@@ -24,6 +24,9 @@ import { PRE_PR_REVIEW_MISSING, validatePrePrReview } from "../loop/_pre-pr-revi
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { createGitClient, main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
+import { readFileSync } from "node:fs";
+import { validateSpikeExplorationSections } from "../refine/validate-spike-file.mjs";
+import { SPIKE_PR_MARKER, hasSpikePrMarker } from "./_spike-pr-marker.mjs";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
 Canonical PR-creation wrapper around \`gh pr create\`. Every PR opened through this
 tool is ALWAYS a draft and is self-assigned by default. Never call raw \`gh pr create\`.
@@ -74,9 +77,11 @@ Behavior:
   - refuses with \`pre_pr_review_missing\` unless a pre-PR review record covers the branch head (PRE-PR-BEFORE-FIRST-PUSH); the writer command is in that rule.
   - refuses with \`head_unresolvable\` (a defensive fallback; the earlier pre-PR record guard normally refuses the same input with \`pre_pr_review_missing\`, which also names \`git fetch origin\`) when \`origin/<base>\` resolves but \`--head\` resolves neither locally nor as \`origin/<branch>\`; run \`git fetch origin\` and retry
   - refuses any \`adr-tripwire:allow\` line in the body, and \`--fill\`/\`--fill-verbose\`/\`--fill-first\`/\`--template\` without \`--body\`/\`--body-file\`, and \`--recover\`/\`--editor\`/\`--web\` always (gh would source a body this wrapper cannot check); write a waiver only through \`dev-loops pr waive-adr-tripwire\`
+  - refuses an empty, whitespace-only or literal \`null\` \`--body\`/\`--body-file\` (a failed read written back); \`--allow-empty-body\` (boolean: bare or \`=value\`, never a space-separated value; consumed here, never forwarded to \`gh\`) overrides all of these refusals
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
   - refuses with \`size_split_required_before_pr\` before creating when the local \`origin/<base>...<head>\` whole-PR logic LOC is at or above the resolved default-tier \`waiverLoc\` (PRE-PR-SIZE-CHECK); no override flag; an unknown size does not refuse
+  - \`--spike-file <findings.md>\` (a spike findings file with Question, Approach and Findings) skips that refusal, stamps a no-merge marker in the PR body and keeps the size line advisory; ready-for-review and merge-pr refuse the PR; only this flag binds the marker, and pr create without it and pr edit refuse a body that adds it (ADR 0293)
   - fetches only \`origin <base>\` before size and changelog checks; refuses with \`base_fetch_failed_before_pr\` on fetch failure
   - validates \`--base\` as a non-empty literal branch name before that fetch: refuses empty values, options, refspecs and revision syntax; valid branch names remain supported
   - refuses with \`changelog_incomplete_before_pr\` (LIFECYCLE-CHANGELOG-COMPLETENESS) after size checks against the fetched base when the selected head equals checkout HEAD; skips for an unresolved origin base or a different head; applies only when \`changelog.required: true\` is set in the committed HEAD \`.devloops\` config file (any loader-order name), otherwise prints a skip notice
@@ -108,6 +113,8 @@ const LIGHTWEIGHT_FLAG_PATTERN = /^--lightweight(?:=(.*))?$/iu;
 // `--issue <n>` declares the tracker link this PR closes. Consumed by the
 // wrapper (never forwarded to gh), same shape as --repo.
 const ISSUE_FLAG_PATTERN = /^--issue(?:=(.*))?$/u;
+// `--spike-file <findings.md>` opens a spike PR: skips the size refusal and stamps the no-merge marker (ADR 0293). Consumed by the wrapper.
+const SPIKE_FILE_FLAG_PATTERN = /^--spike-file(?:=(.*))?$/u;
 // `--allow-replacement-pr <prior>` records a deliberate replacement of
 // an existing open linked PR, overriding the duplicate-refusal guard. Consumed
 // by the wrapper (never forwarded to gh).
@@ -115,6 +122,8 @@ const ALLOW_REPLACEMENT_FLAG_PATTERN = /^--allow-replacement-pr(?:=(.*))?$/u;
 // `--allow-cross-issue` records a deliberate cross-issue closing reference,
 // waiving the branch-derived closing-reference mismatch guard. Consumed by the
 // wrapper (never forwarded to gh).
+// `--allow-empty-body` (boolean) lets an empty, whitespace-only or literal `null` body through the shared guard.
+const ALLOW_EMPTY_BODY_FLAG_PATTERN = /^--allow-empty-body(?:=(.*))?$/iu;
 const ALLOW_CROSS_ISSUE_FLAG_PATTERN = /^--allow-cross-issue(?:=(.*))?$/iu;
 // Resolve the current git branch so the closing reference can be checked
 // against the issue the branch was cut for when `--issue` is omitted. Injectable
@@ -198,16 +207,17 @@ export { detectClosingKeyword, extractClosingIssueNumber };
 // PR-body spec): gh honors `--body=<text>`, so a guard that only saw the space
 // form could be sidestepped by writing `--body=`. Never reads stdin (`gh pr
 // create` doesn't either — body always comes from an explicit --body/--body-file).
-// An unreadable or empty --body-file FAILS CLOSED (throws) rather than silently
-// substituting "" (which used to let a broken/blank --body-file open a body-less
-// PR unnoticed).
-async function resolveBody(args) {
+// An unreadable, empty, whitespace-only or literal `null` --body/--body-file FAILS
+// CLOSED (throws) rather than silently substituting "" (which used to let a
+// broken/blank --body-file open a body-less PR unnoticed). `--allow-empty-body`
+// overrides the empty, whitespace-only and `null` refusals.
+async function resolveBody(args, allowEmptyBody = false) {
   const { body, bodyFile } = scanPrFlags(args);
   if (body !== null) {
-    return body;
+    return resolveBodyOrFile({ body, allowEmptyBody });
   }
   if (bodyFile !== null) {
-    return resolveBodyOrFile({ bodyFile, allowStdin: false });
+    return resolveBodyOrFile({ bodyFile, allowStdin: false, allowEmptyBody });
   }
   return null; // no --body/--body-file given
 }
@@ -499,9 +509,28 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
       throw parseError("--allow-cross-issue is a boolean flag: pass it bare (--allow-cross-issue) or as --allow-cross-issue=false, never a space-separated value");
     }
   }
+  // --allow-empty-body is boolean like --allow-cross-issue: refuse a space-form value for the same reason.
+  const bareEmptyBodyIdx = argv.findIndex((token) => token === "--allow-empty-body");
+  if (bareEmptyBodyIdx !== -1) {
+    const next = argv[bareEmptyBodyIdx + 1];
+    if (typeof next === "string" && !next.startsWith("-")) {
+      throw parseError("--allow-empty-body is a boolean flag: pass it bare (--allow-empty-body) or as --allow-empty-body=false, never a space-separated value");
+    }
+  }
+  const spikeFile = getFlagValue(argv, SPIKE_FILE_FLAG_PATTERN);
+  if (argv.some((token) => SPIKE_FILE_FLAG_PATTERN.test(token))) {
+    let findings = "";
+    try { findings = readFileSync(spikeFile ?? "", "utf8"); } catch { /* an unreadable file fails validation below */ }
+    if (!validateSpikeExplorationSections(findings).ok) {
+      throw parseError("--spike-file requires a readable spike findings file with non-empty Question, Approach and Findings sections");
+    }
+  }
   const lastCrossIssueToken = argv.filter((token) => ALLOW_CROSS_ISSUE_FLAG_PATTERN.test(token)).at(-1) ?? null;
   const allowCrossIssue = lastCrossIssueToken === "--allow-cross-issue" ||
     (typeof lastCrossIssueToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastCrossIssueToken.slice("--allow-cross-issue=".length)));
+  const lastEmptyBodyToken = argv.filter((token) => ALLOW_EMPTY_BODY_FLAG_PATTERN.test(token)).at(-1) ?? null;
+  const allowEmptyBody = lastEmptyBodyToken === "--allow-empty-body" ||
+    (typeof lastEmptyBodyToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastEmptyBodyToken.slice("--allow-empty-body=".length)));
   // Strip --lightweight, --issue, --allow-replacement-pr, and
   // --allow-cross-issue (each with its value in the space form) so none is
   // forwarded to `gh pr create` (which rejects unknown flags).
@@ -516,6 +545,10 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
       if (!token.includes("=")) skipNext = true;
       continue;
     }
+    if (SPIKE_FILE_FLAG_PATTERN.test(token)) {
+      if (!token.includes("=")) skipNext = true;
+      continue;
+    }
     if (ALLOW_REPLACEMENT_FLAG_PATTERN.test(token)) {
       // = form carries the value; space form consumes the next token too.
       if (!token.includes("=")) skipNext = true;
@@ -523,6 +556,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     }
     // Boolean flag (bare or `=value`): never consumes a following space token.
     if (ALLOW_CROSS_ISSUE_FLAG_PATTERN.test(token)) continue;
+    if (ALLOW_EMPTY_BODY_FLAG_PATTERN.test(token)) continue;
     forwardedArgv.push(token);
   }
   // When the caller gave no explicit --base/-B, resolve the default base from
@@ -541,7 +575,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   if (sources.body !== null && sources.bodyFile !== null) {
     throw parseError("--body and --body-file are mutually exclusive; pass only one");
   }
-  const body = await resolveBody(forwardedArgv);
+  const body = await resolveBody(forwardedArgv, allowEmptyBody);
   if (forwardedArgv.some((token) => token === "--recover" || token.startsWith("--recover="))) {
     throw parseError("ADR-TRIPWIRE-STANDING-WAIVER: --recover loads a saved body that this wrapper cannot check, even with --body or --body-file; remove --recover");
   }
@@ -553,6 +587,15 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   }
   // No body source: pass an explicit empty body so gh never prompts for one.
   if (body === null) ghArgs = [...ghArgs, "--body", ""];
+  // The marker belongs to --spike-file PRs only: a body that carries it otherwise could never be readied or merged.
+  if (spikeFile === null && hasSpikePrMarker(body)) {
+    throw parseError("the body carries the spike no-merge marker line; it is stamped only by --spike-file (ADR 0293)");
+  }
+  // The last --body wins, so the marker survives every body source.
+  if (spikeFile !== null && !hasSpikePrMarker(body)) {
+    const stamped = `${body ?? ""}\n\n${SPIKE_PR_MARKER}\n`;
+    ghArgs = [...ghArgs, "--body", stamped];
+  }
   // ADR-TRIPWIRE-STANDING-WAIVER: a new PR starts with no waiver line.
   const waiverRefusal = waiverLineChangeRefusal({ currentBody: "", nextBody: body ?? "", action: "create" });
   if (waiverRefusal) {
@@ -680,7 +723,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
         size = null;
       }
       const sizeWaiverLoc = size?.thresholds?.default?.waiverLoc;
-      if (typeof size?.wholeLogicLoc === "number" && typeof sizeWaiverLoc === "number" && size.wholeLogicLoc >= sizeWaiverLoc) {
+      if (spikeFile === null && typeof size?.wholeLogicLoc === "number" && typeof sizeWaiverLoc === "number" && size.wholeLogicLoc >= sizeWaiverLoc) {
         throw Object.assign(
           parseError(`${SIZE_SPLIT_REQUIRED_BEFORE_PR}: whole-PR logic LOC (${size.wholeLogicLoc}) is at or above default.waiverLoc (${sizeWaiverLoc}); split the local branch before any PR exists (PRE-PR-SIZE-CHECK)`),
           { code: SIZE_SPLIT_REQUIRED_BEFORE_PR },

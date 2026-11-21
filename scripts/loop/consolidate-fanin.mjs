@@ -38,6 +38,8 @@
  * "Consolidation: fan-in synthesis and disposition ledger"
  * (skills/docs/gate-review-sub-loop-contract.md).
  */
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -49,7 +51,7 @@ import { GATE_NAMES, gateScopePrefix } from "../github/_gate-names.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../github/write-gate-context.mjs";
 import { writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { lintFillerPhrases } from "../github/_gate-finding-text.mjs";
-import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, validateCarryForwardPlanEntries, validateCarryForwardPlanShape, validateZeroUnitCarryProof } from "../github/_carried-angles.mjs";
+import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, requireAbsolutePlanFilePath, validateCarryForwardPlanEntries, validateCarryForwardPlanShape, validateZeroUnitCarryProof, verifyCarryForwardPlanIdentity } from "../github/_carried-angles.mjs";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
@@ -64,7 +66,7 @@ import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-teleme
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 
-const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>] [--emit-plan <path>]
+const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> (--carry-forward-plan <json> | --carry-forward-plan-file <path>)] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>] [--emit-plan <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
 --findings-dir into the JSON shapes write-gate-findings-log.mjs, post-gate-findings.mjs
 (--findings / --findings-file), and upsert-checkpoint-verdict.mjs (--findings-json) accept.
@@ -140,7 +142,7 @@ Optional:
                                  this round — Phase 2 dispatches no artifact for them, so without this flag
                                  they are invisible to findingsJson/checkFanoutAngleCoverage and the posted
                                  verdict comment reads as a truncated fan-out instead of a full one. REQUIRES
-                                 --gate and --carry-forward-plan (below) — this CLI never mints a carried
+                                 --gate and the carry-forward plan (below) — this CLI never mints a carried
                                  entry from a bare name alone. For any named angle with no real per-angle
                                  artifact, upserts { angle, verdict, findings, carriedFromHead } (a real
                                  artifact for that angle, if present — matched by base name and
@@ -158,9 +160,11 @@ Optional:
                                  refuses a configured MANDATORY angle, a hardcoded ALWAYS_INCLUDE angle
                                  (gate-evidence/renderer-security/pr-description, unconditionally, regardless
                                  of config), and an unmapped/unknown angle in one seam — or is absent from
-                                 --carry-forward-plan's own "carried" list — refusing to manufacture
+                                 the carry-forward plan's own "carried" list — refusing to manufacture
                                  GitHub-visible "reviewed at this head" evidence for an angle nothing
                                  actually proved was carried.
+  --carry-forward-plan-file <absolute path>  the same plan read from a file (the keyed <gate>-<headSha>.carry-forward-plan.json),
+                                 so carried finding text stays off the command line; mutually exclusive with --carry-forward-plan
   --carry-forward-plan <json>    resolve-angle-carry-forward.mjs's own JSON result, any object with its
                                  "carried" field, or a bare JSON array of carried entries:
                                  [{ angle, carriedFromHead, reason?, reviewer?, dispatchId?, model?,
@@ -181,7 +185,7 @@ Optional:
                                  subset. When given AND the round's computed overall verdict is "clean",
                                  every named angle must have EITHER a real per-angle artifact in
                                  --findings-dir OR a proven carry (a name also present in --carried-angles,
-                                 which is only ever populated after its own --carry-forward-plan proof
+                                 which is only ever populated after its own carry-forward plan proof
                                  check above) — otherwise this FAILS CLOSED (exit 1), naming the missing
                                  angle(s) and the artifact/proof expected for each. This is the mechanical
                                  fan-in-side catch for a resolved angle left with no evidence at all — see
@@ -262,7 +266,7 @@ Optional:
                                  budget needs --ledger-out only without --emit-plan (the keyed ledger is durable). A stale keyed file is removed once the emit-plan key is verified and the path is the canonical emit-plan path, before any later refusal or write; a run refused by either guard leaves a prior keyed file in place.
                                  The ledger gains a "provenance" object ({ distinctReviewers, perAngle })
                                  derived from the head-stamped artifacts, the plan units
-                                 and --carry-forward-plan, and the same ledger is also written to the
+                                 and the carry-forward plan, and the same ledger is also written to the
                                  keyed <gate>-<headSha>.fanin-ledger.json (buildGateFaninLedgerPath)
                                  under --tmp-root, with or without --ledger-out.
   --tmp-root <path>              The tmp/ directory holding the reviewer sentinels and per-gate briefing-prefix
@@ -290,7 +294,7 @@ Output (stdout, JSON):
   verdict/severityCounts/where-they-landed on stdout, with no second invocation ever needed to
   re-extract a different shape or rediscover a path the caller itself just passed in.
   A "carriedFromHead" field appears ONLY on an angle --carried-angles declares (an upserted entry, or an existing
-  artifact whose own headSha is not the current head; the prior head SHA it was carried from, taken from --carry-forward-plan) — every freshly reviewed angle's entry omits it,
+  artifact whose own headSha is not the current head; the prior head SHA it was carried from, taken from the carry-forward plan) — every freshly reviewed angle's entry omits it,
   so a consumer can distinguish a carried verdict from a fresh review without reading the ledger's
   provenance. upsert-checkpoint-verdict.mjs's renderer ignores unrecognized per-angle fields, so this
   never affects the rendered gate comment.
@@ -333,8 +337,8 @@ Exit codes:
      (with --gate) an unloadable/invalid worktree config, a --carried-angles entry whose
      angleReviewSurface(...).kind !== "kinds" (a configured mandatory angle, a hardcoded
      ALWAYS_INCLUDE angle, or an unmapped/unknown angle) or is absent from
-     --carry-forward-plan's "carried" list, --carried-angles given without
-     --carry-forward-plan/--gate (or vice versa), a --carry-forward-plan entry with a
+     the carry-forward plan's "carried" list, --carried-angles given without
+     the carry-forward plan flag or --gate (or vice versa), a carry-forward plan entry (either flag) with a
      malformed "carriedFromHead" (not a 7-64 char hex SHA), a malformed "prevVerdict"
      (not "clean"/"findings_present"), a "findings_present" entry with no non-empty
      well-formed "findings" array, or a "clean" entry carrying non-empty "findings"
@@ -354,7 +358,8 @@ Exit codes:
      unreadable/non-JSON/missing-key --emit-plan artifact
      (the rejected invocation writes no new output and preserves pre-existing
      caller-owned files; callers must honor exit 1)
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -617,6 +622,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       "pr-checklist": { type: "string" },
       "carried-angles": { type: "string" },
       "carry-forward-plan": { type: "string" },
+      "carry-forward-plan-file": { type: "string" },
       "resolved-angles": { type: "string" },
       "repo-root": { type: "string" },
       "expected-dispatch-units": { type: "string" },
@@ -630,6 +636,8 @@ export function parseConsolidateFaninCliArgs(argv) {
     strict: false,
     tokens: true,
   });
+  let planFlagSeen = null;
+  let planFileObject = null;
   for (const token of tokens) {
     if (token.kind === "positional") {
       throw parseError(`Unknown argument: ${token.value}`);
@@ -691,19 +699,43 @@ export function parseConsolidateFaninCliArgs(argv) {
       options.carriedAngles = parseCarriedAnglesJsonArray(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token.name === "carry-forward-plan") {
-      const raw = requireTokenValue(token, parseError);
+    if (token.name === "carry-forward-plan" || token.name === "carry-forward-plan-file") {
+      if (planFlagSeen !== null) {
+        throw parseError(planFlagSeen === token.name
+          ? `--${token.name} was given more than once. Recovery: pass it once, preferably --carry-forward-plan-file <absolute keyed carry-forward-plan.json path>`
+          : "--carry-forward-plan and --carry-forward-plan-file are mutually exclusive. Recovery: pass only --carry-forward-plan-file <absolute keyed carry-forward-plan.json path>");
+      }
+      planFlagSeen = token.name;
+      let raw = requireTokenValue(token, parseError);
+      const planFileRecovery = token.name === "carry-forward-plan-file"
+        ? ". Recovery: re-run resolve-angle-carry-forward.mjs at this head to rewrite the keyed <gate>-<headSha>.carry-forward-plan.json, then pass its absolute path"
+        : "";
+      if (token.name === "carry-forward-plan-file") {
+        try {
+          requireAbsolutePlanFilePath(raw);
+        } catch (err) {
+          throw parseError(err.message);
+        }
+        try {
+          raw = readFileSync(raw, "utf8");
+        } catch (err) {
+          throw parseError(`--carry-forward-plan-file could not be read: ${err.message}. Recovery: pass the keyed <gate>-<headSha>.carry-forward-plan.json path written by resolve-angle-carry-forward.mjs`);
+        }
+      }
       let parsed;
       try {
         parsed = JSON.parse(raw);
       } catch {
-        throw parseError("--carry-forward-plan must be JSON");
+        throw parseError(`--${token.name} must be JSON${planFileRecovery}`);
       }
       try {
         options.carryForwardPlan = validateCarryForwardPlanShape(parsed);
       } catch (err) {
-        throw parseError(err instanceof Error ? err.message : String(err));
+        const message = err instanceof Error ? err.message : String(err);
+        // Name the flag the caller passed, not the inline one the shape check words its errors with.
+        throw parseError(`${token.name === "carry-forward-plan-file" ? message.replace(/^--carry-forward-plan(?=\s)/, "--carry-forward-plan-file") : message}${planFileRecovery}`);
       }
+      if (token.name === "carry-forward-plan-file") planFileObject = parsed;
       continue;
     }
     if (token.name === "resolved-angles") {
@@ -789,11 +821,18 @@ export function parseConsolidateFaninCliArgs(argv) {
   // evidence it is checked against, below) and --gate (so the gate's
   // configured mandatory angles can be rejected) — fail closed here, at parse
   // time, rather than deep inside consolidateGateFanin.
+  if (planFileObject !== null) {
+    try {
+      verifyCarryForwardPlanIdentity(planFileObject, { headSha: options.headSha, gate: options.gate, repo: options.repo, pr: options.pr });
+    } catch (err) {
+      throw parseError(err.message);
+    }
+  }
   if (options.carriedAngles !== undefined && options.carryForwardPlan === undefined) {
-    throw parseError("--carried-angles requires --carry-forward-plan (resolve-angle-carry-forward.mjs's own result) as proof — refusing to mint a carried entry from a bare name with no cross-check");
+    throw parseError("--carried-angles requires --carry-forward-plan-file (or --carry-forward-plan) (resolve-angle-carry-forward.mjs's own result) as proof — refusing to mint a carried entry from a bare name with no cross-check");
   }
   if (options.carryForwardPlan !== undefined && options.carriedAngles === undefined) {
-    throw parseError("--carry-forward-plan was given without --carried-angles — nothing to check it against");
+    throw parseError("--carry-forward-plan-file (or --carry-forward-plan) was given without --carried-angles — nothing to check it against");
   }
   if (options.carriedAngles !== undefined && options.gate === undefined) {
     throw parseError("--carried-angles requires --gate — the gate's configured mandatory angles must be checked before any angle is carried");
@@ -922,7 +961,7 @@ function validateArtifactShape(raw, sourceLabel) {
     throw new Error(`${sourceLabel}: missing "verdict"`);
   }
   if (raw.carriedFromHead !== undefined) {
-    throw new Error(`${sourceLabel}: must not declare "carriedFromHead" — that field is stamped only by this CLI's own --carried-angles/--carry-forward-plan proof check, never self-reported by a per-angle findings artifact (fail-closed)`);
+    throw new Error(`${sourceLabel}: must not declare "carriedFromHead" — that field is stamped only by this CLI's own --carried-angles carry-forward plan proof check, never self-reported by a per-angle findings artifact (fail-closed)`);
   }
   if (Array.isArray(raw.findings)) {
     raw.findings.forEach((f, i) => {
@@ -1147,7 +1186,7 @@ export async function consolidateGateFanin(options) {
         throw new Error(`"${filePath}": angle "${angle}" has no valid "headSha" stamp (unknown provenance) — required when consolidating with --head-sha ${options.headSha}, unless the angle is declared in --carried-angles`);
       }
       if (stamp !== options.headSha) {
-        throw new Error(`"${filePath}": angle "${angle}" is stamped for head ${stamp} but this round consolidates head ${options.headSha} — a stale artifact must not pass as a fresh verdict; re-run the angle or declare it carried forward via --carried-angles/--carry-forward-plan`);
+        throw new Error(`"${filePath}": angle "${angle}" is stamped for head ${stamp} but this round consolidates head ${options.headSha} — a stale artifact must not pass as a fresh verdict; re-run the angle or declare it carried forward via --carried-angles and the carry-forward plan (--carry-forward-plan-file or --carry-forward-plan)`);
       }
     }
     if (!angleSourceFiles.has(angle)) angleSourceFiles.set(angle, []);
@@ -1371,7 +1410,7 @@ export async function consolidateGateFanin(options) {
   //      ALWAYS_INCLUDE angle (gate-evidence/renderer-security/pr-description),
   //      and an unmapped/unknown angle in one seam, so this check and the
   //      producer's own rule can never drift apart.
-  //   2. --carry-forward-plan's own "carried" list — the proof that this
+  //   2. the carry-forward plan's own "carried" list — the proof that this
   //      angle really was resolved as carried, not just typed in.
   if (options.carriedAngles !== undefined) {
     if (!mandatoryAngles) {
@@ -1379,7 +1418,7 @@ export async function consolidateGateFanin(options) {
     }
     const planCarried = Array.isArray(options.carryForwardPlan) ? options.carryForwardPlan : null;
     if (!planCarried) {
-      throw new Error("--carried-angles requires --carry-forward-plan (resolve-angle-carry-forward.mjs's own result) as proof — refusing to mint a carried entry from a bare name with no cross-check (fail-closed)");
+      throw new Error("--carried-angles requires --carry-forward-plan-file (or --carry-forward-plan) (resolve-angle-carry-forward.mjs's own result) as proof — refusing to mint a carried entry from a bare name with no cross-check (fail-closed)");
     }
     // Re-validate entry shape here too, not just presence of the array — a
     // programmatic caller of consolidateGateFanin bypasses
@@ -1418,7 +1457,7 @@ export async function consolidateGateFanin(options) {
       }
       const planEntry = planByName.get(trimmedAngle);
       if (!planEntry) {
-        throw new Error(`--carried-angles names "${angle}", which is not present in --carry-forward-plan's "carried" list — refusing to mint a carried entry with no proof it was ever carried (fail-closed)`);
+        throw new Error(`--carried-angles names "${angle}", which is not present in the carry-forward plan's (--carry-forward-plan-file or --carry-forward-plan) "carried" list — refusing to mint a carried entry with no proof it was ever carried (fail-closed)`);
       }
       if (realAngleKeys.has(key) || seenCarriedNames.has(trimmedAngle)) {
         // A declared carried angle that already has a prior-head artifact keeps that artifact's
@@ -1554,7 +1593,7 @@ export async function consolidateGateFanin(options) {
     if (missingAngles.length > 0) {
       const misplaced = await detectMisplacedFindingsDiagnostic(options.findingsDir, options.repoRoot ?? process.cwd());
       throw new Error(
-        `GATE-EXEC-RESOLVED-ANGLE-EVIDENCE: fan-in computed a "clean" verdict but --resolved-angles names angle(s) with no evidence at all: ${missingAngles.join(", ")} — each expected either a per-angle findings artifact in --findings-dir or a proven carried-forward entry in --carried-angles/--carry-forward-plan; neither was found${misplaced}`,
+        `GATE-EXEC-RESOLVED-ANGLE-EVIDENCE: fan-in computed a "clean" verdict but --resolved-angles names angle(s) with no evidence at all: ${missingAngles.join(", ")} — each expected either a per-angle findings artifact in --findings-dir or a proven carried-forward entry in --carried-angles and the carry-forward plan (--carry-forward-plan-file or --carry-forward-plan); neither was found${misplaced}`,
       );
     }
   }
@@ -1739,6 +1778,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+  loadCommentTrustConfigOrExit({ repoRoot: options.repoRoot });
   try {
     const result = await consolidateGateFanin(options);
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });

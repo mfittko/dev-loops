@@ -5,7 +5,9 @@ import path from "node:path";
 import { test } from "bun:test";
 import { writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
+import { resolveRunId } from "@dev-loops/core/loop/run-context";
 import { watchCopilotReview } from "../../scripts/github/probe-copilot-review.mjs";
+import { runIdFreeEnv, withLaneRunContext } from "../_helpers.mjs";
 
 function emptyActivityPayload() {
   return {
@@ -78,5 +80,21 @@ test("watchCopilotReview treats a rejecting lease heartbeat as non-fatal", async
     );
     // The watch still returns its normal terminal result despite the failure.
     assert.equal(result.status, "timeout");
+  });
+});
+
+test("watchCopilotReview heartbeats under the run id from the run-context file with no env var (issue 3224)", async () => {
+  await withLaneRunContext(async ({ runId }) => {
+    await withGhStub(async (env) => {
+      const calls = [];
+      await watchCopilotReview(
+        { repo: "owner/repo", pr: 17, pollIntervalMs: 60_000, timeoutMs: 120_000 },
+        advancingClockDeps(runIdFreeEnv(env), {
+          ensureOwnershipImpl: async (args) => { calls.push(resolveRunId(args.env, { cwd: args.cwd })); return { ok: true }; },
+        }),
+      );
+      assert.ok(calls.length >= 1);
+      assert.ok(calls.every((resolved) => resolved === runId));
+    });
   });
 });

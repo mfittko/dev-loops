@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-18 ([PR 2813](https://github.com/mfittko/dev-loops/pull/2813))
 
+Extended by [0293](./0293-spike-pr-skips-the-pre-creation-size-refusal.md) (spike PRs skip the refusal).
+
 Amends [0123](./0123-adr-tripwire-early-surface.md) and [0084](./0084-grill-clean-requires-recorded-provenance.md).
 
 ## Context

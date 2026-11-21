@@ -110,27 +110,32 @@ function copilotConvergenceReviewLogin(entry) {
 /**
  * Verify a fresh, agent-unforgeable, head-pinned human approval by `approvedBy`.
  *
- * Two accepted records, in preference order:
+ * Three accepted records, in preference order:
  *  1. a genuine `APPROVED` review by `approvedBy` whose `commit_id` equals the
  *     current head SHA — GitHub forbids approving your own PR, so an `APPROVED`
  *     review can only have come from a real human distinct from the author;
  *  2. else a head-pinned operator comment marker `approve merge <headSha>`
  *     authored by `approvedBy` — the solo-operator path, since an author cannot
- *     leave an `APPROVED` review on their own agent-authored PR.
+ *     leave an `APPROVED` review on their own agent-authored PR;
+ *  3. else a marker `approve merge <sha> patch-id <patchId>` authored by
+ *     `approvedBy` whose `<patchId>` equals `currentPatchId` (ADR 0279), so a
+ *     base-only head change keeps the approval.
  *
  * FAILS CLOSED (returns `{ satisfied: false }`) when the approval is stale (on
- * an earlier commit), agent/bot-authored (a Copilot-login review/comment never
- * satisfies), from a login other than `approvedBy`, or absent. Because both
- * records are pinned to the current head SHA, this re-gates on every head bump.
+ * an earlier commit with a different patch-id), agent/bot-authored (a
+ * Copilot-login review/comment never satisfies), from a login other than
+ * `approvedBy`, or absent. A review or head-pinned marker re-gates on every head
+ * bump; a patch-id marker survives a head change that keeps the patch-id.
  *
- * @returns {{ satisfied: boolean, via: "approved_review"|"comment_marker"|null, reason: string|null }}
+ * @param {{ currentPatchId?: string|null }} [input] `currentPatchId` is null when no patch-id was computed, so only a head match counts.
+ * @returns {{ satisfied: boolean, via: "approved_review"|"comment_marker"|null, matchKind: "head"|"patch_id"|null, reason: string|null }}
  */
-export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, reviews = [], comments = [] } = {}) {
+export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, currentPatchId = null, reviews = [], comments = [] } = {}) {
   if (!isValidGithubLogin(approvedBy)) {
-    return { satisfied: false, via: null, reason: "approvedBy is not a valid GitHub login" };
+    return { satisfied: false, via: null, matchKind: null, reason: "approvedBy is not a valid GitHub login" };
   }
   if (typeof currentHeadSha !== "string" || currentHeadSha.trim().length === 0) {
-    return { satisfied: false, via: null, reason: "current head SHA is unknown" };
+    return { satisfied: false, via: null, matchKind: null, reason: "current head SHA is unknown" };
   }
   const head = currentHeadSha.trim();
 
@@ -151,7 +156,7 @@ export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, reviews =
     && (typeof approverReview.state === "string" ? approverReview.state : null) === "APPROVED"
     && reviewCommit(approverReview) === head // head-pinned — a stale/earlier-commit approval never satisfies
   ) {
-    return { satisfied: true, via: "approved_review", reason: null };
+    return { satisfied: true, via: "approved_review", matchKind: "head", reason: null };
   }
 
   // The marker must OPEN its line (after only leading whitespace / list / quote
@@ -159,20 +164,30 @@ export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, reviews =
   // unanchored `approve merge <head>` would also match `disapprove merge <head>`
   // and `not approve merge <head>` — a fail-open on the merge-authorization
   // path. The trailing `(?:\b|$)` keeps `<head>abc` from matching `<head>`.
-  const markerRe = new RegExp(`^[ \\t>*-]*approve\\s+merge\\s+${escapeRegex(head)}(?:\\b|$)`, "im");
+  const markerRe = new RegExp(`^[ \\t>*-]*approve[ \\t]+merge[ \\t]+${escapeRegex(head)}(?:\\b|$)`, "im");
+  // Patch-id form (ADR 0279): `approve merge <any 40-hex sha> patch-id <currentPatchId>`
+  // survives a base-only head change; the caller supplies currentPatchId only when
+  // the head contains the base tip.
+  const patchId = typeof currentPatchId === "string" && /^[0-9a-f]{40}$/i.test(currentPatchId.trim()) ? currentPatchId.trim() : null;
+  const patchMarkerRe = patchId === null
+    ? null
+    : new RegExp(`^[ \\t>*-]*approve[ \\t]+merge[ \\t]+[0-9a-f]{40}[ \\t]+patch-id[ \\t]+${escapeRegex(patchId)}(?:\\b|$)`, "im");
+  let patchMatch = false;
   for (const entry of Array.isArray(comments) ? comments : []) {
     const login = reviewLogin(entry);
     const body = typeof entry?.body === "string" ? entry.body : "";
     if (login === null || isNonHumanAuthor(entry, login)) continue; // agent/bot comment never satisfies
     if (login !== approvedBy) continue; // wrong login
-    if (!markerRe.test(body)) continue; // not a head-pinned marker for this head
-    return { satisfied: true, via: "comment_marker", reason: null };
+    if (markerRe.test(body)) return { satisfied: true, via: "comment_marker", matchKind: "head", reason: null };
+    if (patchMarkerRe?.test(body)) patchMatch = true;
   }
+  if (patchMatch) return { satisfied: true, via: "comment_marker", matchKind: "patch_id", reason: null };
 
   return {
     satisfied: false,
     via: null,
-    reason: `no fresh ${approvedBy} approval on head ${head} (need an APPROVED review or an "approve merge ${head}" operator comment)`,
+    matchKind: null,
+    reason: `no fresh ${approvedBy} approval on head ${head} (need an APPROVED review, an "approve merge ${head}" operator comment, or an "approve merge <sha> patch-id <patch-id>" comment matching the current diff)`,
   };
 }
 
@@ -188,6 +203,7 @@ export const COPILOT_ABSENT_REVIEW_DISPOSITION = Object.freeze({
   ROUND_CAP_CLEAN_FALLBACK: "round_cap_clean_fallback",
   DOCS_ONLY_SUPPRESSION: "docs_only_suppression",
   COPILOT_GATE_DISABLED: "copilot_gate_disabled",
+  COPILOT_UNAVAILABLE: "copilot_unavailable",
 });
 const SANCTIONED_ABSENT_REVIEW_DISPOSITIONS = new Set(Object.values(COPILOT_ABSENT_REVIEW_DISPOSITION));
 
@@ -349,23 +365,25 @@ function foldTiedReview(latest, next) {
  * ESCALATED: a standing authorization does NOT satisfy it — a fresh per-merge
  * operator approval is required.
  *
- * @returns {{ authorized: boolean, via: string|null, reason: string|null }}
+ * @returns {{ authorized: boolean, via: string|null, matchKind: "head"|"patch_id"|null, reason: string|null }}
  */
 export function resolveMergeApprovalDecision({ mergeClass, standingAuthorized = false, freshApproval = null } = {}) {
   const fresh = freshApproval != null && freshApproval.satisfied === true;
   if (mergeClass === MERGE_CLASS.ESCALATED) {
-    if (fresh) return { authorized: true, via: freshApproval.via, reason: null };
+    if (fresh) return { authorized: true, via: freshApproval.via, matchKind: freshApproval.matchKind ?? null, reason: null };
     return {
       authorized: false,
       via: null,
+      matchKind: null,
       reason: `escalated/stable-release merge requires a fresh per-merge operator approval; a standing authorization does not satisfy it${freshApproval?.reason ? ` (${freshApproval.reason})` : ""}`,
     };
   }
-  if (standingAuthorized === true) return { authorized: true, via: "standing_authorization", reason: null };
-  if (fresh) return { authorized: true, via: freshApproval.via, reason: null };
+  if (standingAuthorized === true) return { authorized: true, via: "standing_authorization", matchKind: null, reason: null };
+  if (fresh) return { authorized: true, via: freshApproval.via, matchKind: freshApproval.matchKind ?? null, reason: null };
   return {
     authorized: false,
     via: null,
+    matchKind: null,
     reason: `drain merge requires a recorded standing authorization or a fresh operator approval${freshApproval?.reason ? ` (${freshApproval.reason})` : ""}`,
   };
 }
@@ -398,7 +416,7 @@ export function resolveCiGreenFromRollup(rollup) {
  * specific failing precondition(s). The CLI resolves the live facts and passes
  * them in; this stays pure so each branch is unit-testable.
  *
- * @returns {{ ok: boolean, failures: Array<{ precondition: string, reason: string }>, mergeClass: string, approvalVia: string|null }}
+ * @returns {{ ok: boolean, failures: Array<{ precondition: string, reason: string }>, mergeClass: string, approvalVia: string|null, approvalMatch: "head"|"patch_id"|null }}
  */
 export function evaluateMergePreconditions({
   humanApprovedBy,
@@ -414,6 +432,7 @@ export function evaluateMergePreconditions({
   touchesT1 = null,
   unresolvedChangesRequestedCount = null,
   currentHeadSha = null,
+  currentPatchId = null,
   reviews = [],
   comments = [],
   standingAuthorized = false,
@@ -485,10 +504,10 @@ export function evaluateMergePreconditions({
   // checks (verifyFreshHumanApproval already owns the comment token, head
   // pinning, and bot exclusion; the size gate no longer re-derives it from
   // reviewDecision alone).
-  const freshApproval = verifyFreshHumanApproval({ approvedBy: humanApprovedBy, currentHeadSha, reviews, comments });
+  const freshApproval = verifyFreshHumanApproval({ approvedBy: humanApprovedBy, currentHeadSha, currentPatchId, reviews, comments });
 
   if (resolveSizeBudgetHumanApprovalRequired({ sizeOutcome, touchesT1, humanApprovalSatisfied: freshApproval.satisfied, unresolvedChangesRequestedCount }) === true) {
-    failures.push({ precondition: "size_budget_human_approval", reason: "size-budget requires a human APPROVED review OR a head-pinned \"approve merge <headSha>\" operator comment, with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR" });
+    failures.push({ precondition: "size_budget_human_approval", reason: "size-budget requires a human APPROVED review OR a head-pinned \"approve merge <headSha>\" operator comment (or an \"approve merge <sha> patch-id <patch-id>\" comment matching the current diff), with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR" });
   }
 
   // Copilot-convergence precondition: refuse a current-head Copilot non-approval
@@ -525,6 +544,8 @@ export function evaluateMergePreconditions({
     failures,
     mergeClass,
     approvalVia: decision.authorized ? decision.via : null,
+    // "head" | "patch_id" for a fresh approval; null for standing authorization or none.
+    approvalMatch: decision.authorized && (decision.via === "comment_marker" || decision.via === "approved_review") ? (decision.matchKind ?? null) : null,
     // Audit trace: which convergence state applied and what settled it (the
     // current-head review disposition, or the sanctioned disposition kind when
     // no current-head review exists), so a merge on a conductor-overridable 🔵

@@ -106,7 +106,7 @@ test("behavioral pin: review proceeds on a foreign-owned PR while the write/merg
     // calls against an ambient GIT_DIR/GIT_WORK_TREE redirect (the hazard its
     // own JSDoc documents) and persists a repo-local identity — the
     // determinism angle's finding (draft_gate round 2).
-    initGitFixture(resolverHalfRoot, { remote: `git@github.com:${REPO}.git`, commit: null });
+    initGitFixture(resolverHalfRoot, { remote: `git@github.com:${REPO}.git`, branch: "main" });
     const ghStub = await writeGhStub(resolverHalfRoot, [
       {
         assertArgs: ["pr", "view", String(PR)],

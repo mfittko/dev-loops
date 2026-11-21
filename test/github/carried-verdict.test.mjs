@@ -138,6 +138,19 @@ test("buildPreMergeGateCheck passes with a carried marker and fails with an unca
   assert.equal(buildPreMergeGateCheck(evidence(marker(origin)), 0).ok, false);
 });
 
+// ADR 0296: a base delta that used to count as gate tooling (a lockfile, a non-outcome script) now carries and merge accepts it.
+test("buildPreMergeGateCheck accepts a carry whose base delta touches a formerly-tooling path", async () => {
+  for (const file of ["package-lock.json", "scripts/github/edit-pr.mjs"]) {
+    const s = setup();
+    const origin = s.head();
+    const cur = s.mergeBase(file);
+    const carried = await carry(s, marker(origin), cur, { written: [] });
+    assert.equal(carried.headSha, cur, file);
+    const pre = { ...carried, sizeOutcome: "pass", sizeTouchesT1: false };
+    assert.equal(buildPreMergeGateCheck({ currentHeadSha: cur, draftGate: { visible: true, verdict: "clean" }, preApprovalGateMarker: pre }, 0).ok, true, file);
+  }
+});
+
 // Tampered evidence at the merge-precondition seam: each case falls back to a full re-gate.
 test("buildPreMergeGateCheck rejects a recorded entry whose evidence differs from the recomputation", async () => {
   const s = setup();
@@ -154,10 +167,10 @@ test("buildPreMergeGateCheck rejects a recorded entry whose evidence differs fro
 });
 
 // Issue 2752 slice 4: the fixer-emit seam accepts a tooling base delta, but gate-round carry and merge acceptance keep the tooling rule.
-test("fixerEmitCarryAccepts accepts a scripts/ base delta that carryGateMarker and merge acceptance refuse", async () => {
+test("fixerEmitCarryAccepts accepts a gate-script base delta that carryGateMarker and merge acceptance refuse", async () => {
   const s = setup();
   const origin = s.head();
-  const cur = s.mergeBase("scripts/tool.mjs");
+  const cur = s.mergeBase("scripts/github/write-gate-context.mjs");
   assert.equal(await fixerEmitCarryAccepts({ originHead: origin, headSha: cur, baseRef: "main", repoRoot: s.dir }), true);
   const m = marker(origin);
   const written = [];
@@ -248,4 +261,74 @@ test("fetchDraftGateEvidence ignores a carried-heads record forged by a NONE-ass
   };
   const evidence = await fetchDraftGateEvidence({ repo: REPO, pr: 7, headSha: cur }, { env: { GH_TOKEN: "t" }, ghCommand: "gh", runChild, repoRoot: s.dir });
   assert.equal(evidence.currentHeadClean, false);
+});
+
+// A converged draft_gate record at A names the fixer commit F; it carries from F, while any other marker carries from its own head.
+const convergedMarker = (reviewedHead, fixerCommit) => ({ ...marker(reviewedHead), converged: { fixerCommit, deltaDigest: `sha256:${"d".repeat(64)}` } });
+
+test("a converged marker carries from its fixer commit to a later base merge, and merge acceptance sees it as current", async () => {
+  const s = setup();
+  const reviewed = "a".repeat(40);
+  const fixer = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  const written = [];
+  const carried = await carry(s, convergedMarker(reviewed, fixer), cur, { written });
+  assert.equal(carried.carriedFrom, fixer);
+  assert.equal(carried.headSha, cur);
+  assert.equal(carried.convergedFromHeadSha, reviewed, "the reviewed head A (where the ledger lives) stays the converged source");
+  assert.equal(written[0].originHead, fixer);
+  assert.equal((await carry(s, convergedMarker(reviewed, fixer), cur, { recorded: written })).carriedFrom, fixer);
+  const pre = { visible: true, verdict: "clean", contractComplete: true, headSha: cur, sizeOutcome: "pass", sizeTouchesT1: false };
+  assert.equal(buildPreMergeGateCheck({ currentHeadSha: cur, draftGate: carried, preApprovalGateMarker: pre }, 0).ok, true);
+});
+
+test("a non-converged marker keeps its own head as the carry origin, and a malformed converged field does not redirect it", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  assert.equal((await carry(s, marker(origin), cur, { written: [] })).carriedFrom, origin);
+  const malformed = { ...marker(origin), converged: { malformed: true } };
+  assert.equal((await carry(s, malformed, cur, { written: [] })).carriedFrom, origin);
+});
+
+test("a converged field on a non-draft_gate marker does not redirect the carry origin", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  const m = { ...convergedMarker("a".repeat(40), "b".repeat(40)), headSha: origin };
+  const carried = await carryGateMarker(m, { gate: "pre_approval_gate", currentHeadSha: cur, baseRef: "main", repoRoot: s.dir, record: async () => {} });
+  assert.equal(carried.carriedFrom, origin);
+  assert.equal(carried.convergedFromHeadSha, undefined);
+});
+
+test("a converged marker with a gate-tooling base delta after its fixer commit does not carry", async () => {
+  const s = setup();
+  const fixer = s.head();
+  const cur = s.mergeBase("scripts/github/write-gate-context.mjs");
+  const m = convergedMarker("a".repeat(40), fixer);
+  assert.deepEqual(await carry(s, m, cur, { written: [] }), m);
+});
+
+// Issue 3346: the stale-base line is not a marker field, so the verdict stays clean and carries across a base-only merge.
+test("a verdict body with the stale-base line stays a clean contractComplete marker and carries across a clean base merge", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  s.git("update-ref", "refs/remotes/origin/main", "main");
+  const written = [];
+  const body = renderGateReviewCommentBody({ gate: GATE, headSha: origin, repo: REPO, verdict: "clean", findingsSummary: "none", nextAction: "mark ready for review", staleBaseNote: "origin/main moved during the round (1 newer commit(s)). Merge it." });
+  assert.match(body, /\*\*Base freshness:\*\* stale;/);
+  const runChild = async (_cmd, args) => {
+    if (args.some((a) => String(a).includes("issues/7/comments"))) {
+      return { code: 0, stdout: JSON.stringify([[{ id: 1, body, user: MAINTAINER, author_association: "MEMBER", created_at: "2026-01-01T00:00:00Z" }]]), stderr: "" };
+    }
+    if (args.includes("baseRefName")) return { code: 0, stdout: JSON.stringify({ baseRefName: "main" }), stderr: "" };
+    return { code: 1, stdout: "", stderr: "unavailable" };
+  };
+  const evidence = await fetchDraftGateEvidence({ repo: REPO, pr: 7, headSha: origin }, { env: { GH_TOKEN: "t" }, ghCommand: "gh", runChild, repoRoot: s.dir });
+  assert.equal(evidence.draftGateMarker.visible, true);
+  assert.equal(evidence.draftGateMarker.verdict, "clean");
+  assert.equal(evidence.draftGateMarker.contractComplete, true);
+  const carried = await carryGateMarker(evidence.draftGateMarker, { gate: GATE, currentHeadSha: cur, baseRef: "origin/main", repoRoot: s.dir, record: async (e) => { written.push(e); } });
+  assert.equal(carried.carriedFrom, origin);
 });

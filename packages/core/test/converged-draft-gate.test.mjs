@@ -117,6 +117,15 @@ describe("composeConvergedDraftGate", () => {
   });
 });
 
+describe("composeConvergedDraftGate with PR-body items", () => {
+  const items = [act("low", 1), { severity: "low", angle: "pr-description", summary: "low body finding", judgeDisposition: "act" }];
+  test("a mixed list refuses body_unchanged and body_read_unrecorded, and converges with a changed body", () => {
+    assert.throws(() => compose(items, converged(items), { reviewedBodySha: "old", liveBodySha: "old" }), /body_unchanged/);
+    assert.throws(() => compose(items, converged(items), { liveBodySha: "new" }), /body_read_unrecorded/);
+    assert.equal(compose(items, converged(items), { reviewedBodySha: "old", liveBodySha: "new" }).fixerCommit, FIX);
+  });
+});
+
 describe("composeBodyOnlyConvergedDraftGate", () => {
   const bodyItem = (severity, n, extra = {}) => ({ severity, angle: "pr-description", summary: `${severity} body finding ${n}`, judgeDisposition: "act", judgeFix: "edit the body", ...extra });
   const bodyOnly = (roundActItems, extra = {}) => composeBodyOnlyConvergedDraftGate({
@@ -127,6 +136,15 @@ describe("composeBodyOnlyConvergedDraftGate", () => {
   test("a non-locatable medium list with a changed body and no own commit composes", () => {
     const items = [bodyItem("medium", 1)];
     assert.equal(bodyOnly(items).fixerCommit, A);
+  });
+
+  test("a pr_body item that names a file composes; the same item without remedyKind is body_item_locatable", () => {
+    const withFile = { files: ["docs/x.md"] };
+    assert.equal(bodyOnly([bodyItem("medium", 1, { ...withFile, remedyKind: "pr_body" })]).fixerCommit, A);
+    assert.throws(() => bodyOnly([bodyItem("medium", 1, withFile)]), /body_item_locatable/);
+    assert.throws(() => bodyOnly([bodyItem("medium", 1, { ...withFile, angle: "review-thread", remedyKind: "pr_body" })]), /body_item_locatable/);
+    // A review-thread item with no file is never a PR-body item: the refusal names the thread.
+    assert.throws(() => bodyOnly([bodyItem("medium", 1, { angle: "review-thread" })]), /body_item_locatable: .*is a review-thread item/);
   });
 
   test("refuses a question, a fail-open item and a security angle, suffixed or prefixed", () => {

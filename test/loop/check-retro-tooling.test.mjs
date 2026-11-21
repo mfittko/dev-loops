@@ -318,3 +318,115 @@ test("an unclosed line joins at most 200 lines and is reported (join cap)", () =
   assert.ok(violations.includes('inline-interpreter: "'));
   assert.ok(violations.every((v) => v.split("\n").length <= 200));
 });
+
+test("--transcript accepts several Claude Code session transcripts and extracts their Bash commands", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "retro-sessions-"));
+  const session = (command) => `${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "gh pr list" }, { type: "tool_use", name: "Bash", input: { command } }] } })}\n${JSON.stringify({ type: "user", message: { content: "gh api x" } })}\n`;
+  const [a, b] = [join(dir, "a.jsonl"), join(dir, "b.jsonl")];
+  writeFileSync(a, session("dev-loops loop info"));
+  writeFileSync(b, `  ${session("gh api repos/o/r")}`); // indented JSONL line still parses as JSON
+  const out = new PassThrough();
+  let text = "";
+  out.on("data", (chunk) => { text += chunk; });
+  const code = await run(["--transcript", a, "--transcript", b, "--json"], { stdout: out, stderr: new PassThrough() });
+  assert.equal(code, 1);
+  assert.deepEqual(JSON.parse(text).rawCallViolations, ["gh: gh api repos/o/r"]);
+});
+
+const sessionLine = (...commands) => `${JSON.stringify({ type: "assistant", message: { content: commands.map((command) => ({ type: "tool_use", name: "Bash", input: { command } })) } })}\n`;
+
+test("a session transcript piped on stdin extracts its Bash commands and reports the gh violation", async () => {
+  const r = await runCli(["--json"], sessionLine("gh api repos/o/r"));
+  assert.equal(r.status, 1);
+  assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, ["gh: gh api repos/o/r"]);
+});
+
+test("a heredoc body is dropped only for a data host; a quote-blind or arithmetic << hides nothing", async () => {
+  const gh = "gh: gh api repos/o/r";
+  for (const command of ["bash <<'EOF'\ngh api repos/o/r\nEOF", "sh <<EOF\ngh api repos/o/r\nEOF", 'echo "a << b"\ngh api repos/o/r', "echo 'a <<b'\ngh api repos/o/r", "x=$((1<<n))\ngh api repos/o/r", "cat <<EOF | bash\ngh api repos/o/r\nEOF", "cat > /tmp/x.sh <<'EOF'\ngh api repos/o/r\nEOF\nbash /tmp/x.sh", "cat <<'EOF' > x.sh && bash x.sh\ngh api repos/o/r\nEOF", "cat <<'EOF' > run.sh\ngh api repos/o/r\nEOF\nbash run.sh", "cat <<EOF\n$(gh api repos/o/r)\nEOF", "cat <<EOF\n# $(gh api repos/o/r)\nEOF", "cat <<EOF\nx # $(gh api repos/o/r)\nEOF", 'git commit -m "$(cat <<EOF\n# $(gh api repos/o/r)\nEOF\n)"', "git commit -F - <<''\n\ngh api repos/o/r\n"]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.equal(JSON.parse(r.stdout).internalToolingOnly, false, JSON.stringify(command));
+    assert.ok(JSON.parse(r.stdout).rawCallViolations.some((v) => v === gh || v.startsWith("unproven heredoc:")), JSON.stringify(command));
+  }
+  const clean = await runCli(["--json"], sessionLine("cat <<'EOF'\ngh api repos/o/r\nEOF"));
+  assert.deepEqual(JSON.parse(clean.stdout).rawCallViolations, []);
+  // a `tee` heredoc writes a file: an OPS-NO-INLINE-INTERPRETER ceiling case, reported as inline-interpreter, never as a raw gh call
+  const tee = await runCli(["--json"], sessionLine("tee out <<EOF\ngh text\nEOF"));
+  assert.ok(JSON.parse(tee.stdout).rawCallViolations.every((v) => v.startsWith("inline-interpreter: tee out")));
+});
+
+test("a heredoc that is not provably data fails closed: mid-line #, nested heredoc, escaped substitution after #", async () => {
+  for (const command of ["cat <<EOF\nx # $(gh api repos/o/r)\nEOF", 'git commit -m "$(cat <<EOF\n# $(gh api repos/o/r)\nEOF\n)"', "cat <<EOF\n# \\$(x) $(gh api repos/o/r)\nEOF", "cat <<EOF\n# `gh api repos/o/r`\nEOF", "dev-loops-run x <<EOF\nplain\nEOF"]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.equal(r.status, 1, JSON.stringify(command));
+    assert.match(JSON.parse(r.stdout).rawCallViolations[0], /^unproven heredoc: /, JSON.stringify(command));
+  }
+});
+
+test("fails closed: an unclosed heredoc, and a # after $( or a backtick outside any heredoc", async () => {
+  for (const command of ["cat <<EOF\n# $(gh api repos/o/r)", 'echo "$(date)\n# $(gh api repos/o/r)"', "echo \"`date`\n# `gh api repos/o/r`\""]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.equal(r.status, 1, JSON.stringify(command));
+    assert.match(JSON.parse(r.stdout).rawCallViolations[0], /^unproven heredoc: /, JSON.stringify(command));
+  }
+  const clean = await runCli(["--json"], sessionLine("git commit -m \"$(cat <<'EOF'\n# heading\nbody\nEOF\n)\""));
+  assert.deepEqual(JSON.parse(clean.stdout).rawCallViolations, []);
+});
+
+test("a later line starting with # fails closed; a data heredoc # line and a leading comment stay clean", async () => {
+  for (const command of ['echo "a\n# x"; gh api repos/o/r', "echo 'a\n#' && gh api repos/o/r", "ls\n  # note\nls"]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.equal(r.status, 1, JSON.stringify(command));
+    assert.match(JSON.parse(r.stdout).rawCallViolations[0], /^unproven heredoc: /, JSON.stringify(command));
+  }
+  for (const command of ["# lead comment", "ls -la", "cat <<'EOF'\n# heading\ngh api repos/o/r\nEOF", "git commit -m \"$(cat <<'EOF'\nsubject\n\n# not a command\nEOF\n)\""]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, [], JSON.stringify(command));
+  }
+});
+
+test("a git commit -m substitution holding one cat heredoc is data; any other substitution keeps its body", async () => {
+  const body = "fix\ngh api is no longer used";
+  const clean = await runCli(["--json"], sessionLine(`git commit -m "$(cat <<'EOF'\n${body}\nEOF\n)"`));
+  assert.deepEqual(JSON.parse(clean.stdout).rawCallViolations, []);
+  for (const command of [`git commit -m "$(cat > f <<'EOF'\ngh api repos/o/r\nEOF\n)"`, `git commit -m "$(cat <<EOF\n$(gh api repos/o/r)\nEOF\n)"`]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.notDeepEqual(JSON.parse(r.stdout).rawCallViolations, [], JSON.stringify(command));
+  }
+});
+
+test("a session with no Bash commands is clean, not an empty transcript", async () => {
+  const file = tmpFile(`${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } })}\n`);
+  const r = await runCli(["--json", "--transcript", file]);
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(r.stdout).internalToolingOnly, true);
+});
+
+test("a multi-line session command is one unit: heredoc bodies drop and continuations join", async () => {
+  const heredoc = "git commit -F - <<'EOF'\nfix\ngh api is no longer used\nEOF";
+  const r = await runCli(["--json"], sessionLine(heredoc, "dev-loops loop info \\\n  --json"));
+  assert.equal(r.status, 0, r.stdout);
+  assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, []);
+  const real = await runCli(["--json"], sessionLine("git commit -F - <<EOF\nx\nEOF\ngh api repos/o/r"));
+  assert.deepEqual(JSON.parse(real.stdout).rawCallViolations, ["gh: gh api repos/o/r"]);
+});
+
+test("a comment line ending in a backslash does not join the next command line", async () => {
+  const r = await runCli(["--json"], sessionLine("# note \\\ngh api repos/o/r"));
+  assert.equal(r.status, 1);
+  assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, ["gh: gh api repos/o/r"]);
+});
+
+test("a trailing comment ending in a backslash does not join the next command line", async () => {
+  for (const command of ["echo hi # note \\\ngh api repos/o/r", "echo a \\\n# x \\\ngh api repos/o/r"]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.equal(r.status, 1, command);
+    assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, ["gh: gh api repos/o/r"], command);
+  }
+});
+
+test("a word ending in an escaped backslash does not join the next command line", async () => {
+  const r = await runCli(["--json"], sessionLine("echo C:\\\\\\\\\ngh api repos/o/r"));
+  assert.equal(r.status, 1);
+  assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, ["gh: gh api repos/o/r"]);
+});

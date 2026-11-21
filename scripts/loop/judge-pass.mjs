@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { access, mkdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -32,11 +32,11 @@ import {
   validateSpecAuthorityVerdict,
 } from "@dev-loops/core/loop/spec-authority";
 import { findEscalations, recurrenceFiles } from "@dev-loops/core/loop/gate-recurrence";
-import { commentDeferredFindings, fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
+import { commentDeferredFindings, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
 import { readClosedPriorRoundLogs, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
-import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
-import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
+import { buildGateEmitPlanPath } from "../github/_gate-artifact-paths.mjs";
+import { OUT_OF_BAND_WRITE, readSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { raiseVerdictForActedCopilotBlock, withPinnedCopilotBodyCluster, withoutCopilotBodyDecision } from "../github/_copilot-body-disposition.mjs";
 import { codeTreeSkewNote, materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
@@ -53,8 +53,9 @@ import {
   emitResult,
   matchJqOutputToken,
 } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 
-const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>] [--tmp-root <path>]
+const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>] [--tmp-root <path>] [--context-tmp-root <path>]
 
 Bridge the judge pass between gate fan-in (Phase 3) and the fixer pass (Phase 4).
 Reads the judge agent's verdict artifact, enforces current-head freshness, applies
@@ -123,6 +124,8 @@ Inputs:
                                the target already lists.
   --tmp-root <path>            Ledger root for the round count and prior-round reads; pass the
                                ledger writer's --tmp-root. Default: the main checkout's tmp/.
+  --context-tmp-root <path>    Root of the round's gate-context bundle and keyed emit plan; pass the
+                               ledger writer's --context-tmp-root. Default: tmp/.
   --repo-root <path>           Root used to resolve relative --findings-file /
                                --judge-verdict / --out / --ledger-out paths
                                (default: process.cwd()).
@@ -184,6 +187,7 @@ Exit codes:
   0   Success
   1   Fail closed (stale verdict head, malformed verdict, out-of-range disposition, etc.)
   2   Invalid --jq filter
+  3   Comment trust config refused (stderr JSON with a state field)
 `.trim();
 
 const GATES = GATE_NAMES;
@@ -230,6 +234,7 @@ export function parseJudgePassCliArgs(argv) {
       "ledger-out": { type: "string" },
       "repo-root": { type: "string" },
       "tmp-root": { type: "string" },
+      "context-tmp-root": { type: "string" },
       "spec-file": { type: "string" },
       "content-digest": { type: "string" },
       "spec-authority-verdict": { type: "string" },
@@ -291,6 +296,10 @@ export function parseJudgePassCliArgs(argv) {
     }
     if (token.name === "ledger-out") {
       options.ledgerOut = token.value;
+      continue;
+    }
+    if (token.name === "context-tmp-root") {
+      options.contextTmpRoot = token.value;
       continue;
     }
     if (token.name === "tmp-root") {
@@ -583,32 +592,6 @@ async function applyDeferralComment(enriched, { repo, pr, gate, trackerProvider 
       delete f.followUpIssueNumber;
     }
   }
-}
-
-/**
- * Copy each stamped defer target onto the durable findings log for the round, matched by fingerprint, so the cap-round fixer check
- * (emit-fixer-work-order) reads the same followUpIssueNumber as the verdict poster. An absent log is left untouched; a log that readGateFindingsLedger rejects fails the pass.
- */
-async function stampDurableDeferTargets(enriched, options, resolvedRoot) {
-  const targets = new Map(enriched.filter((f) => f.judgeDisposition === "defer" && Number.isInteger(f.followUpIssueNumber)).map((f) => [f.fingerprint, f.followUpIssueNumber]));
-  // A defer that applyDeferralComment converted to reject (the PR is the only target, #2724 slice 0) is rewritten to reject on the durable log too.
-  const rejects = new Set(enriched.filter((f) => f.judgeDisposition === "reject" && f.judgeReason?.startsWith("low_fix_until_cap ")).map((f) => f.fingerprint));
-  if (targets.size === 0 && rejects.size === 0) return;
-  const logPath = path.resolve(resolvedRoot, buildLogPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }));
-  if (!(await access(logPath).then(() => true, (err) => (err?.code === "ENOENT" ? false : Promise.reject(err))))) return;
-  // One validity rule for the ledger: the canonical reader rejects a malformed log. It normalizes in memory, so the raw log is re-read to stamp it.
-  await readGateFindingsLedger(logPath);
-  // readSealed refuses a log edited after its sealed write, so the stamp never reseals (launders) an out-of-band edit (AC2).
-  const log = JSON.parse(await readSealed(logPath));
-  let changed = false;
-  for (const f of log.findings) {
-    if (f?.judgeDisposition !== "defer" || f.followUpIssueNumber != null) continue;
-    const fp = fingerprintFinding(f);
-    const target = targets.get(fp);
-    if (target !== undefined) { f.followUpIssueNumber = target; changed = true; }
-    else if (rejects.has(fp)) { f.judgeDisposition = "reject"; delete f.followUpDraft; changed = true; }
-  }
-  if (changed) await writeSealed(logPath, JSON.stringify(log, null, 2) + "\n");
 }
 
 /**
@@ -979,6 +962,16 @@ export function gitShowSource(cwd, sha, file) {
 // The ledger root of the round history: the writer's --tmp-root, else the canonical root.
 const historyRoot = (options, resolvedRoot) => (options.tmpRoot ? path.resolve(resolvedRoot, options.tmpRoot) : resolveGateArtifactTmpRoot(resolvedRoot));
 
+// The fan-out round id the writer stamps on its ledger (its emit plan under --context-tmp-root), null without a readable plan.
+async function emitPlanRoundId(options, resolvedRoot) {
+  try {
+    const plan = JSON.parse(await readFile(path.resolve(resolvedRoot, buildGateEmitPlanPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.contextTmpRoot || "tmp" })), "utf8"));
+    return typeof plan?.roundId === "string" && plan.roundId.length > 0 ? plan.roundId : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function judgePassCli(
   options,
   { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot, readPriorLogs = readClosedPriorRoundLogs, hasCommit = hasCommitInRepo, readSource = gitShowSource } = {},
@@ -993,7 +986,9 @@ export async function judgePassCli(
     "--judge-verdict",
     parseError,
   );
-  const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
+  // The durable log is written after this pass, and its writer counts the completed live same-head ledger of an earlier round: count it here too, with this judge execution as the round identity (a repeated write of this round is not counted).
+  const judgeExecution = /^j\d+-[0-9a-f]+$/.exec(path.basename(path.dirname(path.resolve(resolvedRoot, options.judgeVerdict))))?.[0] ?? null;
+  const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot), roundIdentity: { roundId: await emitPlanRoundId(options, resolvedRoot), judgeExecution, completed: true } }, { repoRoot: resolvedRoot, includeLiveCurrentHead: true });
   const result = runJudgePass(judged, judgeVerdict, options.headSha, { pastCap: lowFixCapped, round });
 
   // Only the pinned work order's sliceLinkageIssues arm the coercion; the emitter already read the spec and PR body Non-goals.
@@ -1084,7 +1079,6 @@ export async function judgePassCli(
       { repo: options.repo, pr: Number(options.pr), gate: options.gate, trackerProvider },
       { env, ghCommand, run, commentIssue },
     );
-    await stampDurableDeferTargets(result.enriched, options, resolvedRoot);
     result.counts = countByDisposition(result.enriched);
   }
 
@@ -1202,6 +1196,7 @@ function main() {
     process.exitCode = 1;
     return;
   }
+  loadCommentTrustConfigOrExit({ repoRoot: opts.repoRoot });
   judgePassCli(opts)
     .then((payload) => {
       process.exitCode = emitResult(payload, { jq: opts.jq, silent: opts.silent });

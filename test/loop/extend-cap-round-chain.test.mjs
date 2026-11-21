@@ -561,6 +561,23 @@ test("a clean-verdict cap round whose act item a sealed fixer record resolved ex
   }
 });
 
+test("a mixed cap round (one code item, one PR-body item) is fixed by a sealed record that names only the code ref", async () => {
+  const { root, A, B } = await capFixture();
+  try {
+    const code = { severity: "medium", summary: "guard missing", files: ["src/a.mjs"], line: 1, angle: "correctness", judgeDisposition: "act", judgeTitle: "Guard", judgeFix: "add" };
+    const body = { severity: "low", summary: "body gap", angle: "spec", judgeDisposition: "act", judgeTitle: "Body" };
+    const ledger = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`, `draft_gate-${A}.json`);
+    await writeFile(ledger, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: A, verdict: "findings_present", loggedAt: "2026-11-04T00:00:00.000Z", findings: [code, body] }), "utf8");
+    const recordPath = gateDeltaRecordPath(path.join(root, "tmp"), A);
+    rmSync(recordPath, { force: true });
+    rmSync(`${recordPath}.seal`, { force: true });
+    writeSealedGateDeltaRecord(path.join(root, "tmp"), A, { reviewBaselineHead: A, candidateHead: B, outcome: "locally_clear", nextStep: "push_to_gate", items: [{ ref: fingerprintFinding(code), status: "resolved" }] });
+    assert.ok(await proof(root, B), "the body ref is not required in the record");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a clean cap round whose plain clearing chain ends at the PR head refuses chain_reaches_head and writes nothing", async () => {
   const { root, A } = await cleanCapFixture();
   try {
@@ -1089,6 +1106,78 @@ test("the chain-end remedy is named only for a locally_clear record whose refs t
     seal([{ ref: fingerprintFinding(act), status: "resolved" }]);
     assert.match(await refusal(), /gate extend-cap-round-chain/);
     assert.equal((await extend(root, head)).ok, true, "the named route accepts the record");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("AC2: a locally_clear reviewer-only delta over a clean merge that overlaps the base carries the cap-round chain to the merge head", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "extend-cap-overlap-"));
+  try {
+    initGitFixture(root, { commit: null });
+    runGitFixture(root, ["config", "commit.gpgsign", "false"]);
+    const lines = (top, bottom) => `${top}\n1\n2\n3\n4\n5\n6\n7\n8\n9\n${bottom}\n`;
+    const M0 = await commit(root, { ".gitignore": "tmp/\n", "src/f.mjs": lines("top", "bottom") }, "base");
+    runGitFixture(root, ["update-ref", "refs/remotes/origin/main", M0]);
+    runGitFixture(root, ["checkout", "-q", "-b", "pr"]);
+    const A = await commit(root, { "src/f.mjs": lines("top", "pr-bottom") }, "feat: pr");
+    runGitFixture(root, ["checkout", "-q", "-b", "base-side", M0]);
+    const M1 = await commit(root, { "src/f.mjs": lines("main-top", "bottom") }, "base moves f");
+    runGitFixture(root, ["update-ref", "refs/remotes/origin/main", M1]);
+    runGitFixture(root, ["checkout", "-q", "pr"]);
+    runGitFixture(root, ["merge", "-q", "--no-ff", "-m", "refresh base", M1]);
+    const merge = String(runGitFixture(root, ["rev-parse", "HEAD"])).trim();
+    const tmp = path.join(root, "tmp");
+    const dir = path.join(tmp, "gate-findings", "owner-repo", `pr-${PR}`);
+    await mkdir(dir, { recursive: true });
+    for (const [i, head] of ["1".repeat(40), "2".repeat(40), "3".repeat(40), A].entries()) {
+      await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
+        repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "clean", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [], provenance: { perAngle: [{ angle: "correctness" }] },
+      }), "utf8");
+    }
+    assert.equal(await proof(root, merge), null, "no clearing record yet");
+    assert.equal((await extend(root, merge)).reason, "logic_commit_in_range");
+    const resultPath = path.join(root, "reviewer-result.json");
+    const args = ["--reviewer-only", "--repo", REPO, "--pr", String(PR), "--baseline", A, "--pr-head", merge, "--findings-log", path.join(dir, `draft_gate-${A}.json`), "--worktree", root];
+    const seam = { stdout: { write: () => {} }, fetchBase: () => {}, fetchPr: async () => ({ baseRefName: "main" }) };
+    const { input } = await runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", resultPath], seam);
+    writeFileSync(resultPath, JSON.stringify({ ...input.resultShape, actionableItems: [], newFindings: [], widenedReads: [], outcome: "locally_clear" }));
+    sealDeltaFixture(tmp, resultPath);
+    const decision = await runDeltaCli([...args, "--result", resultPath, "--invocation", "1"], seam);
+    assert.equal(decision.outcome, "locally_clear");
+    const result = await extend(root, merge);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.ok(await proof(root, merge), "the chain reaches the merge head");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("AC3: a clean base merge with no overlap keeps the base-only carry and needs no delta", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "extend-cap-no-overlap-"));
+  try {
+    initGitFixture(root, { commit: null });
+    runGitFixture(root, ["config", "commit.gpgsign", "false"]);
+    const M0 = await commit(root, { ".gitignore": "tmp/\n", "src/f.mjs": "f\n", "src/g.mjs": "g\n" }, "base");
+    runGitFixture(root, ["update-ref", "refs/remotes/origin/main", M0]);
+    runGitFixture(root, ["checkout", "-q", "-b", "pr"]);
+    const A = await commit(root, { "src/f.mjs": "pr-f\n" }, "feat: pr");
+    runGitFixture(root, ["checkout", "-q", "-b", "base-side", M0]);
+    const M1 = await commit(root, { "src/g.mjs": "main-g\n" }, "base moves g");
+    runGitFixture(root, ["update-ref", "refs/remotes/origin/main", M1]);
+    runGitFixture(root, ["checkout", "-q", "pr"]);
+    runGitFixture(root, ["merge", "-q", "--no-ff", "-m", "refresh base", M1]);
+    const merge = String(runGitFixture(root, ["rev-parse", "HEAD"])).trim();
+    const dir = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`);
+    await mkdir(dir, { recursive: true });
+    for (const [i, head] of ["1".repeat(40), "2".repeat(40), "3".repeat(40), A].entries()) {
+      await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
+        repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "clean", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [], provenance: { perAngle: [{ angle: "correctness" }] },
+      }), "utf8");
+    }
+    const result = await extend(root, merge);
+    assert.equal(result.action, "chain_extended", JSON.stringify(result));
+    assert.ok(await proof(root, merge), "the chain reaches the merge head with no delta record");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -128,6 +128,7 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/loop/build-handoff-envelope.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/ready-for-review.mjs` | Fail closed: `config_load_failed` on its own load, plus the size budget block |
 | `scripts/loop/judge-pass.mjs` | Fail closed: throws |
+| `scripts/loop/_self-check-items.mjs` | Record path fails closed: `pre_pr_self_check_missing`. Brief path is best-effort: the shipped defaults, not a gate decision |
 | `scripts/loop/spec-lint.mjs` | Fail closed: throws, so a broken `.devloops` cannot relax the size forecast bound |
 | `scripts/loop/check-pre-push-delta.mjs` | Fail closed: the earlier-head findings log is refused |
 | `scripts/loop/extend-cap-round-chain.mjs` | Fail closed: throws |

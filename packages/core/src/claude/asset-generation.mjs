@@ -90,7 +90,11 @@ export function stripPiOnlyBlocks(body) {
  * @returns {string}
  */
 export function rewriteCliInvocation(body) {
-  return String(body).split("node <dev-loops-package-root>/cli/index.mjs").join("dev-loops-run cli/index.mjs");
+  return String(body)
+    .split("node <dev-loops-package-root>/cli/index.mjs").join("dev-loops-run cli/index.mjs")
+    // Only `<dir>/<file>` paths map to repo-root `scripts/<dir>/`; a top-level token is a skill-local
+    // script (e.g. skills/dev-loop/scripts/post-gate-verdict-fallback.mjs) the launcher cannot resolve.
+    .replace(/node <resolved-skill-scripts>\/(?=[^/\s`]+\/)/g, "dev-loops-run scripts/");
 }
 
 /**
@@ -133,7 +137,7 @@ export const WRAPPER_LAUNCHER = "dev-loops-run";
  * `inspect` are and were previously missing here, which left e.g. `dev-loops issue edit …` bare
  * and unrouted in the generated tree.
  */
-export const WRAPPER_NS = "gate|loop|pr|issue|queue|project|inspect|refine";
+export const WRAPPER_NS = "gate|loop|pr|decision|issue|queue|project|inspect|refine";
 
 /**
  * Regex source (no flags) matching a bare `node scripts/<dir>/…/<file>.mjs` invocation, at ANY

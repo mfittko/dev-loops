@@ -26,7 +26,7 @@ async function fixture(fn, harness = "pi", alterReads) {
   try {
     const tmpRoot = path.join(root, "tmp");
     const key = { ...TARGET, gate: "draft_gate", tmpRoot };
-    const act = ["1".repeat(16), "2".repeat(16)].map((fingerprint) => ({ fingerprint, angle: "coverage", severity: "medium", summary: fingerprint, judgeDisposition: "act" }));
+    const act = ["1".repeat(16), "2".repeat(16)].map((fingerprint) => ({ fingerprint, angle: "coverage", severity: "medium", summary: fingerprint, file: "src/a.mjs", judgeDisposition: "act" }));
     const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: act });
     const delta = { reviewBaselineHead: BASE, candidateHead: HEAD, actSetId: sequence.actSetId, outcome: "bounded_out",
       actionableItems: sequence.actItems.map(({ ref }) => ({ ref, status: "cannot_verify", evidence: ["qualification missing"] })),

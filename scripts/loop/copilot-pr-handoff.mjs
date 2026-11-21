@@ -5,6 +5,7 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
 import { resolvePrConflicts } from "./resolve-pr-conflicts.mjs";
+import { parseCopilotBodyDispositionMarker, parseReviewBodyDispositionMarkers } from "../github/_copilot-body-disposition.mjs";
 import { isTrustedRestComment, UNTRUSTED_CONVERSATION_COMMENT_REMEDY } from "@dev-loops/core/github/comment-trust";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
@@ -28,6 +29,7 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   COPILOT_REVIEW_WAIT_TIMEOUT_MS,
 } from "@dev-loops/core/loop/policy-constants";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 const VALID_WATCH_STATUSES = new Set(["changed", "timeout", "idle"]);
 const REMOVED_FLAGS = new Set([
   "--force-rerequest-review",
@@ -121,7 +123,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
   1  Argument error or gh failure
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const POST_CONVERGENCE_SUPPRESSED_NEXT_ACTION = "The converged Copilot review stands for this head, so no Copilot round was placed; continue to pre_approval_gate instead of re-requesting Copilot review";
 // The converged review stands for this head: route to the same stop/terminal,
 // pre_approval_gate-bound disposition as the clean round-cap fallback.
@@ -352,6 +355,12 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
       // Skip if comment body is a gate verdict comment (system action, not operator input)
       const body = typeof comment?.body === "string" ? comment.body : "";
       if (body.includes("Gate review:") || body.includes("**draft_gate**") || body.includes("**pre_approval_gate**") || isGateMachineArtifactBody(body)) {
+        continue;
+      }
+      // The loop's own fixer and judge-bound disposition markers are tool output, whatever login `gh` posts under.
+      // shortcut: markers are not matched to loop records, a pasted marker silences a comment; upgrade if abused.
+      const copilotMarker = parseCopilotBodyDispositionMarker(body);
+      if (parseReviewBodyDispositionMarkers(body).length > 0 || copilotMarker?.fixSha || copilotMarker?.judgeBinding) {
         continue;
       }
       humanComments.push({
@@ -610,7 +619,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
   // Check for human comments since last subagent action
   // Only active in async subagent context (DEVLOOPS_RUN_ID set)
   let humanCommentCheck = { paused: false };
-  if (resolveRunId(env)) {
+  if (resolveRunId(env, { cwd: resolvedRepoRoot })) {
     humanCommentCheck = await detectRecentHumanComments(
       { repo: options.repo, pr: options.pr, claimedAtMs: runnerOwnership?.activeRun?.claimedAt ? new Date(runnerOwnership.activeRun.claimedAt).getTime() : undefined },
       { env, ghCommand, runChild },
@@ -1044,6 +1053,7 @@ export async function runCli(
   return emitResult(result, { jq: options.jq, silent: options.silent, stdout });
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseHandoffCliArgs(process.argv.slice(2)).help);
   runCli().then((code) => {
     if (typeof code === "number") {
       process.exitCode = code;

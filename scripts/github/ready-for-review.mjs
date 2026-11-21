@@ -2,8 +2,11 @@
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { deletePrGateCoordinationSnapshot } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchDraftGateEvidence } from "./_gate-finding-surface.mjs";
 import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
+import { cleanCapVerdictUnposted } from "./write-gate-context.mjs";
+import { CAP_ROUND_REFUSAL } from "@dev-loops/core/loop/pr-gate-coordination";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { loadDevLoopConfigStrict, resolveGateConfig } from "@dev-loops/core/config";
@@ -17,6 +20,8 @@ import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refi
 import { sanitizeInline } from "./post-gate-findings.mjs";
 import { findOperatorOwnedLineRefusal } from "@dev-loops/core/github/operator-owned-lines";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { hasSpikePrMarker, spikePrRefusal } from "./_spike-pr-marker.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 const USAGE = `Usage: ready-for-review.mjs --repo <owner/name> --pr <number> [--waive-size-budget --reason <text> [--approved-by <human>]]
 Wrapper around gh pr ready that enforces gate-evidence validation and the
@@ -52,6 +57,9 @@ Also enforces the fail-closed comment-discipline guard
 citing issue-number chronology or over the design-essay threshold blocks unless
 it carries the inline \`comment-discipline:allow\` marker; diff-scoped and
 added-lines-only, so it never flags pre-existing comments.
+
+Also refuses a PR whose body carries the \`dev-loops:spike-pr no-merge\` marker
+line (ADR 0293); no waiver surface exists.
 
 ${JQ_OUTPUT_USAGE}`;
 const parseError = buildParseError(USAGE);
@@ -108,7 +116,7 @@ export function describeUnresolvedGateThreadReasons(breakdown, fallbackCount) {
   const reasons = [];
   if (question > 0) {
     reasons.push(
-      `${question} question thread(s): if unanswered, post a resolving answer reply, then rerun close-gate-findings — it reject-closes an answered question the judge rejected (citing the judge's rejection rationale); an answered question the judge disposed act with an evidence-only remedy is closed by a close-gate-findings rerun, and any other judge-disposed act question is resolved by the fixer's own answer-and-resolve path; an answered question whose judge disposition is ambiguous or unrecorded needs an operator decision`,
+      `${question} question thread(s): if unanswered, post a resolving answer reply, then rerun close-gate-findings — it reject-closes an answered question the judge rejected (citing the judge's rejection rationale); an answered question the judge disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied, is closed by a close-gate-findings rerun, and any other judge-disposed act question is resolved by the fixer's own answer-and-resolve path; an answered question whose judge disposition is ambiguous or unrecorded needs an operator decision`,
     );
   }
   if (nit > 0) {
@@ -119,7 +127,7 @@ export function describeUnresolvedGateThreadReasons(breakdown, fallbackCount) {
     // gate-fanin.mjs) — naming fixer fix-close here would send operators to
     // a remedy that cannot clear this count.
     reasons.push(
-      `${nit} open nit thread(s): rerun close-gate-findings once the judge has rejected or deferred it (or disposed it act with an evidence-only remedy); an unjudged or act nit needs the fixer or a judge rerun`,
+      `${nit} open nit thread(s): rerun close-gate-findings once the judge has rejected or deferred it (or disposed it act with an evidence-only remedy); an unjudged or act nit needs the fixer or a judge rerun, except a pr_body act thread, which close-gate-findings closes after the PR-body edit once the live body digest differs`,
     );
   }
   if (other > 0) {
@@ -129,7 +137,7 @@ export function describeUnresolvedGateThreadReasons(breakdown, fallbackCount) {
     // judge-rejected high is cleared by neither remedy and stays on the
     // operator path.
     reasons.push(
-      `${other} open defect thread(s) (high/medium/low): resolve via fixer fix-close, or rerun close-gate-findings once the judge has deferred or rejected a medium or low (ADR 0144) or disposed it act with an evidence-only remedy; an unjudged or act thread needs the fixer or a judge rerun; a judge-rejected high is cleared by neither and needs an operator decision`,
+      `${other} open defect thread(s) (high/medium/low): resolve via fixer fix-close, or rerun close-gate-findings once the judge has deferred or rejected a medium or low (ADR 0144) or disposed it act with an evidence-only remedy; an unjudged or act thread needs the fixer or a judge rerun, except a pr_body act thread, which close-gate-findings closes after the PR-body edit once the live body digest differs; a judge-rejected high is cleared by neither and needs an operator decision`,
     );
   }
   if (reasons.length === 0) {
@@ -199,7 +207,7 @@ async function postSizeBudgetWaiverComment({ repo, pr, headSha, sizeBudget, reas
 // `skipCiPrecondition` is a runtime-only seam (no CLI flag on this script):
 // restore-ready.mjs calls readyForReview() directly with it set, so the CI
 // precondition can never be skipped through this script's own CLI surface.
-export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild: runChildImpl = runChild, syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire, verifyPolicyChangeApproval: verifyPolicyChangeApprovalFn = verifyPolicyChangeApproval, evaluateCommentDiscipline: evaluateCommentDisciplineFn = realEvaluateCommentDiscipline, skipCiPrecondition = false, resolveCapRoundFixed: resolveCapRoundFixedFn = realResolveCapRoundFixed } = {}) {
+export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild: runChildImpl = runChild, syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire, verifyPolicyChangeApproval: verifyPolicyChangeApprovalFn = verifyPolicyChangeApproval, evaluateCommentDiscipline: evaluateCommentDisciplineFn = realEvaluateCommentDiscipline, skipCiPrecondition = false, resolveCapRoundFixed: resolveCapRoundFixedFn = realResolveCapRoundFixed, coordinationSnapshotRoot } = {}) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const requireCi = draftGateConfig?.requireCi !== false && skipCiPrecondition !== true;
@@ -207,6 +215,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   const headSha = prState.headRefOid;
   if (!headSha) throw new Error(`Could not resolve head SHA`);
   if (!prState.isDraft) throw new Error(`PR #${options.pr} is not in draft state`);
+  if (hasSpikePrMarker(prState.body)) throw new Error(spikePrRefusal(options.pr));
   const titleMarkers = findBlockingTitleMarkers(prState.title);
   if (titleMarkers.length > 0) throw new Error(`PR #${options.pr} cannot be marked ready: title contains merge-blocking marker(s): ${titleMarkers.join(", ")}. Remove them from the title first.`);
   const assertCiGreen = async () => { const ci = await fetchCiStatus({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild: runChildImpl }); if (ci.status === "blocked") throw new Error(`PR #${options.pr} has blocking CI checks`); if (ci.status !== "success") throw new Error(`PR #${options.pr} CI is not green`); };
@@ -223,7 +232,10 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   // (skipCiPrecondition=false) keeps accepting either.
   const gateHeadClean = skipCiPrecondition === true ? gate.currentHeadClean : gate.effectiveHeadClean;
   // ADR 0208: the cap round's fixer pass landed and its delta cleared: no further draft_gate round runs, so this stands in for a clean current-head verdict. CI and every check below stay.
-  const capRoundFixed = !gateHeadClean && skipCiPrecondition !== true && Boolean(await resolveCapRoundFixedFn({ repo: options.repo, pr: options.pr, headSha, baseRefName: prState.baseRefName }, { repoRoot }));
+  const capRound = !gateHeadClean && skipCiPrecondition !== true ? await resolveCapRoundFixedFn({ repo: options.repo, pr: options.pr, headSha, baseRefName: prState.baseRefName }, { repoRoot }) : null;
+  // A clean cap round proven only by its local ledger is no evidence CI can read: refuse until its verdict is posted.
+  if (capRound && cleanCapVerdictUnposted(capRound, gate.draftGatePostedHeads ?? [])) throw new Error(`PR #${options.pr} cap round is clean but its draft_gate verdict is not posted on GitHub (${CAP_ROUND_REFUSAL.clean_cap_verdict_unposted})`);
+  const capRoundFixed = Boolean(capRound);
   // The restore path never accepts the cap-round proof (it was never CI-checked at this head): name the remedy.
   const capRestoreRemedy = skipCiPrecondition === true ? "; a cap-round-fixed PR (ADR 0208) leaves draft through ready-for-review.mjs once CI is green" : "";
   if (!capRoundFixed && !gate.cleanEvidenceExists && !gateHeadClean) throw new Error(`No visible clean draft_gate evidence on ${headSha.slice(0,7)}${capRestoreRemedy}`);
@@ -317,6 +329,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   }
   const readyResult = await runChildImpl(ghCommand, ["pr", "ready", String(options.pr), "--repo", options.repo], env);
   if (readyResult.code !== 0) throw new Error(`gh pr ready failed: ${readyResult.stderr?.trim() || `exit code ${readyResult.code}`}`);
+  await deletePrGateCoordinationSnapshot({ repo: options.repo, pr: options.pr }, { repoRoot, runChild: runChildImpl, coordinationSnapshotRoot });
   // #1069: couple the In-Progress board move to the ready transition. Best-effort
   // and NON-FATAL — a board failure must NEVER block or fail marking ready.
   let boardSync;
@@ -341,5 +354,6 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseReadyForReviewCliArgs(process.argv.slice(2)).help);
   main().then(c => { process.exitCode = c; }).catch(e => { process.stderr.write(`${formatCliError(e, { usage: USAGE })}\n`); process.exitCode = 1; });
 }

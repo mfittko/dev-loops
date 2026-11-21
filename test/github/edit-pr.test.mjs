@@ -367,6 +367,43 @@ test("editPr: refuses the same standing-authorization waiver line when written b
   );
 });
 
+test("editPr: refuses a body edit that removes the spike no-merge marker", async () => {
+  const { run, calls } = stubGh();
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Body\n" }), { run, fetchPrContext: withCurrentBody("Body\n\n<!-- dev-loops:spike-pr no-merge -->\n") }),
+    /refusing to remove the spike no-merge marker/,
+  );
+  assert.equal(calls.length, 0);
+});
+
+test("editPr: refuses a body edit that adds the spike no-merge marker to a non-spike PR", async () => {
+  const { run, calls } = stubGh();
+  for (const marker of ["<!-- dev-loops:spike-pr no-merge -->"]) {
+    await assert.rejects(
+      () => editPr(editOpts({ body: `Body\n\n${marker}\n` }), { run, fetchPrContext: withCurrentBody("Body\n") }),
+      /refusing to add the spike no-merge marker/,
+    );
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("editPr: refuses a body edit that moves the spike no-merge marker off the last line", async () => {
+  const { run, calls } = stubGh();
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Body\n\n<!-- dev-loops:spike-pr no-merge -->\n\nTrailing text\n" }), { run, fetchPrContext: withCurrentBody("Body\n\n<!-- dev-loops:spike-pr no-merge -->\n") }),
+    /refusing to remove the spike no-merge marker/,
+  );
+  assert.equal(calls.length, 0);
+});
+
+test("editPr: accepts a fenced or inline mention of the spike marker on a non-spike PR", async () => {
+  for (const body of ["Body\n\n```\n<!-- dev-loops:spike-pr no-merge -->\n```\n", "Body text <!-- dev-loops:spike-pr no-merge -->\n"]) {
+    const { run } = stubGh();
+    const result = await editPr(editOpts({ body }), { run, fetchPrContext: withCurrentBody("Body\n") });
+    assert.deepEqual(result.edited, ["body"]);
+  }
+});
+
 test("editPr: accepts an edit that preserves the existing waiver lines", async () => {
   const { run, calls } = stubGh();
   const result = await editPr(editOpts({ body: `New prose\n\n${WAIVER}\n` }), { run, fetchPrContext: withCurrentBody(`Old prose\n\n${WAIVER}\n`) });
@@ -376,7 +413,7 @@ test("editPr: accepts an edit that preserves the existing waiver lines", async (
 
 test("editPr: the waiverWriter runtime seam may change the waiver line (no CLI flag exists)", async () => {
   const { run, calls } = stubGh();
-  const result = await editPrRaw(editOpts({ body: `Body\n\n${WAIVER}\n` }), { run, waiverWriter: true });
+  const result = await editPrRaw(editOpts({ body: `Body\n\n${WAIVER}\n` }), { run, waiverWriter: true, currentBody: "Body\n" });
   assert.deepEqual(result.edited, ["body"]);
   assert.equal(calls.length, 1);
   assert.throws(() => parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--body", "x", "--waiver-writer"]), /Unknown argument/);
@@ -560,4 +597,37 @@ test("editPr (#2898): tick-verified-checkboxes and the untick guard agree on one
   assert.equal(ticked.body, live.replaceAll("[ ]", "[x]"));
   // the guard sees the same three rows: unticking them again is refused for each
   await assert.rejects(() => attemptEdit(ticked.body, live), /untick or remove 3 checked row/);
+});
+
+test("editPr: the waiverWriter seam still refuses to move the spike marker off the last line", async () => {
+  const marker = "<!-- dev-loops:spike-pr no-merge -->";
+  const { run } = stubGh();
+  await assert.rejects(
+    () => editPrRaw(editOpts({ body: `Body\n\n${marker}\n\n${WAIVER}\n` }), { run, waiverWriter: true, currentBody: `Body\n\n${marker}\n` }),
+    /spike no-merge marker/,
+  );
+});
+
+test("editPr: refuses a literal `null` body (also padded) unless --allow-empty-body", async () => {
+  for (const body of ["null", "  null\n"]) {
+    const { run } = stubGh();
+    await assert.rejects(
+      () => editPr({ repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] }, { run }),
+      /--body is only `null`/,
+    );
+  }
+  assert.equal(parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--body", "null", "--allow-empty-body"]).allowEmptyBody, true);
+  const { run } = stubGh();
+  await editPr({ repo: "o/n", pr: 5, body: "null", allowEmptyBody: true, addAssignees: [], removeAssignees: [] }, { run });
+});
+
+test("editPr: refuses a --body-file containing only `null`", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "edit-pr-"));
+  const nullPath = join(dir, "null.md");
+  writeFileSync(nullPath, "null\n");
+  const { run } = stubGh();
+  await assert.rejects(
+    () => editPr({ repo: "o/n", pr: 5, bodyFile: nullPath, addAssignees: [], removeAssignees: [] }, { run }),
+    /--body-file .* is only `null`/,
+  );
 });

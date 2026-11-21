@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, test } from "bun:test";
-import { runIdFreeEnv, runNode as runNodeHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { runIdFreeEnv, withLaneRunContext, runNode as runNodeHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -10,7 +10,7 @@ import { PassThrough } from "node:stream";
 import {
   formatWatchCycleConcise,
   parseWatchCycleCliArgs,
-  runWatchCycle,
+  runWatchCycle as runWatchCycleAtCwd,
   watchWorkflowRun,
 } from "../../scripts/loop/run-watch-cycle.mjs";
 import { runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
@@ -19,20 +19,27 @@ import { EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY } from "@dev-loops/core/loop/timeo
 // Config-hermeticity (issue #2055): the integration tests that exercise the real
 // runHandoff resolve the Copilot round cap from a fixture repoRoot mirroring the
 // real .devloops with maxCopilotRounds pinned to 2, not the ambient .devloops
-// (the repo pins maxCopilotRounds to 2 for test isolation). Assertions are
+// (the fixture owns its cap for test isolation). Assertions are
 // unchanged. runWatchCycle does not
 // forward a repoRoot to runHandoff, so inject it through a runHandoffImpl wrapper.
 // The fixture pins the strict Copilot convergence mode
 // (refinement.requireCopilotConvergenceAtLatestHead: true): the re-request
 // scenarios below were written against it.
 let capFixtureRepoRoot = null;
+// Issue 3224: the lease cwd defaults to an isolated checkout with no run-context file, so a lane
+// worktree that holds `.pi/dev-loop-run-context.json` cannot change which run id these cycles resolve.
+let isolatedCheckout = null;
+const runWatchCycle = (options, deps = {}) => runWatchCycleAtCwd(options, { cwd: isolatedCheckout, ...deps });
 beforeAll(async () => {
+  isolatedCheckout = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-cycle-checkout-"));
+  await mkdir(path.join(isolatedCheckout, ".git"));
   capFixtureRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-cycle-cap-fixture-"));
   const realDevloops = await readFile(path.resolve(".devloops"), "utf8");
   await writeFile(path.join(capFixtureRepoRoot, ".devloops"), realDevloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2\n  requireCopilotConvergenceAtLatestHead: true"), "utf8");
 });
 afterAll(async () => {
   if (capFixtureRepoRoot) await rm(capFixtureRepoRoot, { recursive: true, force: true });
+  if (isolatedCheckout) await rm(isolatedCheckout, { recursive: true, force: true });
 });
 const capPinnedHandoff = (opts, ctx) => runHandoff(opts, { ...ctx, repoRoot: capFixtureRepoRoot });
 
@@ -1030,6 +1037,28 @@ test("watcher-exclusivity gate permits the copilot watch when this run owns the 
   assert.equal(result.watcherExclusivity ?? null, null, "no post-watch transition marker on the copilot path (no watcher-reported head to validate against)");
 });
 
+test("watcher-exclusivity claims under the run id from the run-context file with no env var (issue 3224)", async () => {
+  await withLaneRunContext(async ({ runId }) => {
+    const claimed = [];
+    const result = await runWatchCycle(
+      { repo: "owner/repo", pr: 17 },
+      {
+        env: {},
+        cwd: process.cwd(),
+        runHandoffImpl: copilotWatchHandoffWithHead("abc123"),
+        ensureOwnershipImpl: async () => ({ ok: true }),
+        recordWatchClaimImpl: async ({ runId: id, head, waitKind }) => {
+          claimed.push(id);
+          return { ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } };
+        },
+        watchCopilotReviewImpl: async () => ({ ok: true, status: "idle", attempts: 1, newComments: [], newReviews: [], newIssueComments: [] }),
+      },
+    );
+    assert.deepEqual(claimed, [runId]);
+    assert.equal(result.watcherExclusivity?.blocked ?? false, false);
+  });
+});
+
 test("watcher-exclusivity CI settled success maps to the resolver's completed transition, carrying the watcher head", async () => {
   const result = await runWatchCycle(
     { repo: "owner/repo", pr: 17 },
@@ -1415,4 +1444,49 @@ test("execution-record telemetry: a blocked CI gate attaches a record whose outc
     "the record's outcome must reflect the FINAL disposition (pending) set by the exclusivity block, not the initial terminal guess made before the gate resolved",
   );
   assert.equal(result.executionRecord.outcome, result.cycleDisposition);
+});
+
+test("runWatchCycle records a timed-out Copilot wait so request_not_observable can fire (issue 3329)", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "watch-cycle-probe-record-"));
+  const fakeGh = path.join(dir, "gh");
+  await writeFile(fakeGh, "#!/bin/sh\necho '{\"headRefOid\":\"abc123\"}'\n", { mode: 0o755 });
+  const { recordUnobservableRequest, readRequestNotObservable } = await import("../../scripts/loop/_unobservable-review-request-record.mjs");
+  const key = { repo: "owner/repo", pr: 17, headSha: "abc123" };
+  await recordUnobservableRequest(key, { checkpointDir: dir });
+  await recordUnobservableRequest(key, { checkpointDir: dir });
+  let t = 0;
+  for (let i = 0; i < 2; i += 1) {
+    const result = await runWatchCycle(
+      { repo: "owner/repo", pr: 17, forceRerequestReview: false, probeOnly: false },
+      {
+        env: SINGLE_RUNNER_ENV,
+        ghCommand: fakeGh,
+        checkpointDir: dir,
+        now: () => { t += 200_000; return t; },
+        runHandoffImpl: async () => ({
+          ok: true,
+          action: "watch",
+          state: "waiting_for_copilot_review",
+          allowedTransitions: ["unresolved_feedback_present"],
+          nextAction: "Wait for Copilot review",
+          snapshot: { repo: "owner/repo", pr: 17, forceRerequestReview: false, probeOnly: false },
+          loopDisposition: "pending",
+          terminal: false,
+          requestWatchContract: {
+            action: "watch",
+            nextAction: "Wait for Copilot review",
+            requestStatus: "requested",
+            routingState: "copilot_request_confirmed_waiting",
+            watchEntryConfirmed: true,
+            watchArgs: { repo: "owner/repo", pr: 17, pollIntervalMs: 60_000, timeoutMs: 1_800_000 },
+          },
+          watchArgs: { repo: "owner/repo", pr: 17, pollIntervalMs: 60_000, timeoutMs: 1_800_000 },
+        }),
+        watchCopilotReviewImpl: async () => ({ ok: true, status: "timeout", repo: "owner/repo", pr: 17, attempts: 1, newComments: [], newReviews: [], newIssueComments: [] }),
+      },
+    );
+    assert.equal(result.watch.warning, undefined);
+  }
+  assert.ok(await readRequestNotObservable(key, { checkpointDir: dir }));
+  await rm(dir, { recursive: true, force: true });
 });

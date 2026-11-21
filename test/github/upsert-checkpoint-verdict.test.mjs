@@ -25,10 +25,12 @@ import {
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../../scripts/loop/_stale-runner-detection.mjs";
+import { writeRunContext } from "@dev-loops/core/loop/run-context";
 import { buildFanoutEnforcement, buildPreMergeGateCheck, deriveEvidenceState, detectCheckpointEvidence, EVIDENCE_STATE, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { buildLogPath, writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
+import { loadPrGateCoordinationContext, writePrGateCoordinationSnapshot } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
@@ -88,7 +90,8 @@ let fanoutDisabledRepoRoot = null;
 before(async () => {
   gitStubDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gitstub-"));
   const gitStubPath = path.join(gitStubDir, "git");
-  await writeFile(gitStubPath, "#!/bin/sh\n[ \"$1\" = cat-file ] && exit 1\nexit 0\n", "utf8");
+  // symbolic-ref answers the default-branch lookup of the trust-config load; ls-tree prints nothing, so the built-in trust defaults apply.
+  await writeFile(gitStubPath, "#!/bin/sh\n[ \"$1\" = cat-file ] && exit 1\n[ \"$1\" = symbolic-ref ] && { echo origin/main; exit 0; }\nexit 0\n", "utf8");
   await chmod(gitStubPath, 0o755);
   originalPath = process.env.PATH;
   process.env.PATH = [gitStubDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter);
@@ -99,9 +102,8 @@ before(async () => {
   assert.notEqual(fanoutOff, realDevloops, "expected to find gates.requireFanoutEvidence: true in the repo's own .devloops to patch for test isolation");
   // Config-hermeticity (issue #2055): pin the round cap to 2 so these tests own
   // their cap instead of inheriting the ambient .devloops refinement.maxCopilotRounds
-  // (the repo pins refinement.maxCopilotRounds to 2 for test isolation).
-  // Assertions are unchanged; the replace is a
-  // no-op when the ambient value is already 2 (e.g. main).
+  // (the fixture pins the cap to 2 regardless of the ambient value).
+  // Assertions are unchanged.
   // The legacy input shapes below predate the round cap, so the default fixture turns it off (the cap has its own tests).
   const patched = fanoutOff.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2").replace("\n  draft:\n", "\n  draft:\n    maxReviewRounds: 0\n");
   assert.match(patched, /maxCopilotRounds: 2/, "expected refinement.maxCopilotRounds in the repo's own .devloops to pin for test isolation");
@@ -198,6 +200,7 @@ const runNode = async (args = [], options = {}) => {
       // (#2185): a test may pass a fake evaluatePrSizeBudget to assert the
       // derived fields without a real git diff.
       ...(options.evaluatePrSizeBudget ? { evaluatePrSizeBudget: options.evaluatePrSizeBudget } : {}),
+      ...(options.coordinationSnapshotRoot ? { coordinationSnapshotRoot: options.coordinationSnapshotRoot } : {}),
     });
     process.stderr.write = originalWrite;
     const inlineWarning = buildInlineExecutionWarning(options_.executionMode, options_.inlineReason);
@@ -981,6 +984,154 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
       blockCleanOnFindingSeverities: ["high"],
     });
   }, { prefix: "dev-loops-upsert-gate-review-create-" });
+});
+
+const SNAPSHOT_HEAD = "abc1234000000000000000000000000000000000";
+const snapshotCoordinationEntries = (headRefOid = SNAPSHOT_HEAD) => [
+  { assertArgs: ["pr", "view", "17", "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid, body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n" },
+  { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+  { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+  { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid }) + "\n" },
+  { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+];
+const snapshotLiveHeadEntry = (headRefOid = SNAPSHOT_HEAD, isDraft = true, extra = {}) => ({ assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,mergeable,mergeStateStatus,body,closingIssuesReferences,statusCheckRollup"], stdout: JSON.stringify({ headRefOid, isDraft, state: "OPEN", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }], ...extra }) + "\n" });
+const snapshotThreadsEntry = (nodes = []) => ({ assertArgs: ["api", "graphql", "pr=17"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) + "\n" });
+const snapshotThread = (author, body) => ({ id: "THREAD_1", isResolved: false, isOutdated: false, path: "a.mjs", line: 1, comments: { nodes: [{ id: "gid-1", databaseId: 601, body, authorAssociation: "OWNER", author: { login: author, __typename: "User" } }] } });
+const snapshotPostEntries = () => [
+  { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n' },
+];
+const snapshotVerdictArgs = ["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", SNAPSHOT_HEAD, "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}', "--findings-summary", "no issues found", "--next-action", "mark ready for review"];
+const seedCoordinationSnapshot = async (root) => {
+  const { runChild } = makeGhMockRaw(snapshotCoordinationEntries());
+  const seedOptions = { repo: "owner/repo", pr: 17, lightweight: false };
+  const seedRuntime = { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: fanoutDisabledRepoRoot, runChild, coordinationSnapshotRoot: root };
+  await writePrGateCoordinationSnapshot(seedOptions, seedRuntime, await loadPrGateCoordinationContext(seedOptions, seedRuntime));
+  return path.join(root, "gate-coordination", "owner-repo", "pr-17", "context-snapshot.json");
+};
+
+test("upsert-checkpoint-verdict reuses the coordination snapshot, re-reads the live head and verdict comments, and deletes the snapshot after posting", async () => {
+  await withTempDir(async (tempDir) => {
+    const snapshotFile = await seedCoordinationSnapshot(tempDir);
+    const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(), snapshotThreadsEntry(), ...snapshotCoordinationEntries().slice(3), ...snapshotPostEntries()]);
+    const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
+    assert.match(ghArgs[0], /pr view 17 --repo owner\/repo --json headRefOid,isDraft,state,mergeable,mergeStateStatus,body,closingIssuesReferences,statusCheckRollup$/);
+    assert.equal(ghArgs.filter((a) => a.endsWith("--json headRefOid,isDraft,state,mergeable,mergeStateStatus,body,closingIssuesReferences,statusCheckRollup")).length, 1, "the live write-guard read runs once");
+    assert.equal(ghArgs.some((a) => a.includes("--json number,state,isDraft")), false, "the coordination context is not refetched");
+    assert.equal(ghArgs.some((a) => a.includes("issues/17/comments")), true, "the verdict comments are re-read live");
+    assert.match(ghArgs.at(-1), /pulls\/17\/reviews/);
+    assert.equal(await readFile(snapshotFile, "utf8").catch(() => null), null);
+  }, { prefix: "dev-loops-upsert-snapshot-reuse-" });
+});
+
+test("upsert-checkpoint-verdict deletes the snapshot when the post fails", async () => {
+  await withTempDir(async (tempDir) => {
+    const snapshotFile = await seedCoordinationSnapshot(tempDir);
+    const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(), snapshotThreadsEntry(), ...snapshotCoordinationEntries().slice(3)]);
+    const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+    assert.notEqual(result.code, 0);
+    assert.equal(await readFile(snapshotFile, "utf8").catch(() => null), null);
+  }, { prefix: "dev-loops-upsert-snapshot-failed-post-" });
+});
+
+test("upsert-checkpoint-verdict discards a reused snapshot whose head moved and loads fresh", async () => {
+  await withTempDir(async (tempDir) => {
+    await seedCoordinationSnapshot(tempDir);
+    const env = await writeGhStub(tempDir, [
+      snapshotLiveHeadEntry("def4567000000000000000000000000000000000"),
+      ...snapshotCoordinationEntries(),
+      ...snapshotPostEntries(),
+    ]);
+    const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+    const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
+    assert.match(ghArgs[0], /--json headRefOid,isDraft,state,mergeable,mergeStateStatus,body,closingIssuesReferences,statusCheckRollup$/);
+    assert.match(ghArgs[1], /--json number,state,isDraft,headRefOid/);
+  }, { prefix: "dev-loops-upsert-snapshot-moved-" });
+});
+
+test("upsert-checkpoint-verdict discards a reused snapshot whose live draft state changed and loads fresh", async () => {
+  await withTempDir(async (tempDir) => {
+    await seedCoordinationSnapshot(tempDir);
+    const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(SNAPSHOT_HEAD, false), ...snapshotCoordinationEntries(), ...snapshotPostEntries()]);
+    const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+    const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
+    assert.match(ghArgs[1], /--json number,state,isDraft,headRefOid/);
+  }, { prefix: "dev-loops-upsert-snapshot-draft-moved-" });
+});
+
+for (const [name, live] of [["PR state became MERGED", { state: "MERGED" }], ["PR state became CLOSED", { state: "CLOSED" }], ["live mergeable became CONFLICTING", { mergeable: "CONFLICTING" }], ["live mergeStateStatus became DIRTY", { mergeStateStatus: "DIRTY" }], ["PR body changed", { body: "## Summary\nedited after the pre-flight\n" }], ["closing issue set changed with an equal body", { closingIssuesReferences: [{ number: 42 }] }], ["CI rollup turned failing at the same head", { statusCheckRollup: [{ status: "COMPLETED", conclusion: "FAILURE", name: "ci" }] }]]) {
+  test(`upsert-checkpoint-verdict discards a reused snapshot when the live ${name} and loads fresh`, async () => {
+    await withTempDir(async (tempDir) => {
+      await seedCoordinationSnapshot(tempDir);
+      const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(SNAPSHOT_HEAD, true, live), ...snapshotCoordinationEntries(), ...snapshotPostEntries()]);
+      const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+      const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
+      assert.match(ghArgs[0], /--json headRefOid,isDraft,state,mergeable,mergeStateStatus,body,closingIssuesReferences,statusCheckRollup$/);
+      assert.match(ghArgs[1], /--json number,state,isDraft,headRefOid/, result.stderr);
+    }, { prefix: "dev-loops-upsert-snapshot-live-field-" });
+  });
+}
+
+test("upsert-checkpoint-verdict discards a reused snapshot when the live unresolved thread count differs and loads fresh", async () => {
+  await withTempDir(async (tempDir) => {
+    await seedCoordinationSnapshot(tempDir);
+    const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(), snapshotThreadsEntry([snapshotThread("someone", "please rename this")]), ...snapshotCoordinationEntries(), ...snapshotPostEntries()]);
+    const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+    const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
+    assert.match(ghArgs[2], /--json number,state,isDraft,headRefOid/, result.stderr);
+  }, { prefix: "dev-loops-upsert-snapshot-threads-moved-" });
+});
+
+test("upsert-checkpoint-verdict discards a reused snapshot when the live gate-authored thread count differs and loads fresh", async () => {
+  await withTempDir(async (tempDir) => {
+    await seedCoordinationSnapshot(tempDir);
+    const gateThread = snapshotThread("gate-bot", buildFindingMarker({ fp: "e95771ac1b533743", severity: "medium", angle: "correctness", round: 1 }));
+    const env = await writeGhStub(tempDir, [
+      snapshotLiveHeadEntry(),
+      snapshotThreadsEntry([gateThread]),
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      ...snapshotCoordinationEntries(),
+      ...snapshotPostEntries(),
+    ]);
+    const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+    const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
+    assert.match(ghArgs[3], /--json number,state,isDraft,headRefOid/, result.stderr);
+  }, { prefix: "dev-loops-upsert-snapshot-gate-threads-moved-" });
+});
+
+test("upsert-checkpoint-verdict discards a reused snapshot when the head moves between the live reads", async () => {
+  await withTempDir(async (tempDir) => {
+    await seedCoordinationSnapshot(tempDir);
+    const moved = "def4567000000000000000000000000000000000";
+    const env = await writeGhStub(tempDir, [
+      snapshotLiveHeadEntry(), snapshotThreadsEntry(),
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid: moved }) + "\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      ...snapshotCoordinationEntries(moved),
+      ...snapshotPostEntries(),
+    ]);
+    const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+    const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
+    assert.equal(ghArgs.some((a) => a.includes("--json number,state,isDraft,headRefOid")), true);
+  }, { prefix: "dev-loops-upsert-snapshot-evidence-head-" });
+});
+
+test("upsert-checkpoint-verdict discards a reused snapshot when the live draft_gate evidence changed", async () => {
+  await withTempDir(async (tempDir) => {
+    await seedCoordinationSnapshot(tempDir);
+    const comment = buildGateComment({ commentId: 7 });
+    const env = await writeGhStub(tempDir, [
+      snapshotLiveHeadEntry(), snapshotThreadsEntry(),
+      ...snapshotCoordinationEntries().slice(3, 4),
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[comment]]) + "\n" },
+      ...snapshotCoordinationEntries(),
+      ...snapshotPostEntries(),
+    ]);
+    const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+    const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
+    assert.equal(ghArgs.some((a) => a.includes("--json number,state,isDraft,headRefOid")), true, result.stderr);
+  }, { prefix: "dev-loops-upsert-snapshot-draftgate-" });
 });
 
 test("upsert-checkpoint-verdict ignores a caller next action on a clean draft_gate (#3197)", async () => {
@@ -5536,6 +5687,46 @@ test("upsert-checkpoint-verdict by run R on R's own aged claim succeeds with no 
   }, { prefix: "dev-loops-upsert-own-aged-claim-" });
 });
 
+// Issue 3224 AC2: with no DEVLOOPS_RUN_ID, the lane's run id comes from the worktree run-context
+// file, so a claim aged past the 1,800,000 ms stale window is renewed instead of refused.
+test("upsert-checkpoint-verdict renews the lane's aged claim through the run-context file with no env var", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    await writeFile(path.join(tempDir, ".git"), "gitdir: ./.git-common/worktrees/lane\n");
+    writeRunContext({ runId: "devloops-lane", root: tempDir });
+    const claim = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "devloops-lane", cwd: tempDir, now: new Date(Date.now() - 1_800_000 - 60_000).toISOString() });
+    const ghEnv = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: [],
+        issueComments: [],
+      }),
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":301,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-301"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+    ], { cwd: tempDir, env: { ...ghEnv, DEVLOOPS_RUN_ID: "" } });
+    assert.equal(result.code, 0, result.stderr);
+    const persisted = JSON.parse(await readFile(claim.filePath, "utf8"));
+    assert.equal(persisted.activeRun.runId, "devloops-lane");
+    assert.ok(Date.now() - Date.parse(persisted.activeRun.updatedAt) < 1_800_000, "the claim is fresh again");
+    assert.ok(!persisted.history.some((entry) => entry.type === "takeover"));
+  }, { prefix: "dev-loops-upsert-run-context-" });
+});
+
 // #2884 ac:2: a heartbeat between the stale read and the locked write keeps the owner (the takeover pins the observed generation).
 test("upsert-checkpoint-verdict stale takeover refuses when the claim changes after the stale read", async () => {
   await withTempDir(async (tempDir) => {
@@ -8060,6 +8251,87 @@ test("upsert-checkpoint-verdict --findings-ledger omits the evidence-only label 
   }, { prefix: "dev-loops-upsert-evidence-only-mixed-" });
 });
 
+// #3309: the ledger-label merge accepts pr_body as a judged remedyKind; the evidence-only label stays reserved for evidence_only.
+test("upsert-checkpoint-verdict --findings-ledger accepts a pr_body act finding, with or without a mixed evidence_only sibling, and never shows the evidence-only label (#3309)", async () => {
+  for (const [name, remedies] of [["all", ["pr_body"]], ["mixed", ["pr_body", "evidence_only"]]]) {
+    await withTempDir(async (tempDir) => {
+      const ledgerPath = await writeSingleSurfaceLedger(tempDir, [BODY_FILED_FINDING]);
+      const findingsPath = path.join(tempDir, "findings.json");
+      const base = { severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary, judgeDisposition: "act" };
+      await writeFile(findingsPath, JSON.stringify([
+        { angle: "pr-description", verdict: "clean", findings: [] },
+        { angle: "scope", verdict: "clean", findings: [] },
+        { angle: "holistic", verdict: "clean", findings: [] },
+        { angle: "correctness", verdict: "clean", findings: [] },
+        { angle: "coverage", verdict: "findings_present", findings: remedies.map((remedyKind) => ({ ...base, remedyKind })) },
+      ]), "utf8");
+      const { runChild, calls } = makeGhMock([
+        ...singleSurfaceLeadingEntries(),
+        {
+          assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+          stdout: '{"id":701,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-701"}\n',
+        },
+      ]);
+      await upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "draft_gate",
+        headSha: SINGLE_SURFACE_HEAD,
+        verdict: "findings_present",
+        findingsJson: findingsPath,
+        findingsLedger: ledgerPath,
+        nextAction: "stay draft and fix",
+        executionMode: "fanout_fanin",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+      const post = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+      const body = JSON.parse(post.stdinText).body;
+      assert.match(body, /inconsistent casing in constants/, name);
+      assert.doesNotMatch(body, /evidence only, no file change/, name);
+    }, { prefix: `dev-loops-upsert-pr-body-${name}-` });
+  }
+});
+
+// #3309: the ledger-label merge copies pr_body onto a locatable ledger finding only when every same-fingerprint act match is pr_body.
+// Observable seam: --converged-json compares the ledger's PR-body items (isDeltaBodyItem) with its actList, so a wrong label shows as a PR-body disagreement.
+test("upsert-checkpoint-verdict --findings-ledger labels a ledger finding pr_body only when every act match is pr_body (#3309)", async () => {
+  const locatable = { ...BODY_FILED_FINDING, files: ["src/a.mjs"] };
+  const cases = [
+    // All pr_body: the ledger finding gains pr_body, so it is a PR-body item and matches the pr_body actList item.
+    { name: "all", ledger: [locatable], remedies: ["pr_body"], actRemedyKind: "pr_body", reached: /no unclaimed gh fixture matched: pr view 17 --repo owner\/repo --json body/ },
+    // Mixed: no label, so both locatable ledger findings stay code items and match an actList with no remedyKind.
+    { name: "mixed", ledger: [locatable, { ...locatable }], remedies: ["pr_body", "evidence_only"], actRemedyKind: undefined, reached: /converged\.fixerCommit must be a full sha different from the reviewed head/ },
+  ];
+  for (const { name, ledger, remedies, actRemedyKind, reached } of cases) {
+    await withTempDir(async (tempDir) => {
+      const ledgerPath = await writeSingleSurfaceLedger(tempDir, ledger);
+      const findingsPath = path.join(tempDir, "findings.json");
+      const base = { severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary, files: ["src/a.mjs"], judgeDisposition: "act" };
+      await writeFile(findingsPath, JSON.stringify([
+        { angle: "coverage", verdict: "findings_present", findings: remedies.map((remedyKind) => ({ ...base, remedyKind })) },
+      ]), "utf8");
+      const convergedPath = path.join(tempDir, "converged.json");
+      const item = { severity: base.severity, summary: base.summary, files: base.files, ...(actRemedyKind ? { remedyKind: actRemedyKind } : {}) };
+      await writeFile(convergedPath, JSON.stringify({ fixerCommit: SINGLE_SURFACE_HEAD, actList: ledger.map(() => item) }), "utf8");
+      const { runChild } = makeGhMock(singleSurfaceLeadingEntries());
+      const err = await upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "draft_gate",
+        headSha: SINGLE_SURFACE_HEAD,
+        verdict: "clean",
+        findingsJson: findingsPath,
+        findingsLedger: ledgerPath,
+        convergedJson: convergedPath,
+        nextAction: "stay draft and fix",
+        executionMode: "fanout_fanin",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }).then(() => null, (e) => e);
+      assert.doesNotMatch(String(err?.message ?? ""), /disagree on which items are PR-body items/, name);
+      // The refusal that follows the PR-body comparison proves the label merge ran first.
+      assert.match(String(err?.message ?? ""), reached, name);
+    }, { prefix: `dev-loops-upsert-pr-body-label-${name}-` });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // #2263: inlineSeverityFloor — locatable low/nit findings fold into the
 // verdict body's collapsed <details> block instead of posting inline, at the
@@ -8977,6 +9249,7 @@ test("#1808: --gate review on a CLEAN ledger renders with no blocking-severity l
       ...reviewGateFindingSurfaceEntries({ files: null }),
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Judge:** skipped, the round has no findings to dispose"],
         stdout: '{"id":902,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-902"}\n',
       },
     ];
@@ -9000,6 +9273,28 @@ test("#1808: --gate review on a CLEAN ledger renders with no blocking-severity l
   }, { prefix: "dev-loops-upsert-review-gate-clean-" });
 });
 
+test("#2926: --gate review on a zero-finding ledger with --judge-spec-source renders the spec line and no judge-skipped line", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries({ files: null }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Judge spec:** none"],
+        assertStdinNotIncludes: ["**Judge:** skipped, the round has no findings to dispose"],
+        stdout: '{"id":904,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-904"}\n',
+      },
+    ];
+    const { runChild } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath, judgeSpecSource: "none", executionMode: "fanout_fanin",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.ok, true);
+  }, { prefix: "dev-loops-upsert-review-gate-spec-skip-" });
+});
+
 // AC6: the call site passes the unjudged flag into deriveEffectiveNextAction; a clean ledger holding an
 // unjudged finding must not render "no change requested" beside it.
 test("--gate review with --judge-spec-source none and a clean ledger holding one unjudged finding renders 'read the findings, none was judged'", async () => {
@@ -9010,6 +9305,7 @@ test("--gate review with --judge-spec-source none and a clean ledger holding one
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         assertStdinIncludes: ["read the findings, none was judged"],
+        assertStdinNotIncludes: ["**Judge:** skipped, the round has no findings to dispose"],
         stdout: '{"id":903,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-903"}\n',
       },
     ];
@@ -10021,6 +10317,27 @@ test("#1616: upsert derives the verdict from the ledger's overallVerdict when --
     assert.equal(parsed.action, "created");
     assert.equal(parsed.gate, "draft_gate");
   }, { prefix: "dev-loops-1616-derive-" });
+});
+
+test("issue 2926: a draft_gate post carries the judge-skipped line only for a zero-finding ledger", async () => {
+  const SKIP_LINE = "**Judge:** skipped, the round has no findings to dispose";
+  const post = async (tempDir, ledgerOptions, extraArgs, stdinAssertion) => {
+    const ledgerPath = await writeVerdictLedger(tempDir, ledgerOptions);
+    const env = await writeGhStub(tempDir, verdictEnforcementEntries().map((entry) => (entry.assertArgs.includes("POST") ? { ...entry, ...stdinAssertion } : entry)));
+    return runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--findings-ledger", ledgerPath, "--next-action", "stay draft and fix", "--execution-mode", "fanout_fanin", ...extraArgs,
+    ], { env });
+  };
+  await withTempDir(async (tempDir) => {
+    const result = await post(tempDir, { overallVerdict: "clean", provenance: DRAFT_GATE_PROVENANCE }, ["--findings-summary", "no issues found", "--findings-severity-counts", '{"high":0,"medium":0,"low":0,"question":0,"nit":0}'], { assertStdinIncludes: [SKIP_LINE] });
+    assert.equal(result.code, 0, result.stderr);
+  }, { prefix: "dev-loops-2926-skip-line-" });
+  await withTempDir(async (tempDir) => {
+    const findings = [{ severity: "low", angle: "holistic", summary: "one", judgeDisposition: "reject" }];
+    const result = await post(tempDir, { overallVerdict: "clean", findings, provenance: DRAFT_GATE_PROVENANCE }, ["--findings-summary", "one judged finding", "--findings-severity-counts", '{"high":0,"medium":0,"low":1,"question":0,"nit":0}'], { assertStdinNotIncludes: [SKIP_LINE] });
+    assert.equal(result.code, 0, result.stderr);
+  }, { prefix: "dev-loops-2926-no-skip-line-" });
 });
 
 test("#1616: upsert accepts a matching explicit --verdict unchanged", async () => {
@@ -12968,4 +13285,79 @@ test("the structured verdict renderer keeps a balanced code span in a finding su
     ],
   });
   assert.ok(body.includes("accepts `approve release v1.2.3` here"));
+});
+
+test("normalizeStructuredFindings refuses a bogus or empty remedyKind on an empty-summary entry (#3309)", () => {
+  const entry = (remedyKind) => ({ angle: "docs", verdict: "findings_present", findings: [{ severity: "low", summary: "", judgeDisposition: "act", remedyKind }] });
+  for (const bad of ["bogus", ""]) assert.throws(() => normalizeStructuredFindings([entry(bad)]), /remedyKind must be "evidence_only" or "pr_body"/);
+});
+
+test("normalizeStructuredFindings refuses a remedyKind outside evidence_only and pr_body (#3309)", () => {
+  const finding = (remedyKind) => ({ angle: "docs", verdict: "findings_present", findings: [{ severity: "low", summary: "s", judgeDisposition: "act", remedyKind }] });
+  assert.equal(normalizeStructuredFindings([finding("pr_body")])[0].findings[0].remedyKind, "pr_body");
+  assert.throws(() => normalizeStructuredFindings([finding("bogus")]), /remedyKind must be "evidence_only" or "pr_body"/);
+});
+
+// Recovery for a clean cap round whose verdict was never posted: the one command shape the cap-round exit names.
+test("--post-sealed-cap-round parses with only --repo, --pr and --gate draft_gate, and requires the draft gate", () => {
+  const options = parseUpsertCheckpointVerdictCliArgs(["--repo", "o/r", "--pr", "7", "--gate", "draft_gate", "--post-sealed-cap-round"]);
+  assert.equal(options.postSealedCapRound, true);
+  assert.equal(options.executionMode, "fanout_fanin");
+  assert.throws(() => parseUpsertCheckpointVerdictCliArgs(["--repo", "o/r", "--pr", "7", "--post-sealed-cap-round"]), /requires --gate draft_gate/);
+  assert.throws(() => parseUpsertCheckpointVerdictCliArgs(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--post-sealed-cap-round"]), /requires --gate draft_gate/);
+});
+
+test("--post-sealed-cap-round refuses when no sealed clean cap round exists", async () => {
+  await withTempDir(async (dir) => {
+    const options = parseUpsertCheckpointVerdictCliArgs(["--repo", "o/r", "--pr", "7", "--gate", "draft_gate", "--post-sealed-cap-round"]);
+    const runChild = async () => ({ code: 0, stdout: JSON.stringify({ headRefOid: "ab".repeat(20) }), stderr: "" });
+    await assert.rejects(() => upsertCheckpointVerdict(options, { repoRoot: dir, runChild }), /no sealed clean draft_gate cap round/);
+  });
+});
+
+test("--post-sealed-cap-round refuses every flag the sealed ledger supplies at parse time", () => {
+  const base = ["--repo", "o/r", "--pr", "7", "--gate", "draft_gate", "--post-sealed-cap-round"];
+  for (const extra of [["--head-sha", "ab".repeat(20)], ["--verdict", "clean"], ["--findings-summary", "x"], ["--next-action", "y"], ["--findings-severity-counts", "{}"], ["--findings-ledger", "l.json"], ["--findings-json", "[]"], ["--findings-file", "f.json"], ["--execution-mode", "inline_single_agent"], ["--inline-reason", "r"], ["--converged-json", "c.json"]]) {
+    assert.throws(() => parseUpsertCheckpointVerdictCliArgs([...base, ...extra]), /derives head, verdict, findings, next action and execution mode from the sealed ledger/, extra[0]);
+  }
+});
+
+test("upsert-checkpoint-verdict makes one baseRefOid,labels read when the evidence scan, the fan-out enforcement and the size budget all need it", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "localImplementation:",
+      "  lightMode:",
+      "    enabled: true",
+      "    maxFiles: 5",
+      "    maxLines: 50",
+      "",
+    ].join("\n"), "utf8");
+    const headSha = "abc1234000000000000000000000000000000000";
+    const inlineDraftComment = buildGateComment({ headSha });
+    inlineDraftComment.body += "\n**Execution mode:** inline_single_agent — tiny change";
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: false,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: PRE_APPROVAL_READY_REVIEWS,
+        issueComments: [inlineDraftComment],
+      }),
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"], stdout: "src/index.ts\n" },
+      { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":201,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-201"}\n' },
+    ], { repeatLastOnOverflow: true });
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", headSha,
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-summary", "no issues found", "--next-action", "await final human approval",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "micro-PR, under threshold",
+    ], { env, cwd: tempDir, evaluatePrSizeBudget: async () => ({ outcome: "pass", t1SliceLoc: 0, waiver: { t1Valid: false, defaultValid: false } }) });
+    assert.equal(result.code, 0, result.stderr);
+    const reads = result.calls.filter((c) => c.command === "gh" && c.args.includes("baseRefOid,labels"));
+    assert.equal(reads.length, 1);
+  }, { prefix: "dev-loops-upsert-prview-memo-" });
 });

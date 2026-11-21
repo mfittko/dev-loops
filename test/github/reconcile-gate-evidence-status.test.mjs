@@ -116,6 +116,7 @@ test("reconcile: the REAL default detectEvidence reads evidenceState from stderr
   // fallback is exercised end-to-end: a genuinely-missing verdict must return
   // action:none, never throw.
   const rerunCalls = [];
+  const fetchCalls = [];
   const detectorStderrPayload = JSON.stringify({
     ok: false,
     error: "Pre-merge gate evidence check failed: no clean current-head pre_approval_gate verdict",
@@ -126,6 +127,10 @@ test("reconcile: the REAL default detectEvidence reads evidenceState from stderr
     // Default detectEvidence spawns `node detect-checkpoint-evidence.mjs ...`.
     if (String(command).length > 0 && Array.isArray(args) && args.some((a) => String(a).includes("detect-checkpoint-evidence.mjs"))) {
       return { code: 1, stdout: "", stderr: `${detectorStderrPayload}\n` };
+    }
+    if (command === "git" && args[0] === "fetch") {
+      fetchCalls.push(args);
+      return { code: 0, stdout: "", stderr: "" };
     }
     if (command === "gh" && args[0] === "api") {
       return { code: 0, stdout: `${JSON.stringify({ state: "failure", statuses: [{ context: "gate-evidence", state: "failure", target_url: RUN_URL }] })}\n`, stderr: "" };
@@ -139,9 +144,21 @@ test("reconcile: the REAL default detectEvidence reads evidenceState from stderr
 
   const result = await reconcileGateEvidenceStatus({ repo: "mfittko/dev-loops", pr: 1934 }, { runChild });
 
+  // The base ref is refreshed before the detector derives a patch-id from it.
+  assert.equal(fetchCalls.length, 1);
+  assert.match(fetchCalls[0].at(-1), /^\+refs\/heads\/.+:refs\/remotes\/origin\/.+$/);
   assert.equal(result.evidenceState, "not_established");
   assert.equal(result.action, "none");
   assert.equal(result.reason, "evidence-not-satisfied-fail-closed");
   assert.equal(result.refired, false);
   assert.deepEqual(rerunCalls, [], "a genuinely-missing verdict must NEVER re-fire");
+});
+
+test("reconcileGateEvidenceStatus: a detector trust-config refusal (exit 3) surfaces its state and remedy", async () => {
+  const refusal = JSON.stringify({ ok: false, error: "comment trust config: default_branch_unresolved: origin/HEAD is unset; run: git remote set-head origin --auto", state: "default_branch_unresolved" });
+  const runChild = async () => ({ code: 3, stdout: "", stderr: `${refusal}\n` });
+  await assert.rejects(
+    reconcileGateEvidenceStatus({ repo: "mfittko/dev-loops", pr: 1934 }, { runChild }),
+    (err) => /default_branch_unresolved/.test(err.message) && /git remote set-head origin --auto/.test(err.message),
+  );
 });

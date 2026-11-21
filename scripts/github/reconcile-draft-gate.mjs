@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -59,7 +60,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success — PR was reconciled and gate evidence posted
   1  Argument error, gh failure, or unrecoverable state
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const parseError = buildParseError(USAGE);
 export function parseReconcileDraftGateCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -258,7 +260,7 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       if (stale) throw new Error(`${stale} A clean draft_gate verdict is not recorded at a stale base.`);
     }
   }
-  const draftConversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
+  const draftConversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild, repoRoot });
   let gateResult;
   try {
     gateResult = await upsertCheckpointVerdict({
@@ -288,13 +290,13 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
   } catch (error) {
     if (draftConversion.alreadyDraft !== true) {
       try {
-        await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
+        await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild, repoRoot });
       } catch {
       }
     }
     throw withFanoutRefusalGuidance(error, { repo: options.repo, pr: options.pr, headSha, env });
   }
-  await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
+  await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild, repoRoot });
   return {
     ok: true,
     action: "reconciled",
@@ -328,5 +330,6 @@ async function main() {
   }
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseReconcileDraftGateCliArgs(process.argv.slice(2)).help);
   await main();
 }

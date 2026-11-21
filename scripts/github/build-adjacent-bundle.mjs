@@ -13,8 +13,8 @@
  * repo-wide import scan).
  *
  * Size guards (record, never silently drop): lockfiles/generated trees/binary/
- * minified files are recorded in `stripped` with a reason; over-cap files
- * (default ~48KB) are truncated and recorded in `truncated` with byte counts.
+ * minified files are recorded in `stripped` with a reason. The bundle is an
+ * index (path, role, relatedTo, bytes) and embeds no file contents.
  *
  * Output is purely structural adjacency — no opinion, verdict, or main-agent
  * state — so seeding a reviewer with it is the intended neutral seed (RFC-2),
@@ -23,9 +23,6 @@
  */
 import { lstat, open, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
-
-/** Default per-file byte cap before truncation. */
-export const DEFAULT_MAX_FILE_BYTES = 48 * 1024;
 
 /**
  * Binary-sniff window: the NUL-byte heuristic inspects this many leading bytes.
@@ -255,66 +252,43 @@ export function resolveSafeRepoPath(repoRoot, relPath) {
 }
 
 /**
- * Read a file with the size guards applied. Returns the (possibly truncated)
- * content plus guard metadata. Never throws on a missing/unreadable file.
+ * Size a file and apply the strip guards. Reads only the binary-sniff window,
+ * never the whole file, and returns no content: the bundle is an index.
+ * Never throws on a missing/unreadable file.
  *
  * Path safety: unsafe relPaths (absolute, `..` segments, or escaping repoRoot)
  * are NOT read — they are recorded with strip reason "unsafe-path".
- *
- * Bounded read: when the file is over the cap it is truncated, so we read at
- * most maxFileBytes+1 bytes (the +1 lets us also sniff binary content past the
- * cap without loading the whole file). The full original size is read from
- * stat() for the manifest.
  * @param {string} repoRoot
  * @param {string} relPath
- * @param {number} maxFileBytes
- * @returns {Promise<{ relPath: string, content: string|null, bytes: number, includedBytes: number, truncated: boolean, missing: boolean, strip: string|null }>}
+ * @returns {Promise<{ relPath: string, bytes: number, missing: boolean, strip: string|null }>}
  */
-async function readGuardedFile(repoRoot, relPath, maxFileBytes) {
+async function readGuardedFile(repoRoot, relPath) {
   const strip = classifyStripReason(relPath);
   if (strip) {
-    return { relPath, content: null, bytes: 0, includedBytes: 0, truncated: false, missing: false, strip };
+    return { relPath, bytes: 0, missing: false, strip };
   }
   const safe = resolveSafeRepoPath(repoRoot, relPath);
   if (!safe.ok) {
-    return { relPath, content: null, bytes: 0, includedBytes: 0, truncated: false, missing: false, strip: "unsafe-path" };
+    return { relPath, bytes: 0, missing: false, strip: "unsafe-path" };
   }
   const abs = safe.abs;
   let handle;
   try {
     const info = await stat(abs);
     if (!info.isFile()) {
-      return { relPath, content: null, bytes: 0, includedBytes: 0, truncated: false, missing: true, strip: null };
+      return { relPath, bytes: 0, missing: true, strip: null };
     }
     const bytes = info.size;
-    // Read enough to (a) detect over-cap and truncate, and (b) always cover the
-    // binary-sniff window — so a cap configured below BINARY_SNIFF_BYTES can't let
-    // a binary slip through as text. Still bounded (never the whole large file).
-    const readCap = Math.min(bytes, Math.max(maxFileBytes + 1, BINARY_SNIFF_BYTES));
+    const readCap = Math.min(bytes, BINARY_SNIFF_BYTES);
     const buf = Buffer.allocUnsafe(readCap);
     handle = await open(abs, "r");
     const { bytesRead } = await handle.read(buf, 0, readCap, 0);
-    const data = buf.subarray(0, bytesRead);
-    if (looksBinaryContent(data)) {
-      return { relPath, content: null, bytes, includedBytes: 0, truncated: false, missing: false, strip: "binary" };
+    if (looksBinaryContent(buf.subarray(0, bytesRead))) {
+      return { relPath, bytes, missing: false, strip: "binary" };
     }
-    let truncated = false;
-    let slice = data;
-    if (bytes > maxFileBytes) {
-      slice = data.subarray(0, maxFileBytes);
-      truncated = true;
-    }
-    return {
-      relPath,
-      content: slice.toString("utf8"),
-      bytes,
-      includedBytes: slice.length,
-      truncated,
-      missing: false,
-      strip: null,
-    };
+    return { relPath, bytes, missing: false, strip: null };
   } catch {
-    return { relPath, content: null, bytes: 0, includedBytes: 0, truncated: false, missing: true, strip: null };
+    return { relPath, bytes: 0, missing: true, strip: null };
   } finally {
     if (handle) await handle.close().catch(() => {});
   }
@@ -528,17 +502,16 @@ async function selectExpansion({ changed, diffText, repoRoot, importerIndex, cap
  * Build the deterministic, neutral adjacent-code bundle for a set of changed
  * files. For each changed source file, collect its 1-hop import out-edges
  * (resolved relative imports) and in-edges (files that import it) and include
- * each adjacent file's (guarded) content.
+ * each adjacent file's size.
  *
  * Output shape (added to the gate-context artifact under `adjacentCode`):
  *   {
- *     maxFileBytes,
  *     files: [{ path, role: "changed"|"imports"|"importedBy", relatedTo: [..],
- *               bytes, includedBytes, truncated, content }],  // sorted by path
+ *               bytes }],                                    // sorted by path
  *     stripped: [{ path, reason, role: "changed"|"imports"|"importedBy",
  *                 relatedTo: [..] }],                          // sorted by path
- *     truncated: [{ path, bytes, includedBytes }],            // sorted by path
  *     missing: [string],                                      // sorted
+ *     truncated: [],                                          // always empty, kept for shape stability
  *     expansion: { maxFiles, maxBytes,                        // always emitted
  *                  files: [{ path, kind: "siblings"|"importer", relatedTo: [..],
  *                            names?, bytes }],
@@ -551,12 +524,11 @@ async function selectExpansion({ changed, diffText, repoRoot, importerIndex, cap
  * @param {object} input
  * @param {string[]} input.changedFiles — repo-relative paths from the diff
  * @param {string} [input.repoRoot]
- * @param {number} [input.maxFileBytes]
  * @param {string} [input.diffText] — unified diff; drives the adaptive `expansion`
  * @param {{ maxFiles?: number, maxBytes?: number }} [input.expansion] — per-round caps (gates.contextExpansion)
  * @returns {Promise<object>}
  */
-export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd(), maxFileBytes = DEFAULT_MAX_FILE_BYTES, diffText = "", expansion = {} }) {
+export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd(), diffText = "", expansion = {} }) {
   const caps = { maxFiles: expansion?.maxFiles ?? DEFAULT_EXPANSION_CAPS.maxFiles, maxBytes: expansion?.maxBytes ?? DEFAULT_EXPANSION_CAPS.maxBytes };
   const changed = Array.from(
     new Set((Array.isArray(changedFiles) ? changedFiles : []).map((f) => String(f).replace(/\\/g, "/")).filter((f) => f.length > 0)),
@@ -565,7 +537,7 @@ export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd
   // No changed files → empty bundle. Return early so the empty case is O(1) and
   // skips the whole-repo scan + importer-index build entirely.
   if (changed.length === 0) {
-    return { maxFileBytes, files: [], stripped: [], truncated: [], missing: [], expansion: { ...caps, files: [], dropped: [] } };
+    return { files: [], stripped: [], truncated: [], missing: [], expansion: { ...caps, files: [], dropped: [] } };
   }
 
   const repoFiles = await listRepoFiles(repoRoot);
@@ -614,13 +586,12 @@ export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd
 
   const files = [];
   const stripped = [];
-  const truncatedList = [];
   const missing = [];
 
   for (const relPath of Array.from(selected.keys()).sort()) {
     const entry = selected.get(relPath);
     const relatedTo = Array.from(entry.relatedTo).sort();
-    const guarded = await readGuardedFile(repoRoot, relPath, maxFileBytes);
+    const guarded = await readGuardedFile(repoRoot, relPath);
     if (guarded.strip) {
       stripped.push({ path: relPath, reason: guarded.strip, role: entry.role, relatedTo });
       continue;
@@ -630,25 +601,18 @@ export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd
       missing.push(relPath);
       continue;
     }
-    if (guarded.truncated) {
-      truncatedList.push({ path: relPath, bytes: guarded.bytes, includedBytes: guarded.includedBytes });
-    }
     files.push({
       path: relPath,
       role: entry.role,
       relatedTo,
       bytes: guarded.bytes,
-      includedBytes: guarded.includedBytes,
-      truncated: guarded.truncated,
-      content: guarded.content,
     });
   }
 
   return {
-    maxFileBytes,
     files,
     stripped,
-    truncated: truncatedList,
+    truncated: [],
     missing: missing.sort(),
     expansion: await selectExpansion({ changed, diffText, repoRoot, importerIndex, caps, existing }),
   };

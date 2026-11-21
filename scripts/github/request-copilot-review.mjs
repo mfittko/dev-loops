@@ -20,8 +20,10 @@ import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/lo
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveCopilotReviewRequestStatus } from "../loop/_copilot-review-request-status.mjs";
+import { recordUnobservableRequest } from "../loop/_unobservable-review-request-record.mjs";
 import { getLastCopilotReviewHeadSha, resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../loop/_copilot-convergence-carry.mjs";
 import { resolveCurrentHeadBodyFeedback } from "./_copilot-body-disposition.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const BLOCKED_BY_COPILOT_COMMENT_STATUS = "blocked_by_copilot_comment";
 const SUPPRESSED_SAME_HEAD_CLEAN_STATUS = "suppressed_same_head_clean";
 const ROUND_CAP_REACHED_STATUS = "round_cap_reached";
@@ -71,6 +73,7 @@ Debug:
 Output (stdout, JSON):
   { "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_post_convergence"|"suppressed_post_convergence_docs_only"|"suppressed_draft",
     "repo": "...", "pr": N, "reviewer": "Copilot", "detail"?: "...",
+    "warning"?: "<why the unobservable request could not be recorded; the request itself succeeded>",
     "sameHeadCleanConverged"?: true, "violationCommentIds"?: [N], "completedRounds"?: N, "maxRounds"?: N,
     "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] } }
 Request statuses:
@@ -140,7 +143,8 @@ filtered value) and is exempt from the status-based rule above.
 Exit codes:
   0  Success (including unavailable); with --silent, only when status is "requested"
   1  Argument error, gh failure, or (--silent) any non-"requested" status
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const parseError = buildParseError(USAGE);
 export function parseRequestCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -687,10 +691,11 @@ async function performRequest(
     runChild = defaultRunChild,
     delayImpl = delay,
     repoRoot = process.cwd(),
+    checkpointDir = undefined,
   } = {},
   advisory,
 ) {
-  const runtime = { env, ghCommand, runChild };
+  const runtime = { env, ghCommand, runChild, checkpointDir };
   const before = await fetchCopilotReviewState(options, runtime);
   if (before.prData?.isDraft) {
     return {
@@ -1030,9 +1035,21 @@ async function performRequest(
     // cross-check above observed it within the bounded verification window.
     // Treat this as eventually consistent instead of a hard failure; a truly
     // unavailable Copilot reviewer is already classified `unavailable` above
-    // via the 422 path and never reaches here.
+    // via the 422 path and never reaches here. The durable count lets the loop
+    // report Copilot unavailable after repeated unobservable requests.
+    // The POST already succeeded, so a failed record write is a warning, not a failure.
+    let recordWarning = null;
+    try {
+      await recordUnobservableRequest(
+        { repo: options.repo, pr: options.pr, headSha: currentHeadSha },
+        { checkpointDir: runtime.checkpointDir },
+      );
+    } catch (error) {
+      recordWarning = `could not record the unobservable request: ${error?.message ?? error}`;
+    }
     return ({
       ...requestResult,
+      ...(recordWarning ? { warning: recordWarning } : {}),
       detail: "Copilot review request POST succeeded but was not yet observable via requested_reviewers/reviews or GraphQL within the verification window; treating as eventually consistent rather than failing.",
     });
   }
@@ -1071,6 +1088,7 @@ export async function runCli(
   setExitCode(emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: silentOk }));
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseRequestCliArgs(process.argv.slice(2)).help);
   runCli().catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

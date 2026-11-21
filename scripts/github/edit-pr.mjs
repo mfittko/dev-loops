@@ -10,6 +10,7 @@ import {
 } from "@dev-loops/core/github/closing-ref-guard";
 import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
+import { hasSpikePrMarker } from "./_spike-pr-marker.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -28,8 +29,9 @@ At least one edit:
   --remove-assignee <u>         Assignee to remove (repeatable)
   --milestone <m>               Milestone to set (empty string clears it)
                                 (--title/--body/--body-file reject empty or
-                                whitespace-only values; use --milestone "" only
-                                to clear the milestone)
+                                whitespace-only values unless --allow-empty-body
+                                allows an empty --body-file; use --milestone ""
+                                only to clear the milestone)
   --base <branch>               Retarget the PR's base branch (forwarded to
                                 \`gh pr edit --base\`); the sanctioned wrapper for
                                 base retarget (never a raw \`gh pr edit --base\`).
@@ -37,6 +39,7 @@ At least one edit:
   --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
                                 refuse a body that embeds grill
                                 transcript/synthesis/Q&A headings.
+  --allow-empty-body            Allow a --body or --body-file that is only \`null\`, or an empty --body-file.
   --allow-untick                Allow a body that unticks or removes a checked
                                 \`[x]\` checkbox row (a flip to \`[ ]\`, a delete,
                                 a reworded label, or a heading edit that moves
@@ -56,6 +59,9 @@ At least one edit:
 ADR tripwire waiver lines: a body that adds, changes or removes an
 \`adr-tripwire:allow\` line (compared with the PR's current body) is refused.
 Use \`dev-loops pr waive-adr-tripwire\` (ADR-TRIPWIRE-STANDING-WAIVER).
+Spike no-merge marker (ADR 0293): a body that removes the
+\`dev-loops:spike-pr no-merge\` marker from a spike PR, or moves it off the last non-empty body line, is refused, and so is a
+body that adds it to a PR without it. Only \`pr create --spike-file\` binds it.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "pr": 17, "edited": ["title", "body", ...] }
 Error output (stderr, JSON):
@@ -86,6 +92,7 @@ export function parseEditPrCliArgs(argv) {
       "enforce-grill": { type: "boolean" },
       "allow-cross-issue": { type: "boolean" },
       "allow-untick": { type: "boolean" },
+      "allow-empty-body": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -106,6 +113,7 @@ export function parseEditPrCliArgs(argv) {
     enforceGrill: false,
     allowCrossIssue: false,
     allowUntick: false,
+    allowEmptyBody: false,
     jq: undefined,
     silent: false,
   };
@@ -194,6 +202,10 @@ export function parseEditPrCliArgs(argv) {
       options.enforceGrill = true;
       continue;
     }
+    if (token.name === "allow-empty-body") {
+      options.allowEmptyBody = booleanFlagValue(token.value);
+      continue;
+    }
     if (token.name === "allow-untick") {
       options.allowUntick = booleanFlagValue(token.value);
       continue;
@@ -236,9 +248,10 @@ export function parseEditPrCliArgs(argv) {
 
 async function resolveBody(options) {
   // Fail closed on an empty / whitespace-only file so a blank --body-file cannot
-  // silently clear the PR body (USAGE promises --body/--title reject empties).
+  // silently clear the PR body unless --allow-empty-body (USAGE promises
+  // --body/--title reject empties).
   // allowStdin: `--body-file -` reads stdin (fd 0).
-  return resolveBodyOrFile({ body: options.body, bodyFile: options.bodyFile, allowStdin: true });
+  return resolveBodyOrFile({ body: options.body, bodyFile: options.bodyFile, allowStdin: true, allowEmptyBody: options.allowEmptyBody });
 }
 
 // Read the PR's own facts needed to resolve the issue it is expected to close:
@@ -357,13 +370,16 @@ export async function editPr(
   // inline so the grill check and buildEditArgs never re-read the exhausted fd 0.
   if (options.body !== undefined || options.bodyFile !== undefined) {
     const guardBody = await resolveBody(options);
+    const baseline = typeof currentBody === "string" ? currentBody : (await readPrContext())?.body;
+    if (typeof baseline !== "string") {
+      throw new Error(
+        `ADR-TRIPWIRE-STANDING-WAIVER: cannot read the current body of PR #${options.pr} (gh pr view failed), so its \`adr-tripwire:allow\` lines cannot be compared — refusing on ambiguity (fail closed).`,
+      );
+    }
+    // ADR 0293: the spike marker guard applies to every body write, the waiver writer included.
+    if (hasSpikePrMarker(baseline) && !hasSpikePrMarker(guardBody)) throw new Error(`refusing to remove the spike no-merge marker from PR #${options.pr} or move it off the last non-empty body line.`);
+    if (!hasSpikePrMarker(baseline) && hasSpikePrMarker(guardBody)) throw new Error(`refusing to add the spike no-merge marker to PR #${options.pr}: only spike PR creation binds it.`);
     if (!waiverWriter) {
-      const baseline = typeof currentBody === "string" ? currentBody : (await readPrContext())?.body;
-      if (typeof baseline !== "string") {
-        throw new Error(
-          `ADR-TRIPWIRE-STANDING-WAIVER: cannot read the current body of PR #${options.pr} (gh pr view failed), so its \`adr-tripwire:allow\` lines cannot be compared — refusing on ambiguity (fail closed).`,
-        );
-      }
       const waiverRefusal = waiverLineChangeRefusal({ currentBody: baseline, nextBody: guardBody, action: "write" });
       if (waiverRefusal) throw new Error(waiverRefusal);
       const unticked = untickedRows(baseline, guardBody);

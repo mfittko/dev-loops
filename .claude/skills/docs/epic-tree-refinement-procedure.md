@@ -29,7 +29,7 @@ sub-issue tooling.
 Before starting, verify:
 
 1. The root issue and all intended children/grandchildren exist as GitHub issues in the repo.
-2. The sub-issue tree is attached (run `node <resolved-skill-scripts>/github/manage-sub-issues.mjs list --repo <repo> --issue <root>` to inspect it).
+2. The sub-issue tree is attached (run `dev-loops-run scripts/github/manage-sub-issues.mjs list --repo <repo> --issue <root>` to inspect it).
 3. You have the resolved repo slug (`owner/name`).
 
 Optional but recommended before and after edits:
@@ -107,7 +107,7 @@ updated bodies, not sibling parents).
 3. Verify:
    - The parent's phase scope table still matches what the children now claim to own
    - No orphaned responsibilities (parent promised something no child owns)
-   - No duplicate ownership (two children claiming the same thing)
+   - No duplicate ownership (two children claiming the same thing; a line every sibling repeats word for word, in a group of three or more siblings, is a shared constraint and is exempt)
 4. Update the parent's phase scope table and AC/DoD as needed to reflect what children now explicitly own
 5. Write refined body to `tmp/issues/<parent>/refinement/parent-reconciled-body.md`
 6. Show the diff and obtain confirmation before mutating
@@ -126,14 +126,14 @@ After all immediate children of the root have been reconciled:
 3. Verify:
    - Phase scope table matches actual child scope
    - Dependency chain is correct (does execution order in the sub-issue tree match dependencies?)
-   - No orphaned responsibilities; no duplicate ownership
+   - No orphaned responsibilities; no duplicate ownership (a line every sibling repeats word for word, in a group of three or more siblings, is a shared constraint and is exempt)
 4. Update the root body with the final reconciled phase scope table and AC/DoD
 5. Write to `tmp/issues/<root>/refinement/root-final-body.md`
 6. Show the diff and obtain confirmation before mutating
 7. Apply: `dev-loops-run cli/index.mjs issue edit --repo <repo> --issue <root> --body-file tmp/issues/<root>/refinement/root-final-body.md`
 8. Verify the sub-issue tree still reflects the correct execution order:
    ```sh
-   node <resolved-skill-scripts>/github/manage-sub-issues.mjs verify \
+   dev-loops-run scripts/github/manage-sub-issues.mjs verify \
      --repo <repo> --issue <root> --expected <n1,n2,...> --ordered
    ```
 
@@ -177,7 +177,7 @@ The procedure is complete when all issues in the tree satisfy [EPIC-REFINEMENT-R
 | Non-goals present | Issue body contains `## Non-goals` section |
 | Scope boundary present | Issue body contains explicit `"This issue owns ... It does NOT own ..."` text |
 | No orphaned responsibilities | Each thing the parent delegates maps to exactly one child |
-| No duplicate ownership | No two siblings claim the same responsibility |
+| No duplicate ownership | No two siblings claim the same responsibility; a line every sibling repeats word for word, in a group of three or more siblings, is a shared constraint and is exempt |
 | Sub-issue tree order valid | `manage-sub-issues.mjs verify --ordered` exits 0 **and** its JSON reports `verified: true`; see [Sub-Issue Tree Contract](./sub-issue-tree-contract.md). A mismatch exits 0 with `verified: false` and is not completion. |
 
 ---

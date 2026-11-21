@@ -102,8 +102,9 @@ function nonEmpty(value) {
 
 /**
  * Trigger predicate. Delta mode runs only for a committed, not yet pushed fix
- * of a non-empty judge act list or of a non-empty set of unresolved review
- * threads (the thread route). Every other push gets no delta review.
+ * of a non-empty judge act list, of a non-empty set of unresolved review
+ * threads (the thread route) or, with no unresolved thread, of the operator
+ * focus round (counted as one thread-route item). Every other push gets no delta review.
  * @param {{ actItemCount?: number, threadItemCount?: number, fixCommitted?: boolean, fixPushed?: boolean }} input
  * @returns {"delta"|"none"}
  */
@@ -113,23 +114,49 @@ export function resolveDeltaTrigger({ actItemCount = 0, threadItemCount = 0, fix
 }
 
 /**
- * Thread route: reduce successful `list-review-threads --unresolved-only` output for `repo#pr`
+ * Maps a `capture-review-threads --unresolved --bodies` payload onto the `list-review-threads --unresolved-only`
+ * shape the thread route validates; any other payload passes through unchanged.
+ * A capture holds trusted unresolved threads only, so those markers are implied.
+ * A capture not bound to the target (an input or stdin source, another repo or PR) maps to a refused payload.
+ * @param {unknown} payload
+ * @param {{ repo: string, pr: number|string }} target
+ */
+export function normalizeThreadsPayload(payload, { repo, pr } = {}) {
+  const p = /** @type {any} */ (payload);
+  if (!p || typeof p.source !== "object" || p.source === null || p.repo !== undefined || !Array.isArray(p.threads) || !p.threads.every((thread) => Array.isArray(thread?.bodies) && thread.bodies.length > 0 && thread.bodies.every((b) => typeof b === "string"))) return payload;
+  const bound = p.ok === true && p.source.type === "github" && p.source.repo === repo && Number(p.source.pr) === Number(pr);
+  return { ...p, ok: bound, repo, pr, threads: p.threads.map((thread) => ({ ...thread, isResolved: false, trusted: true, body: thread.bodies.join("\n\n") })) };
+}
+
+export const OPERATOR_FOCUS_REF = "operator-focus";
+
+/** The act items an operator focus contributes when the thread source holds no thread: its `round` text. */
+export function operatorFocusActItems(operatorFocus) {
+  const summary = typeof operatorFocus?.round === "string" ? operatorFocus.round.trim() : "";
+  return summary ? [{ ref: OPERATOR_FOCUS_REF, angle: OPERATOR_FOCUS_REF, summary, judgeDisposition: "act" }] : [];
+}
+
+/**
+ * Thread route: reduce successful `list-review-threads --unresolved-only` output (or a github-sourced `capture-review-threads --unresolved --bodies` file) for `repo#pr`
  * to a judge-act-list-shaped array, one act item per unresolved thread, `ref` = the `threadId`.
  * @param {unknown} payload
  * @param {{ repo: string, pr: number|string }} target
  */
-export function threadsToActList(payload, { repo, pr } = {}) {
+export function threadsToActList(rawPayload, { repo, pr, operatorFocus } = {}) {
+  const payload = normalizeThreadsPayload(rawPayload, { repo, pr });
   const allThreads = /** @type {any} */ (payload)?.threads;
   // A trust-incomplete thread stays a blocker but is never an act item.
   const threads = Array.isArray(allThreads) ? allThreads.filter((thread) => thread?.trustIncomplete !== true) : allThreads;
   if (/** @type {any} */ (payload)?.ok !== true || !Array.isArray(threads) || /** @type {any} */ (payload).repo !== repo || Number(/** @type {any} */ (payload).pr) !== Number(pr)
     || !threads.every((thread) => thread?.isResolved === false && nonEmpty(thread?.threadId))) {
-    throw new Error(`threads file is not successful list-review-threads --unresolved-only output for ${repo}#${pr}`);
+    throw new Error(`threads file is not successful list-review-threads --unresolved-only output (or a github-sourced capture-review-threads --unresolved --bodies file) for ${repo}#${pr}`);
   }
   // ADR 0238: a thread without the ingestion trust marker is untrusted text; never an act item.
   if (!threads.every((thread) => thread.trusted === true)) {
     throw new Error(`threads file for ${repo}#${pr} holds a thread without the trusted marker (ADR 0238); re-run list-review-threads --unresolved-only`);
   }
+  // With no unresolved thread, the operator focus round is the act set, so a focus-only fix still has a delta review.
+  if (threads.length === 0) return operatorFocusActItems(operatorFocus);
   // Sorted by threadId so actSetId is stable for the same thread set, whatever the capture order.
   return [...threads].sort((a, b) => (a.threadId < b.threadId ? -1 : a.threadId > b.threadId ? 1 : 0)).map((thread) => ({
     ref: thread.threadId,
@@ -196,6 +223,9 @@ function nonEmptyStrings(value) {
   return Array.isArray(value) && value.length > 0 && value.every(nonEmpty);
 }
 
+/** A PR-body item names no file or carries `remedyKind: "pr_body"` (never a review-thread or operator-focus item); a thread item is exempt (its ref is the thread id). Consumers align to `sequence.actItems` with `actList.filter((e) => !isDeltaBodyItem(e))`. */
+export const isDeltaBodyItem = (entry) => entry?.angle !== "review-thread" && entry?.angle !== OPERATOR_FOCUS_REF && (entry?.remedyKind === "pr_body" || !resolveFindingFile(entry));
+
 /**
  * Open a delta sequence for one gate round. The baseline is the head that gate
  * round reviewed and stays pinned for every invocation in the sequence; a new
@@ -205,7 +235,17 @@ function nonEmptyStrings(value) {
  */
 export function startDeltaSequence({ reviewBaselineHead, actList, reviewerOnly = false } = {}) {
   if (!nonEmpty(reviewBaselineHead)) throw new Error("delta sequence requires reviewBaselineHead");
-  const actItems = reviewerOnly && Array.isArray(actList) && actList.length === 0 ? [] : toDeltaActItems(actList);
+  // A PR-body act item (no file, or remedyKind pr_body) is one the file-reading delta reviewer can never resolve; the next gate round verifies the body (ADR 0271).
+  // A thread item is exempt: its ref is the thread id the full-phase binding checks.
+  // Number and validate the whole list once, so an auto ref `act-N` and an error index are the act list position every consumer sees.
+  const all = Array.isArray(actList) && actList.length > 0 ? toDeltaActItems(actList) : null;
+  const bodyItems = all ? all.filter((_, i) => isDeltaBodyItem(actList[i])).map((item) => item.ref) : [];
+  const codeItems = all ? all.filter((_, i) => !isDeltaBodyItem(actList[i])) : [];
+  // reviewerOnly reviews the PR-own commit range and accepts an empty act set, so an all-body list yields the empty code set instead of refusing.
+  if (bodyItems.length > 0 && codeItems.length === 0 && !reviewerOnly) {
+    throw new Error(`delta_body_only_act_set: every act item is a PR-body item (no file, or remedyKind pr_body; items: ${bodyItems.join(", ")}), so no delta review runs. Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true) at the cap round, or run the next gate round below the cap.`);
+  }
+  const actItems = all ? codeItems : reviewerOnly && Array.isArray(actList) && actList.length === 0 ? [] : toDeltaActItems(actList);
   const actSetId = createHash("sha256")
     .update(JSON.stringify(actItems.map((item) => {
       const { ref, angle, severity, file, line, summary } = item;
@@ -217,7 +257,7 @@ export function startDeltaSequence({ reviewBaselineHead, actList, reviewerOnly =
     })))
     .digest("hex")
     .slice(0, 16);
-  return Object.freeze({ reviewBaselineHead: reviewBaselineHead.trim(), actSetId, actItems, ...(reviewerOnly ? { reviewerOnly: true } : {}) });
+  return Object.freeze({ reviewBaselineHead: reviewBaselineHead.trim(), actSetId, actItems, bodyItems, ...(reviewerOnly ? { reviewerOnly: true } : {}) });
 }
 
 /**
@@ -272,7 +312,8 @@ export function buildDeltaInput({ sequence, candidateHead, runId, specIdentity =
         skipReason: "<non-empty string, optional>",
       }],
       widenedReads: [{ path: "<widened path>", reason: "<why the read was needed>" }],
-      outcome: DELTA_OUTCOMES.join("|"),
+      // The seal command refuses a result that breaks the constraint, before it seals.
+      outcome: `${DELTA_OUTCOMES.join("|")} (locally_clear only when every actionableItems status is resolved: never with a cannot_verify or not_resolved item, and never with a medium-or-higher or open residue newFinding)`,
     },
   };
 }
@@ -310,6 +351,47 @@ export function deriveDeltaOutcome(result, { reviewerOnly = false } = {}) {
 }
 
 /**
+ * The sequence-free shape checks of a DeltaPrePushReviewResult: item statuses and evidence, finding fields,
+ * widenedReads entries, a known outcome and (with `checkOutcome`) an outcome that agrees with the item statuses.
+ * `seal-evidence --kind delta` runs it before it seals, so a shape error costs no invocation.
+ * @param {unknown} result
+ * @returns {string[]}
+ */
+export function deltaResultShapeErrors(result, { checkOutcome = true } = {}) {
+  const errors = [];
+  if (!result || typeof result !== "object") return ["result must be an object"];
+  const r = /** @type {any} */ (result);
+  if (!Array.isArray(r.actionableItems)) errors.push("actionableItems[] is required");
+  const seenRefs = new Set();
+  for (const [i, item] of (Array.isArray(r.actionableItems) ? r.actionableItems : []).entries()) {
+    // A missing or duplicate ref would pass the seal and fail membership validation later, so refuse it before the seal.
+    if (!nonEmpty(item?.ref)) errors.push(`actionableItems[${i}].ref is missing`);
+    else if (seenRefs.has(item.ref)) errors.push(`actionableItems[${i}].ref ${JSON.stringify(item.ref)} is a duplicate`);
+    else seenRefs.add(item.ref);
+    if (item?.status === undefined) errors.push(`actionableItems[${i}].status is missing`);
+    else if (!DELTA_ITEM_STATUSES.includes(item.status)) errors.push(`actionableItems[${i}].status ${JSON.stringify(item.status)} is unknown`);
+    if (!nonEmptyStrings(item?.evidence)) errors.push(`actionableItems[${i}].evidence[] must be non-empty strings`);
+  }
+  if (!Array.isArray(r.newFindings)) errors.push("newFindings[] is required");
+  for (const [i, f] of (Array.isArray(r.newFindings) ? r.newFindings : []).entries()) {
+    if (!VALID_SEVERITIES.has(normalizeSeverity(f?.severity))) errors.push(`newFindings[${i}].severity ${JSON.stringify(f?.severity)} is unknown`);
+    if (!nonEmpty(f?.summary)) errors.push(`newFindings[${i}].summary is required`);
+    if (!nonEmptyStrings(f?.evidence)) errors.push(`newFindings[${i}].evidence[] must be non-empty strings`);
+    // null is an absent optional field
+    if (f?.skipReason != null && (!nonEmpty(f.skipReason) || !nonEmpty(f.residueOf))) errors.push(`newFindings[${i}].skipReason needs residueOf and a non-empty reason`);
+  }
+  if (!Array.isArray(r.widenedReads)) errors.push("widenedReads[] is required (empty when nothing was widened)");
+  else for (const [i, read] of r.widenedReads.entries()) {
+    if (!nonEmpty(read?.path) || !nonEmpty(read?.reason)) errors.push(`widenedReads[${i}] needs a path and a reason`);
+  }
+  if (!DELTA_OUTCOMES.includes(r.outcome)) errors.push(`outcome ${JSON.stringify(r.outcome)} is unknown`);
+  else if (checkOutcome && r.outcome === "locally_clear" && deriveDeltaOutcome(r, { reviewerOnly: true }) !== "locally_clear") {
+    errors.push("locally_clear requires every act item resolved (a cannot_verify or not_resolved item forbids it), no new finding of severity medium or higher, and no residueOf finding without a skipReason (PRE-PUSH-DELTA-RESIDUE)");
+  }
+  return errors;
+}
+
+/**
  * Validate a DeltaPrePushReviewResult against its sequence. Returns the list of
  * problems; an empty list means the result is well formed.
  * Every act item with a site query needs a coverage record, and each `skipReason` must equal the
@@ -334,32 +416,27 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], valid
     errors.push(`actSetId ${JSON.stringify(result.actSetId)} does not match the sequence act set ${JSON.stringify(sequence?.actSetId)}`);
   }
 
+  errors.push(...deltaResultShapeErrors(result, { checkOutcome: false }));
   const items = Array.isArray(result.actionableItems) ? result.actionableItems : null;
-  if (!items) errors.push("actionableItems[] is required");
   const expectedRefs = new Set((sequence?.actItems ?? []).map((item) => item.ref));
   const seen = new Set();
   for (const [i, item] of (items ?? []).entries()) {
     if (!expectedRefs.has(item?.ref)) errors.push(`actionableItems[${i}].ref ${JSON.stringify(item?.ref)} is not in the act set`);
-    else if (seen.has(item.ref)) errors.push(`actionableItems[${i}].ref ${JSON.stringify(item.ref)} is a duplicate`);
+    // A duplicate ref is reported once, by deltaResultShapeErrors above.
     else seen.add(item.ref);
-    if (item?.status === undefined) errors.push(`actionableItems[${i}].status is missing`);
-    else if (!DELTA_ITEM_STATUSES.includes(item.status)) errors.push(`actionableItems[${i}].status ${JSON.stringify(item.status)} is unknown`);
-    if (!nonEmptyStrings(item?.evidence)) errors.push(`actionableItems[${i}].evidence[] must be non-empty strings`);
   }
   for (const ref of expectedRefs) if (!seen.has(ref)) errors.push(`act item ${ref} has no status`);
 
   const findings = Array.isArray(result.newFindings) ? result.newFindings : null;
-  if (!findings) errors.push("newFindings[] is required");
   for (const [i, f] of (findings ?? []).entries()) {
-    if (!VALID_SEVERITIES.has(normalizeSeverity(f?.severity))) errors.push(`newFindings[${i}].severity ${JSON.stringify(f?.severity)} is unknown`);
-    if (!nonEmpty(f?.summary)) errors.push(`newFindings[${i}].summary is required`);
-    if (!nonEmptyStrings(f?.evidence)) errors.push(`newFindings[${i}].evidence[] must be non-empty strings`);
     // null is an absent optional field
     if (f?.residueOf != null && !expectedRefs.has(f.residueOf)) errors.push(`newFindings[${i}].residueOf ${JSON.stringify(f.residueOf)} is not in the act set`);
-    if (f?.skipReason != null && (!nonEmpty(f.skipReason) || !nonEmpty(f.residueOf))) errors.push(`newFindings[${i}].skipReason needs residueOf and a non-empty reason`);
     if (!membershipOnly && nonEmpty(f?.skipReason) && expectedRefs.has(f.residueOf)) {
       const actItem = sequence.actItems.find((item) => item.ref === f.residueOf);
-      const recorded = recordedSkipReason(validationCoverage, actItem.fingerprint ?? actItem.ref, typeof f.site === "string" ? f.site : null);
+      const fp = actItem.fingerprint ?? actItem.ref;
+      // A blank site is siteless, as deltaFixerFindings seals it for the handback.
+      const site = typeof f.site === "string" && f.site.trim() ? f.site : null;
+      const recorded = recordedSkipReason(validationCoverage, fp, site);
       if (recorded !== f.skipReason.trim()) {
         errors.push(`PRE-PUSH-DELTA-RESIDUE: newFindings[${i}].skipReason must equal the reason recorded for site ${JSON.stringify(f.site)} of act item ${f.residueOf}: ${JSON.stringify(recorded)}`);
       }
@@ -367,15 +444,11 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], valid
   }
   if (!membershipOnly) errors.push(...siteCoverageGaps(sequence?.actItems ?? [], validationCoverage));
 
-  if (!Array.isArray(result.widenedReads)) errors.push("widenedReads[] is required (empty when nothing was widened)");
-  else for (const [i, read] of result.widenedReads.entries()) {
-    if (!nonEmpty(read?.path) || !nonEmpty(read?.reason)) errors.push(`widenedReads[${i}] needs a path and a reason`);
-  }
-
-  if (!DELTA_OUTCOMES.includes(result.outcome)) errors.push(`outcome ${JSON.stringify(result.outcome)} is unknown`);
-  else if (result.outcome === "locally_clear" && deriveDeltaOutcome(result, { reviewerOnly: sequence?.reviewerOnly === true }) !== "locally_clear") {
+  // The outcome-consistency check belongs to a full validation: a membershipOnly caller accepts a sealed bounded_out downgrade of a locally_clear result.
+  if (membershipOnly) return errors;
+  if (result.outcome === "locally_clear" && deriveDeltaOutcome(result, { reviewerOnly: sequence?.reviewerOnly === true }) !== "locally_clear") {
     errors.push("locally_clear requires every act item resolved, no new finding of severity medium or higher, and no residueOf finding without a skipReason equal to the recorded reason, at any severity (PRE-PUSH-DELTA-RESIDUE)");
-  } else if (result.outcome === "locally_clear" && !membershipOnly) {
+  } else if (result.outcome === "locally_clear") {
     const open = unaddressedStaleSurfaceHits(staleSurfaceHits, { newFindings: findings ?? [], siteCoverage: validationCoverage });
     if (open.length > 0) errors.push(`PRE-PUSH-DELTA-RESULT: locally_clear leaves stale-surface hits unaddressed (a newFindings[] entry naming the file or a skipped siteCoverage[] site is required): ${open.map((h) => h.site).join(", ")}`);
   }
@@ -405,10 +478,11 @@ const isLowNitActList = (items) => Array.isArray(items) && items.length > 0
  * keeps today's full round. Convergence applies only at the cap round or later (`round` at or past a positive `cap`);
  * below the cap a low or nit act list goes to the fixer and the next full round runs.
  * Returns the converged marker the draft_gate comment at `headSha` records.
- * @param {{ gate?: string, headSha?: string, round?: number, cap?: number, roundActItems?: unknown, converged?: { fixerCommit?: string, actList?: unknown, deltaResult?: any } }} input
+ * @param {{ gate?: string, headSha?: string, round?: number, cap?: number, roundActItems?: unknown, converged?: { fixerCommit?: string, actList?: unknown, deltaResult?: any }, reviewedBodySha?: string|null, liveBodySha?: string }} input
+ * `reviewedBodySha` and `liveBodySha` are required when the act list holds PR-body items; the PR body must have changed.
  * @returns {{ fixerCommit: string, deltaDigest: string }}
  */
-export function composeConvergedDraftGate({ gate, headSha, round, cap, roundActItems, converged } = {}) {
+export function composeConvergedDraftGate({ gate, headSha, round, cap, roundActItems, converged, reviewedBodySha, liveBodySha } = {}) {
   if (gate !== "draft_gate") throw new Error(`converged verdict applies to draft_gate only, got ${JSON.stringify(gate)}`);
   if (cap > 0 && !isPastRoundCap(round, cap)) throw new Error(`converged verdict applies only at the cap round or later (round ${round}, cap ${cap}); below the cap a low or nit act list goes to the fixer and the next full round runs`);
   if (!FULL_SHA_RE.test(headSha ?? "")) throw new Error("converged verdict requires the full reviewed head sha");
@@ -422,9 +496,17 @@ export function composeConvergedDraftGate({ gate, headSha, round, cap, roundActI
     throw new Error("converged.actList must be the round's non-empty low/nit act list (same items as the posted act items)");
   }
   const result = converged.deltaResult;
-  const errors = validateDeltaResult(result, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: converged.actList }), membershipOnly: true });
+  const sequence = startDeltaSequence({ reviewBaselineHead: headSha, actList: converged.actList });
+  // The delta reviewer never sees a PR-body item, so a mixed list needs the narrow body-change fact of the body-only route.
+  if (sequence.bodyItems.length > 0) {
+    if (!reviewedBodySha) throw new Error(`body_read_unrecorded: the round act list holds PR-body items (${sequence.bodyItems.join(", ")}) and no cap-round context records a pr-body read at ${headSha}, so a body edit cannot be shown`);
+    if (reviewedBodySha === liveBodySha) throw new Error(`body_unchanged: the live PR body digest equals the reviewed pr-body read; edit the PR body for the PR-body items (${sequence.bodyItems.join(", ")}) first`);
+  }
+  const errors = validateDeltaResult(result, { sequence, membershipOnly: true });
   if (errors.length > 0) throw new Error(`converged.deltaResult is invalid: ${errors.join("; ")}`);
   if (result.outcome !== "locally_clear") throw new Error("converged.deltaResult must be locally_clear");
+  // validateDeltaResult skips the outcome check under membershipOnly, so state it here.
+  if (deriveDeltaOutcome(result) !== "locally_clear") throw new Error("converged.deltaResult is invalid: locally_clear requires every act item resolved and no blocking new finding");
   if (!isDeltaResultFresh(result, fixerCommit)) throw new Error("converged.deltaResult is stale: candidateHead is not the fixer commit");
   // membershipOnly is enough: the act-set id and baseline A bind the result to this round, and pre_approval_gate reviews the final head in full.
   // A converged round has no unposted new finding.
@@ -433,14 +515,14 @@ export function composeConvergedDraftGate({ gate, headSha, round, cap, roundActI
 }
 
 // An allowlist: a missing, blank or unknown severity blocks, like the low/nit path's isLowNitActList.
-const isBlockedActItem = (item) => !["medium", "low", "nit"].includes(String(normalizeSeverity(item?.severity)).toLowerCase()) || item?.failOpen === true || isSecurityAngle(item?.angle);
+export const isBlockedActItem = (item) => !["medium", "low", "nit"].includes(String(normalizeSeverity(item?.severity)).toLowerCase()) || item?.failOpen === true || isSecurityAngle(item?.angle);
 // A security angle is `security`, a prefixed one (`renderer-security`) and any of them with a `-delta-at-<sha>` suffix.
 // shortcut: no shared security classification exists in core; a pr-gate-coordination one would replace this.
 function isSecurityAngle(angle) { return /(^|-)security(-|$)/.test(baseAngleName(String(angle ?? ""))); }
 
 /**
  * Body-only cap round (ADR 0271, GATE-EXEC-NO-DEAD-END): a cap round whose open act items are all PR-body items clears with no commit.
- * Hard checks cover narrow facts only: every item names no file (a PR-body item), the live PR body digest differs from the
+ * Hard checks cover narrow facts only: every item is a PR-body item (no file, or remedyKind pr_body), the live PR body digest differs from the
  * reviewed `pr-body` read, the reviewed head..fixerCommit range holds no PR-own commit, and no item blocks (high, question, fail-open, security, missing or unknown severity).
  * Whether the edit resolves an item stays with pre_approval_gate. `fixerCommit` may equal the reviewed head.
  * Throws a typed refusal (`body_item_locatable`, `body_unchanged`, `own_commit_in_range`, `body_read_unrecorded`, `blocked_item`); returns the converged marker.
@@ -460,8 +542,10 @@ export function composeBodyOnlyConvergedDraftGate({ gate, headSha, round, cap, r
   if (capBlockers.length > 0) throw new Error(`blocked_item: the cap round holds ${capBlockers.length} blocker(s) (${capBlockers.map((b) => b.item).join("; ")}); they need a fix commit or an operator decision, not a body-only exit`);
   const blocked = items.find(isBlockedActItem);
   if (blocked) throw new Error(`blocked_item: act item ${JSON.stringify(blocked.summary)} is not medium, low or nit, is fail-open or is from a security angle; it needs a fix commit or an operator decision, not a body-only exit (GATE-EXEC-NO-DEAD-END)`);
-  const locatable = items.find((item) => resolveFindingFile(item));
-  if (locatable) throw new Error(`body_item_locatable: act item ${JSON.stringify(locatable.summary)} names a file; it needs a fix commit and a delta review, not a body-only exit`);
+  const locatable = items.find((item) => !isDeltaBodyItem(item));
+  if (locatable) throw new Error(locatable.angle === "review-thread"
+    ? `body_item_locatable: act item ${JSON.stringify(locatable.summary)} is a review-thread item; a thread is never a PR-body item, so it needs a fix commit and a delta review, not a body-only exit`
+    : `body_item_locatable: act item ${JSON.stringify(locatable.summary)} names a file and is not remedyKind pr_body; it needs a fix commit and a delta review, not a body-only exit`);
   if (!reviewedBodySha) throw new Error(`body_read_unrecorded: no cap-round context records a pr-body read at ${headSha}, so a body edit cannot be shown, and write-gate-context.mjs refuses a rerun at the cap head; fix the items with a commit and run the reviewer-only delta (check-pre-push-delta.mjs --reviewer-only)`);
   if (reviewedBodySha === liveBodySha) throw new Error("body_unchanged: the live PR body digest equals the reviewed pr-body read; edit the PR body first");
   if (ownCommits !== 0) throw new Error(`own_commit_in_range: ${headSha}..${converged.fixerCommit} holds ${ownCommits} PR-own commit(s); clear them with the reviewer-only delta review instead`);

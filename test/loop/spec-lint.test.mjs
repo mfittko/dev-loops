@@ -9,7 +9,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, test } from "bun:test";
 
 import { runCli } from "../../cli/index.mjs";
-import { indexDecisionRecords, lintContractDocsInMatrix, lintSimplestDesign, lintSizeForecast, lintSpec, main } from "../../scripts/loop/spec-lint.mjs";
+import { pathsMissingFromMatrix } from "../../scripts/github/waive-adr-tripwire.mjs";
+import { indexDecisionRecords, lintContractDocsInMatrix, lintRuleOwnerDocsInMatrix, lintSimplestDesign, lintSizeForecast, lintSpec, lintStateRecoveryRows, main } from "../../scripts/loop/spec-lint.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const tempDirs = [];
@@ -358,7 +359,7 @@ test("only cli/index.mjs wires the spec-lint lint surface; other files may reuse
 
 test("lintSpec reports simplest_design_missing for a Size forecast body without the section, and none with it", async () => {
   const root = await fixtureRepo();
-  const forecast = "## Size forecast\n\n- forecast: slice=1 wloc=10 files=a.mjs";
+  const forecast = "## Size forecast\n\n- forecast: slice=1 wloc=200 files=a.mjs";
   const kinds = async (body) => (await lintSpec({ body, repoRoot: root })).findings.map((f) => f.kind);
   assert.deepEqual(await kinds(forecast), ["simplest_design_missing"]);
   assert.deepEqual(await kinds(`${forecast}\n\n## Simplest design\n\nMinimal approach.`), []);
@@ -387,6 +388,11 @@ test("DESIGN-SIMPLEST-FIRST is registered, owned by structural-quality, and cite
 test("size forecast: a null waiverLoc never reports size_forecast_split_required", () => {
   assert.deepEqual(lintSizeForecast("## Size forecast\n\n- forecast: slice=1 wloc=10 files=a.mjs", { waiverLoc: null }), []);
   assert.deepEqual(lintSizeForecast("## Size forecast\n\n- forecast: slice=1 wloc=1800 files=a.mjs", { waiverLoc: 1500 }).map((f) => f.kind), ["size_forecast_split_required"]);
+});
+
+test("size forecast: a waiverLoc below minLoc gives only the split finding at or above the waiver bound", () => {
+  const body = "## Size forecast\n\n- forecast: slice=1 wloc=100 files=a.mjs";
+  assert.deepEqual(lintSizeForecast(body, { softLoc: 40, waiverLoc: 75, minLoc: 150 }).map((f) => f.kind), ["size_forecast_split_required"]);
 });
 
 test("size forecast: the split bound moves with a .devloops waiverLoc override", async () => {
@@ -459,4 +465,148 @@ test("contract_doc_not_in_matrix: a forecast contract doc must be named in a mat
   const noMatrix = `## Size forecast\n\n- forecast: slice=1 wloc=90 files=${DOC}\n`;
   assert.deepEqual(lintContractDocsInMatrix(noMatrix), []);
   assert.deepEqual(lintContractDocsInMatrix(`${noMatrix}\n## AC / DoD matrix\n\nnot a table\n`), []);
+});
+
+const forecastBody = (wloc) => `## Size forecast\n\n${forecastLine(1, wloc)}`;
+const bandOf = (config) => ({ softLoc: 400, waiverLoc: 1500, minLoc: 150, ...config });
+
+test("size band: a forecast between softLoc and waiverLoc reports size_band_above_soft_loc with the bound", () => {
+  assert.deepEqual(lintSizeForecast(forecastBody(500), bandOf()), [
+    { kind: "size_band_above_soft_loc", id: "1", detail: { wloc: 500, softLoc: 400, message: "split assessment required in the results comment (softLoc 400)" } },
+  ]);
+});
+
+test("size band: a forecast below minLoc reports size_band_below_min_loc with the bound", () => {
+  assert.deepEqual(lintSizeForecast(forecastBody(45), bandOf()), [
+    { kind: "size_band_below_min_loc", id: "1", detail: { wloc: 45, minLoc: 150, message: "merge assessment required in the results comment (minLoc 150)" } },
+  ]);
+});
+
+test("size band: waiver line, in-band line, minLoc 0 and null softLoc report no size_band finding", () => {
+  const kinds = (wloc, band) => lintSizeForecast(forecastBody(wloc), bandOf(band)).map((f) => f.kind);
+  assert.deepEqual(kinds(1500), ["size_forecast_split_required"]);
+  assert.deepEqual(kinds(400), []);
+  assert.deepEqual(kinds(150), []);
+  assert.deepEqual(kinds(10, { minLoc: 0 }), []);
+  assert.deepEqual(kinds(900, { softLoc: null }), []);
+  assert.deepEqual(lintSizeForecast(forecastBody(5000), bandOf({ waiverLoc: null })), [
+    { kind: "size_band_above_soft_loc", id: "1", detail: { wloc: 5000, softLoc: 400, message: "split assessment required in the results comment (softLoc 400)" } },
+  ]);
+});
+
+test("size band: three slices report per-slice ids, split_required first then informational in forecast order", () => {
+  const body = `## Size forecast\n\n${[45, 500, 1600].map((wloc, i) => forecastLine(i + 1, wloc)).join("\n")}`;
+  assert.deepEqual(lintSizeForecast(body, bandOf()).map((f) => [f.kind, f.id]), [
+    ["size_forecast_split_required", "3"],
+    ["size_band_below_min_loc", "1"],
+    ["size_band_above_soft_loc", "2"],
+  ]);
+});
+
+test("size band: spec-lint prints the resolved band, shipped fallbacks and .devloops overrides", async () => {
+  const root = await fixtureRepo();
+  const bodyFile = path.join(root, "body.md");
+  await writeFile(bodyFile, forecastBody(200));
+  const bandFor = async () => {
+    const stdout = buffer();
+    assert.equal(await main(["--body-file", bodyFile, "--repo-root", root], { stdout: stdout.stream, stderr: buffer().stream }), 0);
+    return JSON.parse(stdout.read()).checks.sizeForecast.band;
+  };
+  assert.deepEqual(await bandFor(), { minLoc: 150, softLoc: 400, waiverLoc: 1500, absoluteHardLoc: 2000 });
+  await writeFile(path.join(root, ".devloops"), "version: 1\ngates:\n  size:\n    absoluteHardLoc: 900\n    planningBand:\n      minLoc: 20\n    tiers:\n      default:\n        softLoc: 300\n        waiverLoc: 600\n");
+  assert.deepEqual(await bandFor(), { minLoc: 20, softLoc: 300, waiverLoc: 600, absoluteHardLoc: 900 });
+});
+
+const ruleMatrix = (row) => `## AC / DoD matrix\n\n| Acceptance criterion | Completion evidence |\n| --- | --- |\n| Row. | ${row} |\n`;
+
+test("contract_doc_not_in_matrix: a cited rule ID owned by a contract doc needs the doc in a matrix row", async () => {
+  const root = await fixtureRepo();
+  const owner = "skills/docs/x-contract.md";
+  await writeFile(path.join(root, owner), "# X\n\n<!-- rule: XXX-YYY-ZZZ -->\nText.\n\n<!-- rule: XXX-A-ZZZ -->\nText.\n");
+  await writeFile(path.join(root, "skills", "docs", "y.md"), "# Y\n\n<!-- rule: YYY-OTHER-ONE -->\nText.\n");
+  const kinds = (body) => lintRuleOwnerDocsInMatrix(body, root);
+  const missing = await kinds(ruleMatrix("`XXX-YYY-ZZZ` holds."));
+  assert.deepEqual(missing.map((f) => f.id), [owner]);
+  assert.ok(missing[0].detail.reason.includes("XXX-YYY-ZZZ") && missing[0].detail.reason.includes(owner));
+  const fixed = ruleMatrix(`\`XXX-YYY-ZZZ\` holds in \`${owner}\`.`);
+  assert.deepEqual(await kinds(fixed), []);
+  assert.deepEqual(pathsMissingFromMatrix([owner], fixed), { matrixInvalid: false, missing: [] });
+  assert.deepEqual(await kinds(ruleMatrix("`YYY-OTHER-ONE` holds.")), []);
+  assert.deepEqual(await kinds("`XXX-YYY-ZZZ` holds."), []);
+  assert.deepEqual((await kinds(ruleMatrix("`XXX-A-ZZZ` holds."))).map((f) => f.id), [owner]);
+  assert.deepEqual((await kinds(ruleMatrix("`XXX-YYY-ZZZ-2` holds."))).map((f) => f.id), [owner]);
+  // Wiring: with the default forecast, lintSpec still reports the owner doc through the rule-cite lint.
+  const ruleOnly = (await lintSpec({ body: `${ruleMatrix("`XXX-YYY-ZZZ` holds.")}${FORECAST}`, repoRoot: root })).findings.filter((f) => f.kind === "contract_doc_not_in_matrix");
+  assert.deepEqual(ruleOnly.map((f) => f.id), [owner]);
+  // Dedup: the forecast finding and the rule-cite finding for one doc collapse to one.
+  const body =`${ruleMatrix("`XXX-YYY-ZZZ` holds.")}${FORECAST.replace("files=a.mjs", `files=${owner}`)}`;
+  const found = (await lintSpec({ body, repoRoot: root })).findings.filter((f) => f.kind === "contract_doc_not_in_matrix");
+  assert.deepEqual(found.map((f) => f.id), [owner]);
+});
+
+const recoverySpec = (...rows) => ["## AC / DoD matrix", "", "| Acceptance criterion | Completion evidence |", "| --- | --- |", ...rows.map((r) => `| ${r[0]} | ${r[1]} |`), ""].join("\n");
+
+test("state_recovery_rows_missing: a spec adding a lock file without recovery rows is flagged (REFINE-STATE-RECOVERY-ROWS)", () => {
+  const flagged = lintStateRecoveryRows(recoverySpec(["The loop writes a lock file per run", "unit test"]));
+  assert.deepEqual(flagged.map((f) => f.id), ["crash", "rebuild at the same head", "replacement by a later step"]);
+  assert.ok(flagged.every((f) => f.kind === "state_recovery_rows_missing"));
+  assert.deepEqual(lintStateRecoveryRows(recoverySpec(["A fail-closed refusal on stale heads", "unit test"])).map((f) => f.id), ["named recovery"]);
+});
+
+test("state_recovery_rows_missing: plurals and lockfile trigger the state check", () => {
+  for (const word of ["locks", "receipts", "marker files", "caches", "sentinels", "a lockfile", "plan files"]) {
+    const ids = lintStateRecoveryRows(recoverySpec([`The loop writes ${word}`, "unit test"])).map((f) => f.id);
+    assert.equal(ids.length, 3, word);
+  }
+});
+
+test("state_recovery_rows_missing: every fail(s/ed/ing) closed form triggers the named-recovery check", () => {
+  for (const phrase of ["fail-closed", "fail closed", "fails closed", "failed closed", "failing closed", "fails-closed"]) {
+    const ids = lintStateRecoveryRows(recoverySpec([`The writer ${phrase} on a stale head`, "unit test"])).map((f) => f.id);
+    assert.deepEqual(ids, ["named recovery"], phrase);
+  }
+  for (const phrase of ["fail open", "closed", "failsafe"]) { // empty row: see the separate test below
+    assert.deepEqual(lintStateRecoveryRows(recoverySpec([`The writer is ${phrase} on a stale head`, "unit test"])), [], phrase);
+  }
+});
+
+test("state_recovery_rows_missing: only criterion text is scanned, per row", () => {
+  assert.deepEqual(lintStateRecoveryRows(recoverySpec(["The parser rejects bad input", "test/cache.test.mjs covers it"])), []);
+  assert.deepEqual(lintStateRecoveryRows(recoverySpec(["The parser rejects bad input", "fail-closed in test/lock.test.mjs"])), []);
+});
+
+test("state_recovery_rows_missing: a spec with the three recovery rows and a named recovery yields no finding", () => {
+  const clean = recoverySpec(
+    ["The loop writes a lock file and refuses fail-closed on a stale head, returning the recovery command", "unit test"],
+    ["The lock survives a crash and is reclaimed", "unit test"],
+    ["A rebuild at the same head reuses the lock", "unit test"],
+    ["A later step replacement of the lock is detected", "unit test"],
+  );
+  assert.deepEqual(lintStateRecoveryRows(clean), []);
+  assert.deepEqual(lintStateRecoveryRows("no matrix here, a lock"), []);
+});
+
+test("state_recovery_rows_missing: verb forms and partial rows are matched per keyword", () => {
+  const rows = (...c) => recoverySpec(["The loop writes a lock file", "unit test"], ...c.map((r) => [r, "unit test"]));
+  for (const replace of ["A later step replaces the lock", "A later step is replacing the lock", "A later step replaced the lock"]) {
+    assert.deepEqual(lintStateRecoveryRows(rows("The lock survives a crash", "A same-head rebuild reuses it", replace)), [], replace);
+  }
+  assert.deepEqual(lintStateRecoveryRows(rows("The lock survives a crash")).map((f) => f.id), ["rebuild at the same head", "replacement by a later step"]);
+});
+
+test("state_recovery_rows_missing: lintSpec and the CLI report the finding", async () => {
+  const root = await fixtureRepo();
+  const body = `${recoverySpec(["The loop writes a lock file", "unit test"])}${FORECAST}`;
+  const found = (await lintSpec({ body, repoRoot: root })).findings.filter((f) => f.kind === "state_recovery_rows_missing");
+  assert.equal(found.length, 3);
+  assert.deepEqual((await lintSpec({ body: `${recoverySpec(["The parser rejects bad input", "unit test"])}${FORECAST}`, repoRoot: root })).findings.filter((f) => f.kind === "state_recovery_rows_missing"), []);
+  const bodyFile = path.join(root, "body.md");
+  await writeFile(bodyFile, body);
+  const stdout = buffer();
+  await main(["--body-file", bodyFile, "--repo-root", root], { stdout: stdout.stream, stderr: buffer().stream });
+  assert.equal((stdout.read().match(/state_recovery_rows_missing/g) ?? []).length, 3);
+});
+
+test("state_recovery_rows_missing: an empty row yields no finding", () => {
+  assert.deepEqual(lintStateRecoveryRows(recoverySpec(["", "unit test"])), []);
 });

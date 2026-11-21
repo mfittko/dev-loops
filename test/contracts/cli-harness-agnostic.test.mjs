@@ -98,6 +98,7 @@ const ASYNC_START = path.join("packages", "core", "src", "loop", "async-start-co
 const ASYNC_START_TEST = path.join("packages", "core", "test", "async-start-contract.test.mjs");
 // CLI integration test injects native markers into a child to verify the public startup boundary.
 const STARTUP_CLI_TEST = path.join("test", "loop", "resolve-dev-loop-startup-cli-contract.test.mjs");
+const STARTUP_TEST = path.join("test", "loop", "resolve-dev-loop-startup.test.mjs");
 const RUN_CONTEXT_GENERATED = path.join(".claude", "hooks", "_run-context.mjs");
 // Commit-msg guard test clears inherited harness session vars from its git env and sets them to cover each harness.
 const COMMIT_MSG_GUARD_TEST = path.join("packages", "core", "test", "commit-msg-guard.test.mjs");
@@ -127,12 +128,12 @@ const HARNESS_RUNTIME_ENV = new Map([
   // only in the run-context/async-start contract modules + their tests.
   [
     "PI_SUBAGENT_RUN_ID",
-    [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED, STARTUP_CLI_TEST],
+    [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED, STARTUP_CLI_TEST, STARTUP_TEST],
   ],
   ["PI_SUBAGENT_CHILD", [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED, STARTUP_CLI_TEST, PI_ROLE_GATE_TEST]],
   [
     "PI_SUBAGENT_PARENT_SESSION",
-    [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED, STARTUP_CLI_TEST],
+    [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED, STARTUP_CLI_TEST, STARTUP_TEST],
   ],
   ["PI_ASYNC_NATIVE_RUNNER", [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED]],
   // PI_SESSION_ID is Pi's per-child session id, injected into every Pi shell (the main agent's

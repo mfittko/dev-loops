@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.12-pre.5
+
+### Changed
+
+- Under Claude Code, emitted work orders, remedies and refusals name CLI calls as `dev-loops-run --repo-root <checkout> cli/index.mjs ...` (#3105)
+
+### Fixed
+
+- A bounded-out delta sequence closes with `gate close-sequence`, so no manual marker delete remains; PR-body act items leave the delta act set (#2447)
+- `gate close-sequence --head` accepts a full SHA or a safe marker file name; an unreadable marker closes as `MARKER_UNREADABLE` once old enough with no fixer running (#2447)
+- `gate close-sequence` refuses `abandonment_unproven` when the marker's emit plan belongs to another PR (#2447)
+- `seal-evidence --kind delta` refuses a malformed or contradicting result with `evidence_malformed` before it seals (#2447)
+- A draft_gate cap round now accepts a second or later fixer pass at a head its sealed clearing chain reaches, so the remaining act items are no longer stranded (#3105)
+- `loop startup --pr` on a ready PR you own now points at the gate-coordination pre-flight, whatever the PR author (#3105)
+- A draft PR with an open draft_gate act list at its head now routes to the fixer instead of another round, a cap-round block or a base integration (#3105)
+
 ## 1.0.12-pre.4
 
 ### Added

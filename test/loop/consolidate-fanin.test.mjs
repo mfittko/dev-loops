@@ -28,7 +28,7 @@ import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, renderBrie
 import { dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
 import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
 import { writeJson } from "@dev-loops/core/loop/phase-files";
-import { runNode, withTempDir } from "../_helpers.mjs";
+import { addLocalOrigin, initGitFixture, runNode, withTempDir } from "../_helpers.mjs";
 
 // #1592: several fixtures below deliberately keep pre-rename severity
 // spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
@@ -1810,6 +1810,117 @@ test("parseConsolidateFaninCliArgs parses --carried-angles + --carry-forward-pla
   assert.deepEqual(result.carryForwardPlan.map((e) => e.angle), ["correctness", "docs"]);
 });
 
+test("parseConsolidateFaninCliArgs reads --carry-forward-plan-file like the inline flag, with multi-finding carried text off the command line", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "carry-plan-file-"));
+  try {
+    const findings = [
+      { severity: "low", summary: "Long `backtick` \"quoted\" text ".repeat(40) },
+      { severity: "high", summary: "Second finding with $(subshell) and {a,b} braces" },
+    ];
+    const planFile = path.join(dir, "plan.json");
+    await writeFile(planFile, findingsPresentCarryForwardPlanJson("config-drift", findings), "utf8");
+    const argv = ["--findings-dir", "/tmp/x", "--gate", "draft_gate", "--carried-angles", '["config-drift"]', "--carry-forward-plan-file", planFile];
+    assert.ok(!argv.join(" ").includes("backtick"));
+    const fromFile = parseConsolidateFaninCliArgs(argv);
+    const inline = parseConsolidateFaninCliArgs([...argv.slice(0, -2), "--carry-forward-plan", findingsPresentCarryForwardPlanJson("config-drift", findings)]);
+    assert.deepEqual(fromFile.carryForwardPlan, inline.carryForwardPlan);
+    assert.equal(fromFile.carryForwardPlan[0].findings.length, 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseConsolidateFaninCliArgs refuses both plan flags and an unreadable plan file, naming a recovery", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", carryForwardPlanJson(["docs"]), "--carry-forward-plan-file", "/tmp/x"]),
+    /mutually exclusive.*Recovery:/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan-file", "/nonexistent/plan.json"]),
+    /could not be read.*Recovery:/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", carryForwardPlanJson(["docs"]), "--carry-forward-plan", carryForwardPlanJson(["docs"])]),
+    (err) => /given more than once/.test(err.message) && !/mutually exclusive/.test(err.message),
+  );
+});
+
+test("parseConsolidateFaninCliArgs refuses a repeated --carry-forward-plan-file as given more than once", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "carry-plan-dup-"));
+  try {
+    const planFile = path.join(dir, "plan.json");
+    await writeFile(planFile, carryForwardPlanJson(["docs"]), "utf8");
+    assert.throws(
+      () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan-file", planFile, "--carry-forward-plan-file", planFile]),
+      (err) => /given more than once/.test(err.message) && !/mutually exclusive/.test(err.message),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseConsolidateFaninCliArgs names a recovery for an empty or malformed --carry-forward-plan-file", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "carry-plan-bad-"));
+  try {
+    const empty = path.join(dir, "empty.json");
+    await writeFile(empty, "", "utf8");
+    assert.throws(
+      () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan-file", empty]),
+      /must be JSON.*Recovery:.*resolve-angle-carry-forward\.mjs/,
+    );
+    const wrongShape = path.join(dir, "shape.json");
+    await writeFile(wrongShape, '{"nope":1}', "utf8");
+    assert.throws(
+      () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan-file", wrongShape]),
+      /--carry-forward-plan-file must have a "carried" array.*Recovery:.*resolve-angle-carry-forward\.mjs/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseConsolidateFaninCliArgs refuses a relative --carry-forward-plan-file and accepts an absolute one", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "carry-plan-abs-"));
+  try {
+    const planFile = path.join(dir, "plan.json");
+    await writeFile(planFile, carryForwardPlanJson(["docs"]), "utf8");
+    const base = ["--findings-dir", "/tmp/x", "--gate", "draft_gate", "--carried-angles", '["docs"]'];
+    assert.deepEqual(parseConsolidateFaninCliArgs([...base, "--carry-forward-plan-file", planFile]).carriedAngles, ["docs"]);
+    for (const rejected of ["tmp/gate-context/o-r/pr-7/draft_gate-abc.carry-forward-plan.json", "./plan.json", ""]) {
+      assert.throws(
+        () => parseConsolidateFaninCliArgs([...base, "--carry-forward-plan-file", rejected]),
+        /(must be an absolute path.*Recovery:|Missing value for --carry-forward-plan-file)/,
+      );
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseConsolidateFaninCliArgs refuses a plan file whose identity differs from the round, in either flag order", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "carry-plan-id-"));
+  try {
+    const plan = JSON.parse(carryForwardPlanJson(["docs"]));
+    const planFile = path.join(dir, "plan.json");
+    await writeFile(planFile, JSON.stringify({ ...plan, headSha: "c".repeat(40), gate: "draft_gate" }), "utf8");
+    const round = ["--findings-dir", "/tmp/x", "--gate", "draft_gate", "--carried-angles", '["docs"]'];
+    assert.throws(
+      () => parseConsolidateFaninCliArgs([...round, "--head-sha", "d".repeat(40), "--carry-forward-plan-file", planFile]),
+      /headSha.*does not match this round.*Recovery:/,
+    );
+    assert.throws(
+      () => parseConsolidateFaninCliArgs(["--carry-forward-plan-file", planFile, ...round, "--head-sha", "d".repeat(40)]),
+      /does not match this round/,
+    );
+    assert.deepEqual(
+      parseConsolidateFaninCliArgs([...round, "--head-sha", "c".repeat(40), "--carry-forward-plan-file", planFile]).carriedAngles,
+      ["docs"],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("parseConsolidateFaninCliArgs rejects unparseable/non-array/empty-string --carried-angles", () => {
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carried-angles", "not json"]),
@@ -1965,11 +2076,11 @@ test("parseConsolidateFaninCliArgs rejects --carried-angles / --carry-forward-pl
   const plan = carryForwardPlanJson(["docs"]);
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--gate", "draft_gate", "--carried-angles", '["docs"]']),
-    /--carried-angles requires --carry-forward-plan/,
+    /--carried-angles requires --carry-forward-plan-file \(or --carry-forward-plan\)/,
   );
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--gate", "draft_gate", "--carry-forward-plan", plan]),
-    /--carry-forward-plan was given without --carried-angles/,
+    /--carry-forward-plan-file \(or --carry-forward-plan\) was given without --carried-angles/,
   );
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carried-angles", '["docs"]', "--carry-forward-plan", plan]),
@@ -2381,7 +2492,7 @@ test("consolidateGateFanin refuses a carried angle whose only plan sibling share
             carriedAngles: ["coverage"],
             carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage-delta-at-abc1234"])).carried,
           }),
-          /coverage.*not present in --carry-forward-plan/s,
+          /coverage.*not present in the carry-forward plan/s,
         );
       },
     );
@@ -2415,7 +2526,7 @@ test("consolidateGateFanin refuses an unmapped/unknown --carried-angles entry", 
 // must-fix (gate-evidence, consolidate-fanin.mjs:641): a carried name absent
 // from the proven carry-forward plan is refused — the plan is the evidence
 // that an angle was actually resolved as carried, not just typed in.
-test("consolidateGateFanin refuses a --carried-angles entry absent from --carry-forward-plan's carried list", async () => {
+test("consolidateGateFanin refuses a --carried-angles entry absent from the carry-forward plan's carried list", async () => {
   await withMinimalConfigRepoRoot(async (repoRoot) => {
     await withFindingsDir(
       { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
@@ -2428,7 +2539,7 @@ test("consolidateGateFanin refuses a --carried-angles entry absent from --carry-
             carriedAngles: ["correctness"],
             carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage"])).carried, // plan proves "coverage", not "correctness"
           }),
-          /not present in --carry-forward-plan/,
+          /not present in the carry-forward plan/,
         );
       },
     );
@@ -2445,7 +2556,7 @@ test("consolidateGateFanin fails closed when --carried-angles is given without -
       );
       await assert.rejects(
         () => consolidateGateFanin({ findingsDir: dir, gate: "draft_gate", carriedAngles: ["correctness"] }),
-        /--carried-angles requires --carry-forward-plan/,
+        /--carried-angles requires --carry-forward-plan-file \(or --carry-forward-plan\)/,
       );
     },
   );
@@ -3855,6 +3966,8 @@ test("through dev-loops-run --repo-root, the fan-in counts the sentinels under <
   const root = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-reporoot-"));
   const shellCwd = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-shell-"));
   try {
+    initGitFixture(root, { branch: "main" });
+    addLocalOrigin(root);
     await mkdir(path.join(root, "findings"), { recursive: true });
     for (const angle of ["coverage", "correctness"]) {
       await writeFile(path.join(root, "findings", `${angle}.json`), JSON.stringify({ angle, verdict: "clean", findings: [], headSha: HEAD_A }));

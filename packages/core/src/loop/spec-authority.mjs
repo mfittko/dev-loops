@@ -338,12 +338,55 @@ export const SPEC_AUTHORITY_VERDICT_SCHEMA = Object.freeze({
     conditional: Object.freeze({
       conflictingCriteria: `non-empty array of criterion ids when outcome is one of ${SPEC_AUTHORITY_CONFLICT_OUTCOMES.join(", ")}; absent otherwise`,
       authorizedRemediation: `non-empty string when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT}`,
-      defectClass: `non-empty string when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only)`,
-      siteQuery: `non-empty string (a git grep pattern or a space-separated symbol list, never an array) when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only)`,
-      remedyKind: "evidence_only when the remedy changes no file; then defectClass and siteQuery are not needed",
+      defectClass: `non-empty string when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only or pr_body)`,
+      siteQuery: `non-empty string (a git grep pattern or a space-separated symbol list, never an array) when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only or pr_body)`,
+      remedyKind: "evidence_only when the remedy changes no file, or pr_body when the only remedy is a PR-body edit; then defectClass and siteQuery are not needed",
       defectKind: `one of: ${DEFECT_KINDS.join(", ")} (default other); matcher also needs acceptedForms[] and rejectedForms[], each a non-empty array of strings (verbatim input forms, "" allowed); doc_lag needs statedSurfaces[], a non-empty array of non-empty strings (surface locations); the lists are refused on any other defectKind`,
     }),
   }),
+  // Two filled verdict files for the checker. Replace every identity and criterion value with the work order's own.
+  examples: Object.freeze([
+    Object.freeze({
+      specDigest: `sha256:${"a".repeat(64)}`,
+      headSha: "b".repeat(40),
+      contentDigest: `sha256:${"c".repeat(64)}`,
+      decisions: [{
+        index: 0,
+        outcome: "valid_compliant",
+        specDigest: `sha256:${"a".repeat(64)}`,
+        headSha: "b".repeat(40),
+        contentDigest: `sha256:${"c".repeat(64)}`,
+        checkedCriteria: ["ac:1"],
+        rationale: "The finding is a real defect and the remedy fits the spec.",
+        authorizedRemediation: "Guard the empty input in parseThing and add a test.",
+        defectClass: "unguarded empty input",
+        siteQuery: "parseThing readThing",
+        defectKind: "matcher",
+        acceptedForms: ["a", "abc"],
+        rejectedForms: ["", "  "],
+      }],
+    }),
+    Object.freeze({
+      specDigest: `sha256:${"a".repeat(64)}`,
+      headSha: "b".repeat(40),
+      contentDigest: `sha256:${"c".repeat(64)}`,
+      decisions: [{
+        index: 1,
+        outcome: "valid_compliant",
+        specDigest: `sha256:${"a".repeat(64)}`,
+        headSha: "b".repeat(40),
+        contentDigest: `sha256:${"c".repeat(64)}`,
+        checkedCriteria: ["ac:1"],
+        rationale: "The matcher rejects a form the spec accepts.",
+        authorizedRemediation: "Accept the prefixed form in matchThing and add a test.",
+        defectClass: "matcher too narrow",
+        siteQuery: "matchThing",
+        defectKind: "matcher",
+        acceptedForms: ["sha256:abc", "abc"],
+        rejectedForms: ["", "sha256:"],
+      }],
+    }),
+  ]),
 });
 
 function nonEmptyStringList(value) {
@@ -364,15 +407,19 @@ function inputFormList(value) {
  * guard defect also lists its accepted and rejected input forms. Doc, comment
  * or fragment lag lists every stated surface of the changed rule.
  */
+const REMEDY_KINDS_NO_SITE = ["evidence_only", "pr_body"];
 function validateRemediationScope(d) {
   // A remedy that changes no file has no defect class or site; it never reaches the fixer.
-  if (d.remedyKind === "evidence_only") return { remedyKind: "evidence_only" };
+  if (d.remedyKind !== undefined && !REMEDY_KINDS_NO_SITE.includes(d.remedyKind)) {
+    throw Object.assign(new Error(`spec-authority decision ${d.index} remedyKind must be one of: ${REMEDY_KINDS_NO_SITE.join(", ")}`), { code: "spec_authority_decision_invalid", decisionIndex: d.index, field: "remedyKind" });
+  }
+  if (REMEDY_KINDS_NO_SITE.includes(d.remedyKind)) return { remedyKind: d.remedyKind };
   const missing = (field, what) => Object.assign(
     new Error(`spec-authority valid_compliant decision ${d.index} requires a non-empty ${field} (${what})`),
     { code: "spec_authority_decision_invalid", decisionIndex: d.index, field },
   );
   if (typeof d.defectClass !== "string" || d.defectClass.trim().length === 0) {
-    throw missing("defectClass", "the class of defect the remediation closes; set remedyKind \"evidence_only\" when the remedy changes no file");
+    throw missing("defectClass", "the class of defect the remediation closes; set remedyKind \"evidence_only\" when the remedy changes no file, or \"pr_body\" when the only remedy is a PR-body edit");
   }
   if (typeof d.siteQuery !== "string" || d.siteQuery.trim().length === 0) {
     throw missing("siteQuery", "a string: a git grep pattern or a space-separated symbol list the fixer runs at the head");
@@ -424,8 +471,8 @@ function validateRemediationScope(d) {
  *   conflictingCriteria: [<ids>],         // required + non-empty for the two conflict outcomes
  *   rationale: "<non-empty>",
  *   authorizedRemediation: "<...>",       // required for valid_compliant
- *   defectClass: "<...>", siteQuery: "<...>", // required for valid_compliant unless remedyKind is "evidence_only"
- *   remedyKind?: "evidence_only",         // the remedy changes no file: no defectClass/siteQuery, never on the fixer act list
+ *   defectClass: "<...>", siteQuery: "<...>", // required for valid_compliant unless remedyKind is "evidence_only" or "pr_body"
+ *   remedyKind?: "evidence_only" | "pr_body", // evidence_only: no file changes, never on the fixer act list; pr_body: the only remedy is a PR-body edit; neither needs defectClass/siteQuery
  *   defectKind?: "matcher"|"doc_lag"|"other", // matcher: acceptedForms[] + rejectedForms[]; doc_lag: statedSurfaces[]
  *   rejectedRemediations: ["<...>"]       // optional audit of rejected options
  * }

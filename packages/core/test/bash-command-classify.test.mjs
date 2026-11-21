@@ -44,6 +44,7 @@ import {
   commandIsFileMarkerPollLoop,
   commandContainsInlineInterpreter,
   inlineInterpreterVerdict,
+  classifyDecisionRecorderCommand,
   commandContainsCodeVerificationEntrypoint,
   tokenizeShellCommand,
 } from "../src/loop/bash-command-classify.mjs";
@@ -121,6 +122,23 @@ test("commandContainsGhPrReady (all-segments, PreToolUse gate) detects ready in 
   assert.equal(commandContainsGhPrReady("echo ok && gh pr ready 17"), true);
   assert.equal(commandContainsGhPrReady("false && gh pr ready 42"), true);
   assert.equal(commandContainsGhPrReady("gh pr merge 1"), false);
+});
+
+test("a -h value after a gh value flag does not exempt the segment; first-arg help stays allowed", () => {
+  assert.equal(commandContainsGhPrMerge("gh pr merge 42 --squash --body -h"), true);
+  assert.equal(commandContainsGhPrMerge("gh pr merge --help"), false);
+  assert.equal(commandContainsGhPrMerge("gh pr merge -h"), false);
+  for (const flag of ["--body", "-b", "--subject", "--title"]) {
+    assert.equal(commandContainsGhPrMerge(`gh pr merge 42 ${flag} -h`), true, flag);
+    assert.equal(commandContainsRawExternalWrite(`gh pr comment 42 ${flag} -h`), true, flag);
+  }
+  assert.equal(commandContainsRawExternalWrite("gh pr comment --help"), false);
+  assert.equal(commandContainsGhPrCreate("gh pr create -H feat --fill"), true);
+  assert.equal(isGhPrMergeCommand("gh pr merge 42 --body -h"), true);
+  const flagged = extractRepoFlagsFromGhPrMergeSegments("gh pr merge 42 --repo o/r --body -h");
+  assert.equal(flagged.length, 1);
+  assert.equal(flagged[0].explicitRepo, "o/r");
+  assert.deepEqual(extractRepoFlagsFromGhPrMergeSegments("gh pr merge --help"), []);
 });
 
 test("commandContainsGhPrMerge (all-segments, PreToolUse gate) detects merge in any segment", () => {
@@ -1803,4 +1821,12 @@ test("OPS-NO-INLINE-INTERPRETER: the inertness heuristics and the hand-written s
   for (const name of ["redirectionSkip", "substitutionIsInert", "dataHeredocs", "blankDataHeredocs", "hasQuotePairingHazard", "segmentsHaveQuotedHeredoc", "inertQuoteSegment", "stripQuotedLiterals", "tokenizeShellCommand", "stripLeadingWrappers", "isPayloadWord", "writeTargets"]) {
     assert.doesNotMatch(denyPath, new RegExp(`\\b${name}\\b`), name);
   }
+});
+
+test("commandContainsInlineInterpreter shifts a wrapper flag value that is named like a launcher", () => {
+  for (const c of ["sudo -u node node -e 'x'", "sudo -u node python3 -c 'x'", "sudo -u bun node -e 'x'", "sudo -u dev-loops node -e 'x'", "sudo -u dev-loops-run python3 -c x"]) assert.equal(commandContainsInlineInterpreter(c), true, c);
+});
+
+test("classifyDecisionRecorderCommand keeps a launcher word after a bare wrapper flag", () => {
+  assert.notEqual(classifyDecisionRecorderCommand("sudo -n node scripts/github/record-operator-*.mjs --repo o/n"), null);
 });

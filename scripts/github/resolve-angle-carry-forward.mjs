@@ -30,6 +30,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { isDevLoopConfigSourcePath } from "@dev-loops/core/analysis/diff-analyzer";
+import { validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-verdict-carry";
 import { loadDevLoopConfigStrict, resolveBaseBranch, resolveClassifyRules, resolveGateAngleContract } from "@dev-loops/core/config";
 import {
   angleReviewSurface,
@@ -45,6 +46,7 @@ import { captureMainRelativeChangedFilesSince, runGitCommand } from "../lib/git-
 export { runGitCommand } from "../lib/git-delta.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { computeBaseMergeCarry } from "./classify-base-merge-carry.mjs";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
@@ -55,6 +57,7 @@ import {
   buildCarryForwardPlanPath,
   mapGateToConfigKey,
 } from "./write-gate-context.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 const USAGE = `Usage: resolve-angle-carry-forward.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --prev-head <sha> --head-sha <sha> [--tmp-root <path>] [--rerun-angle <angle>]...
 Decide, per angle, whether a prior gate verdict (clean OR findings_present, recorded
@@ -425,6 +428,7 @@ async function persistCarryForwardPlan(planBody, { repoRoot, repo, pr, gate, hea
   return planPath;
 }
 
+// The base-merge classifier (computeBaseMergeCarry) always runs git through the pinned runner and ignores the injected runGit.
 export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), runGit = runGitCommand } = {}) {
   let options;
   try {
@@ -543,7 +547,23 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // findings, duplicate angle) throws UNTAGGED and is treated like an
     // operational failure below: no marker, emitter refuses. So the catch never
     // blanket-tags — it trusts the tag the pure seam set.
-    const rawPlan = buildCarryForwardPlan({ log, changedFiles, incrementalFiles, alwaysRerun, deltaComplete: reduced, rules, rerunAngles: options.rerunAngles });
+    // Same-file base merge or resolved conflicts (issue 3284): when validated evidence names the files to
+    // re-run, only angles meeting those files re-run; the rest carry. Any other decision keeps the delta above.
+    const baseMerge = await computeBaseMergeCarry({ prevHead: options.prevHead, headSha: options.headSha, baseRef: mainRef, repoRoot });
+    const partial = (baseMerge.decision === "partial_carry" || baseMerge.decision === "resolution_delta")
+      && validateBaseMergeCarryEvidence(baseMerge, { expectedSourceHead: options.prevHead, expectedNewHead: options.headSha }).ok;
+    // A resolution file that a PR-own commit also edited in the window needs a full PR-hunk review: the --cc hunks hide that edit.
+    let resolutionScopePaths = [];
+    if (partial && baseMerge.decision === "resolution_delta") {
+      const own = await runGit(["log", "--first-parent", "--no-merges", "-z", "--name-only", "--format=", `${options.prevHead}..${options.headSha}`], { repoRoot });
+      if (own.code !== 0) throw new Error(`git log failed while listing PR-own edits: ${own.stderr.trim() || `exit ${own.code}`}`);
+      const ownEdited = new Set(own.stdout.split("\0").filter(Boolean));
+      resolutionScopePaths = baseMerge.resolutionPaths.filter((p) => !ownEdited.has(p));
+    }
+    const rawPlan = buildCarryForwardPlan({
+      log, changedFiles: partial ? baseMerge.rerunPaths : changedFiles, incrementalFiles, alwaysRerun,
+      deltaComplete: partial || reduced, rules, rerunAngles: options.rerunAngles,
+    });
     // AC1 (ADR 0061): optional --spec-authority stamps the pinned revision
     // identity onto the plan via the ONE shared helper. Pure no-op when absent.
     // Resolved against `repoRoot` (default process.cwd()) — matching every
@@ -565,15 +585,19 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       carried: plan.carried,
       mustRerun: plan.mustRerun,
       copilotConvergence,
+      ...(partial ? { baseMergeCarry: baseMerge.decision, rerunPaths: baseMerge.rerunPaths } : {}),
+      // AC2: the delta review of a conflict-resolution merge covers these resolution files only.
+      ...(partial && baseMerge.decision === "resolution_delta" ? { resolutionDeltaPaths: resolutionScopePaths, resolutionDeltaFullPaths: baseMerge.rerunPaths.filter((p) => !resolutionScopePaths.includes(p)), resolutionDeltaMerges: baseMerge.resolutionMerges ?? [] } : {}),
       ...(plan.specAuthority !== undefined ? { specAuthority: plan.specAuthority } : {}),
     };
     // Persist the keyed plan artifact BEFORE emitting to stdout, so the proof
     // that carry-forward ran at head B is durable on disk regardless of how the
     // stdout emit is shaped (--jq/--silent) or whether the caller captures it.
-    await persistCarryForwardPlan(result, {
+    const carryForwardPlanPath = await persistCarryForwardPlan(result, {
       repoRoot, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot,
     });
-    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
+    // Report the written absolute path so the coordinator passes it to --carry-forward-plan-file instead of rebuilding it by convention.
+    process.exitCode = emitResult({ ...result, carryForwardPlanPath }, { jq: options.jq, silent: options.silent });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // FAIL-CLOSED full-fallback: record a marker ONLY for a genuine carry-forward
@@ -607,5 +631,6 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseResolveAngleCarryForwardCliArgs(process.argv.slice(2)).help);
   await main();
 }

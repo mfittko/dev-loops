@@ -133,11 +133,20 @@ export function parseReconcileCliArgs(argv) {
  * the real error).
  */
 async function defaultDetectEvidence({ repo, pr }, { runChild, nodeBin = process.execPath }) {
+  // The detector derives a patch-id approval match only when it knows the base branch; an unreadable base leaves head-only matching.
+  const baseRun = await runChild("gh", ["api", `repos/${repo}/pulls/${pr}`, "--jq", ".base.ref"]);
+  let baseRefName = baseRun.code === 0 ? String(baseRun.stdout ?? "").trim() : "";
+  // Refresh origin/<base> so the patch-id is not computed against a stale ref; a failed fetch leaves head-only matching.
+  if (baseRefName) {
+    const fetched = await runChild("git", ["fetch", "--no-tags", "origin", `+refs/heads/${baseRefName}:refs/remotes/origin/${baseRefName}`]);
+    if (fetched.code !== 0) baseRefName = "";
+  }
   const res = await runChild(nodeBin, [
     DETECT_EVIDENCE_SCRIPT,
     "--repo", repo,
     "--pr", String(pr),
     "--skip-fanout-ledger-check",
+    ...(baseRefName ? ["--base-ref-name", baseRefName] : []),
   ]);
   // The detector exits non-zero when evidence is not satisfied; that is a
   // normal signal here, not an error. On the SATISFIED path it emits the JSON
@@ -151,6 +160,10 @@ async function defaultDetectEvidence({ repo, pr }, { runChild, nodeBin = process
     throw new Error(`detect-checkpoint-evidence returned unparseable output (exit ${res.code}): ${res.stderr || res.stdout}`.trim());
   }
   const evidenceState = typeof parsed?.evidenceState === "string" ? parsed.evidenceState : null;
+  // A trust-config refusal ({ ok: false, error, state }, exit 3) carries the state and its remedy in `error`.
+  if (!evidenceState && parsed?.ok === false && typeof parsed.state === "string") {
+    throw new Error(`detect-checkpoint-evidence refused (exit ${res.code}, state ${parsed.state}): ${parsed.error}`);
+  }
   if (!evidenceState) {
     throw new Error(`detect-checkpoint-evidence returned no evidenceState (exit ${res.code})`);
   }

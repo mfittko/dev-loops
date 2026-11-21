@@ -38,7 +38,7 @@ import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-wri
 import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { retireGateRound } from "./retire-gate-round.mjs";
-import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
+import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities, splitDiffIntoParts, DIFF_PART_MAX_BYTES, DIFF_PART_MAX_LINES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -51,20 +51,22 @@ import { parseNonNegativeInteger, parsePrNumber, requireTokenValue, runChild } f
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { viewPr } from "./view-pr.mjs";
 import { viewIssue } from "./view-issue.mjs";
-import { buildAdjacentBundle, decodeGitDiffPathToken, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
+import { buildAdjacentBundle, decodeGitDiffPathToken } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
 import { capRoundExit, foldDraftGateSatisfied, isCleanDraftVerdict } from "@dev-loops/core/loop/pr-gate-coordination";
-import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
+import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContextReusingSnapshot } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
-import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
-import { fingerprintFinding } from "./_gate-finding-surface.mjs";
+import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
+import { draftGatePostedHeads, fingerprintFinding, resolveTrustedEvidencePredicate } from "./_gate-finding-surface.mjs";
 import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
+import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readGateDeltaRecord, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince, runGitCommand } from "../lib/git-delta.mjs";
 import { existsSync } from "node:fs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 /**
  * Up-front gate-ORDERING tripwire (pure). Given the target gate and the raw
@@ -113,20 +115,35 @@ export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied
 
 /**
  * The one cap-round-fixed fact of a PR coordination context (issue 3139): `{ capRoundFixed, failure }`, `failure` the typed `resolveCapRoundFixed` `onFailure` condition
- * (`cap_round_unresolved` on a throw or a cap reached with an unreadable ledger; a PR below the cap reports `failure: null`). The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
+ * (`cap_round_unresolved` on a throw or a cap reached with an unreadable ledger; a PR below the cap reports `failure: null`), or `clean_cap_verdict_unposted` for a clean cap round with no posted draft_gate review at its head (read from `prData.reviews`, trusted authors only).
+ * `requirePostedCleanCap` (default true) turns that posted-verdict check off; `trustRuntime` is the runtime the trusted-evidence predicate reads. The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
  * A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
- * @param {{ repo: string, pr: number, currentHeadSha: string, prData?: { isDraft?: boolean, baseRefName?: string } }} context
+ * @param {{ repo: string, pr: number, currentHeadSha: string, prData?: { isDraft?: boolean, baseRefName?: string, reviews?: object[] } }} context
  */
-export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = resolveCapRoundFixed }) {
+export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = resolveCapRoundFixed, requirePostedCleanCap = true, trustRuntime = {} }) {
   let failure = null;
   const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
-  const capRoundFixed = await resolve(
+  const capRound = await resolve(
     { repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName, anyHead: context.prData?.isDraft !== true },
     // `resolveCapRoundFixed` reports no_cap_round below the round cap, the normal state: that is no failure. A cap reached with an unresolvable ledger (cap_round_unresolved) or a thrown resolver error is.
     { repoRoot, onFailure: (condition) => { if (condition !== "no_cap_round") failure = condition; } },
-  ).then(Boolean, () => { failure = "cap_round_unresolved"; return false; });
-  return { capRoundFixed, failure };
+  ).catch(() => { failure = "cap_round_unresolved"; return null; });
+  // A clean cap round has no fixer pass: only its posted review is visible to CI, so a ledger-only proof is no clean draft_gate evidence.
+  // Absent reviews and untrusted authors prove nothing (fail closed), matching the detector and ready-for-review.
+  if (capRound && requirePostedCleanCap && isCleanCapRound(capRound)) {
+    // `gh pr view --json reviews` carries camelCase `author`/`authorAssociation`; the trust predicate reads the REST shape.
+    const restShaped = (Array.isArray(context.prData?.reviews) ? context.prData.reviews : []).map((r) => ({ body: r?.body, user: { login: r?.author?.login, type: r?.author?.type }, author_association: r?.authorAssociation }));
+    const isTrusted = await resolveTrustedEvidencePredicate(restShaped, trustRuntime);
+    if (cleanCapVerdictUnposted(capRound, draftGatePostedHeads(restShaped.filter(isTrusted).map((r) => r.body)))) return { capRoundFixed: false, failure: "clean_cap_verdict_unposted" };
+  }
+  return { capRoundFixed: Boolean(capRound), failure };
 }
+
+/** True when `capRound` is a clean cap round (ADR 0250) with no posted draft_gate header (`{ head, round }`) at its head and cap round: the proof then lives in a local ledger only. */
+export const cleanCapVerdictUnposted = (capRound, postedHeads) => {
+  const head = String(capRound?.log?.headSha ?? "").toLowerCase();
+  return isCleanCapRound(capRound) && !postedHeads.some((posted) => head.startsWith(posted.head) && posted.round === capRound.round);
+};
 
 // Map the artifact gate name (draft_gate | pre_approval_gate) to the config
 // gate key understood by resolveGateAnglesDynamic (draft | preApproval).
@@ -275,7 +292,7 @@ Optional:
   Base freshness (every run, with or without --base): the PR's base branch (baseRefName) is fetched from origin (bounded, no prompt) and the PR head must contain it. A stale head refuses with base_stale_integrate_first, a failed fetch with base_fetch_failed, a --head-sha that is not a local commit with base_head_unresolved; each writes no artifact for draft_gate and pre_approval_gate. An unreadable PR base (base_unresolved) refuses on every gate, review included. The review gate records the non-current status in baseFreshness and continues. The artifact records baseFreshness {status, base} on every path.
   --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing evidence file. OPTIONAL: when omitted, every of the PR's closing issue references is resolved, comma-joined and cross-repo-qualified (e.g. #1496, #1511 or owner/other#12) — an umbrella PR resolves all of them. The linked issues' bodies are fetched only when --issue-body is also omitted (see below). An unreadable PR or linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering absence. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
   --validation-posture <text>    Short description of the validation posture. Refused (fails closed, never truncated) past 500 chars; keep details in --validation-results.
-  --pr-body <text>               PR description text, written to the round-bound pr-body read. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content). A changed body digest at the same head re-runs every dispatch unit that holds a body-reading angle (an angle whose configured prompt names the PR body or PR description, that declares \`readsPrBody\`, whose surface is always, that is a verifiedItems angle (acceptance-criteria, pr-checklist), or that has no config entry) and retires every finished pending unit with a live sentinel (GATE-EXEC-BODY-ONLY-RERUN), reported in the result field \`bodyOnlyRerun\` ({retired, retirementDir, scopes}). It refuses while a pending unit is in flight, when the PR closes no issue or, on the all-flags path, the body has no Closes, Fixes or Resolves keyword (the body is then treated as the spec of record and the rebuild fails closed) and live sentinels exist, and under an abbreviated --head-sha when retirement needs the full head.
+  --pr-body <text>               PR description text, written to the round-bound pr-body read. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content). A changed body digest at the same head re-runs every dispatch unit that holds a body-reading angle (an angle whose configured prompt or developer-checklist lines name the PR body or PR description, that declares \`readsPrBody\`, whose surface is always, that is a verifiedItems angle (acceptance-criteria, pr-checklist), or that has no config entry) and retires every finished pending unit with a live sentinel (GATE-EXEC-BODY-ONLY-RERUN), reported in the result field \`bodyOnlyRerun\` ({retired, retirementDir, scopes}). It refuses while a pending unit is in flight, when the PR closes no issue or, on the all-flags path, the body has no Closes, Fixes or Resolves keyword (the body is then treated as the spec of record and the rebuild fails closed) and live sentinels exist, and under an abbreviated --head-sha when retirement needs the full head.
   --issue-body <text>            Linked-issue body text, inlined into the briefing evidence file under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the evidence file should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the evidence file entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and skips the label read too; the only GitHub read left in this mode is the PR base branch for the base freshness check (which also runs the base freshness git fetch origin and records baseFreshness; see Base freshness). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-RESOLUTION) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing evidence file, bound by sha256 as an optional read (read field by field with jq; the sentinel still verifies its hash) (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
@@ -635,16 +652,16 @@ export { buildGateContextPath };
 export { buildGateReviewsDir };
 
 // The body-only rerun set (GATE-EXEC-BODY-ONLY-RERUN) derives from the angle config: an angle is body-reading when its configured
-// prompt names the PR body or PR description, when its entry declares `readsPrBody: true`, when its surface is `always`, or when it is a
+// prompt or developer-checklist lines name the PR body or PR description, when its entry declares `readsPrBody: true`, when its surface is `always`, or when it is a
 // verifiedItems angle (labels copied from the PR body checklists). An angle with no config entry fails closed to body-reading.
 // Local to this path: angleReviewSurface keeps serving carry-forward.
 const PR_BODY_PROMPT = /\b(?:PR|pull[ -]?request)(?:['’]s)?[\s-]+(?:body|bodies|description|descriptions)\b/i;
 export function readsPrBody(angle, config) {
   const name = baseAngleName(String(angle).trim());
   if (angleReviewSurface(angle).kind === "always" || VERIFIED_ITEMS_ANGLES.has(name)) return true;
-  // The same ungated lookup the dispatch emitter uses (resolveReviewerRole), so this check reads the prompt the reviewer receives.
+  // The same ungated lookup the dispatch emitter uses (resolveReviewerRole), so this check reads the entry.prompt the reviewer receives; the rendered checklist lines follow it, so they are tested with it.
   const entry = findAngleEntry(config, name);
-  return !entry || entry.readsPrBody === true || PR_BODY_PROMPT.test(entry.prompt ?? "");
+  return !entry || entry.readsPrBody === true || PR_BODY_PROMPT.test([entry.prompt ?? "", ...(entry["developer-checklist"] ?? [])].join("\n"));
 }
 
 /**
@@ -1321,6 +1338,18 @@ function pushExpansionLines(lines, expansion) {
   }
 }
 
+/** Render the "## Optional read fields" section: the static field names of each optional read, so a reviewer never discovers them with `jq keys`. */
+function renderOptionalReadFieldsSection() {
+  return [
+    "## Optional read fields",
+    "",
+    "Query an optional read by field with `jq`; never run `jq keys` to discover its shape.",
+    "- `context` (JSON): `resolvedAngles`, `angleScopes`, `scope.diffPath`, `scope.diffSource`, `scope.changedFiles`, `adjacentCode.files[]` (`path`, `role`, `relatedTo`, `bytes`; an index, no file contents: read a file by its path), `adjacentCode.stripped`, `adjacentCode.missing`, `adjacentCode.truncated` (always empty), `adjacentCode.expansion.files`, `adjacentCode.expansion.dropped`, `requiredReads`, `fanout`.",
+    "- `validation` (JSON): `allPassed`, `status`, `authority`, `headSha`, `suites[]` (`name`, `command`, `exitCode`, `outputTail`, `outputPath`).",
+    "- `raw-diff`: the unfiltered unified diff; grep it, never read it whole.",
+  ].join("\n");
+}
+
 /**
  * Render the "## Reviewer sibling sweep" section: the one sibling-defect
  * clause owned by GATE-REVIEW-SIBLING-SWEEP in the gate-review sub-loop
@@ -1381,9 +1410,11 @@ function renderRequiredReadsSection(requiredReads, worktreeRoot) {
   return [
     "## Required reads",
     "",
-    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entry is the filtered diff, with lockfiles, generated trees, and configured `gates.reviewDiff.excludeGlobs` paths excluded; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
+    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entries are the filtered diff, split at file and hunk boundaries so each fits one Read; read them in order. The filtered diff excludes lockfiles, generated trees, and configured `gates.reviewDiff.excludeGlobs` paths; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
     "",
     ...(reads.length > 0 ? reads.map((read) => renderRequiredReadLine(read, worktreeRoot)) : ["- (no required reads recorded)"]),
+    // Not a `- ` line, so the manifest verifier ignores it.
+    ...reads.filter((read) => read.oversized).map((read) => `Oversized diff part: \`${path.resolve(worktreeRoot, read.path)}\` holds one unsplittable unit: a hunk (with its file header when it is the file's first hunk) or a file block with no hunks, above the ${DIFF_PART_MAX_BYTES}-byte or ${DIFF_PART_MAX_LINES}-line part cap; page it with offset/limit.`),
   ].join("\n");
 }
 
@@ -1441,6 +1472,8 @@ export function renderBriefingPrefix({
   lines.push("");
   lines.push(renderSiblingSweepSection());
   lines.push("");
+  lines.push(renderOptionalReadFieldsSection());
+  lines.push("");
   lines.push(renderRequiredReadsSection(requiredReads, worktreeRoot));
   return { text: lines.join("\n") + "\n" };
 }
@@ -1456,14 +1489,14 @@ function persistedDiffBytes(text) {
   return Buffer.byteLength(text, "utf8") + (text.endsWith("\n") ? 0 : 1);
 }
 
-function renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes, filteredBytes, diffPath }) {
+function renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes, filteredBytes, diffPaths }) {
   if (!hasDiffText) return ["(no diff text captured for this bundle)"];
   const sizeNote = prefixMode === "pointer"
     ? `Filtered diff: ${filteredBytes} bytes. Its collapsed size (${collapsedBytes} bytes) exceeds the ${capBytes}-byte inline cap — pointer mode.`
     : `Filtered diff: ${filteredBytes} bytes.`;
   return [
-    `${sizeNote} It is the required \`diff\` read; this file does not repeat it. Read the filtered diff from:`,
-    `  ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`,
+    `${sizeNote} It is the required \`diff\` read; this file does not repeat it. When the prefix's \`## Required reads\` lists more than one \`diff\` part, read every part in order. Read the filtered diff from:`,
+    ...(diffPaths.length > 0 ? diffPaths : ["(diff pointer unavailable — re-derive with git diff)"]).map((p) => `  ${p}`),
   ];
 }
 
@@ -1524,7 +1557,7 @@ function renderCapRoundResidueLines(residue) {
  * @param {string|null} [input.issueBody] — single-issue body, rendered under `issueRef` with no `### <label>` sub-heading. Ignored when `issueSections` is given.
  * @param {{label: string, body: string}[]|null} [input.issueSections] — per-issue bodies for a multi-issue PR (structured, never pre-joined): each renders as a renderer-emitted `### <label>` line OUTSIDE any fence, followed by that issue's OWN pickFence-sized fenced block. Takes precedence over `issueBody` when non-empty.
  * @param {string|null} [input.diffOutput] — filtered diff text, when captured; sizes the pointer (prefixMode, diffBytes), never inlined
- * @param {string|null} [input.diffPath] — persisted filtered diff, the required `diff` read this file points at
+ * @param {string[]} [input.diffPaths] — persisted filtered diff parts, the required `diff` reads the pointer lines list
  * @param {string[]} [input.changedFiles]
  * @param {{path: string, reason: "default"|"configured"}[]} [input.excludedFiles] — filterDiffForInline
  *   excludedFiles; rendered as `Excluded from the filtered diff (n):` after the changed-files list, only when non-empty.
@@ -1543,7 +1576,7 @@ function renderCapRoundResidueLines(residue) {
 export function renderBriefingEvidence({
   repo, pr, gate, headSha, worktreeRoot = null,
   issueRef = null, issueBody = null, issueSections = null,
-  diffOutput = null, diffPath = null, changedFiles = [], excludedFiles = [], adjacentCode = null,
+  diffOutput = null, diffPaths = [], changedFiles = [], excludedFiles = [], adjacentCode = null,
   validationResultsPath = null,
   capRoundResidue = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
@@ -1603,7 +1636,7 @@ export function renderBriefingEvidence({
   lines.push(`## Diff at reviewed head (${headSha})`);
   lines.push("");
   const filteredBytes = hasDiffText ? persistedDiffBytes(diffOutput) : 0;
-  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPath })) lines.push(line);
+  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPaths })) lines.push(line);
   lines.push("");
   lines.push("## Changed files + adjacent-code summary");
   lines.push("");
@@ -1664,7 +1697,7 @@ export function renderBriefingEvidence({
  * @param {{label: string, body: string}[]|null} [input.issueSections]
  * @param {string|null} [input.diffOutput] — full diff text, when captured
  * @param {string|null} [input.diffPath] — persisted unfiltered `.diff`, linked unconditionally in the widen-back paragraph
- * @param {string|null} [input.filteredDiffPath] — persisted filtered diff (the pointer target; falls back to diffPath)
+ * @param {string[]} [input.filteredDiffPaths] — persisted filtered diff parts (the pointer targets)
  * @param {{path: string, reason: "default"|"configured"}[]} [input.excludedFiles] — filterDiffForInline
  *   excludedFiles; rendered as `Excluded from the filtered diff (n):` after the diff pointers, only when non-empty.
  * @param {string|null} [input.validationResultsPath]
@@ -1676,7 +1709,7 @@ export function renderScopedBriefingVariant(scope, {
   repo, pr, gate, headSha, evidencePath, contextPath = null, worktreeRoot = null,
   issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null,
-  filteredDiffPath = null, excludedFiles = [],
+  filteredDiffPaths = [], excludedFiles = [],
   validationResultsPath = null, adjacentCode = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
   rules = null,
@@ -1751,7 +1784,7 @@ export function renderScopedBriefingVariant(scope, {
   const diffBytes = hasDiffText ? Buffer.byteLength(collapsePureSubstitutionRuns(diffOutput), "utf8") : 0;
   const prefixMode = diffBytes > capBytes ? "pointer" : "inline";
   const filteredBytes = hasDiffText ? persistedDiffBytes(diffOutput) : 0;
-  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPath: filteredDiffPath ?? diffPath })) lines.push(line);
+  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPaths: filteredDiffPaths })) lines.push(line);
   if (scope === "docs-only") {
     const { docFiles, unparsedCount } = hasDiffText ? listDocFilesInDiff(diffOutput, rules) : { docFiles: [], unparsedCount: 0 };
     lines.push("");
@@ -2002,7 +2035,7 @@ export function isInRoundRewrite(log, incoming) {
  *
  * @returns {Promise<object[]>}
  */
-export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable, includeRetainedCurrentHead = false, includeLiveCurrentHead = false }) {
+export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable, includeRetainedCurrentHead = false, includeLiveCurrentHead = false, withPaths = false }) {
   let ledgerDir;
   try {
     const sampleLogPath = buildLogPath({
@@ -2058,11 +2091,11 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
     if (!retained && (sha.startsWith(head) || head.startsWith(sha)) && isInRoundRewrite(log, options.roundIdentity)) continue;
     // Rounds order by loggedAt, then head, then retained number; the live ledger (Infinity) sorts last among rounds of equal loggedAt and head.
     const retainedNumber = /\.round-(\d+)\.json$/.exec(name);
-    rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", round: retainedNumber ? Number(retainedNumber[1]) : Infinity, log });
+    rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", round: retainedNumber ? Number(retainedNumber[1]) : Infinity, log, ledgerPath: path.join(ledgerDir, name) });
   }
   const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
   rounds.sort((a, b) => cmp(a.loggedAt, b.loggedAt) || cmp(a.sha, b.sha) || cmp(a.round, b.round));
-  return rounds.map((round) => round.log);
+  return rounds.map((round) => (withPaths ? { log: round.log, ledgerPath: round.ledgerPath } : round.log));
 }
 
 /** Merge time of the round cap (PR 2932); a closed prior ledger never counts only when its `loggedAt` is a toISOString-form UTC timestamp earlier than it; every other closed ledger counts (ADR 0189). */
@@ -2170,6 +2203,7 @@ export function capRoundActList(findings, headSha) {
   return kept.map((f, i) => ({
     ref: refs[i], fingerprint: fingerprintFinding(f), judgeDisposition: "act", angle: f.angle, severity: f.severity, summary: f.judgeTitle ?? f.summary,
     judgeRationale: f.judgeRationale, file: resolveFindingFile(f) ?? undefined, line: f.line,
+    ...(f.remedyKind ? { remedyKind: f.remedyKind } : {}),
   }));
 }
 
@@ -2195,7 +2229,8 @@ export async function resolveCapRound(options, { repoRoot, onFailClosed = () => 
   if (!(cap > 0) || await countCompletedRounds(ledger, { repoRoot, includeLiveCurrentHead: true }) - 1 < cap) return null;
   // An unreadable ledger counts toward the cap but readClosedPriorRoundLogs drops it, so the cap-round authority could be an earlier round: fail closed.
   let unreadable = 0;
-  const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, includeLiveCurrentHead: true, includeRetainedCurrentHead: true, onUnreadable: () => { unreadable += 1; } })).at(-1);
+  const picked = (await readClosedPriorRoundLogs(ledger, { repoRoot, includeLiveCurrentHead: true, includeRetainedCurrentHead: true, withPaths: true, onUnreadable: () => { unreadable += 1; } })).at(-1);
+  const log = picked?.log;
   // The persisted severity verdict can read `clean` for judge-act mediums whose posted review composes findings_present: an open act item makes the round a cap round too.
   if (unreadable > 0 || !log || (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0)) { onFailClosed(); return null; }
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
@@ -2207,7 +2242,7 @@ export async function resolveCapRound(options, { repoRoot, onFailClosed = () => 
   const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => (isOpenActItem(f) && !isFixed(f)) || f?.capClosed).map((f) => ({
     fingerprint: fingerprintFinding(f), file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary, disposition: isOpenActItem(f) ? "act" : "cap_closed",
   }));
-  return { log, residue };
+  return { log, residue, ledgerPath: picked.ledgerPath, round: cap };
 }
 
 // A head is a path segment of the record lookup: only a 40 or 64 character hex SHA (after trim and lowercase) is looked up or compared.
@@ -2285,21 +2320,24 @@ export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, 
   return (await clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge, covering, allowUnsealedEnd })).ends;
 }
 
-/** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk: each start's end is collected in the same loop that fills the heads, so a record rewrite cannot split them. */
+/** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk: each start's end is collected in the same loop that fills the heads, so a record rewrite cannot split them. `candidates` is the subset of record candidate heads from that loop. */
 export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true, allowUnsealedEnd = false }) {
   const { starts, seedHeads } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
   const ends = [];
   // The heads the seed proof visited stay in the set even if a concurrent rewrite changes a record before the traversal below.
   const heads = new Set(seedHeads);
+  // `candidates` holds only record candidate heads; `heads` also holds the seeded base-only merges (record baselines).
+  const candidates = new Set();
   // `covering` drops a start that does not name every act item of the cap round (the emitter seam passes none).
   for (const start of starts.filter(covering)) {
     const seededFrom = normalizeSha(start.reviewBaselineHead);
     if (seededFrom && seededFrom !== normalizeSha(capHead)) heads.add(seededFrom);
     // The end and the visited heads come from one read of each record, in the shared clearingChainEnd.
-    const last = clearingChainEnd(tmpRoot, start, heads, { allowUnsealedEnd });
+    const last = clearingChainEnd(tmpRoot, start, candidates, { allowUnsealedEnd });
     if (last) ends.push(last);
   }
-  return { ends, heads: [...heads] };
+  for (const head of candidates) heads.add(head);
+  return { ends, heads: [...heads], candidates: [...candidates] };
 }
 
 // Extension values a sealed clearing record may carry to prove a clean cap round (ADR 0250 records `docs_tests_only`).
@@ -2310,7 +2348,9 @@ const CLEAN_CAP_EXTENSIONS = new Set(["docs_tests_only", "delta_covered"]);
  */
 export const capRoundCovers = (capRound, tmpRoot) => (record) => {
   const refs = new Set((Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref)));
-  const actRefs = [...new Set(capRoundActRefs(capRound.log.findings, capRound.log.headSha).values())];
+  // A PR-body act item never enters a delta record (startDeltaSequence drops it), so the record cannot name its ref.
+  // The delta act list carries each cluster's kept representative only, so the body-item filter reads that representative, as startDeltaSequence does.
+  const actRefs = [...new Set(capRoundActList(capRound.log.findings, capRound.log.headSha).filter((e) => !isDeltaBodyItem(e)).map((e) => e.ref))];
   // A clean cap round has no act item, so only a record whose extension is in CLEAN_CAP_EXTENSIONS proves it (ADR 0250 for docs_tests_only):
   // the first record carries one, or a clearing chain over later heads reaches one.
   if (isCleanCapRound(capRound)) {
@@ -2836,11 +2876,10 @@ export function buildGateContextArtifact(options) {
  * @param {string} input.gate
  * @param {string} input.headSha
  * @param {string} input.tmpRoot
- * @param {number} [input.maxFileBytes]
  * @param {{ repoRoot: string }} opts
  * @returns {Promise<{ diffPath: string|null, diffToWrite: object|null, changedFiles: string[], adjacentCode: object|null, diffOutput: string|null }>}
  */
-async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFileBytes, expansion }, { repoRoot }) {
+async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, expansion }, { repoRoot }) {
   const diffOutput = diff?.diffOutput;
   let diffPath = null;
   const changedFiles = parseChangedFiles(diff?.nameStatusOutput);
@@ -2851,9 +2890,9 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
   // Build the deterministic, neutral adjacent-code bundle ONCE: for each
   // changed source file, include its 1-hop import out-edges (files it imports)
   // and in-edges (files that import it), with size guards (skip
-  // lockfiles/generated/binary/minified; cap per-file bytes; truncate the long
-  // tail) recorded in a stripped/truncated manifest. Every independent reviewer
-  // is seeded with this identical bundle instead of re-deriving it — work-dedup.
+  // lockfiles/generated/binary/minified) recorded in a stripped manifest. The
+  // bundle is an index (path, role, relatedTo, bytes), never file contents.
+  // Every independent reviewer is seeded with this identical bundle instead of re-deriving it — work-dedup.
   // Best-effort: bundle computation must never block the context artifact.
   let adjacentCode = null;
   if (changedFiles.length > 0) {
@@ -2861,7 +2900,6 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
       adjacentCode = await buildAdjacentBundle({
         changedFiles,
         repoRoot,
-        maxFileBytes: typeof maxFileBytes === "number" && maxFileBytes > 0 ? maxFileBytes : DEFAULT_MAX_FILE_BYTES,
         diffText: typeof diffOutput === "string" ? diffOutput : "",
         expansion,
       });
@@ -3105,7 +3143,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // ADR 0208: pre_approval_gate receives the cap round's residue as round input, in the artifact and in the evidence file its reviewers and judge read.
   const capRoundResidue = options.gate === "pre_approval_gate" ? (await resolveCapRound(options, { repoRoot }))?.residue : undefined;
   let pendingEvidence = null;
-  let pendingFilteredDiff = null;
+  let pendingFilteredDiffParts = [];
   let requiredReads = null;
   // AC3: scope.<name> -> emitted companion-file path. Only built in
   // self-rendered mode — under --prefix-file the CLI never resolves
@@ -3151,12 +3189,19 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       ? filterDiffForInline(options.diffOutput, { excludeGlobs: options.config?.gates?.reviewDiff?.excludeGlobs ?? [] })
       : null;
     const inlineDiffOutput = diffFilter ? diffFilter.filteredDiff : (options.diffOutput ?? null);
-    pendingFilteredDiff = typeof inlineDiffOutput === "string" && inlineDiffOutput.length > 0
-      ? {
-        path: buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", suffix: ".filtered.diff" }),
-        text: inlineDiffOutput.endsWith("\n") ? inlineDiffOutput : `${inlineDiffOutput}\n`,
-      }
-      : null;
+    // The filtered diff is persisted as parts that each fit one Read. A diff
+    // that fits one part keeps the plain `.filtered.diff` name.
+    const diffParts = typeof inlineDiffOutput === "string" && inlineDiffOutput.length > 0
+      ? splitDiffIntoParts(inlineDiffOutput.endsWith("\n") ? inlineDiffOutput : `${inlineDiffOutput}\n`)
+      : [];
+    pendingFilteredDiffParts = diffParts.map((part, index) => ({
+      path: buildGateArtifactPath({
+        repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp",
+        suffix: diffParts.length === 1 ? ".filtered.diff" : `.filtered.part-${index + 1}-of-${diffParts.length}.diff`,
+      }),
+      text: part.text,
+      oversized: part.oversized,
+    }));
     const evidence = renderBriefingEvidence({
       repo: options.repo,
       pr: options.pr,
@@ -3167,7 +3212,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       issueBody: options.issueBody ?? null,
       issueSections: options.issueSections ?? null,
       diffOutput: inlineDiffOutput,
-      diffPath: pendingFilteredDiff?.path ?? null,
+      diffPaths: pendingFilteredDiffParts.map((part) => part.path),
       changedFiles: options.changedFiles ?? [],
       excludedFiles: diffFilter?.excludedFiles ?? [],
       adjacentCode: options.adjacentCode ?? null,
@@ -3189,7 +3234,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       kind, path: readPath, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes), required,
     });
     requiredReads = [hashed("evidence", evidencePath, evidence.text, true)];
-    if (pendingFilteredDiff) requiredReads.push(hashed("diff", pendingFilteredDiff.path, pendingFilteredDiff.text, true));
+    for (const part of pendingFilteredDiffParts) requiredReads.push({ ...hashed("diff", part.path, part.text, true), ...(part.oversized ? { oversized: true } : {}) });
     if (options.diffPath) {
       // Optional widening read. A diff this call does not write binds the
       // on-disk bytes; an unreadable one is omitted, never required.
@@ -3244,7 +3289,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           issueSections: options.issueSections ?? null,
           diffOutput: inlineDiffOutput,
           diffPath: options.diffPath ?? null,
-          filteredDiffPath: pendingFilteredDiff?.path ?? null,
+          filteredDiffPaths: pendingFilteredDiffParts.map((part) => part.path),
           excludedFiles: diffFilter?.excludedFiles ?? [],
           validationResultsPath: options.validationResultsPath ?? null,
           adjacentCode: options.adjacentCode ?? null,
@@ -3667,7 +3712,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // Keep the marker available only when prefix AND referenced stable files
   // are unchanged on disk (the prefix hash-binds the evidence and full diff).
   let markerUnchanged = existingBytes !== null && existingBytes.equals(prefixBytes);
-  const referencedWrites = [...(pendingEvidence ? [pendingEvidence] : []), ...(pendingFilteredDiff ? [pendingFilteredDiff] : []), ...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : []), ...pendingRoundReads];
+  const referencedWrites = [...(pendingEvidence ? [pendingEvidence] : []), ...pendingFilteredDiffParts, ...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : []), ...pendingRoundReads];
   for (const pending of referencedWrites) {
     if (!markerUnchanged) break;
     try {
@@ -3691,7 +3736,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256, ...(priorBodyState ? { carriedPriorBodySha256: priorBodyState.priorBodySha256, carriedPriorCarriedAngles: priorBodyState.priorCarriedAngles, carriedPriorGroups: priorBodyState.priorGroups, carriedPriorUnitBound: priorBodyState.priorUnitBound } : {}) }, { repoRoot });
       }
     }
-    if (pendingFilteredDiff) await writeFile(path.resolve(repoRoot, pendingFilteredDiff.path), pendingFilteredDiff.text, "utf8");
+    for (const part of pendingFilteredDiffParts) await writeFile(path.resolve(repoRoot, part.path), part.text, "utf8");
     if (pendingEvidence) await writeFile(path.resolve(repoRoot, pendingEvidence.path), pendingEvidence.text, "utf8");
     for (const [scope, variant] of pendingVariants) {
       try {
@@ -3761,7 +3806,6 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {string|null} [input.validationPosture]
  * @param {string|null} [input.prBody] — PR description text, written to the round-bound `pr-body` read (`<gate>-<headSha>.pr-body-<digest12>.md`), never into the evidence file
  * @param {string|null} [input.issueBody] — linked-issue body text, inlined under `acceptanceCriteria`'s label; omitted when absent
- * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
  * @param {number|null} [input.availableReviewers] — harness remaining reviewer budget for the preflight; null/omitted = unexposed (proceed, no shortfall proven)
  * @param {string[]|null} [input.carriedAngles] — angle names the fail-closed Phase 1.2 carry-forward seam (resolve-angle-carry-forward.mjs) has proven carried from a prior clean head; excluded from the preflight's `requiredReviewers`/`pendingGroups` alongside `completedAngles`; null/omitted = no carried angles known
  * @param {string} [input.tmpRoot]
@@ -3773,7 +3817,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  *
  * The artifact additionally carries a deterministic, neutral `adjacentCode`
  * bundle when changed files are present: 1-hop import in/out-edges of the
- * changed files with size guards + a stripped/truncated manifest. Reviewers read
+ * changed files as an index with a stripped manifest. Reviewers read
  * it by reference through the `context` entry of `requiredReads`, as an
  * optional navigation aid, instead of re-deriving the adjacent code.
  */
@@ -3870,7 +3914,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // scope.changedFiles, and the neutral adjacentCode bundle, all built ONCE by
   // the shared resolveDiffScope helper (also used by the CLI --base path).
   const { diffPath, diffToWrite, changedFiles, adjacentCode, diffOutput } = await resolveDiffScope(
-    { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, maxFileBytes: input.maxFileBytes, expansion: input.config?.gates?.contextExpansion },
+    { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, expansion: input.config?.gates?.contextExpansion },
     { repoRoot },
   );
 
@@ -4236,7 +4280,9 @@ export async function main(
     // (Copilot-cycle / internal-only / lightweight) diverge from the verdict
     // post. Consuming only the raw ordering facts is what keeps this check
     // impossible-to-false-block.
-    loadCoordination = (opts) => loadPrGateCoordinationContext(opts, { runChild: run, repoRoot, cwd: repoRoot }),
+    // The default reuses the gate-coordination pre-flight snapshot when it matches the `--head-sha` head.
+    loadCoordination = async (opts, reuse) => (await loadPrGateCoordinationContextReusingSnapshot(opts, { runChild: run, repoRoot, cwd: repoRoot, coordinationSnapshotRoot }, reuse)).context,
+    coordinationSnapshotRoot,
     checkBaseFreshness = checkBaseFreshnessDefault,
     resolveCapRoundFixed: resolveCapRoundFixedSeam = resolveCapRoundFixed,
   } = {},
@@ -4274,7 +4320,7 @@ export async function main(
     if ((options.gate === "pre_approval_gate" || options.gate === "draft_gate") && !options.prefixFile) {
       let coordination = null;
       try {
-        coordination = await loadCoordination({ repo: options.repo, pr: options.pr });
+        coordination = await loadCoordination({ repo: options.repo, pr: options.pr }, { expectedHeadSha: options.headSha, matchLightweight: false });
       } catch {
         coordination = null;
       }
@@ -4287,7 +4333,7 @@ export async function main(
         // A ready PR whose cap round is fixed holds no clean draft verdict: the sealed proof stands in for it, so pre_approval_gate can build its context.
         const evidenceSatisfied = isCleanDraftVerdict(draftVerdict);
         const { capRoundFixed, failure: capRoundFailure } = coordination.prData?.isDraft === false && !evidenceSatisfied
-          ? await resolveDraftCapRoundFact({ ...coordination, repo: options.repo, pr: options.pr }, { repoRoot, resolve: resolveCapRoundFixedSeam })
+          ? await resolveDraftCapRoundFact({ ...coordination, repo: options.repo, pr: options.pr }, { repoRoot, resolve: resolveCapRoundFixedSeam, trustRuntime: { env, runChild: run } })
           : { capRoundFixed: false, failure: null };
         const refusal = prematureGateOrderingRefusal({
           gate: options.gate,
@@ -4540,5 +4586,41 @@ export async function main(
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseWriteGateContextCliArgs(process.argv.slice(2)).help);
   await main();
 }
+
+// The writer's --tmp-root of a ledger at <root>/gate-findings/<slug>/pr-N/<file>; undefined for any other layout (default root).
+export function ledgerTmpRoot(ledgerPath) {
+  if (!ledgerPath) return undefined;
+  const parts = path.resolve(ledgerPath).split(path.sep);
+  return parts.length > 4 && parts.at(-4) === "gate-findings" && /^pr-\d+$/.test(parts.at(-2)) ? parts.slice(0, -4).join(path.sep) || path.sep : undefined;
+}
+
+// The pr-body digest the context at the given head recorded. write-gate-context.mjs writes the context under the reviewed worktree's tmp/,
+// while the ledger sits under the main checkout's tmp/, so every checkout's tmp/ and --context-tmp-root come first and the ledger root is the fallback.
+export async function readReviewedBodySha256(options, headSha, repoRoot) {
+  const id = { repo: options.repo, pr: options.pr, gate: options.gate, headSha };
+  // Every root is read: a same-head earlier round under another root can hold an older digest, so disagreeing digests refuse.
+  const found = new Map();
+  // The round's own context sits in the reviewed worktree (the first checkout); a digest found only elsewhere is an earlier round's and never stands alone.
+  let reviewedWorktreeHasContext = false;
+  for (const [t, tmpRoot] of [options.contextTmpRoot, undefined, ledgerTmpRoot(options.findingsLedger)].entries()) {
+    for (const [i, root] of resolveLedgerCheckouts(repoRoot).entries()) {
+      const file = path.resolve(root, buildGateContextPath({ ...id, tmpRoot: tmpRoot || "tmp" }));
+      // A strict read: only a missing context is absent. A truncated or unreadable one refuses, so a stale same-head digest cannot stand alone.
+      const context = await readGateContext({ ...id, tmpRoot }, { repoRoot: root }).catch((err) => {
+        throw new Error(`body_read_unrecorded: the context ${file} cannot be read (${err instanceof Error ? err.message : String(err)}); remove or repair it, or fix the items with a commit`);
+      });
+      const sha = Array.isArray(context?.requiredReads) ? context.requiredReads.find((r) => r?.kind === "pr-body")?.sha256 : null;
+      if (typeof sha === "string" && sha) {
+        found.set(file, sha);
+        if (i === 0 && t < 2) reviewedWorktreeHasContext = true;
+      }
+    }
+  }
+  if (found.size && !reviewedWorktreeHasContext) throw new Error(`body_read_unrecorded: the reviewed worktree holds no context at ${headSha}, so the reviewed body is unknown; the only digests found belong to other checkouts (${[...found.keys()].join(", ")}). Rerun from the reviewed worktree or fix the items with a commit`);
+  if (new Set(found.values()).size > 1) throw new Error(`body_read_unrecorded: the contexts at ${headSha} record different pr-body digests, so the reviewed body is ambiguous; remove the stale context of the earlier same-head round or fix the items with a commit. Contexts: ${[...found].map(([file, sha]) => `${file} (${sha})`).join(", ")}`);
+  return [...found.values()][0] ?? null;
+}
+

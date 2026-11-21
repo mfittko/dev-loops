@@ -313,7 +313,7 @@
           "type": "object",
           "properties": {
             "angles": {
-              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds.",
+              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds/developer-checklist.",
               "type": "array",
               "items": {
                 "oneOf": [
@@ -403,6 +403,15 @@
                             "asset",
                             "unknown"
                           ]
+                        }
+                      },
+                      "developer-checklist": {
+                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items from `gates.draft.angles` and the pre-PR record requires evidence per ID. `resolveReviewerRole` also renders the lines into the draft_gate angle prompt (PRE-PR-DEVELOPER-SELF-CHECK).",
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Z]+\\d+: \\S"
                         }
                       }
                     },
@@ -557,7 +566,7 @@
           "type": "object",
           "properties": {
             "angles": {
-              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds.",
+              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds/developer-checklist.",
               "type": "array",
               "items": {
                 "oneOf": [
@@ -647,6 +656,15 @@
                             "asset",
                             "unknown"
                           ]
+                        }
+                      },
+                      "developer-checklist": {
+                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items from `gates.draft.angles` and the pre-PR record requires evidence per ID. `resolveReviewerRole` also renders the lines into the draft_gate angle prompt (PRE-PR-DEVELOPER-SELF-CHECK).",
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Z]+\\d+: \\S"
                         }
                       }
                     },
@@ -796,7 +814,7 @@
           "type": "object",
           "properties": {
             "angles": {
-              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds.",
+              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds/developer-checklist.",
               "type": "array",
               "items": {
                 "oneOf": [
@@ -886,6 +904,15 @@
                             "asset",
                             "unknown"
                           ]
+                        }
+                      },
+                      "developer-checklist": {
+                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items from `gates.draft.angles` and the pre-PR record requires evidence per ID. `resolveReviewerRole` also renders the lines into the draft_gate angle prompt (PRE-PR-DEVELOPER-SELF-CHECK).",
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Z]+\\d+: \\S"
                         }
                       }
                     },
@@ -1934,6 +1961,25 @@
       },
       "additionalProperties": false,
       "description": "Operator-recorded standing human authorizations (adrTripwireWaiver), read only from the default branch's .devloops."
+    },
+    "trust": {
+      "type": "object",
+      "properties": {
+        "githubActionsBot": {
+          "type": "boolean",
+          "description": "Trust the exact github-actions[bot] comment author (default true); false turns the default bot trust off."
+        },
+        "reviewers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9-]{1,39}(?:\\[bot\\])?$"
+          },
+          "description": "Exact, case-insensitive logins trusted as comment authors; a [bot] entry also requires type Bot."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Extra trusted comment authors (githubActionsBot, reviewers), read only from the default branch's .devloops."
     },
     "classify": {
       "type": "object",

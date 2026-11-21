@@ -1297,3 +1297,59 @@ test("probe-ci-status capped call whose slice overruns the requested budget retu
   assert.equal(result.status, "timeout");
   assert.equal(result.reissue, undefined);
 });
+
+// GraphQL `pr view` is rate limited; the REST pulls endpoint still answers.
+function graphqlLimitedRoutes(checkRunItems) {
+  return [
+    { match: ["pr", "view"], exitCode: 1, stdout: "", stderr: "GraphQL: API rate limit exceeded for user ID 1." },
+    { match: ["repos/owner/repo/pulls/7"], stdout: JSON.stringify({ head: { sha: "sha-a" } }) },
+    { match: ["check-runs"], stdout: checkRuns(checkRunItems) },
+    { match: ["/status"], stdout: statuses([]) },
+  ];
+}
+
+test("watch-ci reads the head SHA over REST when GraphQL is rate limited and still returns the check result", async () => {
+  await withGhStub(
+    { routes: graphqlLimitedRoutes([{ status: "completed", conclusion: "failure", name: "lint" }]) },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, fastDeps(env));
+      assert.equal(result.status, "failure");
+      assert.equal(result.headSha, "sha-a");
+      assert.deepEqual(result.failedChecks, [{ name: "lint" }]);
+    },
+  );
+});
+
+test("watch-ci never settles a check-less head green when the REST head read has no known expected checks", async () => {
+  await withGhStub({ routes: graphqlLimitedRoutes([]) }, async (env) => {
+    let clock = 1_000;
+    const result = await watchCiStatus(
+      { repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 },
+      { ...fastDeps(env), now: () => clock, delayImpl: async (ms) => { clock += ms; } },
+    );
+    assert.equal(result.status, "timeout");
+    assert.equal(result.ciStatus, "none");
+    assert.equal(result.settled, false);
+  });
+});
+
+test("watch-ci counts a new failing check-run on the REST head read instead of reusing earlier rollup names", async () => {
+  let prViews = 0;
+  const runChild = async (_command, args) => {
+    const argv = args.join(" ");
+    if (argv.startsWith("pr view")) {
+      prViews += 1;
+      if (prViews === 1) return { code: 0, stdout: JSON.stringify({ headRefOid: "sha-a", statusCheckRollup: [{ name: "build" }] }), stderr: "" };
+      return { code: 1, stdout: "", stderr: "GraphQL: API rate limit exceeded for user ID 1." };
+    }
+    if (argv.includes("repos/owner/repo/pulls/7")) return { code: 0, stdout: JSON.stringify({ head: { sha: "sha-a" } }), stderr: "" };
+    if (argv.includes("check-runs")) {
+      return { code: 0, stdout: checkRuns([{ status: "completed", conclusion: "success", name: "build" }, { status: "completed", conclusion: "failure", name: "test" }]), stderr: "" };
+    }
+    if (argv.includes("/status")) return { code: 0, stdout: statuses([]), stderr: "" };
+    return { code: 97, stdout: "", stderr: `unexpected gh args: ${argv}` };
+  };
+  const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 100 }, { env: {}, ghCommand: "gh", runChild, delayImpl: async () => {}, now: () => 1_000 });
+  assert.equal(result.status, "failure");
+  assert.deepEqual(result.failedChecks, [{ name: "test" }]);
+});

@@ -28,9 +28,9 @@ test("an evidence-only valid_compliant decision needs no defectClass or siteQuer
 });
 
 test("a code-change valid_compliant decision without defectClass is refused with a typed error", () => {
-  for (const extra of [{}, { remedyKind: "code_change" }]) {
-    assert.throws(() => validateSpecAuthorityDecision(decision(extra), ctx), (e) => e.code === "spec_authority_decision_invalid" && e.decisionIndex === 0 && e.field === "defectClass");
-  }
+  assert.throws(() => validateSpecAuthorityDecision(decision({}), ctx), (e) => e.code === "spec_authority_decision_invalid" && e.decisionIndex === 0 && e.field === "defectClass");
+  // An unknown remedyKind is refused outright, not read as a code change (#3309).
+  assert.throws(() => validateSpecAuthorityDecision(decision({ remedyKind: "code_change" }), ctx), (e) => e.code === "spec_authority_decision_invalid" && e.decisionIndex === 0 && e.field === "remedyKind");
   assert.throws(() => validateSpecAuthorityDecision(decision({ defectClass: "c" }), ctx), (e) => e.field === "siteQuery");
 });
 

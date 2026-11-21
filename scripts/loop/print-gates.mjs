@@ -27,7 +27,8 @@ async function run({ stdout = process.stdout, repoRoot = process.cwd() } = {}) {
     for (const angle of angles) {
       const { prompt } = resolveReviewerRole(config, angle);
       const displayPrompt = prompt ?? "(no prompt — add one to this angle's gates.<gate>.angles entry)";
-      stdout.write(`  ${angle.padEnd(maxLen + 2)} ${displayPrompt}\n`);
+      const pad = " ".repeat(maxLen + 5);
+      stdout.write(`  ${angle.padEnd(maxLen + 2)} ${displayPrompt.replaceAll("\n", `\n${pad}`)}\n`);
     }
     stdout.write("\n");
   }

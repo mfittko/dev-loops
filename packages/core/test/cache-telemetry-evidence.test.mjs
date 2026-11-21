@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 import { describe, test } from "bun:test";
 
 import {
@@ -430,13 +432,17 @@ describe("writeCacheTelemetryEvidence — deterministic persistence", () => {
       primerCacheCreations: [{ model: "model-a", tokens: 12000 }],
       reviewerCacheReads: [{ model: "model-a", angle: "correctness", tokens: 200 }],
     });
-    const { rm } = await import("node:fs/promises");
-    const { path: target } = await writeCacheTelemetryEvidence({ dir: "tmp/cache-telemetry-test", evidence: ev });
-    assert.match(target, /cache-telemetry\.json$/);
-    const onDisk = JSON.parse(await readTestFile(target));
-    assert.equal(onDisk.cacheReuseVerified, true);
-    assert.equal(onDisk.aggregate.reads, 1);
-    await rm("tmp/cache-telemetry-test", { recursive: true, force: true });
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "cache-telemetry-"));
+    try {
+      const { path: target } = await writeCacheTelemetryEvidence({ dir, evidence: ev });
+      assert.match(target, /cache-telemetry\.json$/);
+      const onDisk = JSON.parse(await readTestFile(target));
+      assert.equal(onDisk.cacheReuseVerified, true);
+      assert.equal(onDisk.aggregate.reads, 1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

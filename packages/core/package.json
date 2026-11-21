@@ -1,6 +1,6 @@
 {
   "name": "@dev-loops/core",
-  "version": "1.0.12-pre.4",
+  "version": "1.0.12-pre.5",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -24,6 +24,7 @@
     "./github/copilot-helpers": "./src/github/copilot-helpers.mjs",
     "./github/comment-id-guard": "./src/github/comment-id-guard.mjs",
     "./github/copilot-body-disposition-marker": "./src/github/copilot-body-disposition-marker.mjs",
+    "./github/operator-decision-record": "./src/github/operator-decision-record.mjs",
     "./github/operator-owned-lines": "./src/github/operator-owned-lines.mjs",
     "./github/closing-ref-guard": "./src/github/closing-ref-guard.mjs",
     "./github/gh": "./src/github/gh.mjs",

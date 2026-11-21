@@ -27,6 +27,13 @@ function makeRepo() {
   return { rawBase, base, main, linked };
 }
 
+// The trust-config read needs a checkout with a default branch, so the "outside" cwd is an unrelated repo.
+function makeUnrelatedRepo(prefix) {
+  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), prefix)));
+  initGitFixture(dir);
+  return dir;
+}
+
 function write(cwd, tmpRoot) {
   return runNode(SCRIPT, [
     "--repo", "owner/repo", "--pr", "42", "--gate", "draft_gate", "--head-sha", HEAD,
@@ -56,6 +63,8 @@ test("with a bare main repo, --tmp-root inside the first linked worktree is stil
   try {
     const bare = path.join(base, "bare.git");
     execFileSync("git", ["clone", "-q", "--bare", main, bare], { stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+    execFileSync("git", ["-C", bare, "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*"], { stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+    execFileSync("git", ["-C", bare, "remote", "set-head", "origin", "-a"], { stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
     const first = path.join(base, "first");
     execFileSync("git", ["worktree", "add", "-q", "-b", "first", first], { cwd: bare, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
     const result = await write(first, path.join(first, "tmp"));
@@ -67,8 +76,8 @@ test("with a bare main repo, --tmp-root inside the first linked worktree is stil
   }
 });
 
-test("a --tmp-root run from a non-git dir still writes the ledger", async () => {
-  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), "ledger-non-git-")));
+test("a --tmp-root run from an unrelated repo still writes the ledger", async () => {
+  const dir = makeUnrelatedRepo("ledger-non-git-");
   try {
     for (const tmpRoot of ["tmp", path.join(dir, "abs-tmp")]) {
       const result = await write(dir, tmpRoot);
@@ -80,9 +89,9 @@ test("a --tmp-root run from a non-git dir still writes the ledger", async () => 
   }
 });
 
-test("a writer run from a non-git dir with an absolute --tmp-root inside a linked worktree is refused", async () => {
+test("a writer run from an unrelated repo with an absolute --tmp-root inside a linked worktree is refused", async () => {
   const { base, linked } = makeRepo();
-  const outsideCwd = realpathSync(mkdtempSync(path.join(os.tmpdir(), "ledger-outside-cwd-")));
+  const outsideCwd = makeUnrelatedRepo("ledger-outside-cwd-");
   try {
     for (const tmpRoot of [path.join(linked, "tmp"), path.join(linked, "tmp", "not", "yet", "created")]) {
       const result = await write(outsideCwd, tmpRoot);

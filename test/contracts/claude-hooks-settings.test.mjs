@@ -292,6 +292,24 @@ test("bash-gate hook denies an ungated gh pr ready in the target repo (e2e, stub
   }
 });
 
+test("bash-gate hook surfaces a trust-config refusal (exit 3) with its remedy instead of a missing-verdict deny", () => {
+  const stub = path.join(repoRoot, "tmp", `gate-stub-exit3-${process.pid}.mjs`);
+  fs.mkdirSync(path.dirname(stub), { recursive: true });
+  fs.writeFileSync(stub, "process.stderr.write(JSON.stringify({ ok: false, error: 'refusing to run; run: git fetch origin', state: 'missing' }) + '\\n');\nprocess.exit(3);\n", "utf8");
+  try {
+    const { code, json } = runHook(
+      "pre-tool-use-bash-gate.mjs",
+      { tool_name: "Bash", tool_input: { command: "gh pr ready 999999" }, cwd: repoRoot },
+      { DEVLOOPS_PRE_PR_READY_GATE_SCRIPT: stub },
+    );
+    assert.equal(code, 0);
+    assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+    assert.match(json.hookSpecificOutput.permissionDecisionReason, /run: git fetch origin/);
+  } finally {
+    fs.rmSync(stub, { force: true });
+  }
+});
+
 test("bash-gate hook allows gh pr ready when the (stubbed) draft gate passes", () => {
   const stub = path.join(repoRoot, "tmp", `gate-stub-pass-${process.pid}.mjs`);
   fs.mkdirSync(path.dirname(stub), { recursive: true });

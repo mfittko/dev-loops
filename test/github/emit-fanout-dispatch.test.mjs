@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
+import { spawnSyncTrusted as spawnSync } from "../_helpers.mjs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, listPriorFindingsLogHeads, main, unitBudgetBasis } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
-import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, readCompletedAnglesForHead, renderPrBodyRead, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, readCompletedAnglesForHead, renderPrBodyRead, renderRequiredReadLine, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
@@ -136,6 +136,25 @@ test("re-gate emit refuses without a carry-forward plan artifact, proceeds once 
     assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
     const payload = JSON.parse(await readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.emit-plan.json`), "utf8"));
     assert.ok(payload.count > 0);
+
+    // main() reads plan.resolutionDeltaPaths and writes the Resolution scope into each angle suffix (#3284).
+    await writeFile(planPath, JSON.stringify({ ok: true, repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: priorHead, carried: [], mustRerun: [], resolutionDeltaPaths: ["src/resolved.mjs"], resolutionDeltaFullPaths: ["src/z.mjs"], resolutionDeltaMerges: ["c".repeat(40)] }), "utf8");
+    const scoped = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(scoped.status, 0, scoped.stderr || scoped.stdout);
+    const scopedUnit = JSON.parse(scoped.stdout).units[0];
+    const suffix = await readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.angle-suffix-${scopedUnit.scope}.txt`), "utf8");
+    assert.match(suffix, /Resolution scope: .*\("src\/resolved\.mjs"\)/);
+    assert.ok(suffix.includes(`git diff-tree --cc --no-ext-diff -p ${"c".repeat(40)}`));
+    assert.match(suffix, /Findings outside those hunks are out of scope for the resolution files\./);
+    assert.match(suffix, /review the PR hunks of these re-run files in full \("src\/z\.mjs"\)/);
+
+    // A resolution file with a PR-own edit is listed only for full review: no resolution-hunk limit applies to it.
+    await writeFile(planPath, JSON.stringify({ ok: true, repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: priorHead, carried: [], mustRerun: [], resolutionDeltaPaths: [], resolutionDeltaFullPaths: ["src/foo.mjs"], resolutionDeltaMerges: ["c".repeat(40)] }), "utf8");
+    const ownEdit = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(ownEdit.status, 0, ownEdit.stderr || ownEdit.stdout);
+    const ownUnit = JSON.parse(ownEdit.stdout).units[0];
+    const ownSuffix = await readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.angle-suffix-${ownUnit.scope}.txt`), "utf8");
+    assert.doesNotMatch(ownSuffix, /out of scope for the resolution files/);
   });
 });
 
@@ -275,7 +294,36 @@ test("all-carried rounds consume the real emitter's keyed zero-unit plan through
     contextOptions.fanoutDispatch = fanout;
     await writeGateContext(contextOptions, { repoRoot });
     const contextDir = path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7");
-    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan", JSON.stringify(plan)], { cwd: repoRoot });
+    // The plan file input and the both-flags conflict (issue 3415).
+    const planFile = path.join(repoRoot, "carry-plan-input.json");
+    await writeFile(planFile, JSON.stringify(plan), "utf8");
+    const both = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", planFile, "--carry-forward-plan", JSON.stringify(plan)], { cwd: repoRoot });
+    assert.notEqual(both.status, 0);
+    assert.match(both.stdout + both.stderr, /mutually exclusive/);
+    assert.match(both.stdout + both.stderr, /recovery/);
+    // Fail-closed plan file reads: unreadable, relative, and bound to another head.
+    const staleFile = path.join(repoRoot, "carry-plan-stale.json");
+    await writeFile(staleFile, JSON.stringify({ ...plan, headSha: "d".repeat(40) }), "utf8");
+    for (const [label, badPath, expected] of [
+      ["unreadable", path.join(repoRoot, "does-not-exist.json"), /zero-unit carry proof refused/],
+      ["relative", "carry-plan-input.json", /must be an absolute path/],
+      ["empty", "", /must be an absolute path/],
+      ["another head", staleFile, /does not match this round/],
+    ]) {
+      const refused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", badPath], { cwd: repoRoot });
+      assert.notEqual(refused.status, 0, label);
+      const out = refused.stdout + refused.stderr;
+      assert.match(out, /zero-unit carry proof refused/, label);
+      assert.match(out, expected, label);
+      assert.match(out, /recovery/, label);
+    }
+    // A malformed plan file names the file flag, not the inline one.
+    const shapeFile = path.join(repoRoot, "carry-plan-shape.json");
+    await writeFile(shapeFile, JSON.stringify({ carried: "x" }), "utf8");
+    const shapeRefused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", shapeFile], { cwd: repoRoot });
+    assert.notEqual(shapeRefused.status, 0);
+    assert.match(shapeRefused.stdout + shapeRefused.stderr, /--carry-forward-plan-file must have a .{1,3}carried.{1,3} array/);
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", planFile], { cwd: repoRoot });
     assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
     const emitPlan = path.join(contextDir, `${gate}-${HEAD_SHA}.emit-plan.json`);
     const payload = JSON.parse(await readFile(emitPlan, "utf8"));
@@ -984,6 +1032,37 @@ test("--pending emits only the pendingGroups subset", async () => {
     const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
     const persisted = JSON.parse(await readFile(planPath, "utf8"));
     assert.equal(persisted.pending, true);
+  });
+});
+
+test("--pending with pending units refuses a missing --carry-forward-plan-file before any unit is emitted (issue 3415)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", path.join(tmpDir, "does-not-exist.json")],
+      { cwd: tmpDir },
+    );
+    assert.notEqual(result.status, 0);
+    const out = result.stdout + result.stderr;
+    assert.match(out, /carry-forward plan file refused/);
+    assert.match(out, /recovery/);
+    assert.doesNotMatch(out, /"units"/);
+  });
+});
+
+test("--pending with pending units refuses a malformed --carry-forward-plan-file shape before any unit is emitted (issue 3415)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const shapeFile = path.join(tmpDir, "carry-plan-shape.json");
+    await writeFile(shapeFile, JSON.stringify({ carried: "x" }), "utf8");
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", shapeFile],
+      { cwd: tmpDir },
+    );
+    assert.notEqual(result.status, 0);
+    const out = result.stdout + result.stderr;
+    assert.match(out, /--carry-forward-plan-file must have a .{1,3}carried.{1,3} array/);
+    assert.doesNotMatch(out, /"units"/);
   });
 });
 
@@ -1862,6 +1941,17 @@ test("buildAngleNamingSuffix names the Secret leaks check as an exception to the
   assert.match(suffix, /it is never an unassigned angle/);
 });
 
+test("buildAngleNamingSuffix delivers the resolution_delta resolution paths to the re-run reviewer and adds nothing otherwise (#3284)", () => {
+  const unit = { name: "coverage", angles: ["coverage"] };
+  const none = buildAngleNamingSuffix(unit, "draft-gate-coverage");
+  assert.doesNotMatch(none, /Resolution scope/);
+  const scoped = buildAngleNamingSuffix(unit, "draft-gate-coverage", [], [], undefined, null, undefined, ["src/foo.mjs"]);
+  assert.match(scoped, /Resolution scope: .*\("src\/foo\.mjs"\)/);
+  assert.doesNotMatch(scoped, /in full/);
+  const withFull = buildAngleNamingSuffix(unit, "draft-gate-coverage", [], [], undefined, null, undefined, ["src/foo.mjs"], ["a".repeat(40)], ["src/z.mjs"]);
+  assert.match(withFull, /review the PR hunks of these re-run files in full \("src\/z\.mjs"\)/);
+});
+
 test("buildAngleNamingSuffix requires the file-write tool for single-angle and grouped units and keeps the blocked invocation (#2510)", () => {
   const single = buildAngleNamingSuffix({ name: "acceptance-criteria", angles: ["acceptance-criteria"] }, "pre-approval-gate-acceptance-criteria");
   const group = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] }, "pre-approval-gate-group-design-simplicity");
@@ -2639,3 +2729,50 @@ for (const gate of ["draft_gate", "pre_approval_gate"]) {
     });
   });
 }
+
+test("a multi-part filtered diff: the unit prompt lists every diff part with its size, in order, and the budget counts the whole diff", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const hunk = (n) => `@@ -${n},40 +${n},40 @@\n${Array.from({ length: 40 }, (_, i) => `+${n}-${i}-${"x".repeat(120)}`).join("\n")}\n`;
+    const diffOutput = Array.from({ length: 5 }, (_, f) => `diff --git a/src/f${f}.mjs b/src/f${f}.mjs\n--- a/src/f${f}.mjs\n+++ b/src/f${f}.mjs\n${[1, 1001, 2001, 3001, 4001, 5001].map(hunk).join("")}`).join("");
+    const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(["dry", "contradiction-lens"])]);
+    const { config } = await loadDevLoopConfig({ repoRoot: tmpDir });
+    options.config = config;
+    options.fanoutDispatch = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), ["dry", "contradiction-lens"], {});
+    options.diffOutput = diffOutput;
+    options.angleScopes = { "contradiction-lens": "changed-files" };
+    const { artifact } = await writeGateContext(options, { repoRoot: tmpDir });
+    const parts = artifact.requiredReads.filter((read) => read.kind === "diff");
+    assert.ok(parts.length >= 2);
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const { units } = JSON.parse(result.stdout);
+    assert.equal(units.length, 2, "a full-scope unit and a changed-files scoped unit");
+    const unit = units.find((u) => u.angles.includes("dry"));
+    assert.equal(unit.budgetBasis.files, 5);
+    const prompt = await readFile(path.resolve(tmpDir, unit.promptPath), "utf8");
+    const lines = parts.map((part) => renderRequiredReadLine(part, tmpDir));
+    for (const line of lines) assert.ok(prompt.includes(line), line);
+    const positions = lines.map((line) => prompt.indexOf(line));
+    assert.deepEqual(positions, [...positions].sort((a, b) => a - b), "parts are listed in order");
+    for (const u of units) {
+      assert.deepEqual(u.workOrder.requiredReads.filter((read) => read.kind === "diff").map((read) => read.path), parts.map((part) => part.path), u.scope);
+    }
+  });
+});
+
+test("the unit prompt describes the optional bundle files and their fields, under the work-order ceiling", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedRealConfiguredGroupBundle(tmpDir);
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const [unit] = JSON.parse(result.stdout).units;
+    const prompt = await readFile(path.resolve(tmpDir, unit.promptPath), "utf8");
+    const start = prompt.indexOf("## Optional read fields");
+    const section = prompt.slice(start, prompt.indexOf("\n\n## ", start));
+    assert.ok(section.length > 0 && Buffer.byteLength(section) < 900);
+    for (const field of ["adjacentCode.files[]", "`path`", "`role`", "`bytes`", "`allPassed`", "suites[]", "raw-diff"]) {
+      assert.ok(section.includes(field), field);
+    }
+    assert.ok(unit.promptBytes < REVIEWER_WORK_ORDER_MAX_BYTES);
+  });
+});

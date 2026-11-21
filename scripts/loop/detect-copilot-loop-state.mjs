@@ -28,8 +28,10 @@ import {
 import { observeHeadCiSignals } from "../github/observe-head-ci.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
+import { readRequestNotObservable } from "./_unobservable-review-request-record.mjs";
 import { resolveCurrentHeadBodyFeedback } from "../github/_copilot-body-disposition.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 const USAGE = `Usage:
   detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>
   detect-copilot-loop-state.mjs --input <path>
@@ -54,6 +56,7 @@ Optional (either mode):
 Output (stdout, JSON):
   { "ok": true, "snapshot": {..., "copilotReviewRoundCount": N}, "state": "...", "allowedTransitions": [...], "nextAction": "...",
     "autoRerequestEligible": true|false, "sameHeadCleanConverged": true|false,
+    "copilotUnavailableReason": "request_not_observable"|null,
     "loopDisposition": "...", "terminal": true|false }
 Error output (stderr, JSON):
   Argument/usage errors:
@@ -64,7 +67,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
   1  Argument error, gh failure, or indeterminate state
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const parseError = buildParseError(USAGE);
 export function parseDetectCliArgs(argv) {
   const options = {
@@ -264,7 +268,7 @@ function normalizeMergeEnum(value) {
   return normalized.length > 0 ? normalized : null;
 }
 
-export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride, localValidationHeadSha, draftGateResetAtMs }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride, localValidationHeadSha, draftGateResetAtMs, checkpointDir }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd } = {}) {
   const prData = await fetchPrView({ repo, pr }, { env, ghCommand, runChild });
   if (prData === null) {
     return normalizeSnapshot({ prExists: false });
@@ -345,7 +349,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
   // trusted copilot-body-disposition record clears the body finding.
   const bodyFeedback = await resolveCurrentHeadBodyFeedback(
     { repo, pr, headSha: prHeadSha, reviewSummary, reviewThreads },
-    { env, ghCommand, runChild },
+    { env, ghCommand, runChild, cwd },
   );
   const snapshot = buildSnapshotFromPrFacts({
     prData,
@@ -363,6 +367,10 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
     excludedFailureDetails,
     copilotBodyFeedbackUnresolved: bodyFeedback.copilotBodyFeedbackUnresolved,
     copilotPriorHeadBodyFeedbackUnresolved: bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved,
+    copilotRequestNotObservable: await readRequestNotObservable(
+      { repo, pr, headSha: prHeadSha },
+      { checkpointDir },
+    ),
   });
   // Merge-state facts drive the base-integration preflight (never CI-wait on a
   // CONFLICTING/DIRTY branch — GitHub cannot dispatch CI there). Carried as
@@ -410,7 +418,7 @@ export async function runCli(
         repo: options.repo,
         pr: options.pr,
       },
-      { env, ghCommand, runChild },
+      { env, ghCommand, runChild, cwd: repoRoot },
     );
     interpretationInput = snapshot;
   }
@@ -435,11 +443,13 @@ export async function runCli(
     nextAction: interpretation.nextAction,
     autoRerequestEligible: interpretation.autoRerequestEligible,
     sameHeadCleanConverged: interpretation.sameHeadCleanConverged,
+    copilotUnavailableReason: interpretation.copilotUnavailableReason,
     loopDisposition: interpretationSummary.loopDisposition,
     terminal: interpretationSummary.terminal,
   }, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseDetectCliArgs(process.argv.slice(2)).help);
   runCli().catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

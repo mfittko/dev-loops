@@ -31,7 +31,7 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   // without a new review event. The draft guard still skips draft pushes, so development
   // pushes on a draft PR start no run (#1702); the check materializes at ready_for_review,
   // a verdict-post, a verdict-shaped issue comment or a push to a ready PR.
-  assert.deepEqual(triggers.pull_request.types, ["opened", "reopened", "ready_for_review", "synchronize"]);
+  assert.deepEqual(triggers.pull_request.types, ["opened", "reopened", "ready_for_review", "synchronize", "edited"]);
   assert.match(content, /github\.event\.pull_request\.draft == false/, "the draft guard still skips draft pushes");
   // The verdict surface is a PR review: `submitted` fires for each verdict on a
   // NEW head, `edited` for the same-head in-place correction (PUT
@@ -462,4 +462,37 @@ test("head-declared-keys is the only job that checks out a PR head, with no perm
     assert.ok(fetch.if.includes("steps.pr.outputs.draft == 'false'"));
     assert.ok(fetch.run.includes("node scripts/github/fetch-head-declared-keys.mjs"), "default-branch code only");
   }
+});
+
+// ADR 0279: the CI detector derives the approval patch-id, so both detector steps get the PR base branch name
+// (through env, never spliced) after an objects-only fetch of the PR head.
+test("gate-evidence detector steps pass --base-ref-name from a fetched PR head so a patch-id approval clears the size gate in CI", async () => {
+  const workflow = parseYaml(await readRepo(".github/workflows/gate-evidence.yml"));
+  for (const job of [workflow.jobs["gate-evidence-runner"], workflow.jobs["gate-evidence-reporter"]].filter(Boolean)) {
+    const detect = job.steps.find((s) => typeof s.run === "string" && s.run.includes("detect-checkpoint-evidence.mjs"));
+    assert.equal(detect.env.PR_BASE_REF, "${{ steps.pr_git.outputs.base_ref }}");
+    assert.ok(detect.run.includes('base_args=(--base-ref-name "$PR_BASE_REF")') && detect.run.includes('"${base_args[@]}"'));
+    const fetchStep = job.steps.find((s) => s.id === "pr_git");
+    assert.ok(job.steps.indexOf(fetchStep) < job.steps.indexOf(detect), "the fetch precedes the detector");
+    assert.equal(fetchStep["continue-on-error"], true);
+    assert.ok(fetchStep.run.includes('refs/pull/${PR_NUMBER}/head'));
+  }
+});
+
+// ADR 0290: the detector's fail-closed trust-config load resolves the default branch from refs/remotes/origin/HEAD, which actions/checkout leaves unset.
+test("gate-evidence sets origin/HEAD from the event's default branch before each detect-checkpoint-evidence step", async () => {
+  const workflow = parseYaml(await readRepo(".github/workflows/gate-evidence.yml"));
+  let detectSteps = 0;
+  for (const job of Object.values(workflow.jobs)) {
+    const steps = job.steps ?? [];
+    steps.forEach((step, index) => {
+      if (!String(step.run ?? "").includes("detect-checkpoint-evidence.mjs")) return;
+      detectSteps += 1;
+      const setHead = steps.findIndex((s) => /git remote set-head origin "\$DEFAULT_BRANCH"/.test(String(s.run ?? "")));
+      assert.ok(setHead >= 0 && setHead < index, "a set-head step precedes the detector step");
+      assert.equal(steps[setHead].env.DEFAULT_BRANCH, "${{ github.event.repository.default_branch }}", "the default branch comes from the event, never a guessed name");
+      assert.equal(steps[setHead].if, step.if, "the set-head step runs under the same condition as the detector step");
+    });
+  }
+  assert.equal(detectSteps, 2);
 });

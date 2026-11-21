@@ -5,7 +5,7 @@ strategy: local-first
 inputSource: tracker
 
 refinement:
-  maxCopilotRounds: 2
+  maxCopilotRounds: 0
 
 gates:
   # Fail-closed enforcement that gate verdicts were produced by the
@@ -104,7 +104,8 @@ gates:
     # (in-diff file:line) stays an open PR review thread until the fixer
     # resolves it, the judge defers it, the judge rejects a medium, low or nit
     # (a rejected question needs an answer reply first and a rejected high
-    # stays open), or the judge disposes it act with an evidence-only remedy.
+    # stays open), or the judge disposes it act with an evidence-only or
+    # pr_body remedy (pr_body closes once the PR body digest changed).
     # A NON-LOCATABLE one
     # is body-filed and carries disposition=deferred only on a judge defer
     # (never on a nit, which carries no stamp and no issue link). An

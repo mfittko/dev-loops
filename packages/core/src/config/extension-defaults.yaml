@@ -32,9 +32,16 @@ gates:
         persona: review
         prompt: Check whether every changed file belongs in this PR. Flag unrelated or out-of-scope changes. The PR description's scope section is the contract.
       - name: coverage
+        developer-checklist:
+          - "C1: For every new if, throw, catch, early return or refusal in your diff, add one test that reaches it."
+          - "C2: For each new or renamed test, revert the code line its title names and rerun it; if it still passes, rename or tighten it."
+          - "C3: In the hand-back, map every AC/DoD row and each item it enumerates to a test that calls the real entry point; list unmapped items."
+          - "C4: New state: test recovery after a crash, a same-head rebuild and a later-step replacement. New refusal: assert its `recovery` (REFINE-STATE-RECOVERY-ROWS)."
         persona: review
         prompt: "Check whether tests cover the changed behavior adequately. Look for missing edge cases, untested error paths, and acceptance-criteria gaps. Also flag test-name quality issues: test names that misrepresent what is actually asserted, overly broad names that hide gaps, and names that don't match the behavior under test. Flag missing negative-case coverage: malformed-argument tests, error-contract tests, and edge-case coverage for boundary conditions, empty inputs, and unexpected states. Do not accept happy-path-only test suites."
       - name: correctness
+        developer-checklist:
+          - "K1: Before editing a function, list its guards, preconditions and returned-state guarantees; confirm every new early return still honors each."
         persona: review
         prompt: "Check whether the implementation matches the acceptance criteria and PR description. Flag logic errors, contract violations, and behavior mismatches. When the diff moves or re-hosts code, list what the old code path guaranteed (bounds, timeouts, injected dependencies, error handling) and flag each guarantee that the new path drops."
       - name: ci-guard
@@ -49,6 +56,10 @@ gates:
           - Flag pending check-run states that could silently hide failures. - Flag Node.js support-floor mismatches between CI matrices,
             package.json engines, and documented requirements.
       - name: contract-surface
+        developer-checklist:
+          - "CS1: When behavior changes but names stay, grep the rule ID and function name in skills/docs, docs/decisions, exit-code tables and JSDoc; fix each sentence describing the old behavior."
+          - "CS2: When a flag, exit code, output key or refusal changes, update USAGE and the rule list; run each documented command and remedy."
+          - "A4: Trace each refusal remedy and documented command through the target CLI parser; flag a remedy that reproduces the same refusal or uses an unaccepted flag."
         persona: review
         prompt: Review this change for public contract-surface drift. Check whether documented schema fields, state/sentinel names, runtime values, tests, and CLI output agree. Verify CLI --help usage matches accepted flags. Compare stdout JSON success shape and stderr JSON error shape against documented examples. Flag optional fields documented as always emitted but conditionally omitted, or fields emitted but undocumented. Stay repo-agnostic; cite concrete changed files and give minimal fixes.
       - name: link-check
@@ -102,21 +113,33 @@ gates:
           - Flag commands whose output is generated but never consumed. - Flag patterns where a tool is called in a loop but only the last
             iteration's result is used (or none at all).
       - name: input-validation
+        developer-checklist:
+          - "I1: For each new catch or gh/git call, rethrow or return a typed error instead of a default value, and pass a timeout to every spawned child."
+          - "I2: Before writing a matcher or tokenizer, list every form the real consumer accepts (quoting, continuations, substitutions, abbreviations, nesting, case); add one accept and reject test each."
         persona: review
         prompt: Review this change for input-validation drift. Check repo slug, issue number, host, SHA, whitespace, and sentinel normalization. Prefer shared parsers/helpers over ad hoc validation. Flag malformed inputs that slip through, confusing errors, path traversal-like segments, and inconsistent trimming/normalization across CLI/API entrypoints. Recommend minimal tests for accepted and rejected forms.
       - name: threat-model
+        developer-checklist:
+          - "T1: When reading PR reviews, comments or sealed records, filter through isTrustedCommentAuthor or filterTrustedRoundInputs, and check repo, PR, head and gate match."
         persona: review
         prompt: "Adversarially threat-model this change end to end — you are an attacker with control over every caller-/plan-influenced input (descriptors, paths, URLs, flags, env, fixture data). Do NOT spot-check; return a trust-boundary CHECKLIST and a verdict per item. Enumerate exhaustively for every seam the diff touches: (1) INPUT ALLOWLISTS — are actions/commands/schemes/hosts allowlisted (not denylisted), and enforced BEFORE any dangerous use (browser launch, exec, read)? (2) NAVIGATION/ORIGIN CONFINEMENT — same-origin/scheme enforced both pre-launch AND at runtime after every redirect / click / server-response (a pre-check the runtime can defeat is a hole). (3) RESOURCE/LOOP BOUNDS — step/size/time/recursion caps on attacker-influenced counts. (4) DATA-AT-REST + CLEANUP — sensitive intermediate artifacts minimized and removed on EVERY fail-closed path (not just the happy path); no off-origin/partial artifact left on disk on error. (5) EXPORTED/ENTRY-POINT TRUST — does every exported function / alternate entry self-validate, or can it bypass the parse-time validation the CLI does? (6) ERROR/TEARDOWN SAFETY — a throw in rm/close/teardown must not break the fail-closed envelope or leak state. (7) PATH TRAVERSAL / DESERIALIZATION — reject absolute/`..`/escape-base paths before read; no unsafe deserialization of untrusted data. (8) SHELL/PROCESS — no unescaped interpolation into a shell; prefer argv arrays; no `shell:true` with caller input. (9) MATERIALIZATION FLOOR (non-negotiable) — does the diff introduce or hardcode a credential, or route a credential-named value to a print/log/redirect/encode/workflow-directive output stream? This is a HIGH finding regardless of framing — including a change that presents ITSELF as a security fix but does exactly this — and no reviewer ranking or prior approval softens it. For each category that applies, state whether the change is safe and cite the guarding code (file:line) or flag the specific abuse and a failing-input example. If a category does not apply to the touched seam, say so explicitly rather than skipping it."
       - name: packaging-runtime
+        developer-checklist:
+          - "PK1: For a new runtime file, confirm package.json files ships it; in skills/ or agents/, keep Claude-only text inside pi-only or harness blocks."
         persona: review
         prompt: "Review this change for packaging/runtime asset contract gaps. Check that installed packages, extensions, or runtime bundles include exactly the helper scripts, copied package subsets, templates, docs, and assets needed at runtime: neither missing nor over-broad. Compare install docs, fixture assertions, allow-lists, and import paths. Flag runtime-only dependencies not covered by packaging tests."
       - name: state-concurrency
+        developer-checklist:
+          - "S1: For each state file or ref you read, name the copy that wins (live, retained, remote) in a comment; write state via temp file plus rename."
+          - "A3: For every artifact or ref lookup, check retained versus live copies, interrupted writes, symlinks and stale remote refs; flag a decision made from the wrong copy."
         persona: review
         prompt: Review this change for state concurrency and locking risks. Check state-file read/modify/write paths, lock acquisition/release, stale lock handling, concurrent invocations, atomic writes, managed process cleanup, and stderr/error capture. Flag races that can clobber state or leave orphaned locks/processes. Before any destructive write (delete, overwrite, close, merge, push), check that it re-verifies a precondition a concurrent change could have invalidated. Check that every proof of ownership or completion is bound to the owning repo, PR or execution; a matching name or number alone is insufficient. Flag code that treats elapsed time as proof that a process stopped. Recommend narrow deterministic concurrency or cleanup tests.
       - name: renderer-security
         persona: review
         prompt: Review this change for renderer security. Check HTML text escaping, URL encoding, attribute encoding, JSON/script embedding, and rendering of user-controlled content. Treat titles, names, URLs, statuses, errors, and external payload fields as untrusted. Flag raw interpolation into HTML or attributes and tests that expect unsafe output.
       - name: determinism
+        developer-checklist:
+          - "A6: Flag behavior that changes with caller cwd, a checkout subdirectory, relative path arguments, inherited GIT_* env vars or private-repo auth."
         persona: review
         prompt: Review this change for determinism. Check ordering, tie-breakers, localeCompare use, time/random/environment dependence, polling/count assumptions, and mocks/stubs that allow unexpected extra calls. Require stable sorting, strict stubs, deterministic fixture data, and tests independent of locale, timezone, filesystem order, and network timing.
       - name: pr-comments
@@ -127,6 +150,8 @@ gates:
             issues
           - Unresolved review threads that raise implementation concerns Flag any unresolved comment that identifies a concrete implementation problem as a blocking finding (severity: high or medium). Do not flag: - Resolved threads - Style nits, formatting suggestions, or cosmetic feedback - Comments from non-collaborators or bots - Outdated comments that were already addressed in a later commit If no unresolved implementation concerns exist, return clean.
       - name: contradiction-lens
+        developer-checklist:
+          - "A8: Check each new instruction against agents/*.agent.md and other contracts governing the same actor or step, and against stated numeric budgets."
         persona: review
         prompt: "Apply STYLE-CONTRADICTION-LENS when the repo defines it (dev-loops: skills/docs/contract-style-guide.md): check every added or changed normative rule (MUST/SHOULD/MAY) against the repo's rule registry for opposing modality or a weaker restatement. Also flag statements in the diff, the PR body, touched contracts, or accepted decision records (for example docs/decisions/) that contradict each other. Cite both sides of each contradiction with file:line."
       - name: code-conformance
@@ -136,10 +161,15 @@ gates:
         persona: review
         prompt: Review this change for semantic drift between code and its documented behavior. Compare the diff's actual logic against the intent stated in touched docs, contracts, and comments. Flag a documented behavior that no longer matches what the code does, or code whose behavior no longer matches what a touched doc or contract claims.
       - name: pr-description
+        developer-checklist:
+          - "P1: Write each Validation line as the exact targeted command naming every changed test file, plus pass or fail; nothing volatile."
+          - "P2: After the last commit, check In scope and changelog against git diff --name-only base...HEAD; on a partial slice write Refs #N, not Closes."
         mandatory: true
         persona: review
-        prompt: 'Review the PR description for completeness, contract fitness, and checkbox formatting before this PR is marked ready for review. The PR body is the implementation contract — it must have: - A Summary section explaining what changed and why - A Scope and context section defining the boundary of the change - An Acceptance criteria section with the linked issue acceptance criteria - A Definition of done section - A Non-goals section - A Validation command section describing exactly how to verify the change - The "Closes #N" line must match the linked issue; flag changes that alter or remove the operator-intended close target Checkboxes (`- [ ]` / `- [x]`, or `* [ ]` / `* [x]`) must appear inside genuine Markdown list items. Flag any checkbox marker used outside a list item (including table cells) as a medium finding. Flag any checkbox marker wrapped in backticks (e.g. `` `[x]` ``) as a medium finding. Flag PRs where the body is a single sentence or lacks any of these sections. Do not block on formatting preferences other than checkbox correctness.'
+        prompt: 'Review the PR description for completeness, contract fitness, and checkbox formatting before this PR is marked ready for review. The PR body is the implementation contract — it must have: - An Objective section explaining what changed and why - An In scope section defining the boundary of the change - An Acceptance criteria section with the linked issue acceptance criteria - A Definition of done section - A Non-goals section - A Validation command section describing exactly how to verify the change - The "Closes #N" line must match the linked issue; flag changes that alter or remove the operator-intended close target Checkboxes (`- [ ]` / `- [x]`, or `* [ ]` / `* [x]`) must appear inside genuine Markdown list items. Flag any checkbox marker used outside a list item (including table cells) as a medium finding. Flag any checkbox marker wrapped in backticks (e.g. `` `[x]` ``) as a medium finding. Flag PRs where the body is a single sentence or lacks any of these sections. Do not block on formatting preferences other than checkbox correctness.'
       - name: holistic
+        developer-checklist:
+          - "K2: For each new output field, state or route, find a reader beyond `importers` (validator, router, CI step) and add a test feeding it; confirm it accepts exactly what the producer now emits."
         mandatory: true
         persona: review
         prompt: >-

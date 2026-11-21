@@ -262,3 +262,56 @@ test("the gate-coordinator Dispatch model rule is scoped to Claude Code in the P
   assert.match(rule[0], /`kind: "angle"`/);
   assert.match(rule[0], /only when non-null/);
 });
+
+// Issue 2505: the gate coordinator checks its own dispatch tool before any round work.
+const STEP0 = /step 0/i;
+
+test("the gate chain runs the step 0 dispatch-tool check before validation, context, carry-forward and emit", async () => {
+  for (const file of ["skills/copilot-pr-followup/SKILL.md", ".claude/skills/copilot-pr-followup/SKILL.md"]) {
+    const content = await readRepo(file);
+    const chainStart = content.indexOf("Both gates run this same checkpoint review chain");
+    const check = content.indexOf("0. **Capability check (step 0):**");
+    assert.ok(chainStart !== -1 && check > chainStart, `${file}: expected the step 0 capability check inside the gate chain`);
+    for (const later of ["gate resolve-validation", "write-gate-context.mjs", "resolve-angle-carry-forward.mjs", "emit-fanout-dispatch.mjs"]) {
+      assert.ok(check < content.indexOf(later, chainStart), `${file}: step 0 must precede ${later}`);
+    }
+    assert.match(collapse(content.slice(check, content.indexOf("1. **Context (Phase 1):**"))), /`Agent` on Claude Code, `subagent` on Pi/);
+  }
+});
+
+test("the rule states the step 0 check, the no-emitter wording and the detail format", async () => {
+  const section = collapse(ruleSection(await readRepo(CONTRACT_DOC)));
+  assert.match(section, STEP0);
+  assert.match(section, /before `gate resolve-validation`, `write-gate-context\.mjs`, the carry-forward resolver and `emit-fanout-dispatch\.mjs`/);
+  assert.match(section, /no emitter call, no round id/);
+  const failClosed = collapse((await readRepo(CONTRACT_DOC)).split("### Fail-closed: fan-out unavailable")[1].split("\n## ")[0]);
+  assert.match(failClosed, /`Agent`/);
+  assert.match(failClosed, /`subagent`/);
+  assert.match(failClosed, /only when the harness exposes the depth/);
+  assert.ok(failClosed.includes(`${FANOUT_UNAVAILABLE_MESSAGE} (<detail>)`));
+});
+
+test("the contract rule and the dev-loop agent pin the Claude Code gate topology", async () => {
+  const wording = /depth that keeps the `Agent` tool/;
+  const rule = collapse(ruleSection(await readRepo(CONTRACT_DOC)));
+  assert.match(rule, wording);
+  assert.match(rule, /direct child/);
+  assert.match(rule, /never routes the round through a further nested driver/);
+  for (const file of ["agents/dev-loop.agent.md", ".claude/agents/dev-loop.md"]) {
+    const content = collapse(await readRepo(file));
+    assert.match(content, wording, file);
+    assert.match(content, /direct child/, file);
+    assert.match(content, /never routes the round through a further nested driver/, file);
+  }
+});
+
+test("the gate-coordinator agent definition states the step 0 check", async () => {
+  for (const file of [GATE_COORDINATOR_AGENT, ".claude/agents/gate-coordinator.md"]) {
+    const dispatch = collapse((await readRepo(file)).split("## Dispatch")[1].split("## Result")[0]);
+    assert.match(dispatch, STEP0, file);
+    assert.match(dispatch, /`Agent` on Claude Code, `subagent` on Pi/, file);
+    assert.match(dispatch, /FANOUT_UNAVAILABLE/, file);
+    assert.match(dispatch, /no emitter call/, file);
+    assert.match(dispatch, /no round id/, file);
+  }
+});
