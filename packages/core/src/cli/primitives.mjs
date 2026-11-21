@@ -212,14 +212,14 @@ export async function resolveBodyOrFile({ body, bodyFile, allowStdin = false, al
   return content;
 }
 
-// Same gh pacing and one-retry secondary-limit backoff as runChild; `takeSlot` and `sleep` are test seams.
-export async function runCommand(command, args, { cwd = process.cwd(), env = process.env, takeSlot, backoffMs, sleep } = {}) {
+// Same gh pacing and one-retry secondary-limit backoff as runChild; `sleep` is the only test seam.
+export async function runCommand(command, args, { cwd = process.cwd(), env = process.env, sleep } = {}) {
   const once = async () => {
-    if (command === "gh") await (takeSlot ?? (await import("../github/gh-throttle.mjs")).takeGhSlot)({ env, cwd });
+    if (command === "gh") await (await import("../github/gh-throttle.mjs")).takeGhSlot({ env, cwd });
     return spawnCommand(command, args, cwd, env);
   };
   if (command !== "gh") return once();
-  return (await import("../github/gh.mjs")).withSecondaryLimitBackoff(once, { backoffMs, sleep });
+  return (await import("../github/gh.mjs")).withSecondaryLimitBackoff(once, { sleep });
 }
 
 function spawnCommand(command, args, cwd, env) {
