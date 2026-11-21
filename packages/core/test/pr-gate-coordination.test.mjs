@@ -5114,7 +5114,10 @@ for (const [ciStatus, nextAction] of [["pending", PR_CHECKPOINT_ACTION.WAIT_FOR_
       // The recovery names the CI-fix route, not only the read-only wait command (RECOVERY-COMMAND-REQUIRED).
       assert.match(result.recovery, /^route fix_ci_failure: /);
       assert.ok(result.recovery.includes(result.agentRemedy.command));
-      assert.match(result.recovery, /emit-fixer-work-order\.mjs --phase full --ci-file <that file>/);
+      assert.match(result.recovery, /dev-loops-run scripts\/loop\/emit-fixer-work-order\.mjs --repo owner\/repo --pr 3414 --head-sha abc123456789 --phase full --harness <claude\|pi\|codex> --ci-file <that file>/);
+      assert.ok(result.agentRemedy.summary.includes("--repo owner/repo --pr 3414 --head-sha abc123456789"));
+      assert.match(result.agentRemedy.summary, /--gate <the round's gate>/);
+      assert.doesNotMatch(result.agentRemedy.summary, /--gate draft_gate/);
     }
   });
 }

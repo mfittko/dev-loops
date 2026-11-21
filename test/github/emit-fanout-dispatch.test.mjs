@@ -2729,17 +2729,17 @@ test("the unit prompt describes the optional bundle files and their fields, unde
 });
 
 // Issue 3414 ac:2: the pre-fan-out CI re-check stops the round with a typed observation before any unit is emitted.
-for (const [label, ci, nextAction] of [
+for (const ciGate of ["draft_gate", "pre_approval_gate"]) for (const [label, ci, nextAction] of [
   ["pending", { ok: true, status: "pending", settled: false, ciStatus: "pending", headSha: HEAD_SHA }, "wait_for_ci"],
   ["red", { ok: true, status: "failure", settled: true, ciStatus: "failure", headSha: HEAD_SHA, failedChecks: [{ name: "build" }] }, "fix_ci_failure"],
   ["red CI at another head", { ok: true, status: "failure", settled: true, ciStatus: "failure", headSha: "d".repeat(40), failedChecks: [{ name: "build" }] }, "wait_for_ci"],
   ["another head", { ok: true, status: "success", settled: true, ciStatus: "success", headSha: "d".repeat(40) }, "wait_for_ci"],
 ]) {
-  test(`emit-fanout-dispatch.mjs --ci-file with ${label} CI refuses with ci_not_green and ${nextAction} (issue 3414)`, async () => {
+  test(`emit-fanout-dispatch.mjs --gate ${ciGate} --ci-file with ${label} CI refuses with ci_not_green and ${nextAction} (issue 3414)`, async () => {
     await withTmpDir(async (tmp) => {
       const ciFile = path.join(tmp, "ci.json");
       await writeFile(ciFile, JSON.stringify(ci));
-      const result = runEmitCli(["--repo", REPO, "--pr", "7", "--gate", GATE, "--head-sha", HEAD_SHA, "--tmp-root", tmp, "--ci-file", ciFile], { cwd: tmp });
+      const result = runEmitCli(["--repo", REPO, "--pr", "7", "--gate", ciGate, "--head-sha", HEAD_SHA, "--tmp-root", tmp, "--ci-file", ciFile], { cwd: tmp });
       assert.equal(result.status, 1);
       const out = JSON.parse(result.stdout);
       assert.equal(out.ok, false);
@@ -2750,12 +2750,12 @@ for (const [label, ci, nextAction] of [
   });
 }
 
-test("emit-fanout-dispatch.mjs --ci-file with settled green CI passes the CI step and emits units (issue 3414)", async () => {
+for (const ciGate of ["draft_gate", "pre_approval_gate"]) test(`emit-fanout-dispatch.mjs --gate ${ciGate} --ci-file with settled green CI passes the CI step and emits units (issue 3414)`, async () => {
   await withTmpDir(async (tmp) => {
-    await seedBundle(tmp);
+    await seedBundle(tmp, { gate: ciGate });
     const ciFile = path.join(tmp, "ci.json");
     await writeFile(ciFile, JSON.stringify({ ok: true, status: "success", settled: true, ciStatus: "success", headSha: HEAD_SHA }));
-    const result = runEmitCli(["--repo", REPO, "--pr", "7", "--gate", GATE, "--head-sha", HEAD_SHA, "--ci-file", ciFile], { cwd: tmp });
+    const result = runEmitCli(["--repo", REPO, "--pr", "7", "--gate", ciGate, "--head-sha", HEAD_SHA, "--ci-file", ciFile], { cwd: tmp });
     assert.equal(result.status, 0, result.stderr);
     const out = JSON.parse(result.stdout);
     assert.equal(out.ok, true);
@@ -2763,11 +2763,11 @@ test("emit-fanout-dispatch.mjs --ci-file with settled green CI passes the CI ste
   });
 });
 
-test("emit-fanout-dispatch.mjs --ci-file with ciStatus none refuses with ci_not_green, as gate coordination does (issue 3414)", async () => {
+for (const ciGate of ["draft_gate", "pre_approval_gate"]) test(`emit-fanout-dispatch.mjs --gate ${ciGate} --ci-file with ciStatus none refuses with ci_not_green, as gate coordination does (issue 3414)`, async () => {
   await withTmpDir(async (tmp) => {
     const ciFile = path.join(tmp, "ci.json");
     await writeFile(ciFile, JSON.stringify({ ok: true, status: "none", settled: true, ciStatus: "none", headSha: HEAD_SHA }));
-    const result = runEmitCli(["--repo", REPO, "--pr", "7", "--gate", GATE, "--head-sha", HEAD_SHA, "--tmp-root", tmp, "--ci-file", ciFile], { cwd: tmp });
+    const result = runEmitCli(["--repo", REPO, "--pr", "7", "--gate", ciGate, "--head-sha", HEAD_SHA, "--tmp-root", tmp, "--ci-file", ciFile], { cwd: tmp });
     assert.equal(result.status, 1);
     const out = JSON.parse(result.stdout);
     assert.equal(out.refusal, "ci_not_green");

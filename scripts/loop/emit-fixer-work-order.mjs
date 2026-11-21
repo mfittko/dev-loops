@@ -113,7 +113,7 @@ class Refusal extends Error {
   constructor(message, refusal, recovery) { super(message); if (refusal) this.refusal = refusal; if (recovery) this.recovery = recovery; }
 }
 
-const CI_ACT_RETRY = "Re-run scripts/loop/emit-fixer-work-order.mjs --phase full --ci-file <wait-pr-checks JSON> --act-list-file <judge-pass --out> --gate <gate> with valid inputs (issue 3420).";
+const CI_ACT_RETRY = "Re-run dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo <owner/name> --pr <n> --head-sha <sha> --harness <claude|pi|codex> --phase full --ci-file <wait-pr-checks JSON> --act-list-file <judge-pass --out> --gate <gate> with valid inputs (issue 3420).";
 
 async function readSource(kind, filePath, capture, recovery) {
   const bytes = await capture.read(filePath);
@@ -630,7 +630,7 @@ async function emitPlan({
   if (ciFile) {
     const ci = source.parsed, next = "run scripts/github/wait-pr-checks.mjs on the PR head and pass its JSON";
     // The act-list retry names inputs only the combined --ci-file plus --act-list-file path has.
-    const recover = (lead = next) => ciActFile ? `${next}, then ${CI_ACT_RETRY}` : `${lead}, then re-run emit-fixer-work-order.mjs --phase full --ci-file <that JSON>`;
+    const recover = (lead = next) => ciActFile ? `${next}, then ${CI_ACT_RETRY}` : `${lead}, then re-run dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo <owner/name> --pr <n> --head-sha <sha> --harness <claude|pi|codex> --phase full --ci-file <that JSON>`;
     if (ci?.ok !== true || ci.status !== "failure" || ci.ciStatus !== "failure") throw new Refusal(`ci file ${ciFile} is not a red wait-pr-checks result (status ${JSON.stringify(ci?.status)}, ciStatus ${JSON.stringify(ci?.ciStatus)}); a green, pending or failed read has nothing to fix; ${next}`, undefined, ciActFile || ci?.ciStatus !== "success" ? recover() : "CI is green at this head: re-run gate coordination (detect-pr-gate-coordination-state.mjs); there is nothing to fix.");
     if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`, undefined, recover());
     if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`, undefined, recover());
@@ -755,7 +755,7 @@ async function emitPlan({
   }
   // A carried act list is bound to this head's round: its findings ledger must exist here (or at the carry origin), so an older-head or foreign list refuses.
   if (ciActFile) {
-    const staleRecovery = "re-run judge-pass at the PR head, then re-run scripts/loop/emit-fixer-work-order.mjs --phase full --ci-file <wait-pr-checks JSON> --act-list-file <judge-pass --out> --gate <gate>";
+    const staleRecovery = "re-run judge-pass at the PR head, then re-run dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo <owner/name> --pr <n> --head-sha <sha> --harness <claude|pi|codex> --phase full --ci-file <wait-pr-checks JSON> --act-list-file <judge-pass --out> --gate <gate>";
     let ledgerFile = ledgerPath(capRoundHead);
     if (!existsSync(ledgerFile)) { const origin = await carryOriginHead(); if (origin) ledgerFile = ledgerPath(origin); }
     if (!existsSync(ledgerFile)) throw new Refusal(`stale_act_list: no ${gate} findings ledger exists for this head (${ledgerPath(capRoundHead)}); act list ${ciActFile} is not this head's round; ${staleRecovery}`, "stale_act_list", staleRecovery);

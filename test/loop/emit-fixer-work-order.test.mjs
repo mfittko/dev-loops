@@ -3793,7 +3793,31 @@ test("issue 3414: a carried act list must match an act finding of the head's led
   });
 });
 
-for (const gated of [true, false]) test(`issue 3414: locateFixerUnit ${gated ? "reports a gated ci-failure order retired with its round" : "does not retire a gate-less ci-failure order"}`, async () => {
+test("issue 3414: the combined --ci-file path accepts a ledger only at the carry origin head", async () => {
+  await withFixture(async (fx) => {
+    const { merged, over } = await verdictCarryScenario(fx, { cap: 3 });
+    const unit = await emitCi(fx, { ...over(), phase: "full", gate: "draft_gate", actListFile: fx.files.actList }, ciFailureFor(merged));
+    assert.equal(unit.workOrder.source, "ci-failure");
+    assert.deepEqual(unit.workOrder.requiredReads.map((read) => read.kind), ["ci-failure", "act-list"]);
+  });
+});
+
+test("issue 3414: the combined --ci-file path refuses a corrupt head ledger with the judge-pass recovery", async () => {
+  await withFixture(async (fx) => {
+    const file = path.join(fx.root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${fx.head}.json`);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "{not json");
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), (error) => error.refusal === "stale_act_list" && /judge-pass/.test(error.recovery));
+  });
+});
+
+test("issue 3414: the verdict_not_posted recovery names --ci-file for a red-CI post refusal", () => withoutClaudeCode(async () => {
+  await withFixture(async ({ head, emit }) => {
+    await assert.rejects(emit({ fetchVerdictMarkers: async () => summarizeGateReviewCommentMarkers([], { headSha: head }) }), (error) => error.refusal === "verdict_not_posted" && /--ci-file/.test(error.recovery));
+  });
+}));
+
+for (const gated of [true, false]) test(`issue 3414: locateFixerUnit${gated ? "reports a gated ci-failure order retired with its round" : "does not retire a gate-less ci-failure order"}`, async () => {
   await withFixture(async (fx) => {
     const { root, wt, head, files } = fx;
     await writeCurrentLog(path.join(root, "tmp"), head, ACT);
