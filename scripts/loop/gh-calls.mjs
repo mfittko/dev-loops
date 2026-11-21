@@ -33,7 +33,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   }
   if (values.log !== undefined && values.log.trim() === "") throw parseError("--log requires a non-empty path");
   // A relative --log resolves against the main checkout, like DEVLOOPS_GH_CALL_LOG.
-  const logPath = values.log === undefined ? undefined : resolveGhCallLogPath(process.cwd(), { [GH_CALL_LOG_ENV]: values.log });
+  const logPath = values.log === undefined ? undefined : resolveGhCallLogPath(process.cwd(), { [GH_CALL_LOG_ENV]: values.log.trim() });
   process.exitCode = emitResult({ ok: true, ...summarizeGhCallLog(logPath) }, { jq: values.jq, silent: values.silent, stdout, stderr });
 }
 

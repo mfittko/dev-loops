@@ -18,20 +18,23 @@ const GRAPHQL_GROUPS = new Set(["pr", "issue", "project", "repo", "release"]);
 
 const mainCheckoutByCwd = new Map();
 
-/** Log path: env override (relative paths resolve against the main checkout), else `<main checkout>/tmp/gh-calls.jsonl`. */
+/**
+ * Log path: env override (trimmed; blank is unset; relative paths resolve against the main checkout),
+ * else `<main checkout>/tmp/gh-calls.jsonl`. Returns null when no main checkout resolves and no absolute override is set.
+ */
 export function resolveGhCallLogPath(cwd = process.cwd(), env = process.env) {
-  if (env[GH_CALL_LOG_ENV] && path.isAbsolute(env[GH_CALL_LOG_ENV])) return env[GH_CALL_LOG_ENV];
+  const override = String(env[GH_CALL_LOG_ENV] ?? "").trim();
+  if (override && path.isAbsolute(override)) return override;
   let mainCheckout = mainCheckoutByCwd.get(cwd);
   if (mainCheckout === undefined) {
-    let main = cwd;
     try {
       const listing = execFileSync("git", ["worktree", "list"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: GIT_TIMEOUT_MS });
-      main = parseMainWorktreePath(listing) ?? cwd;
-    } catch { /* not a git checkout: log under cwd */ }
-    mainCheckout = main;
-    mainCheckoutByCwd.set(cwd, main);
+      mainCheckout = parseMainWorktreePath(listing) ?? null;
+    } catch { mainCheckout = null; /* not a git checkout */ }
+    mainCheckoutByCwd.set(cwd, mainCheckout);
   }
-  return env[GH_CALL_LOG_ENV] ? path.resolve(mainCheckout, env[GH_CALL_LOG_ENV]) : path.join(mainCheckout, "tmp", "gh-calls.jsonl");
+  if (mainCheckout === null) return null;
+  return override ? path.resolve(mainCheckout, override) : path.join(mainCheckout, "tmp", "gh-calls.jsonl");
 }
 
 /** Classify a `gh` argv as `graphql` or `rest`. */
@@ -90,6 +93,7 @@ export function recordGhCall(args, { durationMs, status, stderr = "", script = p
       rateLimited: stderr === null ? (status === 0 ? false : null) : status !== 0 && RATE_LIMIT_PATTERN.test(String(stderr)),
     };
     const file = logPath ?? resolveGhCallLogPath();
+    if (file === null) return;
     mkdirSync(path.dirname(file), { recursive: true });
     // One appendFileSync per line: O_APPEND keeps concurrent writers' lines whole.
     appendFileSync(file, `${JSON.stringify(record)}\n`);
@@ -104,7 +108,7 @@ export function ghSync(args, options = {}) {
     recordGhCall(args, { durationMs: Date.now() - started, status: 0 });
     return out;
   } catch (err) {
-    recordGhCall(args, { durationMs: Date.now() - started, status: typeof err?.status === "number" ? err.status : 1, stderr: err?.stderr ?? err?.message });
+    recordGhCall(args, { durationMs: Date.now() - started, status: typeof err?.status === "number" ? err.status : 1, stderr: err?.stderr ?? null });
     throw err;
   }
 }
@@ -124,7 +128,7 @@ export async function ghAsync(args, options = {}) {
     recordGhCall(args, { durationMs: Date.now() - started, status: 0 });
     return out;
   } catch (err) {
-    recordGhCall(args, { durationMs: Date.now() - started, status: typeof err?.code === "number" ? err.code : 1, stderr: err?.stderr ?? err?.message });
+    recordGhCall(args, { durationMs: Date.now() - started, status: typeof err?.code === "number" ? err.code : 1, stderr: err?.stderr ?? null });
     throw err;
   }
 }
@@ -168,6 +172,7 @@ export function summarizeGhCalls(text) {
 /** Read and summarize the log at `logPath`; a missing log is an empty summary. */
 export function summarizeGhCallLog(logPath = resolveGhCallLogPath()) {
   let text = "";
+  if (logPath === null) return summarizeGhCalls(text);
   try { text = readFileSync(logPath, "utf8"); } catch (err) { if (err?.code !== "ENOENT") throw err; }
   return summarizeGhCalls(text);
 }

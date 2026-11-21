@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "bun:test";
@@ -119,20 +119,28 @@ const GH_COMMAND_SEAM_DEFAULT = /ghCommand[^\n]*\b(?:exec|runChild)\s*=\s*execFi
 
 /**
  * True when `source` passes the literal "gh" or `ghCommand` as the command to a raw child_process
- * function or to a file-local wrapper that spawns raw. A file that calls `recordGhCall` records its own calls.
+ * function or to a file-local wrapper that spawns raw. A `recordGhCall` call exempts only the top-level
+ * block (up to the next line that starts in column 0) that contains it, never the whole file.
+ * shortcut: a block is the coarse unit, so a raw spawn beside a record inside one block passes; upgrade with a parser.
  */
 export function hasUnrecordedGhCall(source) {
   if (GH_COMMAND_SEAM_DEFAULT.test(source)) return true;
-  if (source.includes("recordGhCall(")) return false;
-  return [...source.matchAll(GH_CALL)].some(([, name]) => {
+  let offset = 0;
+  const blocks = source.split(/\n(?=\S)/u).map((text) => { const block = { text, start: offset }; offset += text.length + 1; return block; });
+  const blockAt = (index) => blocks.findLast((b) => b.start <= index).text;
+  return [...source.matchAll(GH_CALL)].some((match) => {
+    const name = match[1];
     if (RECORDING_CALLS.has(name)) return false;
+    if (blockAt(match.index).includes("recordGhCall(")) return false;
     if (RAW_SPAWNERS.test(`${name}(`)) return true;
     const def = new RegExp(`(?:function|const)\\s+${name}\\b`, "u").exec(source);
-    return def !== null && RAW_SPAWNERS.test(source.slice(def.index, def.index + 800));
+    if (def === null) return false;
+    const body = blockAt(def.index);
+    return RAW_SPAWNERS.test(body) && !body.includes("recordGhCall(");
   });
 }
-// verify-release-approval runs under bare node before any install, so it cannot import core and stays unrecorded.
-const ALLOWED_SPAWNERS = new Set(["packages/core/src/github/gh-call-log.mjs", "packages/core/src/cli/primitives.mjs", "scripts/release/verify-release-approval.mjs"]);
+// verify-release-approval and post-gate-verdict-fallback run without @dev-loops/core installed, so they cannot import the recorder and stay unrecorded.
+const ALLOWED_SPAWNERS = new Set(["packages/core/src/github/gh-call-log.mjs", "packages/core/src/cli/primitives.mjs", "scripts/release/verify-release-approval.mjs", "skills/dev-loop/scripts/post-gate-verdict-fallback.mjs"]);
 
 function sourceFiles(dir) {
   return readdirSync(path.join(REPO_ROOT, dir)).flatMap((name) => {
@@ -144,7 +152,7 @@ function sourceFiles(dir) {
 }
 
 test("no non-test source spawns gh outside the recording helpers", () => {
-  const offenders = ["scripts", "packages", "cli"]
+  const offenders = ["scripts", "packages", "skills", "cli"]
     .flatMap((dir) => (dir === "cli" ? ["cli/index.mjs"] : sourceFiles(dir)))
     .filter((file) => !ALLOWED_SPAWNERS.has(file) && hasUnrecordedGhCall(readFileSync(path.join(REPO_ROOT, file), "utf8")));
   assert.deepEqual(offenders, []);
@@ -157,6 +165,8 @@ test("the call-site guard flags gh passed to raw spawners and local wrappers, an
   assert.equal(hasUnrecordedGhCall(`${wrapper}run("gh", ["pr", "view"])`), true);
   assert.equal(hasUnrecordedGhCall(`function spawnResult(c, a) { return spawnSync(c, a); }\nspawnResult("gh", ["auth", "status"])`), true);
   assert.equal(hasUnrecordedGhCall(`${wrapper}run(ghCommand, args)`), true);
+  assert.equal(hasUnrecordedGhCall(`function spawnResult(c, a) { return spawnSync(c, a); }\nrecordGhCall(x);\nspawnResult("gh", ["auth", "status"])`), true, "a recordGhCall elsewhere in the file does not exempt a raw wrapper");
+  assert.equal(hasUnrecordedGhCall(`function runGh(a) { const r = spawnSync("gh", a); recordGhCall(a, {}); return r; }\nrunGh(["pr", "view"])`), false, "a wrapper whose body records is accepted");
   assert.equal(hasUnrecordedGhCall('spawnRecorded("gh", args)'), false);
   assert.equal(hasUnrecordedGhCall("ghSync(args)"), false);
   assert.equal(hasUnrecordedGhCall('spawn("git", args)'), false);
@@ -199,12 +209,46 @@ test("execFileSyncRecorded records gh and skips other commands", async () => {
   });
 });
 
-test("resolveGhCallLogPath resolves each cwd independently", async () => {
+test("resolveGhCallLogPath resolves no log outside a checkout, and recordGhCall then creates nothing", async () => {
   await withTempDir(async (a) => {
     await withTempDir(async (b) => {
-      assert.equal(resolveGhCallLogPath(a, {}), path.join(a, "tmp", "gh-calls.jsonl"));
-      assert.equal(resolveGhCallLogPath(b, {}), path.join(b, "tmp", "gh-calls.jsonl"));
+      assert.equal(resolveGhCallLogPath(a, {}), null);
+      assert.equal(resolveGhCallLogPath(b, {}), null);
     });
+    const saved = process.env[GH_CALL_LOG_ENV];
+    delete process.env[GH_CALL_LOG_ENV];
+    const cwd = process.cwd();
+    try {
+      process.chdir(a);
+      recordGhCall(["pr", "list"], { durationMs: 1, status: 0 });
+    } finally {
+      process.chdir(cwd);
+      if (saved !== undefined) process.env[GH_CALL_LOG_ENV] = saved;
+    }
+    assert.deepEqual(readdirSync(a), []);
+  });
+});
+
+test("a blank DEVLOOPS_GH_CALL_LOG is unset and a padded one is trimmed", () => {
+  const main = resolveGhCallLogPath(REPO_ROOT, {});
+  assert.ok(main.endsWith(path.join("tmp", "gh-calls.jsonl")));
+  assert.equal(resolveGhCallLogPath(REPO_ROOT, { [GH_CALL_LOG_ENV]: "  " }), main);
+  assert.equal(resolveGhCallLogPath(REPO_ROOT, { [GH_CALL_LOG_ENV]: " /abs/x.jsonl " }), "/abs/x.jsonl");
+});
+
+test("ghSync with stderr ignored records rateLimited null, not false", async () => {
+  await withTempDir(async (dir) => {
+    const logPath = path.join(dir, "log.jsonl");
+    const saved = { PATH: process.env.PATH, log: process.env[GH_CALL_LOG_ENV] };
+    process.env[GH_CALL_LOG_ENV] = logPath;
+    try {
+      process.env.PATH = fakeGhEnv(dir, { code: 1, stderr: "API rate limit already exceeded" }).PATH;
+      assert.throws(() => ghSync(["pr", "list"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 }));
+    } finally {
+      process.env.PATH = saved.PATH;
+      if (saved.log === undefined) delete process.env[GH_CALL_LOG_ENV]; else process.env[GH_CALL_LOG_ENV] = saved.log;
+    }
+    assert.deepEqual(readLog(logPath).map((r) => r.rateLimited), [null]);
   });
 });
 
@@ -296,6 +340,16 @@ test("gh-calls CLI rejects an empty --log and resolves a relative --log against 
   let out = "";
   await runCli(["--log", "tmp/does-not-exist-3338.jsonl"], { stdout: { write: (s) => { out += s; } } });
   assert.equal(JSON.parse(out).total, 0);
+});
+
+test("gh-calls CLI trims a padded --log before resolving it", async () => {
+  await withTempDir(async (dir) => {
+    const logPath = path.join(dir, "log.jsonl");
+    recordGhCall(["pr", "list"], { durationMs: 1, status: 0, script: "s.mjs", logPath });
+    let out = "";
+    await runCli(["--log", ` ${logPath} `], { stdout: { write: (s) => { out += s; } } });
+    assert.equal(JSON.parse(out).total, 1);
+  });
 });
 
 test("summarizeGhCalls counts per script, pr and minute, graphql share and refusals, skipping bad lines", () => {
