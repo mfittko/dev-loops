@@ -2716,3 +2716,33 @@ test("the unit prompt describes the optional bundle files and their fields, unde
     assert.ok(unit.promptBytes < REVIEWER_WORK_ORDER_MAX_BYTES);
   });
 });
+
+// Issue 3414 ac:2: the pre-fan-out CI re-check stops the round with a typed observation before any unit is emitted.
+for (const [label, ci, nextAction] of [
+  ["pending", { ok: true, status: "pending", settled: false, ciStatus: "pending", headSha: HEAD_SHA }, "wait_for_ci"],
+  ["red", { ok: true, status: "failure", settled: true, ciStatus: "failure", headSha: HEAD_SHA, failedChecks: [{ name: "build" }] }, "fix_ci_failure"],
+  ["another head", { ok: true, status: "success", settled: true, ciStatus: "success", headSha: "d".repeat(40) }, "wait_for_ci"],
+]) {
+  test(`emit-fanout-dispatch.mjs --ci-file with ${label} CI refuses with ci_not_green and ${nextAction} (issue 3414)`, async () => {
+    await withTmpDir(async (tmp) => {
+      const ciFile = path.join(tmp, "ci.json");
+      await writeFile(ciFile, JSON.stringify(ci));
+      const result = runEmitCli(["--repo", REPO, "--pr", "7", "--gate", GATE, "--head-sha", HEAD_SHA, "--tmp-root", tmp, "--ci-file", ciFile], { cwd: tmp });
+      assert.equal(result.status, 1);
+      const out = JSON.parse(result.stdout);
+      assert.equal(out.ok, false);
+      assert.equal(out.refusal, "ci_not_green");
+      assert.equal(out.observation, "ci_not_green");
+      assert.equal(out.nextAction, nextAction);
+    });
+  });
+}
+
+test("emit-fanout-dispatch.mjs --ci-file with settled green CI passes the CI step (issue 3414)", async () => {
+  await withTmpDir(async (tmp) => {
+    const ciFile = path.join(tmp, "ci.json");
+    await writeFile(ciFile, JSON.stringify({ ok: true, status: "success", settled: true, ciStatus: "success", headSha: HEAD_SHA }));
+    const result = runEmitCli(["--repo", REPO, "--pr", "7", "--gate", GATE, "--head-sha", HEAD_SHA, "--tmp-root", tmp, "--ci-file", ciFile], { cwd: tmp });
+    assert.doesNotMatch(result.stdout, /ci_not_green/);
+  });
+});

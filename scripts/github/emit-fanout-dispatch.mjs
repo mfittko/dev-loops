@@ -19,10 +19,11 @@ import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_BUDGET_CAP, REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE, REVIEWER_UNIT_MAX_ANGLES, computeReviewerUnitBudget, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { preFanoutCiObservation } from "../loop/_coordinator-handback.mjs";
 import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "../loop/_operator-focus.mjs";
 import { dispatchUnitScope, expandDispatchUnits, normalizeUnitAngles, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 
-const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--operator-focus-file <path>] [--tmp-root <path>] [--help]
+const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--operator-focus-file <path>] [--ci-file <path>] [--tmp-root <path>] [--help]
 The SANCTIONED one-shot gate fan-out dispatch step: given a gate +
 head whose write-gate-context.mjs bundle is already on disk, it reads the resolved
 fan-out plan (the artifact's fanout.groups / fanout.pendingGroups, resolveFanoutGroups
@@ -96,6 +97,9 @@ Optional:
   --operator-focus-file <path> A JSON file { round?: string } rendered as a bounded, sanitized
                                "Operator focus" section in every unit's prompt and pinned by the
                                unit work-order digest (GATE-EXEC-OPERATOR-FOCUS). Items are refused.
+  --ci-file <path>             The CI wait result JSON the coordinator read immediately before this fan-out (GATE-EXEC-GATE-COORDINATOR).
+                               CI that is not settled green at --head-sha refuses with { ok: false, refusal: "ci_not_green",
+                               observation: "ci_not_green", nextAction: "wait_for_ci"|"fix_ci_failure" } and emits no units.
   --tmp-root <path>            The tmp/ directory the round's gate-context
                                artifacts live under (default: process.cwd()/tmp;
                                must match the write-gate-context.mjs call).
@@ -492,6 +496,17 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const jq = jqArg === null ? undefined : jqArg;
   const silent = argv.includes("--silent") || argv.includes("-s");
   const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
+  // Pre-fan-out CI re-check (GATE-EXEC-GATE-COORDINATOR): a round that fans out on unsettled CI loses its verdict.
+  const ciFileArg = resolveFlagValue(argv, "--ci-file");
+  if (ciFileArg === "") {
+    process.stderr.write(`${formatCliError(parseError("--ci-file must not be an empty value; pass the CI result JSON path or omit the flag"))}\n`);
+    return 2;
+  }
+  if (ciFileArg !== null) {
+    const ci = await readFile(ciFileArg, "utf8").then((text) => JSON.parse(text), () => null);
+    const stop = preFanoutCiObservation(ci, headSha);
+    if (stop) return finish({ ok: false, refusal: stop.observation, ...stop, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: current-head CI is ${stop.ciStatus}, not settled green; stop and route ${stop.nextAction}` }, false);
+  }
 
   // The same config write-gate-context resolved against (this step runs in that
   // worktree). A config load error refuses before any artifact is read.

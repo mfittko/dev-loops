@@ -3735,8 +3735,10 @@ test("issue 2787 C11: --ci-file emits a ci-failure order that names the failing 
 
 test("issue 3414: --ci-file with --act-list-file feeds the unposted act list and the CI failure to one fixer order", async () => {
   await withFixture(async (fx) => {
+    await writeCurrentLog(path.join(fx.root, "tmp"), fx.head);
     const unit = await emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" });
     assert.equal(unit.workOrder.source, "ci-failure");
+    assert.equal(unit.workOrder.gate, "draft_gate");
     assert.deepEqual(unit.workOrder.requiredReads.map((read) => read.kind), ["ci-failure", "act-list"]);
     const text = await readFile(unit.promptPath, "utf8");
     assert.match(text, /Also fix every act item in the `act-list` read/);
@@ -3744,6 +3746,36 @@ test("issue 3414: --ci-file with --act-list-file feeds the unposted act list and
     await writeFile(fx.files.actList, "[]");
     await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), /not a non-empty judge-pass --out array/);
     await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: undefined }), /--act-list-file needs --gate/);
+  });
+});
+
+test("issue 3414: --ci-file with --act-list-file refuses what the plain act-list path refuses", async () => {
+  await withFixture(async (fx) => {
+    const { root, wt, head, files } = fx;
+    const combined = (over = {}) => emitCi(fx, { actListFile: files.actList, gate: "draft_gate", ...over });
+    const { fingerprint, ...noFingerprint } = ACT[0];
+    // A list with no ledger for this head is another round's list (stale_act_list).
+    await assert.rejects(combined(), (e) => e.refusal === "stale_act_list");
+    await writeCurrentLog(path.join(root, "tmp"), head);
+    // Rejected input forms: a missing fingerprint, a non-canonical fingerprint, and clusterSeverities [] .
+    await writeFile(files.actList, JSON.stringify([noFingerprint]));
+    await assert.rejects(combined(), /whose fingerprint is missing/);
+    await writeFile(files.actList, JSON.stringify([{ ...ACT[0], fingerprint: "0".repeat(16) }]));
+    await assert.rejects(combined(), /not the canonical fingerprintFinding value/);
+    await writeFile(files.actList, JSON.stringify([{ ...ACT[0], clusterSeverities: [] }]));
+    await assert.rejects(combined(), (e) => e.refusal === "invalid_cluster_severities");
+    // Accepted input form: a canonical fingerprint with valid clusterSeverities.
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], clusterSeverities: ["high", "low"] })]));
+    assert.equal((await combined()).workOrder.source, "ci-failure");
+    // A low-only pre_approval list never reaches the fixer.
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low" })]));
+    await assert.rejects(combined({ gate: "pre_approval_gate" }), (e) => e.refusal === "low_fix_until_cap");
+    // A list after the cap round is refused.
+    await rm(path.join(root, "tmp", "gate-findings"), { recursive: true });
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    await writeFile(files.actList, JSON.stringify(ACT));
+    for (const sha of ["d", "e"]) await writeCurrentLog(path.join(root, "tmp"), sha.repeat(40));
+    await assert.rejects(combined(), (e) => e.refusal === "round_cap_reached");
   });
 });
 
@@ -3781,7 +3813,7 @@ test("issue 2787 C11: a ci-failure file that is missing, green, pending, for ano
   });
 });
 
-test("issue 2787 C11: --ci-file takes only --phase full and no other source, --gate or --delta-result", async () => {
+test("issue 2787 C11: --ci-file accepts no other primary source and accepts --gate only with --act-list-file", async () => {
   await withFixture(async (fx) => {
     await assert.rejects(emitCi(fx, { phase: "commit_only" }), /--ci-file takes only --phase full.*re-run with --phase full/);
     await assert.rejects(emitCi(fx, { threadsFile: fx.files.threads }), /exactly one of --act-list-file, --threads-file, --review-id and --ci-file/);

@@ -320,7 +320,7 @@ test("issue 3414 ac:2 the rule re-checks settled green CI immediately before fan
   const content = await readRepo(CONTRACT_DOC);
   assertClaims(ruleSection(content), [
     ["Immediately before", "Phase 2 fan-out", "MUST", "re-read current-head CI", "`wait-pr-checks.mjs --timeout 0`"],
-    ["MUST", "stop", "typed observation", "CI route"],
-    ["Pending CI", "`wait_for_ci`", "red CI", "`fix_ci_failure`"],
+    ["MUST", "emit-fanout-dispatch.mjs --ci-file", "typed observation", "`ci_not_green`"],
+    ["`wait_for_ci` for pending CI", "`fix_ci_failure` for red CI"],
   ], "pre-fan-out CI re-check");
 });

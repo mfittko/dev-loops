@@ -2,6 +2,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { spawnSyncTrusted as spawnSync } from "../_helpers.mjs";
 import { claimRunnerOwnership, handoffRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { validateCoordinatorHandback } from "../../scripts/loop/_coordinator-handback.mjs";
 import { runCli as handbackCli } from "../../scripts/loop/validate-coordinator-handback.mjs";
@@ -157,10 +158,17 @@ test("AC1 the soft-cap bullet points at the run-ending cases and the fix-pass en
 test("issue 3414 ac:3 a verdict post refused for red CI is recorded with the CI route as nextAction", async () => {
   const good = { pr: 7, head: HEAD, nextAction: "fix_ci_failure", workerRunning: false, verdictRefusal: { reason: "ci_red", actListPath: "tmp/act-list.json" } };
   assert.deepEqual(validateCoordinatorHandback(good), { ok: true });
-  for (const bad of [{ nextAction: "run_draft_gate" }, { verdictRefusal: { reason: "ci_red" } }, { verdictRefusal: { reason: "other", actListPath: "x" } }, { verdictRefusal: null }]) {
+  for (const bad of [{ nextAction: "run_draft_gate" }, { verdictRefusal: { reason: "ci_red" } }, { verdictRefusal: { reason: "other", actListPath: "x" } }, { verdictRefusal: { reason: "ci_red", actListPath: "   " } }, { verdictRefusal: null }]) {
     const result = validateCoordinatorHandback({ ...good, ...bad });
     assert.equal(result.refusal, "verdict_refusal_route", JSON.stringify(bad));
     assert.match(result.recovery, /--ci-file <wait-pr-checks JSON> --act-list-file/);
   }
   assert.match(await rule(), /verdictRefusal/);
+});
+
+test("issue 3414 the emitter refusal JSON for a bad CI source carries a recovery key", () => {
+  const result = spawnSync("node", [path.resolve("scripts/loop/emit-fixer-work-order.mjs"), "--harness", "claude", "--repo", "o/r", "--pr", "7", "--head-sha", HEAD, "--phase", "full", "--ci-file", "ci.json", "--threads-file", "threads.json"], { encoding: "utf8" });
+  const out = JSON.parse(result.stdout);
+  assert.equal(out.refusal, "ambiguous_source");
+  assert.match(out.recovery, /--ci-file <wait-pr-checks JSON> --act-list-file/);
 });

@@ -132,7 +132,7 @@ function ciAgentRemedy(input, ciStatus) {
   if (ciStatus === "failure") {
     const remedy = remedyOrOperator(input, (repo, pr) => ({
       command: `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${repo} --pr ${pr} --timeout 0`,
-      summary: "Read the red head's checks, save that JSON with the Write tool, then emit the CI fixer order: dev-loops-run scripts/loop/emit-fixer-work-order.mjs --phase full --ci-file <that file> (add --act-list-file <act list> --gate draft_gate when a round's act list is unposted). Re-run gate coordination once CI is green.",
+      summary: "Read the red head's checks, save that JSON to a file, then emit the CI fixer order: dev-loops-run scripts/loop/emit-fixer-work-order.mjs --phase full --ci-file <that file> (add --act-list-file <act list> --gate draft_gate when a round's act list is unposted). Re-run gate coordination once CI is green.",
     }));
     return remedy.agentRemedy ? { ...remedy, recovery: remedy.agentRemedy.command } : remedy;
   }

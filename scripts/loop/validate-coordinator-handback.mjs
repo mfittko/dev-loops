@@ -9,7 +9,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-
 const USAGE = `Usage: validate-coordinator-handback.mjs --packet <path>
 Reads the hand-back packet JSON ({pr, head, nextAction, workerRunning[, verdictRefusal: {reason: "ci_red", actListPath}]}) and prints the result.
 A verdictRefusal needs nextAction "fix_ci_failure".
-Stdout: {ok:true}, {ok:false, refusal, message, recovery[, missing]}, or {ok:false, error} for a usage error or unreadable packet.
+Stdout: {ok:true}, {ok:false, refusal, message[, missing][, recovery on verdict_refusal_route]}, or {ok:false, error} for a usage error or unreadable packet.
 Exit codes: 0 valid, 1 refused, unreadable packet or usage error, 2 invalid --jq/--fields filter.
 
 ${JQ_OUTPUT_USAGE}`;
