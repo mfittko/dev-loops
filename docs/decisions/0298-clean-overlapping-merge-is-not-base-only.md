@@ -1,4 +1,4 @@
-# 0297. A clean overlapping merge adds its overlap paths to the PR-own paths
+# 0298. A clean overlapping merge adds its overlap paths to the PR-own paths
 
 ## Status
 

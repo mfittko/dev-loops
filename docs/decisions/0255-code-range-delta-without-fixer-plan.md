@@ -8,7 +8,7 @@ Amends the remedy of [ADR 0254](./0254-cap-chain-delta-extension.md). Every othe
 
 Amended by [ADR 0261](./0261-sealed-delta-record-never-deleted.md), which replaces the `rm -f` remedy of decisions 6, 7 and 9 for a sealed record.
 
-Amended by [ADR 0297](./0297-clean-overlapping-merge-is-not-base-only.md), which adds the overlap paths of a clean merge to decision 3.
+Amended by [ADR 0298](./0298-clean-overlapping-merge-is-not-base-only.md), which adds the overlap paths of a clean merge to decision 3.
 
 ## Context
 
