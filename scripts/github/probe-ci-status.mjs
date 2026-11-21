@@ -193,19 +193,19 @@ function extractPrVisibleCheckNames(statusCheckRollup) {
     .filter((name) => typeof name === "string" && name.length > 0);
 }
 
-// `lastNames` carries the expected check names of the last successful GraphQL read.
 // A rate-limited GraphQL read falls back to the REST pulls endpoint, which has no
-// statusCheckRollup: it reuses those names, or null (expected checks unknown) when
-// no GraphQL read has succeeded yet.
-async function fetchPrHeadSha({ repo, pr }, { env, ghCommand, runChild, lastNames = { names: null } }) {
+// statusCheckRollup: prVisibleCheckNames stays null (expected checks unknown), so
+// every non-loop check-run counts and a check-less head stays pending.
+async function fetchPrHeadSha({ repo, pr }, { env, ghCommand, runChild }) {
   let headSha;
+  let prVisibleCheckNames = null;
   try {
     const payload = await ghJson(
       ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,statusCheckRollup"],
       { env, ghCommand, runChild },
     );
     headSha = typeof payload.headRefOid === "string" ? payload.headRefOid.trim() : "";
-    if (headSha.length > 0) lastNames.names = extractPrVisibleCheckNames(payload.statusCheckRollup);
+    prVisibleCheckNames = extractPrVisibleCheckNames(payload.statusCheckRollup);
   } catch (error) {
     if (!isRateLimitError(error)) throw error;
     // A failed REST read surfaces the original rate-limit error so the caller's wait path engages.
@@ -215,7 +215,7 @@ async function fetchPrHeadSha({ repo, pr }, { env, ghCommand, runChild, lastName
   if (headSha.length === 0) {
     throw new Error("Missing required PR facts: headRefOid");
   }
-  return { headSha, prVisibleCheckNames: lastNames.names };
+  return { headSha, prVisibleCheckNames };
 }
 
 /**
@@ -397,13 +397,12 @@ export async function watchCiStatus(
     onStall = undefined,
   } = {},
 ) {
-  const lastNames = { names: null };
   const leaseCwd = resolveRepoRoot(process.cwd());
   // options.baselineSha lets a retried watch keep the first watch's baseline, so a
   // push between the two still short-circuits to "changed".
   const baselineSha = options.baselineSha ?? (await fetchPrHeadSha(
     { repo: options.repo, pr: options.pr },
-    { env, ghCommand, runChild, lastNames },
+    { env, ghCommand, runChild },
   )).headSha;
   onBaseline?.(baselineSha);
   const attemptBudget = buildAttemptBudget(options.timeoutMs, options.pollIntervalMs);
@@ -462,7 +461,7 @@ export async function watchCiStatus(
     // "changed" so the caller re-baselines instead of waiting on a stale head.
     const { headSha: currentSha, prVisibleCheckNames: currentNames } = await fetchPrHeadSha(
       { repo: options.repo, pr: options.pr },
-      { env, ghCommand, runChild, lastNames },
+      { env, ghCommand, runChild },
     );
     if (currentSha !== baselineSha) {
       const changedState = await fetchHeadCiState(
@@ -511,7 +510,7 @@ export async function watchCiStatus(
   // budget reports "timeout".
   const { headSha: finalSha, prVisibleCheckNames: finalNames } = await fetchPrHeadSha(
     { repo: options.repo, pr: options.pr },
-    { env, ghCommand, runChild, lastNames },
+    { env, ghCommand, runChild },
   );
   if (finalSha !== baselineSha) {
     const changedState = await fetchHeadCiState(
@@ -525,7 +524,7 @@ export async function watchCiStatus(
   }
   const finalState = await fetchHeadCiState(
     { repo: options.repo, headSha: finalSha, prVisibleCheckNames: finalNames },
-    { env, ghCommand, runChild, lastNames },
+    { env, ghCommand, runChild },
   );
   return settledResult({ ...finalState, headSha: finalSha, attempts: attemptBudget }, {
     settled: false,

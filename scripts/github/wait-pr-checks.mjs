@@ -61,7 +61,7 @@ budget.
 Diagnostic output (stderr):
   { "ok": true, "type": "watch_heartbeat", "elapsedMs": N, "totalBudgetMs": N, "poll": N, "maxPolls": N }
   { "ok": false, "error": "...", "usage"?: "..." }
-GraphQL rate limit (JSON, exit 1):
+Rate limit (JSON, exit 1):
   { "ok": false, "code": "RATE_LIMITED", "error": "...", "resetAt": "<ISO 8601>"|null,
     "budget": "primary_graphql"|"primary_core"|"secondary" }
 "budget" names the limit that was hit, read from \`gh api rate_limit\`: GraphQL
@@ -71,10 +71,11 @@ A rate limit is never reported as CI success or failure.
 The RATE_LIMITED envelope is written to stdout when output is unfiltered, and
 always to stderr.
 On GraphQL rate-limit exhaustion the tool waits for the reset inside the
-remaining --timeout budget (heartbeats continue) and retries once; otherwise
-it returns RATE_LIMITED at once. On a secondary limit it backs off and retries inside
---timeout: the delay is the error's retry-after seconds when present, otherwise
-exponential with jitter (${BACKOFF_BASE_MS / 1000} s base, doubling, capped at ${BACKOFF_MAX_MS / 1000} s, each delay drawn from
+remaining --timeout budget (heartbeats continue) and retries once. A
+GraphQL reset past the requested budget, or a core limit, returns RATE_LIMITED at once.
+On a secondary limit the tool backs off and retries inside
+--timeout: the delay is the exponential step, raised to the error's retry-after seconds
+when that is longer (the step has jitter: ${BACKOFF_BASE_MS / 1000} s base, doubling, capped at ${BACKOFF_MAX_MS / 1000} s, each delay drawn from
 50 to 100 percent of the step). A delay past the requested budget returns
 RATE_LIMITED; a delay past the cap that fits the budget is returned like a reset
 past the cap (see below). When the reset falls past this call's ~${WAIT_CAP_MS / 1000} s
@@ -230,7 +231,8 @@ export async function runCli(
   });
   let backoffStep = 0;
   for (;;) try {
-    result = await withGraphqlRateLimitWait(
+    lastLimitText = "";
+    result =await withGraphqlRateLimitWait(
       () => {
         // The retry after a rate-limit wait only gets the remaining budget. The
         // floor of 1 keeps it a real watch: timeoutMs 0 would switch to
@@ -240,7 +242,7 @@ export async function runCli(
         return watchCiStatus(
           { repo: options.repo, pr: options.pr, timeoutMs, pollIntervalMs: capRemainingMs > 0 ? Math.min(options.pollIntervalMs, options.timeoutMs) : options.pollIntervalMs, baselineSha, stallStartedAtMs },
           {
-            env, ghCommand, delayImpl, now, ensureOwnershipImpl, ...(runChild ? { runChild } : {}),
+            env, ghCommand, delayImpl, now, ensureOwnershipImpl, runChild,
             onBaseline: (sha) => { baselineSha = sha; },
             onStall: (startedAtMs) => { stallStartedAtMs = startedAtMs; },
           },
@@ -279,7 +281,7 @@ export async function runCli(
     if (budget === "secondary") {
       const retryAfter = /retry-after:?\s*(\d+)/i.exec(lastLimitText);
       const stepMs = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** backoffStep);
-      resetInMs = retryAfter ? Number(retryAfter[1]) * 1000 : stepMs * (0.5 + random() * 0.5);
+      resetInMs = Math.max(retryAfter ? Number(retryAfter[1]) * 1000 : 0, stepMs * (0.5 + random() * 0.5));
       backoffStep += 1;
       resetAt = new Date(now() + resetInMs).toISOString();
       if (resetInMs <= remainingMs()) {
@@ -295,7 +297,7 @@ export async function runCli(
       pendingRemainingMs = requested.timeoutMs - (now() - startedAt);
       break;
     } else {
-      result = { ...rateLimitedResult(error), budget };
+      result = { ...rateLimitedResult(error), ...(budget === "secondary" ? { resetAt } : {}), budget };
       // --jq/--silent would filter the envelope away; always keep code/resetAt on stderr.
       stderr.write(`${JSON.stringify(result)}\n`);
       break;
