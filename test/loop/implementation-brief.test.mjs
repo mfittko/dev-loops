@@ -10,6 +10,7 @@ import { detectAcDodMatrix } from "@dev-loops/core/loop/issue-refinement-artifac
 import { runCli } from "../../cli/index.mjs";
 import { runGitFixture } from "../_helpers.mjs";
 import { buildImplementationBrief, main } from "../../scripts/loop/implementation-brief.mjs";
+import { resolveSelfCheckAngles } from "../../scripts/loop/_self-check-items.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const tempDirs = [];
@@ -1184,4 +1185,61 @@ test("exactly 50 importers are listed without importersTruncated", async () => {
   const entry = brief.importers["src/a.mjs"];
   assert.equal(entry.files.length, 50);
   assert.equal("importersTruncated" in entry, false);
+});
+
+test("the brief carries selfCheck with the config-sourced checklist items of the selected angles (finalStep on P2, CS1, CS2), one condensed constraint line per applicable angle, and no classes without logs or an export", async () => {
+  const root = await fixtureRepo();
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/b.mjs"] });
+  assert.deepEqual(brief.selfCheck.items.map((i) => i.id), ["C1", "C2", "C3", "K1", "CS1", "CS2", "I1", "I2", "S1", "P1", "P2", "K2"]);
+  assert.deepEqual(brief.selfCheck.items.filter((i) => i.finalStep).map((i) => i.id), ["CS1", "CS2", "P2"]);
+  assert.ok(brief.selfCheck.items.every((i) => i.angle && i.check.length > 0 && i.check.length <= 170 && !i.check.startsWith(i.id)));
+  assert.deepEqual(brief.selfCheck.classes, []);
+  assert.deepEqual(brief.selfCheck.copilotClasses, []);
+  assert.ok(brief.selfCheck.angles.length > 0 && brief.selfCheck.angles.length <= 8);
+  for (const a of brief.selfCheck.angles) {
+    assert.equal(a.id, `angle:${a.angle}`);
+    assert.ok(a.constraint.length > 0 && a.constraint.length <= 200);
+  }
+});
+
+test("selfCheck angle ids come from the declared --paths only, equal to the record writer's ids for the same paths", async () => {
+  const root = await fixtureRepo();
+  await mkdir(path.join(root, "skills/docs"), { recursive: true });
+  await writeFile(path.join(root, "skills/docs/untouched.md"), "# untouched\n");
+  const brief = await buildImplementationBrief({ body: `${MATRIX}\nSee skills/docs/untouched.md.\n`, repoRoot: root, paths: ["scripts/a.mjs"] });
+  assert.ok(brief.touchedPaths.includes("skills/docs/untouched.md"));
+  const expected = (await resolveSelfCheckAngles(root, ["scripts/a.mjs"])).map((a) => a.id);
+  assert.deepEqual(brief.selfCheck.angles.map((a) => a.id), expected);
+});
+
+test("the selfCheck digest stays bounded with a large Copilot export, and the export is optional", async () => {
+  const root = await fixtureRepo();
+  const file = path.join(root, "threads.jsonl");
+  const bodies = ["Handle an empty input. ", "Fix the help text. ", "Add a test. ", "Other remark. "];
+  await writeFile(file, Array.from({ length: 200 }, (_, i) => JSON.stringify({ pr: i, author: "copilot-pull-request-reviewer", body: bodies[i % 4] + "z".repeat(500) })).join("\n"));
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, copilotFile: file });
+  assert.equal(brief.selfCheck.copilotClasses.length, 3);
+  assert.ok(brief.selfCheck.copilotClasses.every((c) => c.examples.length === 1 && c.examples[0].length <= 160));
+  assert.ok(JSON.stringify(brief.selfCheck).length < 7500);
+  const missing = await buildImplementationBrief({ body: MATRIX, repoRoot: root, copilotFile: path.join(root, "nope.jsonl") });
+  assert.deepEqual(missing.selfCheck.copilotClasses, []);
+});
+
+test("selfCheck.classes caps at 3 gate classes with one example each when the tmp root holds findings logs for 5 angles", async () => {
+  const root = await fixtureRepo();
+  runGitFixture(root, ["remote", "add", "origin", "https://github.com/o/r.git"]);
+  const dir = path.join(root, "tmp", "gate-findings", "o-r", "pr-1");
+  await mkdir(dir, { recursive: true });
+  const findings = ["a1", "a2", "a3", "a4", "a5"].flatMap((angle, i) => Array.from({ length: 5 - i }, () => ({ angle, judgeDisposition: "act", summary: `${angle} summary` })));
+  await writeFile(path.join(dir, "draft_gate-aaaaaaa.json"), JSON.stringify({ loggedAt: "2026-01-01T00:00:00Z", findings }));
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root });
+  assert.deepEqual(brief.selfCheck.classes.map((c) => c.angle), ["a1", "a2", "a3"]);
+  assert.ok(brief.selfCheck.classes.every((c) => c.examples.length === 1));
+});
+
+test("a relative --copilot-file resolves against --repo-root, not the process cwd", async () => {
+  const root = await fixtureRepo();
+  await writeFile(path.join(root, "threads.jsonl"), `${JSON.stringify({ author: "Copilot", body: "Add a test." })}\n`);
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, copilotFile: "threads.jsonl" });
+  assert.equal(brief.selfCheck.copilotClasses[0]?.class, "tests");
 });
