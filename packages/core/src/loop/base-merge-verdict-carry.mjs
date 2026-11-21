@@ -16,11 +16,28 @@ import { isDevLoopConfigSourcePath } from "../analysis/diff-analyzer.mjs";
 
 export const BASE_MERGE_CARRY_DECISIONS = Object.freeze(["carry_verdict", "full_regate", "fallback_full"]);
 
-// Paths whose change alters how a gate runs: .devloops config (isDevLoopConfigSourcePath),
-// gate contracts, scripts, agents and agent mirrors, CLI, schemas, harness extension and
-// command prompts, core source, CI workflows, and the installed dev-loops version
-// (manifests and lockfiles). Broad on purpose: a miss fails open, a hit only re-gates.
-const GATE_TOOLING_RE = /^(skills\/|scripts\/|agents\/|cli\/|lib\/|schemas\/|extension\/|commands\/|AGENTS\.md$|bunfig\.toml$|\.claude\/|\.pi\/|packages\/core\/src\/|\.github\/|package\.json$|package-lock\.json$|yarn\.lock$|pnpm-lock\.yaml$|bun\.lockb?$|packages\/[^/]+\/package\.json$)/;
+// Paths that can change a gate outcome (ADR 0296, amends ADR 0096 and ADR 0156): .devloops config
+// (isDevLoopConfigSourcePath), reviewer, judge, gate-coordinator and docs agents with their .claude mirror,
+// the gate, judge, review, acceptance-criteria, structural-quality, validation-policy, spec-authority, copilot-loop-operations and contract-style-guide contracts, the SKILL.md of the copilot-pr-followup, review, dev-loop and local-implementation skills,
+// core config (angle, persona, prompt and judge-track resolution), spec-authority.mjs (judge disposition rules), analysis/diff-analyzer.mjs (angle scope and dispatch mode), analysis/change-classifier.mjs (angle selection), build-adjacent-bundle.mjs (reviewer input), the scripts (at any depth) and core loop modules
+// whose file name holds a gate, fanin, fan-in, judge, verdict, carry, review, reviewer, finding, angle, dispatch,
+// cluster, round-cap, prompt, unit-bound, disposition, evidence, checkpoint, convergence or pre-push-delta token, and the installed dev-loops version (package
+// manifests). Lockfiles and every other path carry.
+// A name token matches as a whole word between "-", "_" or ".", so navigate or preview never hit.
+const word = (tokens) => `(?:[^/]*[-_.])?(?:${tokens})(?:[-_.][^/]*)?`;
+const OUTCOME_NAME = word("gates?|fanin|fan-in|judge|verdicts?|carry|reviews?|reviewers?|findings?|angles?|dispatch|clusters?|round-cap|prompts?|unit-bound|dispositions?|evidence|checkpoint|convergence|pre-push-delta");
+const GATE_TOOLING_RE = new RegExp(
+  "^(?:\\.claude/)?(?:agents/(?:review|judge|gate-coordinator|docs)\\.(?:agent\\.)?md" +
+    `|skills/docs/${word("gate|judge|review")}\\.md` +
+    "|skills/docs/(?:acceptance-criteria-verification|structural-quality|validation-policy|spec-authority-contract|copilot-loop-operations|contract-style-guide)\\.md" +
+    "|skills/(?:copilot-pr-followup|review|dev-loop|local-implementation)/SKILL\\.md)$" +
+    `|^scripts/(?:[^/]+/)*${OUTCOME_NAME}$` +
+    "|^scripts/github/build-adjacent-bundle\\.mjs$" +
+    `|^packages/core/src/loop/${OUTCOME_NAME}$` +
+    "|^packages/core/src/(?:loop/spec-authority|analysis/(?:diff-analyzer|change-classifier))\\.mjs$" +
+    "|^packages/core/src/config/[^/]+$" +
+    "|^package\\.json$|^packages/[^/]+/package\\.json$",
+);
 
 export function isGateToolingPath(filePath) {
   if (typeof filePath !== "string") return false;

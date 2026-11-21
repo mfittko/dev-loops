@@ -1,13 +1,14 @@
 import { test, mock } from "bun:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { mergePr, parseMergePrCliArgs, main, defaultReadMergeDiff, defaultIsAncestor, defaultComputePatchId, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
 import { runChild } from "../../scripts/_cli-primitives.mjs";
 import { captureStream } from "../_helpers.mjs";
 import { scanDiffText } from "@dev-loops/core/security/secret-scan";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 
 const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
 const MERGE_COMMIT = "aaaa1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
@@ -738,6 +739,54 @@ test("a current-head body finding cleared by a trusted copilot-body-disposition 
     assert.deepEqual(threw.mergePrFailure.failures.map((f) => f.precondition), ["copilot_convergence"], label);
     assert.equal(threw.mergePrFailure.copilotBodyDisposition, null, label);
     assert.ok(!calls.runChild.some((c) => c.args[0] === "pr" && c.args[1] === "merge"), `${label}: no merge`);
+  }
+});
+
+// Judge-bound `reject=` / `defer=` records: the ledger of the named gate at the head is the authority.
+async function judgeLedgerCwd(findings) {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "merge-pr-judge-"));
+  await writeFile(path.join(cwd, ".devloops"), "");
+  const file = path.join(cwd, buildLogPath({ repo: "mfittko/dev-loops", pr: 5, gate: "pre_approval_gate", headSha: HEAD, tmpRoot: "tmp" }));
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify({ findings }));
+  return cwd;
+}
+const judgeRecord = (action, reviewId = "PRR_head") => ({ ...dispositionRecord({ reviewId }), body: `<!-- dev-loops:copilot-body-disposition review=${reviewId} head=${HEAD} ${action}=pre_approval_gate -->` });
+const bodyFinding = (overrides = {}) => ({ angle: "copilot-body", reviewId: "PRR_head", severity: "low", summary: "s", judgeDisposition: "reject", ...overrides });
+
+test("a reject= record backed by the judge ledger clears copilot_convergence and is named in the merge result", async () => {
+  const cwd = await judgeLedgerCwd([bodyFinding()]);
+  try {
+    const headYellow = [withNodeId(copilotAt(HEAD, YELLOW_BODY, "2026-01-01T00:00:00Z"), "PRR_head")];
+    const { runtime } = makeRuntime({ maxCopilotRounds: 3, reviews: headYellow, dispositionComments: [judgeRecord("reject")] });
+    const result = await mergePr(baseOptions(), { ...runtime, cwd });
+    assert.equal(result.merged, true);
+    assert.equal(result.copilotBodyDisposition.reviewId, "PRR_head");
+    assert.deepEqual(result.copilotBodyDisposition.judgeBinding, { action: "reject", gate: "pre_approval_gate" });
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("a defer= record at the Copilot round cap with no thread merges; a high finding stays blocked", async () => {
+  const reviews = [
+    withNodeId(copilotAt(HEAD, "### 🟢 Approval recommended", "2026-01-01T00:00:00Z"), "PRR_round1"),
+    withNodeId(copilotAt(HEAD, YELLOW_BODY, "2026-01-02T00:00:00Z"), "PRR_kwDOScHU788AAAABZK9Ziw"),
+  ];
+  const record = judgeRecord("defer", "PRR_kwDOScHU788AAAABZK9Ziw");
+  const cwd = await judgeLedgerCwd([bodyFinding({ reviewId: "PRR_kwDOScHU788AAAABZK9Ziw", judgeDisposition: "defer" })]);
+  const highCwd = await judgeLedgerCwd([bodyFinding({ reviewId: "PRR_kwDOScHU788AAAABZK9Ziw", judgeDisposition: "defer", severity: "high" })]);
+  try {
+    const { runtime } = makeRuntime({ maxCopilotRounds: 2, reviews, dispositionComments: [record] });
+    const result = await mergePr(baseOptions(), { ...runtime, cwd });
+    assert.equal(result.merged, true);
+    assert.equal(result.copilotBodyDisposition.judgeBinding.action, "defer");
+
+    const blocked = makeRuntime({ maxCopilotRounds: 2, reviews, dispositionComments: [record] });
+    const threw = await mergePr(baseOptions(), { ...blocked.runtime, cwd: highCwd }).then(() => null, (e) => e);
+    assert.ok(threw, "a high finding must refuse");
+    assert.deepEqual(threw.mergePrFailure.failures.map((f) => f.precondition), ["copilot_convergence"]);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+    await rm(highCwd, { recursive: true, force: true });
   }
 });
 

@@ -44,6 +44,7 @@ import {
   commandContainsRawPrBodyApiWrite,
   commandContainsDetachedWaitTool,
   commandContainsTimeoutWrappedSanctionedTool,
+  classifyDecisionRecorderCommand,
   commandContainsInlineInterpreter,
   inlineInterpreterDenyDetail,
   commandContainsCodeVerificationEntrypoint,
@@ -125,6 +126,7 @@ export const BASH_GATE_RULES = Object.freeze([
   "COORDINATOR-VERIFY-BOUNDARY",
   "OPS-NO-INLINE-INTERPRETER",
   "COPILOT-FOLLOWUP-WAIT-TOOLS",
+  "OPERATOR-DECISION-RECORDER",
   "SUBISSUE-NO-ADHOC-BYPASS",
   "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER",
   "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY",
@@ -197,13 +199,14 @@ export function decideUnresolveOwnerDeny({ command, role }) {
   return null;
 }
 
-/** Whether the raw command text names `merge-pr`, in any form (`--check` included), once quote and backslash characters are stripped (Bash drops them: `merge-""pr`, `merge\-pr`). */
-export const commandMentionsMergePr = (command) => typeof command === "string" && command.replace(/\$?["']|\\/g, "").search(/merge-pr\b/) !== -1;
+/** Whether the raw command text names `merge-pr`, in any form (`--check` included) except a merge-pr test-file path (`merge-pr<suffix>.test.mjs`), once quote and backslash characters are stripped (Bash drops them: `merge-""pr`, `merge\-pr`). */
+export const commandMentionsMergePr = (command) => typeof command === "string" && command.replace(/\$?["']|\\/g, "").search(/merge-pr\b(?![\w.-]*\.test\.mjs\b)/) !== -1;
 
 /**
  * Merge ownership (issue 2500): `merge-pr.mjs` is orchestrator-owned, so a subagent Bash command whose raw text contains `merge-pr` is denied, `--check` included.
+ * A merge-pr test-file path (`merge-pr<suffix>.test.mjs`) is exempt, so every run of the merge script stays denied (docs/decisions/0297-subagent-may-run-merge-test-files.md).
  * The top-level session (role null) keeps the script. Keys on the role name alone, like the unresolve allowlist.
- * ponytail: ceiling: a name assembled by variable or command substitution (`m=merge; ...$m-pr`) is not caught; the orchestrator is the only actor allowed to run the script.
+ * ponytail: ceiling: a name assembled by variable or command substitution (`m=merge; ...$m-pr`), or a substitution or expansion applied to an exempt test path (`f=.../merge-pr.test.mjs; node ${f/.test/}`), is not caught; the orchestrator is the only actor allowed to run the script.
  * @param {{command: string, role: string|null|undefined}} params
  * @returns {{ruleId: null, reason: string}|null}
  */
@@ -369,6 +372,22 @@ export function decideBashGateDeny(facts = {}) {
         "Do not wrap sanctioned dev-loops commands in `timeout N`: the wrapper hides the " +
         "`dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound " +
         "themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
+    };
+  }
+
+  // OPERATOR-DECISION-RECORDER: the recorder runs only through its `permissions.ask` rules, which match
+  // one spelling (`dev-loops-run cli/index.mjs decision record ...`). A subagent never
+  // runs it (the operator's approval prompt is for the main agent's call), and any other spelling would
+  // skip the ask rule.
+  const recorder = classifyDecisionRecorderCommand(command);
+  if (recorder !== null && (typeof role === "string" || !recorder.canonical)) {
+    return {
+      ruleId: "OPERATOR-DECISION-RECORDER",
+      reason:
+        "OPERATOR-DECISION-RECORDER: `decision record` runs only from the main agent as " +
+        "`dev-loops-run cli/index.mjs decision record ...` from the checkout, the plain prefix the operator's permission prompt matches. " +
+        "A subagent returns the needed decision in its hand-back, and the orchestrator asks the operator and runs the recorder. " +
+        "The `--repo-root` spelling, `node`, `bun`, the `scripts/github/record-operator-decision.mjs` path, `.claude/bin/dev-loops-run`, bare `dev-loops`, quoted or escaped words and extra whitespace are denied. If the command only quotes the recorder as data, rephrase it or move the text into a file.",
     };
   }
 

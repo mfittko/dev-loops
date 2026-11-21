@@ -75,17 +75,17 @@ function advance(s, file, extra = {}) {
 // Issue 2752 slice 4: the fixer-emit seam option skips only the gate-tooling decision and its evidence never validates under the default rule.
 test("ignoreGateTooling: skips only the tooling decision; conflicts, changed blobs and overlaps still refuse", () => {
   const opt = { ignoreGateTooling: true };
-  const tooling = { ...ok, baseDeltaPaths: ["scripts/x.mjs"] };
+  const tooling = { ...ok, baseDeltaPaths: ["scripts/github/write-gate-context.mjs"] };
   assert.equal(classifyBaseMergeCarry(tooling).decision, "full_regate");
   assert.equal(classifyBaseMergeCarry(tooling, opt).decision, "carry_verdict");
   assert.equal(classifyBaseMergeCarry({ ...tooling, conflictResolutionHunks: true }, opt).decision, "full_regate");
   assert.equal(classifyBaseMergeCarry({ ...tooling, prBlobsAfter: [`src/x.mjs\t100644\t${"2".repeat(40)}`] }, opt).decision, "full_regate");
-  assert.equal(classifyBaseMergeCarry({ ...tooling, baseDeltaPaths: ["scripts/x.mjs", "src/x.mjs"] }, opt).decision, "full_regate");
+  assert.equal(classifyBaseMergeCarry({ ...tooling, baseDeltaPaths: ["scripts/github/write-gate-context.mjs", "src/x.mjs"] }, opt).decision, "full_regate");
 });
 
 test("ignoreGateTooling: seam evidence validates only with the option, even when no tooling path is in the delta", () => {
   const opt = { ignoreGateTooling: true };
-  for (const input of [{ ...ok, baseDeltaPaths: ["scripts/x.mjs"] }, ok]) {
+  for (const input of [{ ...ok, baseDeltaPaths: ["scripts/github/write-gate-context.mjs"] }, ok]) {
     const seam = classifyBaseMergeCarry(input, opt);
     assert.equal(seam.decision, "carry_verdict");
     assert.equal(validateBaseMergeCarryEvidence(seam, opt).ok, true);
@@ -296,9 +296,46 @@ test("git: base-side conflict-resolved merge still carries", async () => {
   assert.equal(ev.decision, "carry_verdict");
 });
 
-test("gate tooling covers agent mirrors and lockfiles", () => {
-  for (const p of [".claude/skills/x.md", "package-lock.json", "packages/core/src/foo/bar.mjs", "schemas/a.json", "extension/readonly-role-gate.ts", "commands/loop-review.command.md", "AGENTS.md", "bunfig.toml"]) {
-    assert.equal(classifyBaseMergeCarry({ ...ok, baseDeltaPaths: [p] }).decision, "full_regate", p);
+// ADR 0296: only paths that can change a gate outcome re-gate.
+const OUTCOME_PATHS = [
+  "agents/review.agent.md", "agents/judge.agent.md", "agents/gate-coordinator.agent.md", ".claude/agents/judge.md",
+  "skills/docs/gate-review-sub-loop-contract.md", ".claude/skills/docs/judge-contract.md", "skills/docs/pre-pr-review-contract.md",
+  "scripts/github/write-gate-context.mjs", "scripts/loop/consolidate-fanin.mjs", "scripts/loop/check-judge-decision.mjs",
+  "scripts/github/_carried-verdict.mjs", "packages/core/src/loop/base-merge-verdict-carry.mjs",
+  ".devloops", "package.json", "packages/core/package.json",
+  "scripts/gate-x.mjs", "scripts/loop/x/gate-check.mjs", "scripts/github/build-adjacent-bundle.mjs",
+  "skills/docs/validation-policy.md", "skills/docs/spec-authority-contract.md", "skills/local-implementation/SKILL.md",
+  ".claude/skills/docs/validation-policy.md", ".claude/skills/docs/spec-authority-contract.md", "agents/docs.agent.md", ".claude/agents/docs.md",
+  "packages/core/src/config/config.mjs", "packages/core/src/loop/spec-authority.mjs", "packages/core/src/analysis/diff-analyzer.mjs", "packages/core/src/analysis/change-classifier.mjs", "skills/docs/copilot-loop-operations.md", ".claude/skills/docs/copilot-loop-operations.md", "skills/docs/contract-style-guide.md", ".claude/skills/docs/contract-style-guide.md", "scripts/github/_findings-x.mjs", "skills/docs/acceptance-criteria-verification.md", ".claude/skills/docs/structural-quality.md",
+];
+const NON_OUTCOME_PATHS = [
+  "package-lock.json", "bun.lock", "pnpm-lock.yaml", "scripts/github/edit-pr.mjs", "test/helpers/x.mjs", "agents/developer.agent.md",
+  "scripts/_core-helpers.mjs", "scripts/github/navigate.mjs", "scripts/loop/x/preview.mjs", "scripts/github/comment-issue.mjs", "skills/docs/release-runbook.md",
+  "skills/docs/worktree-guidance.md", ".claude/skills/docs/worktree-guidance.md", "skills/docs/main-agent-contract.md", "skills/docs/anti-patterns.md", "skills/docs/contract-style-guide-notes.md", "skills/docs/copilot-loop-operations-notes.md", "packages/core/src/loop/normalize.mjs", "packages/core/src/loop/spec-authority-notes.mjs", "packages/core/src/foo/bar.mjs", "packages/core/src/analysis/diff-analyzer-notes.mjs", "packages/core/src/analysis/other-helper.mjs", "schemas/a.json",
+  "extension/readonly-role-gate.ts", "commands/loop-review.command.md", "AGENTS.md", "bunfig.toml", ".github/workflows/ci.yml",
+];
+
+test("gate tooling: outcome-relevant paths re-gate, other tooling paths carry, validator agrees", () => {
+  for (const p of OUTCOME_PATHS) {
+    const ev = classifyBaseMergeCarry({ ...ok, baseDeltaPaths: [p] });
+    assert.equal(ev.decision, "full_regate", p);
+    assert.equal(validateBaseMergeCarryEvidence(ev).ok, true, p);
+    assert.equal(validateBaseMergeCarryEvidence({ ...ev, decision: "carry_verdict" }).ok, false, p);
+  }
+  for (const p of NON_OUTCOME_PATHS) {
+    const ev = classifyBaseMergeCarry({ ...ok, baseDeltaPaths: [p] });
+    assert.equal(ev.decision, "carry_verdict", p);
+    assert.deepEqual(ev.gateToolingPaths, [], p);
+    assert.equal(validateBaseMergeCarryEvidence(ev).ok, true, p);
+  }
+});
+
+test("git: a lockfile, test helper or unrelated script base move carries; a gate script or judge agent move re-gates", async () => {
+  for (const p of ["package-lock.json", "test/helpers/x.mjs", "scripts/github/edit-pr.mjs"]) {
+    assert.equal((await advance(setup(), p)).decision, "carry_verdict", p);
+  }
+  for (const p of ["agents/judge.agent.md", "skills/docs/gate-review-sub-loop-contract.md", "scripts/github/write-gate-context.mjs", "package.json", "packages/core/src/config/config.mjs"]) {
+    assert.equal((await advance(setup(), p)).decision, "full_regate", p);
   }
 });
 

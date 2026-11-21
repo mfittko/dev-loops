@@ -603,6 +603,26 @@ exit 0
 });
 
 
+test("the recorder settings check reads the repo toplevel from a subdirectory and reports an unparsable file", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-cli-recorder-settings-"));
+  try {
+    const repoDir = await realpath(tempRoot);
+    assert.equal(spawnSync("git", ["init", "-q"], { cwd: repoDir }).status, 0);
+    await mkdir(path.join(repoDir, ".claude"), { recursive: true });
+    await mkdir(path.join(repoDir, "sub"), { recursive: true });
+    const local = path.join(repoDir, ".claude/settings.local.json");
+    await writeFile(local, JSON.stringify({ permissions: { allow: ["Bash(dev-loops-run cli/index.mjs decision record *)"] } }));
+    const fromSub = await createCliRuntime({ cwd: path.join(repoDir, "sub") }).getRecorderSettingsProblems();
+    assert.ok(fromSub.some((p) => p.startsWith(`${local}: permissions.allow names the decision recorder`)), fromSub.join("\n"));
+
+    await writeFile(local, "{ not json");
+    const unparsable = await createCliRuntime({ cwd: path.join(repoDir, "sub") }).getRecorderSettingsProblems();
+    assert.ok(unparsable.some((p) => p.startsWith(`${local}: the settings file does not parse`)), unparsable.join("\n"));
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("createCliRuntime honors PATHEXT lookups when simulating Windows PATH resolution", async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-cli-win-runtime-"));
   const binDir = path.join(tempRoot, "bin");
