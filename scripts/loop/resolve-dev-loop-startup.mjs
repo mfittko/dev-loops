@@ -15,6 +15,7 @@ import { shellWord } from "../lib/timeout-flag.mjs";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { execFileSync } from "node:child_process";
+import { ghExecFileSync } from "@dev-loops/core/github/gh-throttle";
 import {
   parseMainWorktreePath,
   parseAllWorktreePaths,
@@ -395,7 +396,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
 const GH_CALL_TIMEOUT_MS = 10000;
 function ghJson(args, cwd, env = process.env) {
   try {
-    const stdout = execFileSync("gh", args, {
+    const stdout = ghExecFileSync("gh", args, {
       cwd,
       env,
       encoding: "utf8",
@@ -774,7 +775,7 @@ function enforceOwnershipGate(ownership, { describeArtifact, claimCommand, claim
     if (claim) {
       // The only write: add the viewer as assignee, then continue as owner.
       try {
-        execFileSync("gh", claimArgs, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GH_CALL_TIMEOUT_MS });
+        ghExecFileSync("gh", claimArgs, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GH_CALL_TIMEOUT_MS });
       } catch (err) {
         throw new Error(`${describeArtifact} could not be claimed (${err instanceof Error ? err.message : String(err)}); fail closed — do not start.`);
       }

@@ -30,6 +30,29 @@
 import { runChild as defaultRunChild } from "../cli/primitives.mjs";
 import { parseJsonText } from "./review-threads.mjs";
 
+const SECONDARY_RATE_LIMIT_BACKOFF_MS = 30_000;
+
+/**
+ * Run one gh child. Pacing lives in the default runChild (each attempt takes a
+ * slot there). A secondary rate limit backs off once and retries; a second one
+ * throws RATE_LIMITED with the original gh message.
+ */
+async function runWithBackoff(runChild, command, args, env, { backoffMs, sleep }) {
+  // An injected runner (a caller with its own rate-limit handling, or a test stub) is not retried unless the caller passes a backoff seam.
+  if (runChild !== defaultRunChild && backoffMs === undefined && sleep === undefined) return runChild(command, args, env);
+  backoffMs ??= SECONDARY_RATE_LIMIT_BACKOFF_MS;
+  sleep ??= (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const isSecondaryLimit = (result) => result.code !== 0 && isSecondaryRateLimitError(result.stderr);
+  let result = await runChild(command, args, env);
+  if (!isSecondaryLimit(result)) return result;
+  await sleep(backoffMs);
+  result = await runChild(command, args, env);
+  if (isSecondaryLimit(result)) {
+    throw Object.assign(new Error(`gh command failed: ${result.stderr.trim()}`), { code: "RATE_LIMITED", resetAt: null });
+  }
+  return result;
+}
+
 /**
  * Run a `gh` subcommand and parse its stdout as JSON. Fails loudly on a
  * non-zero exit (naming the command's stderr) and on malformed JSON stdout.
@@ -44,8 +67,8 @@ import { parseJsonText } from "./review-threads.mjs";
  *   when omitted it reads `gh command failed: <detail>` (the probe-ci-status
  *   shape). Either way the non-zero-exit error carries `code: "GH_API_ERROR"`.
  */
-export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRunChild, label } = {}) {
-  const result = await runChild(ghCommand, args, env);
+export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRunChild, label, backoffMs, sleep } = {}) {
+  const result = await runWithBackoff(runChild, ghCommand, args, env, { backoffMs, sleep });
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
     const prefix = label ? `${label} failed` : "gh command failed";
@@ -70,15 +93,17 @@ export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRu
  *   in the response is returned instead of thrown. This includes a non-zero
  *   `gh` exit whose stdout is JSON with an `errors` array.
  */
-export async function ghGraphql(query, vars, env, runChild = defaultRunChild, { allowErrors = false } = {}) {
+export async function ghGraphql(query, vars, env, runChild = defaultRunChild, { allowErrors = false, backoffMs, sleep } = {}) {
   const fieldArgs = [];
   for (const [key, value] of Object.entries(vars)) {
     fieldArgs.push("--field", `${key}=${value}`);
   }
-  const result = await runChild(
+  const result = await runWithBackoff(
+    runChild,
     "gh",
     ["api", "graphql", "--field", `query=${query}`, ...fieldArgs],
     env,
+    { backoffMs, sleep },
   );
   if (result.code !== 0) {
     // `gh api graphql` exits non-zero when the response carries GraphQL
@@ -162,6 +187,12 @@ export async function resolveOwner(login, env, runChild) {
 export function isRateLimitError(error) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   return /rate limit[^\n]{0,20}\bexceeded\b|\bexceeded\b[^\n]{0,20}rate limit/i.test(message);
+}
+
+// A secondary (abuse) rate limit message from gh, matched on raw stderr or an Error.
+export function isSecondaryRateLimitError(error) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /secondary rate limit/i.test(message);
 }
 
 // Sanity bound: a GraphQL reset further ahead than this is a bogus reading.

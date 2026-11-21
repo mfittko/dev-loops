@@ -429,6 +429,7 @@ queue:
   # near-zero; a low cap keeps tracker noise minimal, especially early.
   maxAutoFiledIssues: 1
   reDispatchMaxRetries: 1
+  ghMinIntervalMs: 500
 
 # Internal path patterns for internal-only PR detection.
 internalPathPatterns:
