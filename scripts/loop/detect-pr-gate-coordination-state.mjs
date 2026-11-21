@@ -1323,14 +1323,14 @@ export async function deletePrGateCoordinationSnapshot(options, runtime = {}) {
 /**
  * Returns `{ context, reused }`: the persisted context when it matches repo, PR, lightweight (unless `matchLightweight` is false), the exact full expected head and the age bound; otherwise a fresh load. Only the pre-flight writes snapshots.
  */
-export async function loadPrGateCoordinationContextReusingSnapshot(options, runtime = {}, { expectedHeadSha, matchLightweight = true, maxAgeMs = PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS, nowMs = Date.now() } = {}) {
+export async function loadPrGateCoordinationContextReusingSnapshot(options, runtime = {}, { expectedHeadSha, matchLightweight = true, nowMs = Date.now() } = {}) {
   if (typeof expectedHeadSha === "string" && /^([0-9a-f]{40}|[0-9a-f]{64})$/i.test(expectedHeadSha)) {
     try {
       // A seal mismatch (out-of-band edit) throws and falls to the fresh load.
       const snap = JSON.parse(await readSealed(coordinationSnapshotPath(options, runtime) ?? ""));
       if (snap.repo === options.repo && snap.pr === options.pr && (!matchLightweight || snap.lightweight === (options.lightweight === true))
         && typeof snap.headSha === "string" && snap.headSha.toLowerCase() === expectedHeadSha.toLowerCase()
-        && Number.isFinite(snap.fetchedAtMs) && nowMs >= snap.fetchedAtMs && nowMs - snap.fetchedAtMs < maxAgeMs && snap.context) {
+        && Number.isFinite(snap.fetchedAtMs) && nowMs >= snap.fetchedAtMs && nowMs - snap.fetchedAtMs < PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS && snap.context) {
         return { context: snap.context, reused: true };
       }
     } catch { /* missing or unparsable: fetch fresh */ }
