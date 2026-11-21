@@ -558,6 +558,8 @@ const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit i
 const chainEndRecovery = ({ repo, pr }) => renderCliText(`dev-loops gate extend-cap-round-chain --repo ${repo} --pr ${pr}`);
 const chainEndRemedy = () => renderCliText(`The cap round's act items are already cleared: run dev-loops gate extend-cap-round-chain --repo <owner/name> --pr <n> (its refusal names the reviewer-only delta and the baseline to use, the cleared candidate and not this baseline)`);
 const replacementRemedy = () => renderCliText("node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number> while this PR is still open");
+// RECOVERY-COMMAND-REQUIRED: the same restart as one runnable command, with the real PR number and no prose.
+const replacementRecovery = ({ pr }) => renderCliText(`node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr ${pr}`);
 
 // ADR 0255 (decision 6, amended by ADR 0261): why a prior record at the baseline is protected from the reviewer-only run, or null. The same act set re-runs. A non-clearing record
 // (the fixer's needs_fix) is taken over whatever its ref set or candidate: it is never clearing evidence, and the takeover continues its invocation count. Only a locally_clear
@@ -567,13 +569,13 @@ function priorRecordRefusal(prior, { sequence, currentHead, isAncestor, isSealed
   if (!prior) return null;
   const offHistory = typeof prior.candidateHead !== "string" || !isAncestor(prior.candidateHead, currentHead);
   // No chain end remains when the cleared record's candidate is off the PR head's history (decision 6). A refusal without a remedy names the rm step (the caller adds it).
-  const cleared = (reason) => ({ reason, remedy: offHistory ? replacementRemedy() : chainEndRemedy(), recovery: offHistory ? replacementRemedy() : chainEndRecovery(target) });
+  const cleared = (reason) => ({ reason, remedy: offHistory ? replacementRemedy() : chainEndRemedy(), recovery: offHistory ? replacementRecovery(target) : chainEndRecovery(target) });
   if (prior.extension) return cleared("carries an extension");
   if (prior.actSetId === sequence.actSetId) return null;
   if (prior.outcome !== "locally_clear" && isSealed()) return null;
   const refs = (list) => [...new Set((list ?? []).map((item) => item?.ref))].sort().join("\n");
   // The chain-end remedy fits only a record whose items cover the derived refs (both empty at a chain end): another ref set leaves the cap round uncovered, so extend-cap-round-chain would refuse it.
-  if (prior.outcome === "locally_clear") return refs(prior.items) === refs(sequence.actItems) ? cleared("is locally_clear for another act set") : { reason: "is locally_clear for another act set and covers another set of act refs", remedy: replacementRemedy() };
+  if (prior.outcome === "locally_clear") return refs(prior.items) === refs(sequence.actItems) ? cleared("is locally_clear for another act set") : { reason: "is locally_clear for another act set and covers another set of act refs", remedy: replacementRemedy(), recovery: replacementRecovery(target) };
   if (refs(prior.items) !== refs(sequence.actItems) || offHistory) return { reason: offHistory ? "names a candidate that is not on the PR head's history" : "covers another set of act refs" };
   return null;
 }
@@ -742,7 +744,7 @@ export async function runCli(
       refusal ??= priorRecordRefusal(priorRecord, { sequence, currentHead, isAncestor: onHistory, isSealed, target: { repo: options.repo, pr: options.pr } });
       if (refusal) {
         const unsealed = priorRecord === undefined || !isSealed();
-        throw Object.assign(new Error(`reviewer-only: ${unsealed ? "unsealed_record: " : ""}the delta record for baseline ${baselineHead} ${refusal.reason} and is never overwritten. ${unsealed || !refusal.remedy ? `${unsealed ? "Its seal does not match; if it is a leftover" : "If it is stale"}${refusal.reason.includes("history") ? " (run git fetch origin <candidate> first; if it is still absent)" : ""}, run \`rm -f ${shellQuote(gateDeltaRecordPath(root, baselineHead))} ${shellQuote(`${gateDeltaRecordPath(root, baselineHead)}.seal`)}\` and rerun (this restarts the invocation count), or restart on a replacement PR: ${replacementRemedy()}` : refusal.remedy}`), refusal.recovery ? { recovery: refusal.recovery } : {});
+        throw Object.assign(new Error(`reviewer-only: ${unsealed ? "unsealed_record: " : ""}the delta record for baseline ${baselineHead} ${refusal.reason} and is never overwritten. ${unsealed || !refusal.remedy ? `${unsealed ? "Its seal does not match; if it is a leftover" : "If it is stale"}${refusal.reason.includes("history") ? " (run git fetch origin <candidate> first; if it is still absent)" : ""}, run \`rm -f ${shellQuote(gateDeltaRecordPath(root, baselineHead))} ${shellQuote(`${gateDeltaRecordPath(root, baselineHead)}.seal`)}\` and rerun (this restarts the invocation count), or restart on a replacement PR: ${replacementRemedy()}` : refusal.remedy}`), !unsealed && refusal.remedy && refusal.recovery ? { recovery: refusal.recovery } : {});
       }
     });
     // The invocation bound of 3 counts the reviewer-only records at this baseline; a takeover continues the prior record's count.

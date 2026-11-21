@@ -13,6 +13,7 @@ import { rmSync } from "node:fs";
 import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
@@ -33,7 +34,7 @@ Extend the sealed cap-round clearing chain over later commits that change docs a
 (GATE-EXEC-ROUND-CAP-CHAIN-EXTEND, ADR 0254). The PR head must equal HEAD of the worktree (default: cwd).
 Commits after the start of the logic range that touch a logic file need a sealed locally_clear pre-push delta record for exactly the start of the logic range..PR head (the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end; ADR 0254): the tool then seals extension "delta_covered" into that record. It refuses with a typed reason and writes nothing when such commits have no covering delta, when no cap-round chain exists (a clean cap round counts as a chain of length zero ending at the cap-round head), or when the proof does not reach the head afterwards.
 Output (stdout, JSON): { "ok": true, "action": "chain_extended" | "already_proven", "chainEnd" (null for already_proven), "candidateHead", "files" }
-Refusal (stderr, JSON, exit 1): { "ok": false, "refused": true, "reason": "<code>", "detail": "..." }
+Refusal (stderr, JSON, exit 1): { "ok": false, "refused": true, "reason": "<code>", "detail": "...", "recovery": "<the one next command, optional>" }
 Reasons: repo_mismatch, pr_state_unreadable, base_fetch_failed, head_mismatch, no_cap_round_chain, baseline_orphaned,
 logic_commit_in_range (no sealed locally_clear pre-push delta covers the code commits: run it for the start of the logic range), delta_range_mismatch (a sealed delta record exists but covers another range or is not locally_clear: rerun it for the start of the logic range..PR head), chain_reaches_head, record_exists, record_changed (the delta record changed on disk after it was validated), record_not_clearing, proof_not_reached; a thrown gh or git failure is "writer_error".
 ${JQ_OUTPUT_USAGE}`.trim();
@@ -69,6 +70,8 @@ export function parseExtendCapRoundChainCliArgs(argv) {
 
 // RECOVERY-COMMAND-REQUIRED: `recovery` is the one command to run next; a refusal without a unique one leaves it undefined.
 const refuse = (reason, detail, recovery) => ({ ok: false, refused: true, reason, detail, recovery });
+// The command that reruns this tool for the PR once its refusal cause is fixed.
+const rerun = (repo, pr) => `${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}`;
 const CLI = "node <dev-loops-package-root>/cli/index.mjs";
 const defaultGit = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnvNoDirOverrides(), stdio: ["ignore", "pipe", "pipe"] }).trim();
 const defaultFetchPr = ({ repo, pr }, { env, ghCommand, runChild }) => ghJson(["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,baseRefName"], { env, ghCommand, runChild });
@@ -82,21 +85,21 @@ export async function extendCapRoundChain(options, {
   const repoRoot = resolveRepoRoot(cwd);
   // The ledger and the record are read from this checkout, keyed by the --repo slug: it must be --repo.
   const originSlug = detectOriginSlug(repoRoot);
-  if (!originSlug || !repoSlugEquals(originSlug, options.repo)) return refuse("repo_mismatch", `the checkout origin (${originSlug ?? "unresolved"}) is not ${options.repo}; rerun with --repo ${originSlug ?? "<origin slug>"} from a clone of ${options.repo}`);
+  if (!originSlug || !repoSlugEquals(originSlug, options.repo)) return refuse("repo_mismatch", `the checkout origin (${originSlug ?? "unresolved"}) is not ${options.repo}; rerun with --repo ${originSlug ?? "<origin slug>"} from a clone of ${options.repo}`, rerun(originSlug ?? "<origin slug>", pr));
   // Every later path (ledger directory, proof, messages) uses the origin slug, so a case variant of --repo cannot miss the ledger on a case-sensitive filesystem.
   const repo = originSlug;
   const state = await fetchPr({ repo, pr }, { env, ghCommand, runChild });
   const prHead = typeof state?.headRefOid === "string" ? state.headRefOid.trim().toLowerCase() : "";
   const baseRefName = state?.baseRefName;
-  if (!/^[0-9a-f]{40}$/u.test(prHead) || !baseRefName) return refuse("pr_state_unreadable", `cannot read PR #${pr} head and base; check \`gh auth status\` and rerun with --repo ${repo} --pr ${pr}`);
+  if (!/^[0-9a-f]{40}$/u.test(prHead) || !baseRefName) return refuse("pr_state_unreadable", `cannot read PR #${pr} head and base; check \`gh auth status\` and rerun with --repo ${repo} --pr ${pr}`, "gh auth status");
   const head = git(cwd, ["rev-parse", "HEAD"]).toLowerCase();
-  if (head !== prHead) return refuse("head_mismatch", `the worktree HEAD ${head.slice(0, 7)} is not the PR head ${prHead.slice(0, 7)}; check out and push the PR head, then rerun`);
+  if (head !== prHead) return refuse("head_mismatch", `the worktree HEAD ${head.slice(0, 7)} is not the PR head ${prHead.slice(0, 7)}; check out and push the PR head, then rerun`, `gh pr checkout ${pr} --repo ${repo}`);
 
   // The proof, the chain-end discovery and the range all read origin/<base>: fetch it fresh (bounded, prompt-free) first or refuse.
   try {
     fetchBaseBranch(baseRefName, { repoRoot });
   } catch {
-    return refuse("base_fetch_failed", `git fetch origin ${baseRefName} failed; cannot trust the local origin/${baseRefName} ref. Run \`git fetch origin ${baseRefName}\` and rerun`);
+    return refuse("base_fetch_failed", `git fetch origin ${baseRefName} failed; cannot trust the local origin/${baseRefName} ref. Run \`git fetch origin ${baseRefName}\` and rerun`, `git fetch origin ${baseRefName}`);
   }
 
   const proofArgs = { repo, pr, headSha: head, baseRefName };
@@ -105,7 +108,8 @@ export async function extendCapRoundChain(options, {
   const cap = await resolveCapRound(proofArgs, { repoRoot });
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
   // The reviewer-only remedies name the cap-round ledger path when the cap round resolved, so no other log is picked.
-  const capLog = cap ? buildLogPath({ repo, pr, gate: "draft_gate", headSha: cap.log.headSha, tmpRoot }) : "<cap-round findings log>";
+  // The path is quoted in every command string: a worktree path with a space must stay one argument.
+  const capLog = cap ? shellQuote(buildLogPath({ repo, pr, gate: "draft_gate", headSha: cap.log.headSha, tmpRoot })) : "<cap-round findings log>";
   const cleanCap = isCleanCapRound(cap);
   // A clean cap round has no act item to cover: any sealed clearing chain (a thread-route record over a logic commit) ends at the E the extension record binds to, and the proof then accepts the chain through that record.
   const ends = cap ? await clearingChainLastCandidates({ tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot, covering: cleanCap ? () => true : capRoundCovers(cap, tmpRoot), allowUnsealedEnd: true }) : [];
@@ -151,9 +155,9 @@ export async function extendCapRoundChain(options, {
     const record = sealedClearing(start);
     if (!record || String(record.candidateHead ?? "").toLowerCase() !== head || record.outcome !== "locally_clear") return null;
     // Already sealed with an extension for this head: the proof fails for another condition, so a delta rerun cannot help. Write nothing.
-    if (record.extension) return refuse("proof_not_reached", `the delta record for ${start.slice(0, 7)} already carries ${record.extension} for ${head.slice(0, 7)}, but the cap-round-fixed proof does not reach the head; nothing was written. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`);
+    if (record.extension) return refuse("proof_not_reached", `the delta record for ${start.slice(0, 7)} already carries ${record.extension} for ${head.slice(0, 7)}, but the cap-round-fixed proof does not reach the head; nothing was written. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`, `${CLI} loop gate-coordination --repo ${repo} --pr ${pr}`);
     const written = JSON.stringify({ ...record, extension: "delta_covered" });
-    if (onDisk(start) !== JSON.stringify(record)) return refuse("record_changed", `the delta record for ${start.slice(0, 7)} changed on disk since it was validated; nothing was written. Rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}`);
+    if (onDisk(start) !== JSON.stringify(record)) return refuse("record_changed", `the delta record for ${start.slice(0, 7)} changed on disk since it was validated; nothing was written. Rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}`, rerun(repo, pr));
     writeRecord(tmpRoot, start, JSON.parse(written));
     let reachedAfter = null;
     let proofError;
@@ -162,7 +166,7 @@ export async function extendCapRoundChain(options, {
       const ours = onDisk(start) === written;
       if (ours) writeRecord(tmpRoot, start, record);
       if (proofError) throw proofError;
-      return refuse("proof_not_reached", `the cap-round-fixed proof does not reach ${head.slice(0, 7)} after sealing delta_covered into the record for ${start.slice(0, 7)}; ${ours ? "the record was restored" : "the record changed since this run wrote it and was left in place"}. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`);
+      return refuse("proof_not_reached", `the cap-round-fixed proof does not reach ${head.slice(0, 7)} after sealing delta_covered into the record for ${start.slice(0, 7)}; ${ours ? "the record was restored" : "the record changed since this run wrote it and was left in place"}. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`, `${CLI} loop gate-coordination --repo ${repo} --pr ${pr}`);
     }
     return { ok: true, action: "chain_extended", chainEnd: start, candidateHead: head, files: (await classifyRange(start)).files };
   };
@@ -173,7 +177,7 @@ export async function extendCapRoundChain(options, {
       const { logic } = await classifyRange(capHeadSha);
       if (logic.length > 0) return await sealDeltaCovered(capHeadSha) ?? refuseLogic(capHeadSha, logic);
     }
-    return refuse("chain_reaches_head", `the sealed clearing chain from the cap-round head ends at the PR head ${head.slice(0, 7)}, so no extension can bind to it yet. Push one further docs or tests commit, then rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}; it extends at the chain end and writes nothing now`);
+    return refuse("chain_reaches_head", `the sealed clearing chain from the cap-round head ends at the PR head ${head.slice(0, 7)}, so no extension can bind to it yet. Push one further docs or tests commit, then rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}; it extends at the chain end and writes nothing now`, rerun(repo, pr));
   }
   if (!chainEnd && capHeadValid && cleanCap) chainEnd = capHeadSha;
   if (!chainEnd) {
@@ -182,15 +186,15 @@ export async function extendCapRoundChain(options, {
     const capHead = cap?.log?.headSha;
     const present = (sha) => { try { git(repoRoot, ["cat-file", "-e", `${sha}^{commit}`]); return true; } catch { return false; } };
     const proveOrphan = () => { try { git(repoRoot, ["merge-base", "--is-ancestor", capHead, head]); return false; } catch (error) { return error?.status === 1 && present(capHead) && present(head); } };
-    if (capHead && capHead.toLowerCase() !== head && proveOrphan()) return refuse("baseline_orphaned", CAP_ROUND_REFUSAL.baseline_orphaned);
-    if (capHead && !present(capHead)) return refuse("no_cap_round_chain", `the cap-round head ${capHead.slice(0, 7)} is not in this clone, so no chain can be read. A cap-round head missing from this clone is outside the PR head's fetched history. Run \`git rev-parse --is-shallow-repository\`: if it prints true, run \`git fetch --unshallow\`, otherwise run \`git fetch origin ${capHead}\`. Then rerun \`${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}\`. If the commit is still absent, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`);
+    if (capHead && capHead.toLowerCase() !== head && proveOrphan()) return refuse("baseline_orphaned", CAP_ROUND_REFUSAL.baseline_orphaned, `${CLI} pr create --head <new-branch> --allow-replacement-pr ${pr}`);
+    if (capHead && !present(capHead)) return refuse("no_cap_round_chain", `the cap-round head ${capHead.slice(0, 7)} is not in this clone, so no chain can be read. A cap-round head missing from this clone is outside the PR head's fetched history. Run \`git rev-parse --is-shallow-repository\`: if it prints true, run \`git fetch --unshallow\`, otherwise run \`git fetch origin ${capHead}\`. Then rerun \`${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}\`. If the commit is still absent, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, `git fetch origin ${capHead}`);
     // Issue 3437: without a resolved cap round (fewer closed draft_gate rounds than the cap, or an unreadable ledger) no chain exists to extend, and the next draft_gate round is not refused (round > cap): gate-coordination routes to that round or to the ledger repair, never back to this command.
     const coordination = `${CLI} loop gate-coordination --repo ${repo} --pr ${pr}`;
     if (!cap) return refuse("no_cap_round_chain", `PR #${pr} has no resolved draft_gate cap round (fewer rounds than maxReviewRounds are closed, or the findings ledger is unreadable), so there is no cap-round chain to extend and no extension is needed. Run ${coordination}: it routes to the next draft_gate round, or to the repair of an unreadable ledger.`, coordination);
     // A sealed record at the cap-round head that does not cover the cap round's act set is never overwritten: a reviewer-only run at that head refuses and names this command, so only a replacement PR breaks the cycle.
     const sealedCap = capHeadValid ? sealedClearing(capHeadSha) : null;
     const replacement = `${CLI} pr create --head <new-branch> --allow-replacement-pr ${pr}`;
-    if (sealedCap) return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}: the sealed record at the cap-round head ${capHeadSha.slice(0, 7)} names another act set and is never overwritten, so a reviewer-only run at that head refuses. Restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, replacement);
+    if (sealedCap) return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}: the sealed record at the cap-round head ${capHeadSha.slice(0, 7)} does not cover the cap round's act set or its candidate is off the PR head's history, and it is never overwritten, so a reviewer-only run at that head refuses. Restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, replacement);
     const delta = `${CLI} loop pre-push-delta --reviewer-only --repo ${repo} --pr ${pr} --baseline ${cap.log.headSha} --pr-head ${head} --findings-log ${capLog} --spec-identity <id> --result-path <result-file>`;
     return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}. Run ${delta} (then --result <result-file> --invocation <1-3>) until it is locally_clear, then rerun this command, or restart on a replacement PR. If the PR head already carries a clean current-head draft_gate verdict, no extension is needed. ${coordination} routes this refusal back to this command, so only the pre-push delta or the replacement-PR restart breaks the cycle: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, delta);
   }
@@ -203,12 +207,12 @@ export async function extendCapRoundChain(options, {
   const rangeStart = (clearedEnd && chainEnd !== clearedEnd && reaches(clearedEnd, chainEnd) ? chainEnd : clearedEnd) ?? (cleanCap && capHeadValid ? capHeadSha : chainEnd);
   const { files, logic } = await classifyRange(rangeStart);
   if (logic.length > 0) return await sealDeltaCovered(rangeStart) ?? refuseLogic(rangeStart, logic);
-  const recordExists = () => refuse("record_exists", `a delta record for ${chainEnd.slice(0, 7)} already exists and is never overwritten; run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed proof condition`);
+  const recordExists = () => refuse("record_exists", `a delta record for ${chainEnd.slice(0, 7)} already exists and is never overwritten; run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed proof condition`, `${CLI} loop gate-coordination --repo ${repo} --pr ${pr}`);
   if (readGateDeltaRecord(tmpRoot, chainEnd) !== null) {
     let clearing = false;
     try { clearing = DELTA_CLEARING_NEXT_STEPS.includes(readSealedGateDeltaRecord(tmpRoot, chainEnd)?.nextStep); } catch { /* unreadable: not a clearing record */ }
     if (clearing) return recordExists();
-    return refuse("record_not_clearing", `the delta record for ${chainEnd.slice(0, 7)} exists but is not a sealed clearing record and is never overwritten; run ${CLI} loop pre-push-delta --reviewer-only --repo ${repo} --pr ${pr} --baseline ${chainEnd} --pr-head ${head} --findings-log ${capLog} --spec-identity <id> --result-path <result-file> (then --result <result-file> --invocation <1-3>) until it is locally_clear, then rerun this command`);
+    return refuse("record_not_clearing", `the delta record for ${chainEnd.slice(0, 7)} exists but is not a sealed clearing record and is never overwritten; run ${CLI} loop pre-push-delta --reviewer-only --repo ${repo} --pr ${pr} --baseline ${chainEnd} --pr-head ${head} --findings-log ${capLog} --spec-identity <id> --result-path <result-file> (then --result <result-file> --invocation <1-3>) until it is locally_clear, then rerun this command`, deltaRecovery(chainEnd));
   }
 
   // One sequence lock (the one the reviewer-only run takes) spans the exclusive create, the proof and the rollback. The proof takes no sequence lock.
@@ -241,7 +245,7 @@ async function extendDocsTests({ tmpRoot, chainEnd, head, repo, pr, files, proof
       rmSync(`${recordPath}.seal`, { force: true });
     }
     if (proofError) throw proofError;
-    return refuse("proof_not_reached", `the cap-round-fixed proof does not reach ${head.slice(0, 7)} after the extension for ${chainEnd.slice(0, 7)}; ${ours ? "the record was removed" : "the record changed since this run wrote it and was left in place"}. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`);
+    return refuse("proof_not_reached", `the cap-round-fixed proof does not reach ${head.slice(0, 7)} after the extension for ${chainEnd.slice(0, 7)}; ${ours ? "the record was removed" : "the record changed since this run wrote it and was left in place"}. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`, `${CLI} loop gate-coordination --repo ${repo} --pr ${pr}`);
   }
   return { ok: true, action: "chain_extended", chainEnd, candidateHead: head, files };
 }
@@ -259,7 +263,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   try {
     result = await extendCapRoundChain(options, runtime);
   } catch (error) {
-    stderr.write(`${JSON.stringify(refuse("writer_error", error instanceof Error ? error.message : String(error)))}\n`);
+    stderr.write(`${JSON.stringify(refuse("writer_error", error instanceof Error ? error.message : String(error), rerun(options.repo, options.pr)))}\n`);
     return 1;
   }
   if (!result.ok) {

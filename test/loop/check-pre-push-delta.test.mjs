@@ -1592,6 +1592,8 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
     ["bounded_out", { sameActSet: true, outcome: "locally_clear", invocation: 3, candidateHead: "ORPHAN" }, false, /pr create .*--allow-replacement-pr/],
     ["bounded_out", { sameActSet: true, outcome: "locally_clear", invocation: 3, candidateHead: "HEAD" }, false, /pr create .*--allow-replacement-pr/], // a symbolic candidate at the bound
     ["unsealed_record: .*is locally_clear for another act set.*rm -f \\S+\\.json \\S+\\.seal", { outcome: "locally_clear" }, true],
+    // An unsealed extension record reaches cleared() too: its message names the rm step, so it carries no extend recovery.
+    ["unsealed_record: .*carries an extension.*rm -f \\S+\\.json \\S+\\.seal", { outcome: "locally_clear", extension: "docs_tests_only", sameActSet: true }, true],
     // ADR 0255 decision 7: an unsealed non-clearing record over another ref set is not taken over.
     ["unsealed_record: .*covers another set of act refs.*rm -f \\S+\\.json \\S+\\.seal", { outcome: "needs_fix", items: [{ ref: "other", status: "not_resolved" }] }, true],
   ];
@@ -1610,6 +1612,10 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
         assert.doesNotMatch(error.message, /loop gate-coordination/, "no remedy routes back to the coordinator");
         if (!/extend-cap-round-chain/.test(String(remedy))) assert.doesNotMatch(error.message, /extend-cap-round-chain/, "a record that does not cover the derived refs never routes to the extension");
         assert.doesNotMatch(error.message, /\$\{/, "no uninterpolated placeholder");
+        // Issue 3437 ac:3: the recovery is the one runnable command of the printed remedy, with the real PR number; an unsealed record names the rm step and carries none.
+        if (unsealed || message === "bounded_out") assert.equal(error.recovery, undefined, "no recovery contradicts the printed remedy");
+        else if (/extend-cap-round-chain/.test(String(remedy))) assert.match(error.recovery, /gate extend-cap-round-chain --repo owner\/repo --pr 70$/u);
+        else assert.match(error.recovery, /pr create --head <new-branch> --allow-replacement-pr 70$/u, "the off-history and other-refs recovery is a pure command, not the prose remedy");
         return true;
       });
       assert.equal(fs.readFileSync(recordPath, "utf8"), before, "the record is never overwritten");

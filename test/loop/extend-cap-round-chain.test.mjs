@@ -111,7 +111,9 @@ test("refuses a PR head that is not the worktree HEAD and a PR with no cap-round
   const { root } = await capFixture();
   try {
     await commit(root, { "docs/y.md": "y\n" }, "docs");
-    assert.equal((await extend(root, "9".repeat(40))).reason, "head_mismatch");
+    const mismatch = await extend(root, "9".repeat(40));
+    assert.equal(mismatch.reason, "head_mismatch");
+    assert.match(mismatch.recovery, /^gh pr checkout \d+ --repo \S+$/u); // RECOVERY-COMMAND-REQUIRED (issue 3437)
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -218,7 +220,7 @@ test("runCli maps a refusal and a thrown failure to a stderr JSON with exit 1", 
     const stderr = sink();
     const code = await runCli(["--repo", REPO, "--pr", String(PR), "--worktree", root], { stdout, stderr, detectOriginSlug: () => REPO, fetchPr: async () => { throw new Error("gh down"); } });
     assert.equal(code, 1);
-    assert.deepEqual(JSON.parse(stderr.chunks.join("")), { ok: false, refused: true, reason: "writer_error", detail: "gh down" });
+    assert.deepEqual(JSON.parse(stderr.chunks.join("")), { ok: false, refused: true, reason: "writer_error", detail: "gh down", recovery: `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo ${REPO} --pr ${PR}` });
     const refusedErr = sink();
     assert.equal(await runCli(["--repo", REPO, "--pr", String(PR), "--worktree", root], { stdout, stderr: refusedErr, detectOriginSlug: () => REPO, fetchPr: async () => ({}) }), 1);
     assert.equal(JSON.parse(refusedErr.chunks.join("")).reason, "pr_state_unreadable");
@@ -299,6 +301,7 @@ test("a non-clearing or unsealed record at the chain end refuses record_not_clea
     const before = readSealedGateDeltaRecord(tmp, B);
     const refused = await extend(root, D);
     assert.equal(refused.reason, "record_not_clearing");
+    assert.match(refused.recovery, /loop pre-push-delta --reviewer-only --repo \S+ --pr \d+ --baseline /u);
     assert.doesNotMatch(refused.detail, /extend-cap-round-chain|gate-coordination/);
     assert.match(refused.detail, /loop pre-push-delta --reviewer-only --repo \S+ --pr \d+ --baseline/);
     assert.doesNotMatch(refused.detail, /rm -f/);
@@ -627,6 +630,7 @@ test("a code commit pushed after the covering delta refuses delta_range_mismatch
     const M = await commit(root, { "src/y.mjs": "export const y = 1;\n" }, "logic M");
     const result = await extend(root, M);
     assert.equal(result.reason, "delta_range_mismatch");
+    assert.match(result.recovery, new RegExp(`loop pre-push-delta --reviewer-only .*--baseline ${A} --pr-head ${M}`, "u"));
     assert.match(result.detail, /reviewer-only pre-push delta over .*--reviewer-only --repo \S+ --pr \d+ --baseline .*--pr-head.*replacement PR/u);
     assert.equal(readSealedGateDeltaRecord(tmp, A).extension, undefined);
   } finally {
@@ -689,6 +693,7 @@ test("a bounded_out A to L record over logic plus a locally_clear L to D record 
     writeSealedGateDeltaRecord(tmp, L, { reviewBaselineHead: L, candidateHead: D, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
     const result = await extend(root, D);
     assert.equal(result.reason, "delta_range_mismatch");
+    assert.match(result.recovery, new RegExp(`loop pre-push-delta --reviewer-only .*--baseline ${A} --pr-head ${D}`, "u"));
     assert.match(result.detail, /outcome bounded_out/u, "names the failing link's outcome");
     assert.equal(readSealedGateDeltaRecord(tmp, A).extension, undefined);
     assert.equal(readSealedGateDeltaRecord(tmp, L).extension, undefined);
