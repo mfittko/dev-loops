@@ -2,8 +2,9 @@
  * The pre-PR review record (PRE-PR-BEFORE-FIRST-PUSH): local evidence at
  * `<main-tmp-root>/pre-pr-review/<head>.json`, written only by
  * `dev-loops loop pre-pr-review` and checked by `pr create`. The writer reads the
- * head from git. The `integrity` field is a digest of the other fields, so a
- * hand-built file without it fails validation.
+ * head from git. The `integrity` field is a digest of head, verdict and disposition,
+ * so a hand-built file without it fails validation. `selfCheck` is self-reported and
+ * not integrity-bound (ADR 0303).
  */
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";

@@ -346,6 +346,7 @@ test("record mode refuses with pre_pr_self_check_missing for a missing flag, fil
     await refuse([]);
     await refuse(["--self-check-file", path.join(dir, "nope.json")]);
     await refuse(["--self-check-file", selfCheckFile(dir, "{not json")]);
+    await refuse(["--self-check-file", selfCheckFile(dir, "{}")]);
     await refuse(["--self-check-file", selfCheckFile(dir, [{ id: "tests", status: "done", evidence: "e" }])]);
     await refuse(["--self-check-file", selfCheckFile(dir, [...IDS.map((id) => ({ id, status: "done", evidence: "e" })), { id: "angle:nope", status: "done", evidence: "e" }])]);
     await refuse(["--self-check-file", selfCheckFile(dir, [...IDS, IDS[0]].map((id) => ({ id, status: "done", evidence: "e" })))]);

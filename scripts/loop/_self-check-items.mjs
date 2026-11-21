@@ -20,7 +20,7 @@ const configFailed = (error) => Object.assign(new Error(`${PRE_PR_SELF_CHECK_MIS
 export async function resolveChecklistItems(root, { strict = false } = {}) {
   try {
     const { config } = await (strict ? loadDevLoopConfigStrict : loadDevLoopConfig)({ repoRoot: root });
-    const items = (config.gates?.draft?.angles ?? []).flatMap((entry) => (entry["developer-checklist"] ?? []).map((line) => {
+    const items = (config.gates?.draft?.angles ?? []).filter((entry) => entry.enabled !== false).flatMap((entry) => (entry["developer-checklist"] ?? []).map((line) => {
       const split = line.indexOf(": ");
       const id = line.slice(0, split);
       return { id, angle: entry.name, check: line.slice(split + 2), ...(FINAL_STEP_CHECKLIST_IDS.includes(id) ? { finalStep: true } : {}) };

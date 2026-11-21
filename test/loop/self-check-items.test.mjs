@@ -38,6 +38,15 @@ test("a duplicate developer-checklist id across angles is refused in strict mode
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("resolveChecklistItems skips the checklist of an angle a consumer layer disables with enabled: false", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "issue-3395-disabled-"));
+  try {
+    writeFileSync(path.join(dir, ".devloops"), JSON.stringify({ version: 1, gates: { draft: { angles: [{ name: "threat-model", enabled: false }] } } }));
+    assert.ok(!(await resolveChecklistItems(dir, { strict: true })).some((i) => i.id === "T1"));
+    assert.ok((await resolveChecklistItems(dir, { strict: true })).some((i) => i.id === "C1"));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("requiredSelfCheckIds refuses with pre_pr_self_check_missing when git diff fails for an unresolvable base", async () => {
   await assert.rejects(requiredSelfCheckIds(process.cwd(), "no-such-ref-issue-3395"), { code: "pre_pr_self_check_missing", message: /git diff/u });
 });

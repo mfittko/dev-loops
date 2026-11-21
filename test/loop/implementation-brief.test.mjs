@@ -10,6 +10,7 @@ import { detectAcDodMatrix } from "@dev-loops/core/loop/issue-refinement-artifac
 import { runCli } from "../../cli/index.mjs";
 import { runGitFixture } from "../_helpers.mjs";
 import { buildImplementationBrief, main } from "../../scripts/loop/implementation-brief.mjs";
+import { resolveSelfCheckAngles } from "../../scripts/loop/_self-check-items.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const tempDirs = [];
@@ -1199,6 +1200,16 @@ test("the brief carries selfCheck with the 14 config-sourced checklist items (fi
     assert.equal(a.id, `angle:${a.angle}`);
     assert.ok(a.constraint.length > 0 && a.constraint.length <= 200);
   }
+});
+
+test("selfCheck angle ids come from the declared --paths only, equal to the record writer's ids for the same paths", async () => {
+  const root = await fixtureRepo();
+  await mkdir(path.join(root, "skills/docs"), { recursive: true });
+  await writeFile(path.join(root, "skills/docs/untouched.md"), "# untouched\n");
+  const brief = await buildImplementationBrief({ body: `${MATRIX}\nSee skills/docs/untouched.md.\n`, repoRoot: root, paths: ["scripts/a.mjs"] });
+  assert.ok(brief.touchedPaths.includes("skills/docs/untouched.md"));
+  const expected = (await resolveSelfCheckAngles(root, ["scripts/a.mjs"])).map((a) => a.id);
+  assert.deepEqual(brief.selfCheck.angles.map((a) => a.id), expected);
 });
 
 test("the selfCheck digest stays bounded with a large Copilot export, and the export is optional", async () => {

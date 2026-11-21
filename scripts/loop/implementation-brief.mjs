@@ -107,7 +107,7 @@ for string-path and package-name references yourself.
 "selfCheck" holds the constraints the developer applies while writing each change
 (PRE-PR-DEVELOPER-SELF-CHECK); it is not a review pass after the code. "angles" is one
 { "id": "angle:<name>", "angle", "constraint" } per draft_gate angle that applies to the touched
-paths (at most 8; "constraint" is the first sentence of the angle prompt the gate reviewers get, at
+paths (the first 8 recommended angles in recommendation order, resolved from --paths only; "constraint" is the first sentence of the angle prompt the gate reviewers get, at
 most 200 characters; empty when the config does not load). "classes" is the top 3 act-finding angles
 of past first draft_gate rounds and "copilotClasses" the top 3 keyword buckets of the local Copilot
 thread export (offline; one example of at most 160 characters each; empty without logs or export).
@@ -448,6 +448,7 @@ async function importersByModule(root, touchedPaths, resolved, tracked) {
 }
 
 // Offline and best effort: a config or log problem yields empty angles/classes, never a failure.
+// Angles resolve from the declared --paths only: the record writer sees base...HEAD paths, never spec-cited ones.
 // Bounded (dod:3): at most MAX_ANGLE_LINES angle lines, 3 gate and 3 Copilot classes, one example each.
 async function selfCheck(root, touchedPaths, copilotFile) {
   const angles = await resolveSelfCheckAngles(root, touchedPaths);
@@ -618,7 +619,7 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
     adrTripwirePaths: touchedPaths.filter(matchesAdrTripwire),
     helperInventory: await helperInventory(root, touchedPaths, resolved, trackedSources.files),
     importers: await importersByModule(root, touchedPaths, resolved, trackedSources.files),
-    selfCheck: await selfCheck(root, touchedPaths, copilotFile),
+    selfCheck: await selfCheck(root, declared, copilotFile),
     requiredReads: [...REQUIRED_READS],
     findings,
   };
