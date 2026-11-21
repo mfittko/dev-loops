@@ -90,7 +90,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --fixer-plan <path>     Canonical current pulled commit_only plan; pair with --site-coverage for ACT/THREAD closure (required for ACT input/result)
   --findings-log <path>   Required on the act-list route, input mode: the reviewed gate round's findings log (its headSha must equal --baseline, or its sealed clearing chain or a base-only merge must reach --baseline: PRE-PUSH-DELTA-INPUT-CAP-CHAIN);
                           its provenance.perAngle angles join the surface hints (PRE-PUSH-DELTA-INPUT). Refused with --threads-file.
-  --reviewer-only         Code-range clearing without a fixer plan (ADR 0255, GATE-EXEC-ROUND-CAP-CHAIN-EXTEND): an ACT sequence over baseline..PR head for a PR whose head moved past the cap round. The act list is derived from the cap-round ledger (--findings-log, required): its open act clusters, with no fixer plan or coverage record; empty for a clean cap round or a chain-end baseline.
+  --reviewer-only         Code-range clearing without a fixer plan (ADR 0255, GATE-EXEC-ROUND-CAP-CHAIN-EXTEND): an ACT sequence over baseline..PR head for a PR whose head moved past the cap round. The act list is derived from the cap-round ledger (--findings-log, required): its open act clusters, with no fixer plan or coverage record; empty for a clean cap round or a chain-end baseline. A clean merge whose parents both changed a path since their merge bases adds those overlap paths to the review; the no-PR-own refusal applies only when there is no PR-own commit and no overlap path.
                           --repo and --pr bind the log to the PR: the log must carry the same repo and pr, and the cap-round log reaches a chain-end baseline through the sealed clearing chain of that PR.
                           Needs --baseline (an ancestor of the worktree HEAD), --pr-head (equal to the worktree HEAD), --spec-identity and --result-path (input run) or --result and --invocation (result run).
                           Refuses --act-list, --threads-file, --fixer-plan, --site-coverage and --handback. The invocation bound of 3 still applies and no sequence marker is written.
@@ -428,13 +428,14 @@ function fetchAndResolveBase(worktree, base, { revParse, fetchBase }) {
   try { revParse(worktree, `origin/${base}`); } catch { throw new Error(`reviewer-only: origin/${base} does not exist in ${worktree}; run \`git fetch origin ${base}\` and rerun`); }
 }
 // The PR-own commit count of baseline..head under the reviewer-only rules: non-merge commits origin/<base> lacks plus non-base-only merges whose remerge diff names a path.
+// A clean merge whose parents overlap adds review paths and counts as one PR-own commit: the body-only post must not carry a verdict across it unreviewed.
 // The body-only converged post (ADR 0271) asks the same question, so it calls this instead of counting on its own.
 export async function countPrOwnCommits(worktree, baseline, head, base, { revParse = gitRevParse, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin, isAncestor = gitIsAncestor } = {}) {
   fetchAndResolveBase(worktree, base, { revParse, fetchBase });
   // A head that does not descend from the baseline (reset or force-pushed backward) has an empty baseline..head range, which must not read as "no PR-own commit".
   if (baseline !== head && !isAncestor(worktree, baseline, head)) throw new Error(`own_commit_in_range: ${head} does not descend from the reviewed head ${baseline}; the head moved backward or sideways, so the range holds code the cap round never reviewed`);
-  const { ownCommits, resolvedMerges } = await reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base });
-  return ownCommits + resolvedMerges.length;
+  const { ownCommits, resolvedMerges, overlapMerges } = await reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base });
+  return ownCommits + resolvedMerges.length + overlapMerges;
 }
 async function reviewerOnlyBase(worktree, baseline, head, deps) {
   const { base } = deps;
@@ -449,6 +450,7 @@ async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyM
   const ownCommits = revList(worktree, baseline, head, ["--no-merges", `^origin/${base}`]).length;
   // A merge that is not base-only is reviewed through its resolution diff (`git show --remerge-diff`: the merge against an automatic remerge of its parents), whose paths join the PR-own paths.
   const resolvedPaths = [], resolvedMerges = [];
+  let overlapMerges = 0;
   for (const merge of revList(worktree, baseline, head, ["--merges", `^origin/${base}`])) {
     if (await baseOnlyMerge({ fromHead: revParse(worktree, `${merge}^1`), head: merge, mainRef: `origin/${base}`, repoRoot })) continue;
     const parents = spawnSync("git", ["-C", repoRoot, "rev-list", "--parents", "-n", "1", merge], { encoding: "utf8", env: gitEnvNoDirOverrides() });
@@ -456,11 +458,42 @@ async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyM
       ? gitRemergeShow(repoRoot, merge, ["--name-only", "-z"], "utf8") : null;
     if (shown?.status !== 0) throw new Error(`non_base_only_merge: merge ${merge} in ${baseline}..${head} ${shown || parents.status !== 0 ? "has a resolution diff or parents that cannot be read" : `is an octopus merge (${parents.stdout.trim().split(" ").length - 1} parents)`} (${((shown ?? parents).stderr ?? "").trim() || (shown ?? parents).error?.message}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
     const paths = shown.stdout.split("\0").filter(Boolean);
-    if (paths.length === 0) continue; // a clean merge adds no change of its own
+    if (paths.length === 0) {
+      // A clean merge adds no change of its own, but the files both parents changed since their merge base are reviewed: the delta covers where main and the PR meet.
+      const [, p1, p2] = parents.stdout.trim().split(" ");
+      // Criss-cross history has several best bases (the ort merge used a virtual base of all of them): union the overlap over every one.
+      const mb = spawnSync("git", ["-C", repoRoot, "merge-base", "--all", p1, p2], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: gitEnvNoDirOverrides() });
+      const fail = (why) => new Error(`non_base_only_merge: cannot read the paths merge ${merge} brought in (${why}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
+      // Each side is listed with rename detection, as the ort merge applies one side's edit of a renamed file to its destination.
+      const sideNames = (mergeBase, tip) => {
+        const r = spawnSync("git", ["-C", repoRoot, "diff", "-M", "--no-relative", "--no-ext-diff", "--ignore-submodules=none", "--name-status", "-z", mergeBase, tip], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: gitEnvNoDirOverrides() });
+        if (r.status !== 0) throw fail((r.stderr ?? "").trim() || r.error?.message);
+        const fields = r.stdout.split("\0").filter(Boolean), names = [], renames = [];
+        for (let i = 0; i < fields.length;) {
+          const copyOrRename = /^[RC]/.test(fields[i]);
+          if (fields[i].startsWith("R")) renames.push([fields[i + 1], fields[i + 2]]);
+          names.push(...fields.slice(i + 1, i + (copyOrRename ? 3 : 2)));
+          i += copyOrRename ? 3 : 2;
+        }
+        return { names, renames };
+      };
+      if (mb.status !== 0 || !mb.stdout.trim()) throw new Error(`non_base_only_merge: cannot read the merge base of merge ${merge} (${(mb.stderr ?? "").trim() || mb.error?.message}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
+      const overlap = new Set();
+      for (const mergeBase of mb.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
+        const pr = sideNames(mergeBase, p1), main = sideNames(mergeBase, p2);
+        const mainSet = new Set(main.names), prSet = new Set(pr.names);
+        for (const f of pr.names) if (mainSet.has(f)) overlap.add(f);
+        for (const [from, to] of pr.renames) if (mainSet.has(from)) overlap.add(to);
+        for (const [from, to] of main.renames) if (prSet.has(from)) overlap.add(to);
+      }
+      resolvedPaths.push(...overlap);
+      if (overlap.size > 0) overlapMerges += 1;
+      continue;
+    }
     resolvedPaths.push(...paths);
     resolvedMerges.push(merge);
   }
-  return { ownCommits, resolvedPaths, resolvedMerges };
+  return { ownCommits, resolvedPaths, resolvedMerges, overlapMerges };
 }
 
 async function authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor, { closureOnly = false } = {}) {

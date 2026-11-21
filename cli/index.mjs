@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { realpathSync, readFileSync, constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
 import https from "node:https";
+import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,6 +16,7 @@ import {
   summarizeChecks,
   DEV_LOOP_CHECK_IDS,
   SETUP_GUIDANCE,
+  findRecorderSettingsProblems,
 } from "../lib/dev-loops-core.mjs";
 
 // Zero-dep preflight: a Claude Code plugin marketplace checkout ships
@@ -337,6 +339,7 @@ export const SUBCOMMAND_ROUTES = {
     "convert-to-draft": "scripts/github/convert-to-draft.mjs",
     "restore-ready":    "scripts/github/restore-ready.mjs",
   },
+  decision: { record: "scripts/github/record-operator-decision.mjs" },
   issue: {
     edit:   "scripts/github/edit-issue.mjs",
     create: "scripts/github/create-issue.mjs",
@@ -374,6 +377,7 @@ const HELP_CATEGORY_LABELS = {
   gate: "Gate verdicts, evidence, and review operations",
   loop: "Loop lifecycle",
   pr: "PR helpers",
+  decision: "Operator decision recorder (accept, exempt, defer)",
   issue: "Issue helpers",
   queue: "Queue board: run + management (add/list/reorder/move/sync-status/archive)",
   project: "Alias for queue (GitHub Projects queue helpers)",
@@ -397,7 +401,7 @@ const EXTRA_SUBCOMMAND_HELP = {
     .map(([action, description]) => `    ${action.padEnd(16)} ${description} [--repo <owner/name>]`),
 };
 
-const TOP_LEVEL_HELP_CATEGORY_ORDER = ["gate", "loop", "pr", "issue", "queue", "project", "inspect", "refine"];
+const TOP_LEVEL_HELP_CATEGORY_ORDER = ["gate", "loop", "pr", "decision", "issue", "queue", "project", "inspect", "refine"];
 
 const SUBCOMMAND_DESCRIPTIONS = {
   gate: {
@@ -461,6 +465,9 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "reconcile-draft": "Reconcile non-draft PR",
     "convert-to-draft": "Convert a ready PR to draft (idempotent)",
     "restore-ready": "Restore a transient draft PR to ready while CI is blocking",
+  },
+  decision: {
+    record: "Post an operator decision comment (accept, exempt, defer) behind the permission prompt",
   },
   issue: {
     edit: "Edit issue title/body/assignees/milestone/state (close/reopen)",
@@ -615,6 +622,22 @@ export function createCliRuntime({
         throw new Error("Run `dev-loops inspect` from inside a git repository checkout.");
       }
       return repoRoot;
+    },
+    // Parsed Claude settings of the repo toplevel (the cwd outside a git repo) and the user.
+    // An absent file reports nothing; a file that exists but does not parse is reported.
+    async getRecorderSettingsProblems() {
+      const top = spawnResult("git", ["rev-parse", "--show-toplevel"], { cwd: effectiveCwd });
+      const projectRoot = top.ok && top.stdout.trim() ? top.stdout.trim() : effectiveCwd;
+      const files = [
+        path.join(projectRoot, ".claude/settings.json"),
+        path.join(projectRoot, ".claude/settings.local.json"),
+        path.join(homedir(), ".claude/settings.json"),
+      ].flatMap((file) => {
+        let text;
+        try { text = readFileSync(file, "utf8"); } catch { return []; }
+        try { return [{ file, settings: JSON.parse(text) }]; } catch { return [{ file, unparsable: true }]; }
+      });
+      return findRecorderSettingsProblems(files);
     },
     async getSubagentAvailability() {
       const ok = await commandExists("subagent", { searchPath: effectiveSearchPath, platform: effectivePlatform, pathExt: effectivePathExt });
