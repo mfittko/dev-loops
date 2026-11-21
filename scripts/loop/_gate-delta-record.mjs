@@ -69,7 +69,7 @@ export function listGateDeltaRecords(tmpRoot) {
 export const isLifecycleFinding = (finding) => finding?.lifecycle === true;
 
 /** Write the decision of one `--result` run. Returns the record path. */
-export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocation, decision, result, lifecycleFindings = [] }) {
+export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocation, decision, result, lifecycleFindings = [], bodySha256 }) {
   const items = Array.isArray(result?.actionableItems) ? result.actionableItems.map((item) => ({ ref: item?.ref, status: item?.status })) : [];
   // The 20-entry cap bounds the record findings, lifecycle findings first; the emitter's act-ref tasks are not counted against it.
   const findings = [...lifecycleFindings, ...deltaFixerFindings(result)].slice(0, 20);
@@ -83,6 +83,7 @@ export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocat
     nextStep: decision.nextStep,
     items,
     ...(findings.length > 0 ? { findings } : {}),
+    ...(typeof bodySha256 === "string" ? { bodySha256 } : {}),
   };
   return writeSealedGateDeltaRecord(tmpRoot, sequence.reviewBaselineHead, record);
 }

@@ -2207,3 +2207,30 @@ test("--threads-file with no unresolved thread records a locally_clear result ag
   assert.deepEqual(record.items, [{ ref: "operator-focus", status: "resolved" }]);
   assert.equal(record.nextStep, "push");
 });
+
+// Issue 3364: a residue with no site (a PR-body item) clears on a PR body edit or a siteless skip; a code-site residue still needs a commit or a site-matched skip.
+test("issue 3364: a siteless residue is cleared by a PR body edit after the sealed result; a code-site residue still refuses", async () => {
+  const { prBodySha256 } = await import("../../scripts/github/write-gate-context.mjs");
+  const sealedBody = "tradeoff: snapshot-sourced";
+  const siteless = { severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" };
+  const target = ["--repo", "o/r", "--pr", "7"];
+  const withBody = (body) => ({ ...headAt(B), fetchPr: async () => { if (body instanceof Error) throw body; return { body }; } });
+  const fx = openRecordFixture([siteless]);
+  const recordPath = gateDeltaRecordPath(fx.tmpRoot, A);
+  const sealedWith = (findings) => writeSealedGateDeltaRecord(fx.tmpRoot, A, { ...JSON.parse(fs.readFileSync(recordPath, "utf8")), findings, bodySha256: prBodySha256(sealedBody) });
+  sealedWith([siteless]);
+  const atC = fx.handback(B);
+  await assert.rejects(fx.run(atC, ["--handback", ...target], withBody(sealedBody)), /open task[^]*edit the PR body/);
+  await assert.rejects(fx.run(atC, ["--handback", ...target], withBody(new Error("gh offline"))), /open task/);
+  await assert.rejects(fx.run(atC, ["--handback"], withBody("edited")), /open task/);
+  assert.ok((await fx.run(atC, ["--handback", ...target], withBody("tradeoff: fixed"))).ok);
+  // A code-site residue keeps refusing after a body edit.
+  sealedWith([RESIDUE_FINDING]);
+  await assert.rejects(fx.run(atC, ["--handback", ...target], withBody("tradeoff: fixed")), /open task/);
+});
+
+test("issue 3364: a siteless residue is cleared by a recorded skip reason that carries no site", async () => {
+  const fx = openRecordFixture([{ severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" }]);
+  const skipped = fx.handback(B, [{ fingerprint: ACT.fingerprint ?? FP, returnedSites: [], noSitesReason: "a PR-body item with no code site", sites: [] }]);
+  assert.ok((await fx.run(skipped, ["--handback"])).ok);
+});

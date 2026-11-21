@@ -536,3 +536,10 @@ test("evaluate: a prior bare Fixed reply does not satisfy a noted partially_fixe
   assert.deepEqual(steps([`Fixed in commit ${SHA}.`]), [FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING]);
   assert.deepEqual(steps([composeFixerReplyBody(handoff.dispositions[0])]), [FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED]);
 });
+
+test("recordedSkipReason: a residue with no site is skipped only by the record's noSitesReason (issue 3364)", () => {
+  const records = [{ fingerprint: "fp", sites: [{ site: "a.mjs", status: "skipped", reason: "code reason", kind: "location" }], noSitesReason: "body item" }, { fingerprint: "other", sites: [] }];
+  assert.equal(recordedSkipReason(records, "fp", null), "body item");
+  assert.equal(recordedSkipReason(records, "other", null), null);
+  assert.equal(recordedSkipReason(records, "missing", undefined), null);
+});

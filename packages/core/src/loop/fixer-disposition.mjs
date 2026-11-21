@@ -226,9 +226,9 @@ export function siteCoverageGaps(actItems, siteCoverage, residualRefs = new Set(
   return gaps;
 }
 
-/** The recorded skip reason for a site of an act item, or null. */
+/** The recorded skip reason for a site of an act item, or null. A residue with no site is skipped by the record's `noSitesReason`. */
 export function recordedSkipReason(siteCoverage, fingerprint, site) {
-  if (typeof site !== "string") return null;
+  if (typeof site !== "string") return (siteCoverage ?? []).find((record) => record.fingerprint === fingerprint)?.noSitesReason ?? null;
   const sites = (siteCoverage ?? []).find((record) => record.fingerprint === fingerprint)?.sites ?? [];
   // Resolve the exact site first, then filter by status, so a fixed exact form is not shadowed by a skipped trimmed location.
   const found = sites.find((s) => s.site === site) ?? sites.find((s) => s.kind !== "input_form" && s.site === site.trim());
