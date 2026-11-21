@@ -38,7 +38,7 @@ import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-wri
 import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { retireGateRound } from "./retire-gate-round.mjs";
-import { retireStaleRound } from "./_stale-round-retirement.mjs";
+import { buildRetireCommand, retireStaleRound } from "./_stale-round-retirement.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities, splitDiffIntoParts, DIFF_PART_MAX_BYTES, DIFF_PART_MAX_LINES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
@@ -3369,6 +3369,19 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     }).map((e) => e.name);
     return { names, scanError };
   };
+  // The sentinels and dispatch records live under the scanned root; the findings directory lives under --tmp-root.
+  const scanRoot = path.resolve(repoRoot, "tmp");
+  const findingsRoot = path.resolve(repoRoot, options.tmpRoot || "tmp");
+  // A runnable retire command for the live round, named by its one full head (taken from the sentinel names when
+  // --head-sha is abbreviated). When no single full head resolves, the recovery is an explicit stop route.
+  const liveRoundRecovery = (names) => {
+    const heads = new Set(names.map((n) => n.slice(0, -".json".length).split("-").at(-1)));
+    const given = String(options.headSha).trim().toLowerCase();
+    const head = heads.size === 1 ? [...heads][0] : heads.size === 0 && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(given) ? given : null;
+    if (head === null) return `stop: no single full head names the live ${options.gate} round for ${options.headSha}; list tmp/ for its sentinels, then run dev-loops-run scripts/github/retire-gate-round.mjs for that full head`;
+    const findingsDir = buildGateReviewsDir({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: head, tmpRoot: findingsRoot });
+    return buildRetireCommand({ gate: options.gate, headSha: head, tmpRoot: scanRoot, findingsDir: existsSync(findingsDir) ? findingsDir : null, repo: options.repo, pr: options.pr, reason: `the ${options.gate} round at ${head} was in flight when the briefing prefix changed` });
+  };
   let rebuildWarning = null;
   let retiredRound = null;
   if (readError !== null) {
@@ -3385,24 +3398,28 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     // refusing the rebuild (the operator can fix the scan or retire first).
     if (scanError !== null) {
       throw new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes at head ${options.headSha} (${options.gate}): the live-sentinel scan failed (${scanError.code ?? scanError.message}) — cannot rule out an in-flight fan-out for this head, and a rebuild that splits a live round must not be allowed through a broken scan. The existing (recorded) prefix hash is ${priorPrefixHash}; the attempted rebuild would write hash ${newPrefixHash}. Fix the scan first (make tmp/ listable again — restore read permission on the tmp/ directory or remove a file/blocker masquerading as it), then either retire the round explicitly before rebuilding (retire-gate-round moves sentinels out of the live namespace, so a rebuild then sees no live sentinels) or confirm no fan-out is in flight: ${retireCommand}`);
-    } else if (liveSentinelNames.length > 0) {
+    } else {
       // Issue 3416: retire the undispatched or partial round at this head automatically, so the fresh round starts clean.
-      // A round with a posted verdict is never retired: the refusal below stands, with its recovery.
-      const stale = await retireStaleRound({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: path.resolve(repoRoot, options.tmpRoot || "tmp"), verdictRoots: [path.resolve(repoRoot, options.tmpRoot || "tmp"), resolveGateArtifactTmpRoot(repoRoot)] });
+      // A live round has sentinels or dispatch records; a round with a posted verdict is never retired: the refusal stands, with its recovery.
+      const stale = await retireStaleRound({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: scanRoot, findingsTmpRoot: findingsRoot, verdictRoots: [findingsRoot, scanRoot, resolveGateArtifactTmpRoot(repoRoot)], liveOnly: true });
       if (stale.refusal) throw Object.assign(new Error(`${stale.refusal.error} recovery: ${stale.refusal.recovery}`), { recovery: stale.refusal.recovery });
       retiredRound = stale.retiredRound;
       const { names: stillLive } = await scanLiveSentinels();
       if (stillLive.length > 0) {
         // AC2: name the in-flight head and point at the reviewers already briefed on the prior bytes (their sentinel files + the recorded hash they carry).
-        const recovery = retireCommand;
-        throw Object.assign(new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes while a fan-out for head ${options.headSha} is in flight (${options.gate}): ${stillLive.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one was briefed on the prior prefix hash ${priorPrefixHash} and would fail closed on the new hash ${newPrefixHash}, splitting the round. Reviewers already briefed on the prior bytes: ${stillLive.map((n) => `tmp/${n}`).sort().join(", ")}. Retire the round explicitly before rebuilding: ${retireCommand}`), { recovery });
+        const recovery = liveRoundRecovery(stillLive);
+        throw Object.assign(new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes while a fan-out for head ${options.headSha} is in flight (${options.gate}): ${stillLive.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one was briefed on the prior prefix hash ${priorPrefixHash} and would fail closed on the new hash ${newPrefixHash}, splitting the round. Reviewers already briefed on the prior bytes: ${stillLive.map((n) => `tmp/${n}`).sort().join(", ")}. Retire the round explicitly before rebuilding: ${recovery}`), { recovery });
       }
     }
-    // liveSentinelNames.length === 0: the round is not in flight (already
-    // retired or never fanned out). AC3: a rebuild after the round has
+    // No live round remains (already retired, undispatched or never fanned out). AC3: a rebuild after the round has
     // completed is unaffected — proceed to overwrite the frozen artifact.
   }
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
+  // The caller computed the fan-out plan from the findings the retirement just moved away, so it plans again over what remains.
+  if (retiredRound && typeof options.replanFanout === "function") {
+    const fanoutDispatch = await options.replanFanout();
+    options = { ...options, fanoutDispatch };
+  }
 
   // Request plan: angles partition by concrete resolved model via
   // resolveRoleModel(config, { role: angle, harness, kind: "angle" }), the
@@ -3567,7 +3584,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       const cause = scanError !== null
         ? `the live-sentinel scan failed (${scanError.code ?? scanError.message}), so an in-flight fan-out cannot be ruled out`
         : `${names.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist: ${names.map((n) => `tmp/${n}`).sort().join(", ")}`;
-      throw Object.assign(new Error(`Refusing to rewrite required read(s) ${changedOutOfPrefix.join(", ")} with DIFFERENT bytes while a fan-out for head ${options.headSha} may be in flight (${options.gate}): ${cause}. Retire the round explicitly before rebuilding: ${retireCommand}`), { recovery: retireCommand });
+      const recovery = liveRoundRecovery(names);
+      throw Object.assign(new Error(`Refusing to rewrite required read(s) ${changedOutOfPrefix.join(", ")} with DIFFERENT bytes while a fan-out for head ${options.headSha} may be in flight (${options.gate}): ${cause}. Retire the round explicitly before rebuilding: ${recovery}`), { recovery });
     }
   }
 
@@ -3935,9 +3953,12 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // AC3: same-head skip-completed resume — angles with a clean artifact
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
-  const angleState = await readBodyAwareAngleState({ ...input, tmpRoot, carriedAngles: input.carriedAngles ?? null }, { repoRoot });
-  const completedAngles = input.completedAngles ?? angleState.completedAngles;
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: angleState.carriedAngles, singleWave: !isReviewGate, unitBound: await recordedUnitBound(input, repoRoot), sizeOutcome: input.sizeOutcome, changedFiles, harness: input.harness ?? resolveRuntimeHarness(), recordedSizeTier: await recordedSizeTier(input, repoRoot) });
+  const planFanout = async (explicitCompletedAngles) => {
+    const angleState = await readBodyAwareAngleState({ ...input, tmpRoot, carriedAngles: input.carriedAngles ?? null }, { repoRoot });
+    const completedAngles = explicitCompletedAngles ?? angleState.completedAngles;
+    return resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: angleState.carriedAngles, singleWave: !isReviewGate, unitBound: await recordedUnitBound(input, repoRoot), sizeOutcome: input.sizeOutcome, changedFiles, harness: input.harness ?? resolveRuntimeHarness(), recordedSizeTier: await recordedSizeTier(input, repoRoot) });
+  };
+  const fanoutDispatch = await planFanout(input.completedAngles);
 
   const writeResult = await writeGateContext(
     {
@@ -3949,6 +3970,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       rationale,
       angleScopes,
       fanoutDispatch,
+      replanFanout: () => planFanout(),
       branch: input.branch ?? null,
       touchedFiles: input.touchedFiles ?? [],
       changedFiles,
@@ -4583,15 +4605,20 @@ export async function main(
       // --prefix-file (config is a local file read).
       // AC3: same-head skip-completed resume (angles with a clean artifact
       // at this head are excluded from the required count + pending plan).
-      const angleState = await readBodyAwareAngleState({ ...options, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
-      const { completedAngles } = angleState;
-      options.carriedAngles = angleState.carriedAngles;
-      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review", unitBound: await recordedUnitBound(options, repoRoot), sizeOutcome, changedFiles: options.changedFiles, harness: options.harness, recordedSizeTier: await recordedSizeTier(options, repoRoot) });
+      const planFanout = async () => {
+        const angleState = await readBodyAwareAngleState({ ...options, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
+        options.carriedAngles = angleState.carriedAngles;
+        return resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles: angleState.completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review", unitBound: await recordedUnitBound(options, repoRoot), sizeOutcome, changedFiles: options.changedFiles, harness: options.harness, recordedSizeTier: await recordedSizeTier(options, repoRoot) });
+      };
+      options.fanoutDispatch = await planFanout();
+      options.replanFanout = planFanout;
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
-    process.stderr.write(`${formatCliError(error)}\n`);
+    // A refusal that carries a recovery keeps it in the CLI JSON (RECOVERY-COMMAND-REQUIRED).
+    const recovery = typeof error?.recovery === "string" && error.recovery.length > 0 ? { recovery: error.recovery } : {};
+    process.stderr.write(`${JSON.stringify({ ...JSON.parse(formatCliError(error)), ...recovery })}\n`);
     process.exitCode = 1;
   }
 }

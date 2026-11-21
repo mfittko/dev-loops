@@ -112,11 +112,15 @@ Output (stdout, JSON):
   "unitBound" is present only when the round's recorded bound (fanout.unitBound)
   differs from 5; its absence means 5. "budget.maxAngles" carries the round's
   resolved unit bound.
+  "retiredRound" ({ "retirementDir", "retired", "sentinels", "dispatchPromptRecords",
+  "findingsDirRetired" }) is present only when a full emission retired a stale round at
+  this head; a --pending emission never retires, so it omits the key. A refusal or failure
+  after that retirement carries the same "retiredRound" key.
   Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
   gates.fanout.sequential is set). Do NOT use the artifact's fanout.wavePlan to
   bound this step: that plan is computed over the UNSPLIT resolveFanoutGroups
   units and no longer matches this step's split unit set.
-  A fail-closed refusal (exit 1) emits { "ok": false, "error": "..." } on STDOUT
+  A fail-closed refusal (exit 1) emits { "ok": false, "error": "...", "recovery"?: "..." } on STDOUT
   (via the shared jq-output emitter); a usage/parse error (exit 2) emits
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" } on STDERR.
   On success this step ALSO persists its emitted round plan to the keyed
@@ -138,7 +142,9 @@ Exit codes:
      derive a colliding scope, a unit's invariant-prefix record is missing /
      suffix could not be composed, an angle has no resolvable prompt, or a
      composed work order exceeds REVIEWER_WORK_ORDER_MAX_BYTES (30 KB) or
-     carries an inline "diff --git" line
+     carries an inline "diff --git" line, or a full emission finds a posted verdict
+     (a fan-in ledger or findings log) at the head and refuses to retire that round
+     (the "recovery" field names the operator step)
   2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, filesystem
      error, or invalid --jq filter)`.trim();
 
@@ -492,7 +498,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   }
   const jq = jqArg === null ? undefined : jqArg;
   const silent = argv.includes("--silent") || argv.includes("-s");
-  const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
+  // A full emission retires the stale round before its later steps, so every failure after that reports what moved.
+  let retiredRound = null;
+  const finish = (payload, ok) => emitResult(retiredRound && !ok ? { ...payload, retiredRound } : payload, { jq, silent, ok });
 
   // The same config write-gate-context resolved against (this step runs in that
   // worktree). A config load error refuses before any artifact is read.
@@ -751,7 +759,6 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   }
   // Issue 3416: a full emission mints a new round, so the undispatched or partial round at this head is retired first
   // (GATE-EXEC-ROUND-RETIREMENT). A --pending emission resumes the round and keeps it. A posted verdict is never retired.
-  let retiredRound = null;
   if (!pendingOnly) {
     let stale;
     try {

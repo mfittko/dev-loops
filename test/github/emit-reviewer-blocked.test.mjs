@@ -315,7 +315,7 @@ test("issue 3416: a blocked result never overwrites a finished artifact and carr
       process.stdout.write = write;
     }
     assert.equal(code, 1);
-    assert.match(out.join(""), /"recovery"/);
+    assert.match(JSON.parse(out.join("")).recovery, /^stop: the finished artifact stands/);
     assert.deepEqual(await readArtifacts(findingsDir), [finished]);
   });
 });
@@ -335,5 +335,42 @@ test("issue 3416: an over-budget run that covered every angle still writes block
     }
     assert.equal(code, 0);
     assert.deepEqual((await readArtifacts(findingsDir)).map((a) => a.verdict), ["blocked", "blocked"]);
+  });
+});
+
+async function runCapturingStdout(argv) {
+  const out = [];
+  const write = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (chunk) => { out.push(String(chunk)); return true; };
+  try {
+    return { code: await main(argv), out: out.join("") };
+  } finally {
+    process.stdout.write = write;
+  }
+}
+
+test("issue 3416: a sentinel-refused reviewer (no --completed-angles, in budget) never overwrites a finished artifact", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const findingsDir = path.join(tmpDir, "findings");
+    await mkdir(findingsDir, { recursive: true });
+    const finished = { angle: "a", verdict: "findings_present", headSha: HEAD_SHA, findings: [] };
+    await writeFile(path.join(findingsDir, "a.json"), JSON.stringify(finished));
+    const { code, out } = await runCapturingStdout(["--run", RUN, "--head-sha", HEAD_SHA, "--angles", "a", "--model-turns", "1", "--tool-calls", "1", "--findings-dir", findingsDir]);
+    assert.equal(code, 1);
+    assert.match(JSON.parse(out).recovery, /^stop: the finished artifact stands/);
+    assert.deepEqual(await readArtifacts(findingsDir), [finished]);
+  });
+});
+
+test("issue 3416: an existing blocked artifact is overwritten by a new blocked result", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const findingsDir = path.join(tmpDir, "findings");
+    await mkdir(findingsDir, { recursive: true });
+    await writeFile(path.join(findingsDir, "a.json"), JSON.stringify({ angle: "a", verdict: "blocked", headSha: HEAD_SHA, findings: [], reason: "old" }));
+    const { code } = await runCapturingStdout(["--run", RUN, "--head-sha", HEAD_SHA, "--angles", "a", "--model-turns", "1", "--tool-calls", "1", "--findings-dir", findingsDir]);
+    assert.equal(code, 0);
+    const [artifact] = await readArtifacts(findingsDir);
+    assert.equal(artifact.verdict, "blocked");
+    assert.notEqual(artifact.reason, "old");
   });
 });

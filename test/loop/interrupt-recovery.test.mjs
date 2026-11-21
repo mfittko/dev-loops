@@ -146,8 +146,8 @@ test("a reviewer re-fanned after a context rebuild at the same head passes the s
   assert.equal(redo.status, 0, redo.stdout + redo.stderr);
 });
 
-// A round that already recorded its verdict (fan-in ledger) is never retired by a context rebuild: it refuses.
-test("a context rebuild over a round with a posted verdict refuses and keeps the round", async () => {
+// A round that already recorded its verdict (fan-in ledger) is never retired by the retirement helper: it refuses.
+test("the retirement step over a round with a posted verdict refuses and keeps the round", async () => {
   const root = await makeRoot();
   const done = runChild("round", root);
   assert.equal(done.status, 0, done.stderr);

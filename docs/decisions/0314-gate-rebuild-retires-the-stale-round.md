@@ -15,7 +15,7 @@ A coordinator that rebuilt the gate context or re-ran `emit-fanout-dispatch.mjs`
 - `write-gate-context.mjs` (on a byte-changing prefix rebuild at a full head) and a full `emit-fanout-dispatch.mjs` emission retire the undispatched or partial round of that gate and head through the `retire-gate-round.mjs` logic, and report `retiredRound`.
 - A round with a posted verdict at that head (a fan-in ledger or a findings log) and a live sentinel, dispatch record or findings directory is never retired automatically. Both scripts refuse and return a `recovery` field. A verdict marker with nothing live (the round was retired manually; retirement leaves the ledger and log in place) does not refuse.
 - The prefix-change retirement does not check whether a reviewer is still writing. A reviewer dispatched under the old prefix and still running can write a same-head artifact into the recreated findings directory. This race is accepted: rebuilding while reviewers run is already forbidden by the contract, and an in-flight check needs per-angle dispatch state the builder does not hold on this path.
-- A blocked-result writer refuses to overwrite a finished per-angle artifact.
+- A blocked-result writer refuses to overwrite a finished per-angle artifact, except that an over-budget run that reports every angle covered blocks all its angles and overwrites their own artifacts.
 - The fresh-context sentinel is unchanged.
 
 ## Consequences

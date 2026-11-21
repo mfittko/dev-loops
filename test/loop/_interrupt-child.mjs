@@ -14,7 +14,9 @@ const consolidateScript = new URL("../../scripts/loop/consolidate-fanin.mjs", im
 const FIXER_HEAD = process.env.GATE_HEAD; // the PR head the gh stub reports, defined in interrupt-recovery.test.mjs
 // The reviewer sentinel is keyed by the checkout's real head (verify-fresh-review-context.mjs), so the round's
 // sentinel, findings artifact, ledger and retirement all use that one head.
-const HEAD = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+// An ambient GIT_DIR or GIT_WORK_TREE (a git hook running the suite) would key the round to the outer repo's head.
+const { GIT_DIR: _gitDir, GIT_WORK_TREE: _gitWorkTree, ...gitEnv } = process.env;
+const HEAD = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8", env: gitEnv }).trim();
 const gateKey = { repo: "owner/repo", pr: 266, gate: "draft_gate", headSha: HEAD, tmpRoot: path.join(root, "tmp") };
 const contextFile = buildGateContextPath(gateKey);
 const angleFile = path.join(buildGateReviewsDir(gateKey), "coverage.json");
@@ -36,7 +38,8 @@ let emission;
 // A reviewer unit and a fixer emission unit; each step is one durable state change.
 const UNITS = {
   round: {
-    // Rebuilding the context retires the undispatched or partial round at this head first (issue 3416), as write-gate-context.mjs does.
+    // This step runs the shared retirement helper on every run (issue 3416). It models the retire-then-rebuild step only:
+    // write-gate-context.mjs retires only when the prefix bytes change, which this child does not model.
     context: async () => {
       const stale = await retireStaleRound(gateKey);
       if (stale.refusal) { process.stderr.write(JSON.stringify(stale.refusal)); process.exit(5); }

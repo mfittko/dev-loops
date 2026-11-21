@@ -2744,3 +2744,17 @@ test("issue 3416: re-emission at the same head retires the prior partial round a
     assert.equal(existsSync(sentinel), true);
   });
 });
+
+test("issue 3416: a refusal after a full emission retired the stale round still reports retiredRound", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const contextDir = await seedBundle(tmpDir);
+    const args = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+    assert.equal(runEmitCli(args, { cwd: tmpDir }).status, 0);
+    await writeFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.briefing-prefix.txt`), `${PREFIX_BYTES}diff --git a/x b/x\n`, "utf8");
+    const second = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(second.status, 1, second.stderr || second.stdout);
+    const payload = JSON.parse(second.stdout);
+    assert.match(payload.error, /inline diff/);
+    assert.equal(payload.retiredRound.dispatchPromptRecords.length, 3);
+  });
+});

@@ -42,8 +42,8 @@ test("a round with a posted verdict at the head is refused with a recovery and l
     const result = await retireStaleRound({ ...KEY, tmpRoot });
     assert.equal(result.retiredRound, undefined);
     assert.match(result.refusal.recovery, /dev-loops-run scripts\/github\/retire-gate-round\.mjs/);
-    assert.ok(result.refusal.recovery.includes(`--tmp-root ${tmpRoot}`));
-    assert.ok(result.refusal.recovery.includes(`--findings-dir ${buildGateReviewsDir({ ...KEY, tmpRoot })}`));
+    assert.ok(result.refusal.recovery.includes(`--tmp-root ${JSON.stringify(tmpRoot)}`));
+    assert.ok(result.refusal.recovery.includes(`--findings-dir ${JSON.stringify(buildGateReviewsDir({ ...KEY, tmpRoot }))}`));
     assert.doesNotMatch(result.refusal.recovery, /<why>/);
     assert.equal(existsSync(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`)), true);
   });
@@ -86,4 +86,48 @@ test("an abbreviated head is never retired automatically", async () => {
     assert.deepEqual(await retireStaleRound({ ...KEY, headSha: HEAD.slice(0, 12), tmpRoot }), { retiredRound: null });
     assert.equal(existsSync(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`)), true);
   });
+});
+
+test("the recovery command quotes a tmp root with a space and a findings dir path", async () => {
+  const base = await mkdtemp(path.join(os.tmpdir(), "stale-round-"));
+  const tmpRoot = path.join(base, "a b", "tmp");
+  try {
+    await mkdir(buildGateReviewsDir({ ...KEY, tmpRoot }), { recursive: true });
+    await writeFile(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`), "{}");
+    const ledger = buildGateFaninLedgerPath({ ...KEY, tmpRoot });
+    await mkdir(path.dirname(ledger), { recursive: true });
+    await writeFile(ledger, "{}");
+    const { refusal } = await retireStaleRound({ ...KEY, tmpRoot });
+    assert.ok(refusal.recovery.includes(`--tmp-root "${tmpRoot}"`), refusal.recovery);
+    assert.ok(refusal.recovery.includes(`--findings-dir "${buildGateReviewsDir({ ...KEY, tmpRoot })}"`), refusal.recovery);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("liveOnly leaves a findings directory with no sentinel or dispatch record in place", async () => {
+  await withRound(async (tmpRoot) => {
+    await rm(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`));
+    await rm(path.join(tmpRoot, `checkpoint-dispatch-prompt-draft-gate-coverage-${HEAD}.json`));
+    assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot, liveOnly: true }), { retiredRound: null });
+    assert.equal(existsSync(buildGateReviewsDir({ ...KEY, tmpRoot })), true);
+  });
+});
+
+test("a dispatch-record-only round is retired under liveOnly, with the findings dir under another root", async () => {
+  const sentinelRoot = await mkdtemp(path.join(os.tmpdir(), "stale-round-"));
+  const findingsRoot = await mkdtemp(path.join(os.tmpdir(), "stale-round-"));
+  try {
+    await writeFile(path.join(sentinelRoot, `checkpoint-dispatch-prompt-draft-gate-coverage-${HEAD}.json`), "{}");
+    const dir = buildGateReviewsDir({ ...KEY, tmpRoot: findingsRoot });
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "coverage.json"), "{}");
+    const { retiredRound } = await retireStaleRound({ ...KEY, tmpRoot: sentinelRoot, findingsTmpRoot: findingsRoot, liveOnly: true });
+    assert.equal(retiredRound.dispatchPromptRecords.length, 1);
+    assert.equal(retiredRound.findingsDirRetired, true);
+    assert.equal(existsSync(dir), false);
+  } finally {
+    await rm(sentinelRoot, { recursive: true, force: true });
+    await rm(findingsRoot, { recursive: true, force: true });
+  }
 });

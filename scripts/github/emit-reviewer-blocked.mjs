@@ -47,11 +47,16 @@ Optional:
                                  Absent means 5.
 Output (stdout, JSON):
   { "ok": true, "verdict": "blocked", "reason": "...", "unreviewedAngles": [...], "headSha": "...", "written": ["..."] }
+  A refusal (exit 1) emits { "ok": false, "error": "..." }; the finished-artifact refusal adds "recovery".
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Blocked artifact(s) written
   1  Refused: the unit is within budget and fully covered (nothing to emit —
-     write normal per-angle artifacts instead), or --jq predicate false
+     write normal per-angle artifacts instead); a blocked result would overwrite
+     a finished (non-blocked) findings artifact of an angle it blocks, which is
+     refused with { "ok": false, "error", "recovery" } and leaves the artifact
+     unchanged (an over-budget run that covered every angle is exempt); or
+     --jq predicate false
   2  Usage/argument error, an out-of-range budget, or a malformed
      unit/consumed shape rejected by enforceReviewerUnitBound itself`.trim();
 
@@ -193,7 +198,7 @@ export async function main(argv = process.argv.slice(2), { mkdirFn = mkdir, writ
     return finish({
       ok: false,
       error: `refusing to overwrite finished findings artifact(s): ${finished.join(", ")} — no blocked artifact was written`,
-      recovery: "the finished artifact stands; make no further write for these angles, and if the round must restart run retire-gate-round.mjs for this gate and head first",
+      recovery: "stop: the finished artifact stands; write no further artifact for these angles and report the unit as refused to the coordinator",
     }, false);
   }
 
