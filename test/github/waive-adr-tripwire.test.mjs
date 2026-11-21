@@ -350,6 +350,12 @@ test("punctuation regrouping, a stray semicolon, a mid-sentence insertion and a 
   assert.equal(check("The rule is stated", "The rule is stated `skills/docs/y-contract.md`"), false);
   assert.equal(check("Return `false` when stale.", `Return \`false\` in \`${X}\` when stale.`), false);
   assert.equal(check("The rule is stated", `The rule is stated in \`${X}\`, \`skills/docs/y-contract.md\`.`, [X, "skills/docs/y-contract.md"]), true);
+  assert.equal(check("The contract doc states the rule.", `The contract doc states the rule (see \`${X}\`).`), true);
+  assert.equal(check("The contract doc states the rule.", `The contract doc states (see the rule \`${X}\`).`), false);
+  const A = "skills/docs/a-contract.md";
+  assert.equal(check(`\`${A}\` and the tests`, `\`${A}\` and \`${X}\` and the tests`), true);
+  assert.equal(check(`Stated in \`${A}\`.`, `Stated in \`${A}\` and \`${X}\`.`), true);
+  assert.equal(check(`Stated in \`${A}\`.`, `Stated in \`${A}\` and only \`${X}\`.`), false);
 });
 
 test("the default history fetch parses userContentEdits and passes the issue number", async () => {

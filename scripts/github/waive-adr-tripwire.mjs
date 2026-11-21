@@ -138,33 +138,42 @@ export function pathsMissingFromMatrix(paths, issueBody) {
   return { matrixInvalid: false, missing };
 }
 
-const PATH_WORD_RE = /^\(?`([^`\s]+)`[),;.:]*$/u;
-const PUNCT_WORD_RE = /^[(),;.:]+$/u;
+const PATH_WORD_RE = /^`([^`\s]+)`$/u;
+const PUNCT_WORD_RE = /^[(),;.:]$/u;
 const CONNECTOR_RE = /^(?:in|and|see)$/u;
 
+// Whitespace words with leading "(" and trailing ) , ; . : split off as one token per character, so `(see` and `\`a\`.` align by their parts.
+function tokenize(t) {
+  return normalizeCriterionText(t).split(/\s+/u).filter(Boolean).flatMap((w) => {
+    const [, lead, core, trail] = /^(\(*)(.*?)([),;.:]*)$/u.exec(w);
+    return [...lead, ...(core ? [core] : []), ...trail];
+  });
+}
+
 /**
- * True when `cur` is `prior` plus one contiguous run of extra words that adds at least one backticked trigger path.
- * The run sits at the start or end of the string or directly after an existing backticked repo path (one containing "/").
- * Inside the run, the connectors `in`, `and`, `see` and the `( ) , ; . :` words must touch an added trigger path.
+ * True when `cur` is `prior` plus one contiguous run of extra tokens that adds at least one backticked trigger path.
+ * The run sits at the start of the string, at its end (before any trailing punctuation) or directly after an existing backticked repo path (one containing "/").
+ * Inside the run, the connectors `in`, `and`, `see` and the `( ) , ; . :` tokens must touch an added trigger path (a `(` may touch it through `see`).
+ * Every contiguous insertion position that reproduces `prior` is tried.
  */
 function onlyAddsPathWords(prior, cur, triggerPaths) {
-  const words = (t) => normalizeCriterionText(t).split(/\s+/u).filter(Boolean);
-  const want = words(prior);
-  const have = words(cur);
-  let i = 0;
-  const extra = [];
-  have.forEach((w, k) => {
-    if (i < want.length && w === want[i]) i++;
-    else extra.push(k);
-  });
-  if (i !== want.length) return false;
-  if (extra.length === 0) return true;
-  const start = extra[0];
-  if (extra.some((k, n) => k !== start + n)) return false;
-  if (start !== 0 && start + extra.length !== have.length && !PATH_WORD_RE.exec(have[start - 1])?.[1]?.includes("/")) return false;
-  const isAddedPath = (k) => extra.includes(k) && triggerPaths.has(PATH_WORD_RE.exec(have[k])?.[1]);
-  if (!extra.some(isAddedPath)) return false;
-  return extra.every((k) => isAddedPath(k) || ((CONNECTOR_RE.test(have[k]) || PUNCT_WORD_RE.test(have[k])) && (isAddedPath(k - 1) || isAddedPath(k + 1))));
+  const want = tokenize(prior);
+  const have = tokenize(cur);
+  const n = have.length - want.length;
+  if (n < 0) return false;
+  if (n === 0) return want.every((w, k) => w === have[k]);
+  for (let start = 0; start + n <= have.length; start++) {
+    if (!want.slice(0, start).every((w, k) => w === have[k]) || !want.slice(start).every((w, k) => w === have[start + n + k])) continue;
+    if (start !== 0 && !have.slice(start + n).every((t) => PUNCT_WORD_RE.test(t)) && !PATH_WORD_RE.exec(have[start - 1])?.[1]?.includes("/")) continue;
+    const isAddedPath = (k) => k >= start && k < start + n && triggerPaths.has(PATH_WORD_RE.exec(have[k])?.[1]);
+    let ok = false;
+    for (let k = start; k < start + n; k++) if (isAddedPath(k)) ok = true;
+    if (!ok) continue;
+    let all = true;
+    for (let k = start; k < start + n; k++) if (!(isAddedPath(k) || ((CONNECTOR_RE.test(have[k]) || PUNCT_WORD_RE.test(have[k])) && (isAddedPath(k - 1) || isAddedPath(k + 1) || (have[k] === "(" && have[k + 1] === "see" && isAddedPath(k + 2)))))) all = false;
+    if (all) return true;
+  }
+  return false;
 }
 
 /**
