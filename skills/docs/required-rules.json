@@ -981,7 +981,7 @@
     },
     {
       "id": "RECOVERY-COMMAND-REQUIRED",
-      "enforcement": "doc"
+      "enforcement": "runtime"
     },
     {
       "id": "REFINER-DOD-PROPOSED-SUBSECTION"

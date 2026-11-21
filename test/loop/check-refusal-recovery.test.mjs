@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkAgainstBaseline, scanRefusals } from "../../scripts/loop/check-refusal-recovery.mjs";
+import { AUDIT_TABLE_HEADER, checkAgainstBaseline, missingCounts, scanRefusals, spliceAudit } from "../../scripts/loop/check-refusal-recovery.mjs";
 
 test("flags a refusal without recovery and passes one with it", () => {
   const dir = mkdtempSync(join(tmpdir(), "pr-refusal-"));
@@ -36,11 +36,59 @@ test("a brace in a string does not break a real recovery", () => {
   assert.deepEqual(scanSource('f({ ok: false, reason: "a } b {", recovery });\n'), [true]);
 });
 
-test("a lowered count or an unlisted file fails the baseline", () => {
+test("a raised count or an unlisted file fails the baseline; a lowered count passes", () => {
   const sites = [{ file: "a.mjs", line: 1, recovery: false }];
-  assert.equal(checkAgainstBaseline(sites, { "a.mjs": 2 }).length, 1);
+  assert.equal(checkAgainstBaseline(sites, { "a.mjs": 0 }).length, 1);
   assert.equal(checkAgainstBaseline(sites, {}).length, 1);
   assert.equal(checkAgainstBaseline(sites, { "a.mjs": 1 }).length, 0);
+  assert.equal(checkAgainstBaseline(sites, { "a.mjs": 2 }).length, 0);
+  assert.deepEqual(missingCounts(sites), { "a.mjs": 1 });
+});
+
+test("an interpolated refusal inside a template expression is a site", () => {
+  assert.deepEqual(scanSource("f(`${JSON.stringify({ ok: false, error })}\\n`);\n"), [false]);
+  assert.deepEqual(scanSource("f(`x ${g({ ok: false })} y`);\n"), [false]);
+  assert.deepEqual(scanSource('f(`${a ? JSON.stringify({ ok: false }) : ""}`);\n'), [false]);
+  assert.deepEqual(scanSource("f(`${g({ ok: false, recovery: 'x' })}`);\n"), [true]);
+});
+
+test("ok: false in template text, strings and comments is not a site", () => {
+  assert.deepEqual(scanSource("const t = `ok: false`;\n"), []);
+  assert.deepEqual(scanSource("const t = `text ok: false ${x}`;\n"), []);
+  assert.deepEqual(scanSource('const t = "ok: false";\n'), []);
+  assert.deepEqual(scanSource("// ok: false\n/* ok: false */\n"), []);
+  assert.deepEqual(scanSource("const t = a / b; // ok: false\n"), []);
+});
+
+test("a regex literal does not hide a later refusal and its text is not a site", () => {
+  assert.deepEqual(scanSource("const r = /'/; return { ok: false, error: \"e\" };\n"), [false]);
+  assert.deepEqual(scanSource('s.replace(/\\/\\//g, ""); return { ok: false };\n'), [false]);
+  assert.deepEqual(scanSource('if (/"/.test(x)) return { ok: false };\n'), [false]);
+  assert.deepEqual(scanSource("const r = /ok: false/;\n"), []);
+});
+
+test("recovery in value position is not a recovery key", () => {
+  assert.deepEqual(scanSource('f({ ok: false, recovery: "x" });\n'), [true]);
+  assert.deepEqual(scanSource("f({ ok: false, recovery });\n"), [true]);
+  assert.deepEqual(scanSource("f({ ok: false, error, recovery, });\n"), [true]);
+  assert.deepEqual(scanSource("f({ ok: false, reason: recovery });\n"), [false]);
+  assert.deepEqual(scanSource("f({ ok: false, steps: [recovery, x] });\n"), [false]);
+  assert.deepEqual(scanSource("f({ ok: false, hint: g(recovery, x) });\n"), [false]);
+  assert.deepEqual(scanSource("f({ ok: false, reason: c ? recovery : y });\n"), [false]);
+});
+
+test("spliceAudit replaces the table and refuses a missing header", () => {
+  const table = `${AUDIT_TABLE_HEADER}\n|---|---|\n| \`a.mjs:1\` | MISSING |`;
+  const doc = `intro\n\n${AUDIT_TABLE_HEADER}\n|---|---|\n| old | row |\n`;
+  assert.equal(spliceAudit(doc, table), `intro\n\n${table}\n`);
+  assert.equal(spliceAudit("intro\n| Other header |\n", table), null);
+});
+
+test("the scan visits files in sorted name order", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pr-refusal-"));
+  mkdirSync(join(dir, "lib"));
+  for (const n of ["b.mjs", "c.mjs", "a.mjs"]) writeFileSync(join(dir, "lib", n), "f({ ok: false });\n");
+  assert.deepEqual(scanRefusals(dir).map((s) => s.file), ["lib/a.mjs", "lib/b.mjs", "lib/c.mjs"]);
 });
 
 test("the repo has no refusal path above the committed baseline", () => {

@@ -2,7 +2,7 @@
 
 Rule: `RECOVERY-COMMAND-REQUIRED` in the [contract style guide](../skills/docs/contract-style-guide.md).
 Scope: every `ok: false` refusal object in `scripts/github`, `scripts/loop`, `cli`, `lib` and `packages/core/src`.
-Check: `scripts/loop/check-refusal-recovery.mjs` fails on any file whose count of sites without `recovery` differs from `docs/refusal-recovery-baseline.json`, and on any file with such sites and no baseline entry. Regenerate the baseline with `--write-baseline` and this table with `--write-audit`; lower the baseline whenever a site gains `recovery`.
+Check: `scripts/loop/check-refusal-recovery.mjs` fails on any file whose count of sites without `recovery` rises above `docs/refusal-recovery-baseline.json`, and on any file with such sites and no baseline entry. A count that falls rewrites the baseline; commit the rewrite. Regenerate the baseline with `--write-baseline` and this table with `--write-audit`.
 
 ## Seed: refusal patterns behind issues 3411, 3414 to 3419
 
@@ -18,12 +18,13 @@ Check: `scripts/loop/check-refusal-recovery.mjs` fails on any file whose count o
 
 ## Missing-recovery backlog
 
-The orchestrator files the single tracking issue for this backlog and adds its number here.
+The single tracking issue for this backlog is #3424.
 
-One row per refusal site (line numbers drift; the baseline counts per file).
+One row per refusal site (line numbers drift; the baseline counts per file). The sites marked MISSING are tracked in #3424.
 
 | Refusal site | recovery |
 |---|---|
+| `scripts/github/_comment-trust-config.mjs:51` | MISSING |
 | `scripts/github/_minimize-superseded-verdicts.mjs:163` | MISSING |
 | `scripts/github/_work-order-protocol.mjs:158` | MISSING |
 | `scripts/github/_work-order-protocol.mjs:159` | MISSING |
@@ -32,11 +33,32 @@ One row per refusal site (line numbers drift; the baseline counts per file).
 | `scripts/github/_work-order-protocol.mjs:162` | MISSING |
 | `scripts/github/_work-order-protocol.mjs:176` | MISSING |
 | `scripts/github/_work-order-protocol.mjs:179` | MISSING |
+| `scripts/github/build-adjacent-bundle.mjs:245` | MISSING |
+| `scripts/github/build-adjacent-bundle.mjs:246` | MISSING |
+| `scripts/github/build-adjacent-bundle.mjs:247` | MISSING |
+| `scripts/github/build-adjacent-bundle.mjs:250` | MISSING |
+| `scripts/github/close-gate-findings.mjs:1034` | MISSING |
+| `scripts/github/comment-issue.mjs:167` | MISSING |
 | `scripts/github/compose-reviewer-prompt.mjs:108` | MISSING |
+| `scripts/github/create-issue.mjs:197` | MISSING |
+| `scripts/github/create-label.mjs:123` | MISSING |
 | `scripts/github/detect-checkpoint-evidence.mjs:932` | MISSING |
 | `scripts/github/detect-checkpoint-evidence.mjs:941` | MISSING |
+| `scripts/github/detect-checkpoint-evidence.mjs:1516` | MISSING |
 | `scripts/github/detect-checkpoint-evidence.mjs:1545` | MISSING |
-| `scripts/github/emit-fanout-dispatch.mjs:570` | MISSING |
+| `scripts/github/detect-checkpoint-evidence.mjs:1553` | MISSING |
+| `scripts/github/detect-checkpoint-evidence.mjs:1567` | MISSING |
+| `scripts/github/edit-comment.mjs:195` | MISSING |
+| `scripts/github/edit-issue.mjs:355` | MISSING |
+| `scripts/github/edit-pr.mjs:461` | MISSING |
+| `scripts/github/emit-fanout-dispatch.mjs:511` | MISSING |
+| `scripts/github/emit-fanout-dispatch.mjs:529` | MISSING |
+| `scripts/github/emit-fanout-dispatch.mjs:583` | MISSING |
+| `scripts/github/emit-fanout-dispatch.mjs:595` | MISSING |
+| `scripts/github/emit-fanout-dispatch.mjs:611` | MISSING |
+| `scripts/github/emit-fanout-dispatch.mjs:618` | MISSING |
+| `scripts/github/emit-fanout-dispatch.mjs:640` | MISSING |
+| `scripts/github/emit-fanout-dispatch.mjs:647` | MISSING |
 | `scripts/github/emit-fanout-dispatch.mjs:711` | MISSING |
 | `scripts/github/emit-fanout-dispatch.mjs:721` | MISSING |
 | `scripts/github/emit-fanout-dispatch.mjs:734` | MISSING |
@@ -48,6 +70,7 @@ One row per refusal site (line numbers drift; the baseline counts per file).
 | `scripts/github/emit-fanout-dispatch.mjs:813` | MISSING |
 | `scripts/github/emit-fanout-dispatch.mjs:842` | MISSING |
 | `scripts/github/emit-reviewer-blocked.mjs:168` | MISSING |
+| `scripts/github/fetch-ci-logs.mjs:190` | MISSING |
 | `scripts/github/merge-pr.mjs:595` | MISSING |
 | `scripts/github/merge-pr.mjs:617` | MISSING |
 | `scripts/github/merge-pr.mjs:623` | MISSING |
@@ -59,17 +82,25 @@ One row per refusal site (line numbers drift; the baseline counts per file).
 | `scripts/github/merge-pr.mjs:982` | MISSING |
 | `scripts/github/merge-pr.mjs:1010` | MISSING |
 | `scripts/github/merge-pr.mjs:1020` | MISSING |
+| `scripts/github/merge-pr.mjs:1157` | MISSING |
 | `scripts/github/observe-head-ci.mjs:36` | MISSING |
 | `scripts/github/observe-head-ci.mjs:48` | MISSING |
+| `scripts/github/post-gate-findings.mjs:872` | MISSING |
+| `scripts/github/pull-work-order.mjs:178` | MISSING |
+| `scripts/github/quarantine-gate-findings-log.mjs:208` | MISSING |
 | `scripts/github/record-dispatch-prompt-layout.mjs:109` | MISSING |
 | `scripts/github/record-dispatch-prompt-layout.mjs:113` | MISSING |
 | `scripts/github/record-operator-decision.mjs:70` | MISSING |
 | `scripts/github/resolve-angle-carry-forward.mjs:614` | MISSING |
+| `scripts/github/retire-gate-round.mjs:368` | MISSING |
+| `scripts/github/retire-gate-round.mjs:379` | MISSING |
+| `scripts/github/tick-verified-checkboxes.mjs:254` | MISSING |
 | `scripts/github/verify-fixer-disposition.mjs:852` | MISSING |
 | `scripts/github/verify-fixer-disposition.mjs:1029` | MISSING |
 | `scripts/github/verify-fixer-disposition.mjs:1064` | MISSING |
 | `scripts/github/verify-fixer-disposition.mjs:1095` | MISSING |
 | `scripts/github/verify-fixer-disposition.mjs:1135` | MISSING |
+| `scripts/github/verify-fixer-disposition.mjs:1206` | MISSING |
 | `scripts/github/waive-adr-tripwire.mjs:97` | MISSING |
 | `scripts/github/withdraw-copilot-review-request.mjs:256` | MISSING |
 | `scripts/github/withdraw-copilot-review-request.mjs:264` | MISSING |
@@ -105,6 +136,16 @@ One row per refusal site (line numbers drift; the baseline counts per file).
 | `scripts/loop/close-gate-sequence.mjs:45` | MISSING |
 | `scripts/loop/conductor-monitor.mjs:169` | MISSING |
 | `scripts/loop/conductor-monitor.mjs:177` | MISSING |
+| `scripts/loop/conductor-monitor.mjs:1323` | MISSING |
+| `scripts/loop/conductor-monitor.mjs:1342` | MISSING |
+| `scripts/loop/conductor-monitor.mjs:1359` | MISSING |
+| `scripts/loop/conductor-monitor.mjs:1379` | MISSING |
+| `scripts/loop/conductor-monitor.mjs:1399` | MISSING |
+| `scripts/loop/conductor-monitor.mjs:1419` | MISSING |
+| `scripts/loop/conductor-monitor.mjs:1454` | MISSING |
+| `scripts/loop/conductor-monitor.mjs:1469` | MISSING |
+| `scripts/loop/consolidate-fanin.mjs:1740` | MISSING |
+| `scripts/loop/consolidate-fanin.mjs:1749` | MISSING |
 | `scripts/loop/debt-remediate.mjs:64` | MISSING |
 | `scripts/loop/debt-remediate.mjs:67` | MISSING |
 | `scripts/loop/debt-remediate.mjs:83` | MISSING |
@@ -122,6 +163,7 @@ One row per refusal site (line numbers drift; the baseline counts per file).
 | `scripts/loop/detect-tracker-first-loop-state.mjs:67` | MISSING |
 | `scripts/loop/detect-tracker-first-loop-state.mjs:95` | MISSING |
 | `scripts/loop/docs-grill-contract.mjs:46` | MISSING |
+| `scripts/loop/emit-coordinator-work-order.mjs:190` | MISSING |
 | `scripts/loop/emit-fixer-work-order.mjs:1298` | MISSING |
 | `scripts/loop/emit-judge-work-order.mjs:423` | MISSING |
 | `scripts/loop/emit-judge-work-order.mjs:437` | MISSING |
@@ -148,17 +190,24 @@ One row per refusal site (line numbers drift; the baseline counts per file).
 | `scripts/loop/pre-pr-ready-gate.mjs:280` | MISSING |
 | `scripts/loop/pre-pr-ready-gate.mjs:309` | MISSING |
 | `scripts/loop/pre-write-remote-freshness-guard.mjs:26` | MISSING |
+| `scripts/loop/pre-write-remote-freshness-guard.mjs:50` | MISSING |
+| `scripts/loop/pre-write-remote-freshness-guard.mjs:55` | MISSING |
+| `scripts/loop/pre-write-remote-freshness-guard.mjs:67` | MISSING |
+| `scripts/loop/pre-write-remote-freshness-guard.mjs:146` | MISSING |
 | `scripts/loop/resolve-pr-conflicts.mjs:433` | MISSING |
 | `scripts/loop/resolve-validation.mjs:161` | MISSING |
 | `scripts/loop/resolve-validation.mjs:164` | MISSING |
 | `scripts/loop/resolve-validation.mjs:170` | MISSING |
 | `scripts/loop/resolve-validation.mjs:282` | MISSING |
+| `scripts/loop/run-gate-validation.mjs:595` | MISSING |
 | `scripts/loop/run-queue.mjs:154` | MISSING |
 | `scripts/loop/run-queue.mjs:227` | MISSING |
 | `scripts/loop/run-watch-cycle.mjs:338` | MISSING |
 | `scripts/loop/run-watch-cycle.mjs:344` | MISSING |
 | `scripts/loop/run-watch-cycle.mjs:355` | MISSING |
 | `scripts/loop/run-watch-cycle.mjs:440` | MISSING |
+| `scripts/loop/spec-context.mjs:431` | MISSING |
+| `scripts/loop/spec-context.mjs:435` | MISSING |
 | `scripts/loop/standing-authorization.mjs:96` | MISSING |
 | `scripts/loop/ui-designer-review-contract.mjs:31` | MISSING |
 | `scripts/loop/ui-designer-review-contract.mjs:55` | MISSING |
@@ -242,7 +291,7 @@ One row per refusal site (line numbers drift; the baseline counts per file).
 | `packages/core/src/loop/merge-approval.mjs:310` | MISSING |
 | `packages/core/src/loop/merge-approval.mjs:319` | MISSING |
 | `packages/core/src/loop/merge-approval.mjs:322` | MISSING |
-| `packages/core/src/loop/plan-file-promote-contract.mjs:148` | MISSING |
+| `packages/core/src/loop/plan-file-promote-contract.mjs:176` | MISSING |
 | `packages/core/src/loop/plan-file-refine-contract.mjs:85` | MISSING |
 | `packages/core/src/loop/plan-file-refine-contract.mjs:89` | MISSING |
 | `packages/core/src/loop/plan-file-refine-contract.mjs:92` | MISSING |
