@@ -24,7 +24,7 @@ async function selectedAngleNames(config, paths) {
   return (await resolveGateAnglesDynamic(config, "draft", { diff })).recommendedAngles ?? resolveGateAngles(config, "draft") ?? [];
 }
 
-/** The `developer-checklist` lines of the draft_gate angles selected for `paths`, in config order, as { id, angle, check, finalStep? }; at most 18 with the shipped defaults. Best-effort falls back to the shipped defaults when the .devloops layer does not load (strict, the record path: throws pre_pr_self_check_missing). A duplicate id across selected angles is a config error (strict: throws pre_pr_self_check_missing; best-effort: empty). */
+/** The `developer-checklist` lines of the draft_gate angles selected for `paths`, in config order, as { id, angle, check, finalStep? }; at most 19 with the shipped defaults. Best-effort falls back to the shipped defaults when the .devloops layer does not load (strict, the record path: throws pre_pr_self_check_missing). A duplicate id across selected angles is a config error (strict: throws pre_pr_self_check_missing; best-effort: empty). */
 export async function resolveChecklistItems(root, paths, { strict = false, config: loaded } = {}) {
   try {
     const config = loaded ?? await loadConfig(root, strict);

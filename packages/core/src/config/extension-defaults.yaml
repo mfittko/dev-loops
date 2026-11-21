@@ -36,6 +36,7 @@ gates:
           - "C1: For every new if, throw, catch, early return or refusal in your diff, add one test that reaches it."
           - "C2: For each new or renamed test, revert the code line its title names and rerun it; if it still passes, rename or tighten it."
           - "C3: In the hand-back, map every AC/DoD row and each item it enumerates to a test that calls the real entry point; list unmapped items."
+          - "C4: New state: test recovery after a crash, a same-head rebuild and a later-step replacement. New refusal: assert its `recovery` (REFINE-STATE-RECOVERY-ROWS)."
         persona: review
         prompt: "Check whether tests cover the changed behavior adequately. Look for missing edge cases, untested error paths, and acceptance-criteria gaps. Also flag test-name quality issues: test names that misrepresent what is actually asserted, overly broad names that hide gaps, and names that don't match the behavior under test. Flag missing negative-case coverage: malformed-argument tests, error-contract tests, and edge-case coverage for boundary conditions, empty inputs, and unexpected states. Do not accept happy-path-only test suites."
       - name: correctness

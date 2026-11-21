@@ -4,7 +4,7 @@
 
 Accepted — 2026-11-21 ([issue 3396](https://github.com/mfittko/dev-loops/issues/3396))
 
-Extends: 0304 ([record](./0304-developer-pre-pr-self-check.md)). ADR 0304 states a checklist cap of 14. This record raises the cap to 18.
+Extends: 0304 ([record](./0304-developer-pre-pr-self-check.md)). ADR 0304 states a checklist cap of 14. This record raises the cap to 19, counted after merging ADR 0310 (line C4).
 
 ## Context
 
@@ -20,5 +20,5 @@ A matcher class gets a new checklist line when it holds at least 10% of the Copi
 
 ## Consequences
 
-- The developer brief carries at most 18 checklist items with the shipped defaults.
+- The developer brief carries at most 19 checklist items with the shipped defaults.
 - A new checklist line reaches both the developer and the gate reviewer without a second edit.
