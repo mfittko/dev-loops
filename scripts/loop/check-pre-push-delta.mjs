@@ -90,7 +90,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --fixer-plan <path>     Canonical current pulled commit_only plan; pair with --site-coverage for ACT/THREAD closure (required for ACT input/result)
   --findings-log <path>   Required on the act-list route, input mode: the reviewed gate round's findings log (its headSha must equal --baseline, or its sealed clearing chain or a base-only merge must reach --baseline: PRE-PUSH-DELTA-INPUT-CAP-CHAIN);
                           its provenance.perAngle angles join the surface hints (PRE-PUSH-DELTA-INPUT). Refused with --threads-file.
-  --reviewer-only         Code-range clearing without a fixer plan (ADR 0255, GATE-EXEC-ROUND-CAP-CHAIN-EXTEND): an ACT sequence over baseline..PR head for a PR whose head moved past the cap round. The act list is derived from the cap-round ledger (--findings-log, required): its open act clusters, with no fixer plan or coverage record; empty for a clean cap round or a chain-end baseline.
+  --reviewer-only         Code-range clearing without a fixer plan (ADR 0255, GATE-EXEC-ROUND-CAP-CHAIN-EXTEND): an ACT sequence over baseline..PR head for a PR whose head moved past the cap round. The act list is derived from the cap-round ledger (--findings-log, required): its open act clusters, with no fixer plan or coverage record; empty for a clean cap round or a chain-end baseline. A clean merge whose parents both changed a path since their merge bases adds those overlap paths to the review; the no-PR-own refusal applies only when there is no PR-own commit and no overlap path.
                           --repo and --pr bind the log to the PR: the log must carry the same repo and pr, and the cap-round log reaches a chain-end baseline through the sealed clearing chain of that PR.
                           Needs --baseline (an ancestor of the worktree HEAD), --pr-head (equal to the worktree HEAD), --spec-identity and --result-path (input run) or --result and --invocation (result run).
                           Refuses --act-list, --threads-file, --fixer-plan, --site-coverage and --handback. The invocation bound of 3 still applies and no sequence marker is written.
@@ -462,13 +462,13 @@ async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyM
       // A clean merge adds no change of its own, but the files both parents changed since their merge base are reviewed: the delta covers where main and the PR meet.
       const [, p1, p2] = parents.stdout.trim().split(" ");
       // Criss-cross history has several best bases (the ort merge used a virtual base of all of them): union the overlap over every one.
-      const mb = spawnSync("git", ["-C", repoRoot, "merge-base", "--all", p1, p2], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+      const mb = spawnSync("git", ["-C", repoRoot, "merge-base", "--all", p1, p2], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: gitEnvNoDirOverrides() });
       const sideNames = (base, tip) => {
-        const r = spawnSync("git", ["-C", repoRoot, "diff", "--no-renames", "--no-relative", "--no-ext-diff", "--ignore-submodules=none", "--name-only", "-z", base, tip], { encoding: "utf8", env: gitEnvNoDirOverrides() });
-        if (r.status !== 0) throw new Error(`non_base_only_merge: cannot read the paths merge ${merge} brought in (${(r.stderr ?? "").trim()}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
+        const r = spawnSync("git", ["-C", repoRoot, "diff", "--no-renames", "--no-relative", "--no-ext-diff", "--ignore-submodules=none", "--name-only", "-z", base, tip], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: gitEnvNoDirOverrides() });
+        if (r.status !== 0) throw new Error(`non_base_only_merge: cannot read the paths merge ${merge} brought in (${(r.stderr ?? "").trim() || r.error?.message}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
         return r.stdout.split("\0").filter(Boolean);
       };
-      if (mb.status !== 0 || !mb.stdout.trim()) throw new Error(`non_base_only_merge: cannot read the merge base of merge ${merge} (${(mb.stderr ?? "").trim()}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
+      if (mb.status !== 0 || !mb.stdout.trim()) throw new Error(`non_base_only_merge: cannot read the merge base of merge ${merge} (${(mb.stderr ?? "").trim() || mb.error?.message}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
       const overlap = new Set();
       for (const base of mb.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
         const main = new Set(sideNames(base, p2));
