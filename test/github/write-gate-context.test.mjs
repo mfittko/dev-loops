@@ -68,6 +68,7 @@ import {
 import { CAP_ROUND_REFUSAL, evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { DISPOSITION, STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
+import { writePrGateCoordinationSnapshot } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { readSealedGateDeltaRecord, writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
@@ -2474,6 +2475,38 @@ test("CLI tripwire (real resolver): the DEFAULT coordination path refuses a prem
   } finally {
     process.stderr.write = origErr;
     process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI tripwire: the DEFAULT coordination path reuses the pre-flight snapshot for the same head and refetches for another head", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const snapshotRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-wgc-snapshot-"));
+  const options = { repo: "owner/repo", pr: 2 };
+  await writePrGateCoordinationSnapshot(options, { coordinationSnapshotRoot: snapshotRoot }, { currentHeadSha: headSha, prData: { isDraft: true }, gateEvidence: { draftGateSatisfied: false } });
+  const runWith = async (expectedHeadSha) => {
+    const { runChild, calls } = makeGhMock([], { defaultStdout: "{}\n" });
+    const priorExitCode = process.exitCode;
+    const origErr = process.stderr.write;
+    const stderrChunks = [];
+    process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
+    try {
+      await main(["--repo", "owner/repo", "--pr", "2", "--gate", "pre_approval_gate", "--head-sha", expectedHeadSha, "--angles", '["scope"]', "--base", baseSha], { repoRoot, run: runChild, coordinationSnapshotRoot: snapshotRoot });
+      return { calls, stderr: stderrChunks.join("") };
+    } finally {
+      process.stderr.write = origErr;
+      process.exitCode = priorExitCode;
+    }
+  };
+  try {
+    const reused = await runWith(headSha);
+    assert.equal(reused.calls.some((c) => c.args.includes("closingIssuesReferences,reviews") || c.args.join(" ").includes("--json number,state")), false, "no coordination refetch");
+    assert.match(reused.stderr, /run_draft_gate/);
+    const other = "f".repeat(40);
+    const fresh = await runWith(other);
+    assert.equal(fresh.calls.some((c) => c.args.join(" ").includes("--json number,state")), true, "a different head fetches fresh");
+  } finally {
+    await rm(snapshotRoot, { recursive: true, force: true });
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
@@ -10776,4 +10809,29 @@ test("capRoundCovers filters body items on the kept representative, so a cluster
   const base = { severity: "low", angle: "correctness", judgeDisposition: "act", clusterId: 0 };
   const findings = [{ ...base, summary: "body claim" }, { ...base, summary: "code claim", files: ["src/a.mjs"] }];
   assert.equal(capRoundCovers({ log: { verdict: "findings_present", headSha: A, findings } }, undefined)({ items: [] }), true);
+});
+
+// PR 3281 shape: the cap round is clean in a sealed local ledger, but only rounds 1 to 3 are posted.
+test("resolveDraftCapRoundFact: a clean cap round with no posted draft_gate review at its head is not proven fixed", async () => {
+  const capHead = "98".repeat(20);
+  const cleanCapRound = { log: { verdict: "clean", headSha: capHead, findings: [] }, residue: [], round: 4 };
+  const header = (head, round) => `<!-- dev-loops:gate-findings-review draft_gate ${head} round=${round} -->`;
+  // The shape `gh pr view --json reviews` returns; trustRuntime stubs the viewer lookup so no real gh runs.
+  const review = (body, association = "OWNER") => ({ body, author: { login: "maint" }, authorAssociation: association });
+  const fact = (reviews, extra = {}, capRound = cleanCapRound) => resolveDraftCapRoundFact({ repo: "o/r", pr: 9, currentHeadSha: "ab".repeat(20), prData: { isDraft: false, baseRefName: "main", reviews } }, { repoRoot: ".", resolve: async () => capRound, trustRuntime: { runChild: async () => ({ code: 1, stdout: "", stderr: "no viewer" }) }, ...extra });
+  const unposted = { capRoundFixed: false, failure: "clean_cap_verdict_unposted" };
+  assert.deepEqual(await fact([review(header("6ef58a1", 3))]), unposted);
+  assert.deepEqual(await fact([review(header(capHead.slice(0, 7), 4))]), { capRoundFixed: true, failure: null }, "the posted cap-round review proves it");
+  assert.deepEqual(await fact([review(header(capHead.slice(0, 7), 3))]), unposted, "a header at the cap head but another round does not prove it");
+  assert.deepEqual(await fact([review(header("6ef58a1", 3))], { requirePostedCleanCap: false }), { capRoundFixed: true, failure: null }, "the post itself is not gated on the post");
+  assert.deepEqual(await fact([review(header(capHead.slice(0, 7), 4), "NONE")]), unposted, "a forged header from an untrusted author proves nothing");
+  assert.deepEqual(await fact([review(`<!-- dev-loops:gate-findings-review pre_approval_gate ${capHead.slice(0, 7)} round=4 -->`)]), unposted, "a pre_approval_gate header at the cap head and round is no draft_gate post");
+  // The injected runChild, not the ambient gh, answers the viewer lookup for an association-untrusted author.
+  const viewerRunChild = async () => ({ code: 0, stdout: '{"login":"maint"}\n', stderr: "" });
+  assert.deepEqual(await fact([review(header(capHead.slice(0, 7), 4), "NONE")], { trustRuntime: { runChild: viewerRunChild } }), { capRoundFixed: true, failure: null }, "the viewer-authored post counts through the stubbed runChild");
+  assert.deepEqual(await fact(undefined), unposted, "absent reviews fail closed");
+  assert.deepEqual(await fact([review(header("deadbee", 4))]), unposted, "a header whose head prefix does not match the cap head does not prove it");
+  assert.deepEqual(await fact([], { resolve: async () => { throw new Error("unreadable"); } }), { capRoundFixed: false, failure: "cap_round_unresolved" }, "a thrown resolver is the typed failure, never a posted-check result");
+  const withAct = { log: { verdict: "findings_present", headSha: capHead, findings: [{ judgeDisposition: "act", severity: "low", summary: "x" }] }, residue: [] };
+  assert.deepEqual(await fact([], {}, withAct), { capRoundFixed: true, failure: null }, "a cap round with act items posts through the normal flow");
 });

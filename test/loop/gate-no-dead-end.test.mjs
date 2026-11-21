@@ -13,6 +13,7 @@ import { hasRunnableCommand, isTyped, isTypedOrKnownGap, KNOWN_GAPS } from "../.
 import { DISPOSITION, STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
 import { SUBCOMMAND_ROUTES } from "../../cli/index.mjs";
 import { parseExtendCapRoundChainCliArgs } from "../../scripts/loop/extend-cap-round-chain.mjs";
+import { parseUpsertCheckpointVerdictCliArgs } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
 // Issue 3105 slice 1: no-dead-end invariant. Every report_blocked result names who decides
 // (`blockedOn`) or the command an agent can run (`agentRemedy.command`), unless it is a listed
@@ -195,7 +196,7 @@ test("every cap-round block is typed: a command that parses on the extension rou
     assert.ok(hasRunnableCommand(command), command);
     const [, group, sub, ...args] = command.split(" ");
     assert.ok(SUBCOMMAND_ROUTES[group]?.[sub], `${command} is not a CLI command`);
-    assert.doesNotThrow(() => parseExtendCapRoundChainCliArgs(args), command);
+    assert.doesNotThrow(() => (sub === "upsert-verdict" ? parseUpsertCheckpointVerdictCliArgs : parseExtendCapRoundChainCliArgs)(args), command);
   }
   assert.ok(commands >= 4);
 });

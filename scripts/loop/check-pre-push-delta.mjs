@@ -34,6 +34,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
+import { repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { createEvidenceRun, EvidenceSealError, mintEvidenceRunId, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
@@ -43,6 +44,7 @@ import {
   buildDeltaInput,
   decideDeltaNextStep,
   deltaCoverageBinding,
+  deltaFixerFindings,
   resolveDeltaTrigger,
   staleSurfaceTruncatedHit,
   startDeltaSequence,
@@ -54,6 +56,7 @@ import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
+import { promptEndsWithWorkOrder } from "../github/_fixer-emission-evidence.mjs";
 import { assertPlanSourceHasNoThreads, fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
 import { capRoundActList, clearingChainWalk } from "../github/write-gate-context.mjs";
 
@@ -61,6 +64,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
+import { prBodySha256 } from "../github/write-gate-context.mjs";
 import { gateDeltaRecordPath, isLifecycleFinding, readGateDeltaRecord, readSealedGateDeltaRecord, writeGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { runDocsValidators } from "../docs/docs-validators.mjs";
 import { defaultFetchOrigin } from "./standing-authorization.mjs";
@@ -69,9 +73,9 @@ import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 
-const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --result-path <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
-       check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--worktree <dir>]   (fixer handbackCheck run)
-       check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
+const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --result-path <path> --fixer-plan <path> --site-coverage <path> [--repo <owner/name> --pr <n>] [--worktree <dir>]
+       check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--repo <owner/name> --pr <n>] [--worktree <dir>]   (fixer handbackCheck run)
+       check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> --fixer-plan <path> --site-coverage <path> [--repo <owner/name> --pr <n>] [--worktree <dir>]
        check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list; with no unresolved thread the --fixer-plan's operator focus round is the one act item)
        check-pre-push-delta.mjs --reviewer-only --repo <owner/name> --pr <n> --baseline <sha> --pr-head <sha> --findings-log <cap-round log> --spec-identity <id> --result-path <path> [--worktree <dir>]   (code-range clearing, act list derived from the ledger)
        check-pre-push-delta.mjs --reviewer-only --repo <owner/name> --pr <n> --baseline <sha> --pr-head <sha> --findings-log <cap-round log> --result <path> --invocation <1-3> [--worktree <dir>]
@@ -81,8 +85,8 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --act-list <path>       The judge-pass --out act list the fix resolves. An act item that names no file or carries remedyKind pr_body (a PR-body item) leaves the act set and is printed as bodyItems, a top-level field of the input-run output that is present only when at least one act item was dropped; edit the PR body through scripts/github/edit-pr.mjs and the next gate round verifies it. An act list of only such items refuses delta_body_only_act_set, except on the --reviewer-only route, where it yields an empty code act set and prints bodyItems
   --threads-file <path>   Thread route, in place of --act-list: successful list-review-threads --unresolved-only
                           output, or a github-sourced capture-review-threads --unresolved --bodies file, for --repo/--pr. Each unresolved thread is one act item; its ref is the threadId.
-  --repo <owner/name>     Required with --threads-file and --reviewer-only
-  --pr <n>                Required with --threads-file and --reviewer-only
+  --repo <owner/name>     Required with --threads-file and --reviewer-only; optional on the ACT input, --result and --handback runs, where it sets the PR body target (pass it with --pr; a pair that differs from the --fixer-plan target refuses target_mismatch)
+  --pr <n>                Required with --threads-file and --reviewer-only; optional on the ACT input, --result and --handback runs, where it sets the PR body target (pass it with --repo; a pair that differs from the --fixer-plan target refuses target_mismatch)
   --baseline <sha>        reviewBaselineHead: the head the gate round reviewed (hex SHA)
   --pr-head <sha>         The PR head just read from GitHub; the check fails closed when it differs from --baseline (with --reviewer-only it must equal the worktree HEAD and differ from --baseline)
   --spec-identity <id>    Current spec identity passed to the reviewer (required without --result)
@@ -123,6 +127,8 @@ Result JSON (--result, DeltaPrePushReviewResult):
     "newFindings": [{ "severity", "summary", "evidence": ["..."], "residueOf"?, "site"?, "skipReason"? }],
     "widenedReads": [{ "path": "...", "reason": "..." }],   (objects, not strings; [] when none)
     "outcome": "locally_clear|needs_fix|bounded_out" }
+
+  Residue with no site (issue 3364): when the run knows the PR target (--repo and --pr, or the authenticated --fixer-plan target) the --result run seals bodySha256 (the live PR body digest) and that target in the record, and the --handback run clears that residue when its own target equals the sealed target and the live body digest differs, or when the act item's site coverage record carries a sitelessSkipReason (noSitesReason does not clear it); the coordinator input run (with --fixer-plan) falls back to the plan target when no --repo/--pr is given; an unreadable body keeps it open.
 
   ACT results additionally require this binding from input.resultShape:
     { "coverageProtocol": "pulled_commit_only_v1",
@@ -190,6 +196,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
   } else if (Boolean(values["act-list"]) === Boolean(values["threads-file"])) throw parseError("pass exactly one of --act-list <path> and --threads-file <path>");
   if (values["threads-file"] && values["findings-log"]) throw parseError("--findings-log is refused with --threads-file: PRE-PUSH-DELTA-INPUT gives the thread route the act items' angles only");
   if ((values["threads-file"] || reviewerOnly) && !(values.repo && /^[1-9]\d*$/.test(values.pr ?? ""))) throw parseError(`--${reviewerOnly ? "reviewer-only" : "threads-file"} requires --repo <owner/name> and --pr <n>`);
+  if ((values.repo !== undefined || values.pr !== undefined) && !(values.repo && /^[1-9]\d*$/.test(values.pr ?? ""))) throw parseError("--repo <owner/name> and --pr <positive integer> are passed together");
   if (!values.baseline) throw parseError("--baseline <sha> is required");
   const baseline = values.baseline.trim().toLowerCase();
   if (!HEAD_SHA_RE.test(baseline)) throw parseError("--baseline must be a hex commit SHA (7-64 hex characters)");
@@ -517,9 +524,11 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   refuse(subject?.repo === target.repo && subject.pr === target.pr && subject.headSha === sequence.reviewBaselineHead
     && subject.branch === order.mutationAuthority.branch && subject.phase === "commit_only"
     && typeof subject.planPath === "string" && realpathSync(subject.planPath) === planPath, "wrong original pull subject");
-  const renderedHash = materializationHash(readFileSync(expectedPrompt));
-  refuse(renderedHash === plan.materializationHash && renderedHash === unit.materializationHash
-    && renderedHash === pull.receipt.materializationHash, "materialization differs from actual bytes, renderer, plan or receipt");
+  const promptBytes = readFileSync(expectedPrompt), renderedHash = materializationHash(promptBytes);
+  // The emit-time plan hash and the pull-time receipt hash bind the bytes; a re-render would refuse any fix that edits the renderer.
+  refuse(renderedHash === plan.materializationHash && renderedHash === pull.receipt.materializationHash, "materialization differs from actual bytes, plan or receipt");
+  // The trailing Work order JSON block binds the plan's local fields (the LOCAL_MATERIAL_KEYS fields and absolute-path strings such as `executionRules.contract`) that the semantic digest drops.
+  refuse(promptEndsWithWorkOrder(promptBytes, order), "materialization differs from the plan's work order");
   const sourcePath = options.threadsFile ?? options.actList;
   const actRead = order.requiredReads?.find((read) => read.kind === order.source);
   const actBytes = readFileSync(sourcePath);
@@ -531,7 +540,7 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   return { target, coverageBinding: options.threadsFile ? null : { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex(raw.siteCoverage).slice(7), handbackBytesDigest: sha256Hex(reportBytes).slice(7), origin } };
 }
 
-const defaultFetchPr = ({ repo, pr }, { env, ghCommand }) => ghJson(["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,baseRefName"], { env, ghCommand });
+const defaultFetchPr = ({ repo, pr }, { env, ghCommand }) => ghJson(["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,baseRefName,body"], { env, ghCommand });
 // The PR's own base branch, read from GitHub: the configured or default branch is no fallback (fail closed).
 async function readPrBase(fetchPr, { repo, pr }) {
   let state, failure;
@@ -619,16 +628,49 @@ async function lifecycleRefusals({ options, ownPaths, changedPaths, changelog, d
   return findings;
 }
 
+// The target the fixer plan names, for the body-edit clear when no --repo/--pr is given; an unreadable plan yields no target (the residue stays open).
+function planTarget(fixerPlan) {
+  if (!fixerPlan) return null;
+  try { const target = JSON.parse(readFileSync(fixerPlan, "utf8")).workOrder?.target; return target?.repo && target.pr ? target : null; } catch { return null; }
+}
+
+// The explicit --repo/--pr pair may not override an authenticated target: a differing pair is refused, so a digest never seals or clears against another PR's body.
+function resolveBodyTarget(options, authenticated) {
+  const explicit = options.repo && options.pr ? { repo: options.repo, pr: options.pr } : null;
+  if (explicit && authenticated && (!repoSlugEquals(explicit.repo, authenticated.repo) || Number(explicit.pr) !== Number(authenticated.pr))) {
+    throw new Error(`target_mismatch: --repo ${explicit.repo} --pr ${explicit.pr} differ from the fixer plan target ${authenticated.repo}#${authenticated.pr}; pass the plan target or omit --repo and --pr`);
+  }
+  return explicit ?? authenticated ?? null;
+}
+
 // Issue 2447: a handback at the candidate that a fix_and_rereview record reviewed is refused while must-fix work is open there: a lifecycle finding, or a residue finding with no skip reason recorded for its site.
 // A record of another act set (a closed sequence or a replaced act list) names residue refs this sequence lacks, so no skip reason could clear it: it does not apply.
-function assertNoOpenWorkAtCandidate(prior, { handbackHead, siteCoverage, actItems, actSetId }) {
+// Issue 3364: a residue with no site (a PR-body item no commit can fix) is also cleared when the live PR body digest differs from the digest the sealed record took (the issue 3309 body rule). An unreadable body fails closed.
+async function assertNoOpenWorkAtCandidate(prior, { handbackHead, siteCoverage, actItems, actSetId, target, fetchPr }) {
   if (prior?.nextStep !== "fix_and_rereview" || prior.candidateHead !== handbackHead || prior.actSetId !== actSetId) return;
   const skipped = (f) => {
     const item = actItems.find((a) => a.ref === f.residueOf);
     return Boolean(item) && Boolean(recordedSkipReason(siteCoverage, item.fingerprint ?? item.ref, typeof f.site === "string" ? f.site : null));
   };
-  const open = (prior.findings ?? []).filter((f) => isLifecycleFinding(f) || (f.residueOf && !skipped(f)));
-  if (open.length) throw new Error(`the handback is at ${handbackHead}, the candidate the sealed delta record reviewed, and ${open.length} open task(s) remain: ${open.map((f) => JSON.stringify(f.summary)).join("; ")}. Commit the fix on top of ${handbackHead} and hand back that new commit${open.every((f) => !isLifecycleFinding(f)) ? " (or record a skip reason for each residue site)" : ""}`);
+  let bodyEdited;
+  const bodyChanged = async () => {
+    if (bodyEdited !== undefined) return bodyEdited;
+    bodyEdited = false;
+    // The digest counts only against the PR it was sealed from: a record without a sealed target, or a handback naming another PR, keeps the residue open.
+    if (typeof prior.bodySha256 !== "string" || !target || !repoSlugEquals(prior.bodyTarget?.repo, target.repo) || prior.bodyTarget?.pr !== Number(target.pr)) return bodyEdited;
+    try {
+      const state = await fetchPr(target, { env: process.env, ghCommand: "gh" });
+      bodyEdited = typeof state?.body === "string" && prBodySha256(state.body) !== prior.bodySha256;
+    } catch { /* fail closed: the body counts as unedited */ }
+    return bodyEdited;
+  };
+  const open = [];
+  for (const f of prior.findings ?? []) {
+    if (isLifecycleFinding(f) || (f.residueOf && !skipped(f) && !(typeof f.site !== "string" && await bodyChanged()))) open.push(f);
+  }
+  const sitelessFps = open.filter((f) => typeof f.site !== "string").map((f) => { const item = actItems.find((a) => a.ref === f.residueOf); return item ? (item.fingerprint ?? item.ref) : f.residueOf; });
+  const sitelessHint = sitelessFps.length ? `; for a residue with no site edit the PR body (pass --repo and --pr equal to the sealed bodyTarget; another PR or an unreadable body keeps it open) or record a sitelessSkipReason in the siteCoverage entry for ${[...new Set(sitelessFps)].join(", ")}${typeof prior.bodySha256 === "string" ? "" : "; the sealed record has no bodySha256, and a --result re-run with --repo and --pr seals the current body, so when the body is already fixed record a sitelessSkipReason or edit the body again after the re-run"}` : "";
+  if (open.length) throw new Error(`the handback is at ${handbackHead}, the candidate the sealed delta record reviewed, and ${open.length} open task(s) remain: ${open.map((f) => JSON.stringify(f.summary)).join("; ")}. Commit the fix on top of ${handbackHead} and hand back that new commit${open.every((f) => !isLifecycleFinding(f)) ? ` (or record a skip reason for each residue site${sitelessHint})` : ""}`);
 }
 
 export async function runCli(
@@ -762,7 +804,7 @@ export async function runCli(
       }
       for (const guardedHead of new Set(closure ? [record.headSha, currentHead] : [record.headSha])) {
         if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === guardedHead && unsealed.actSetId === sequence.actSetId) throw new Error(`delta_record_unsealed: a delta record exists for ${sequence.reviewBaselineHead} but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record`);
-        assertNoOpenWorkAtCandidate(sealed, { handbackHead: guardedHead, siteCoverage: record.siteCoverage ?? [], actItems: sequence.actItems, actSetId: sequence.actSetId });
+        await assertNoOpenWorkAtCandidate(sealed, { handbackHead: guardedHead, siteCoverage: record.siteCoverage ?? [], actItems: sequence.actItems, actSetId: sequence.actSetId, target: resolveBodyTarget(options, planTarget(options.fixerPlan)), fetchPr });
       }
     }
     if (closure) {
@@ -826,10 +868,16 @@ export async function runCli(
       if (decision.outcome === "bounded_out") decision = { ...decision, nextStep: "restart_on_replacement_pr" };
       if (priorRecord?.outcome === "locally_clear" && !decision.locallyClear) throw new Error(`reviewer-only: the locally_clear record for baseline ${baselineHead} is not replaced by a non-clearing result and is never overwritten. ${chainEndRemedy()}`);
     }
+    // A residue with no site is a PR-body item: seal the live body digest so the handback can see a later body edit (issue 3364). An unreadable body records no digest and the handback stays refused.
+    let bodySha256, sealedTarget;
+    const bodyTarget = resolveBodyTarget(options, authenticatedTarget);
+    if (bodyTarget && deltaFixerFindings(result).some((f) => f.residueOf && typeof f.site !== "string")) {
+      try { const state = await fetchPr(bodyTarget, { env: process.env, ghCommand: "gh" }); if (typeof state?.body === "string") { bodySha256 = prBodySha256(state.body); sealedTarget = { repo: bodyTarget.repo, pr: Number(bodyTarget.pr) }; } } catch { /* fail closed */ }
+    }
     // Local evidence for the emitter and the fixed-reply guard; never a gate verdict.
     const write = () => writeGateDeltaRecord({
       tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree),
-      sequence, candidateHead: currentHead, invocation: options.invocation, decision, result, lifecycleFindings,
+      sequence, candidateHead: currentHead, invocation: options.invocation, decision, result, lifecycleFindings, bodySha256, bodyTarget: sealedTarget,
     });
     // The reviewer-only route read its prior record before the fetch, the scans and the changelog check: write only when the record is still the snapshot every check above judged.
     if (options.reviewerOnly) {

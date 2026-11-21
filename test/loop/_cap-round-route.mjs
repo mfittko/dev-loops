@@ -39,7 +39,7 @@ export async function reviewerOnlyRoute(root, { baseline, head, ledgerPath, stat
 
 /** The coordinator's view of a draft PR at `head`: the proof as detect-pr-gate-coordination-state computes it, then the real evaluator. */
 export async function coordinationAt(root, { repo, pr, head, ready = false }) {
-  const { capRoundFixed: fixed, failure } = await resolveDraftCapRoundFact({ repo, pr, currentHeadSha: head, prData: { isDraft: !ready, baseRefName: "main" } }, { repoRoot: root });
+  const { capRoundFixed: fixed, failure } = await resolveDraftCapRoundFact({ repo, pr, currentHeadSha: head, prData: { isDraft: !ready, baseRefName: "main" } }, { repoRoot: root, requirePostedCleanCap: false }); // these scenarios exercise the chain-extension exits, not the posted-verdict check
   const marker = { visible: true, headSha: "abc1234", verdict: "blocked", contractComplete: true };
   const result = evaluatePrGateCoordination({
     pr, repo, currentHeadSha: head, prDraft: !ready, lifecycleState: ready ? STATE.READY_TO_REREQUEST_REVIEW : STATE.PR_DRAFT_NO_FEEDBACK, loopDisposition: ready ? DISPOSITION.CLEAN_CONVERGED : DISPOSITION.ACTION_REQUIRED, ciStatus: "success",

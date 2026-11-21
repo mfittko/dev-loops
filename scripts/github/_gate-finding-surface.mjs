@@ -865,6 +865,7 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
     overallVerdict: overallVerdictRaw !== undefined ? overallVerdictRaw : null,
     executionMode: parsed.executionMode,
     verifiedItems: verifiedItems === undefined ? [] : verifiedItems.map((item) => item.trim()),
+    prBodySha256: BODY_DIGEST_RE.test(parsed.prBodySha256) ? parsed.prBodySha256 : null,
   };
 }
 
@@ -1205,6 +1206,7 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
     draftGateMarker,
     unresolvedGateThreadCount,
     unresolvedGateThreadBreakdown,
+    draftGatePostedHeads: draftGatePostedHeads(comments.map((c) => c?.body)),
     currentHeadClean,
     preApprovalCurrentHeadClean,
     cleanEvidenceExists,
@@ -1439,6 +1441,14 @@ export function collectVerdictHeadShas(comments, gate, headShas) {
   }
 }
 
+// The head SHAs (as recorded in the header, possibly abbreviated) of every posted draft_gate review body.
+export function draftGatePostedHeads(bodies) {
+  return (bodies ?? []).flatMap((body) => {
+    const header = typeof body === "string" ? body.match(REVIEW_HEADER_RE) : null;
+    return header && header[1] === "draft_gate" ? [{ head: header[2].toLowerCase(), round: Number(header[3]) }] : [];
+  });
+}
+
 // Scoped strictly to review bodies carrying THIS gate's own header marker —
 // never mixes draft_gate/pre_approval_gate round numbers. Only the header's
 // own round= is read: an inline-comment finding marker never appears in a
@@ -1552,13 +1562,27 @@ async function collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, g
         disposition: finding.judgeDisposition.trim(),
         rationale,
         reason,
-        ...(finding.remedyKind === "evidence_only" ? { remedyKind: "evidence_only" } : {}),
+        ...(finding.remedyKind === "evidence_only" || finding.remedyKind === "pr_body" ? { remedyKind: finding.remedyKind } : {}),
+        verdictHeadSha: typeof parsed.headSha === "string" ? parsed.headSha : null,
+        bodySha256: BODY_DIGEST_RE.test(parsed.prBodySha256) ? parsed.prBodySha256 : null,
         loggedAtMs: Number.isFinite(loggedAtMs) ? loggedAtMs : null,
       });
     }
   }
   return matches;
 }
+
+// The verdict head (the ledger's own headSha) of the matched candidates; omitted unless every candidate names the same one, so a pr-body baseline is never guessed.
+// The ledger-recorded pr-body digest of the disposing round rides only when every candidate records the same one.
+const BODY_DIGEST_RE = /^[0-9a-f]{64}$/;
+const verdictHeadOf = (candidates) => {
+  const heads = new Set(candidates.map((m) => m.verdictHeadSha));
+  const digests = new Set(candidates.map((m) => m.bodySha256));
+  return {
+    ...(heads.size === 1 && [...heads][0] ? { headSha: [...heads][0] } : {}),
+    ...(digests.size === 1 && [...digests][0] ? { bodySha256: [...digests][0] } : {}),
+  };
+};
 
 /**
  * Tier 2 of the reject-close judge-disposition lookup (close-gate-findings.mjs,
@@ -1618,14 +1642,14 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
     // At least one candidate ledger carries no usable loggedAt: "greatest" is
     // undecidable across the full set. Safe to proceed only when every
     // candidate already agrees on the disposition regardless of order.
-    return allAgree ? { disposition: matches[0].disposition, rationale: matches[0].rationale, reason: matches[0].reason, ...(matches[0].remedyKind ? { remedyKind: matches[0].remedyKind } : {}) } : { ambiguous: true };
+    return allAgree ? { disposition: matches[0].disposition, rationale: matches[0].rationale, reason: matches[0].reason, ...(matches[0].remedyKind ? { remedyKind: matches[0].remedyKind } : {}), ...verdictHeadOf(matches) } : { ambiguous: true };
   }
   const maxLoggedAtMs = Math.max(...timestamped.map((m) => m.loggedAtMs));
   const winners = timestamped.filter((m) => m.loggedAtMs === maxLoggedAtMs);
   if (winners.length > 1 && !winners.every((m) => same(m, winners[0]))) {
     return { ambiguous: true }; // Tied on the greatest loggedAt, and those tied candidates disagree.
   }
-  return { disposition: winners[0].disposition, rationale: winners[0].rationale, reason: winners[0].reason, ...(winners[0].remedyKind ? { remedyKind: winners[0].remedyKind } : {}) };
+  return { disposition: winners[0].disposition, rationale: winners[0].rationale, reason: winners[0].reason, ...(winners[0].remedyKind ? { remedyKind: winners[0].remedyKind } : {}), ...verdictHeadOf(winners) };
 }
 
 // Tier 3 (last-resort) of the reject-close judge-disposition lookup: parses
