@@ -46,7 +46,7 @@ import { renderCliText } from "@dev-loops/core/loop/cli-command";
 import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 import { readPrViewOnce } from "../github/_pr-view-memo.mjs";
 
-const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path> | --review-id <review node id> | --ci-file <path>) [--completion-only] [--delta-result <path>] [--allowed-path <repo-relative path>]... [--operator-focus-file <path>] [--tmp-root <path>]
+const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path> | --review-id <review node id> | --ci-file <path> [--act-list-file <path> --gate <draft_gate|pre_approval_gate>]) [--completion-only] [--delta-result <path>] [--allowed-path <repo-relative path>]... [--operator-focus-file <path>] [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
 or the unresolved review threads (list-review-threads.mjs --unresolved-only, or capture-review-threads.mjs --repo --pr --unresolved --bodies for full thread text), plus the
 optional pre-push delta result (dev-loops loop pre-push-delta). --review-id <node id> takes the body of one PR
@@ -113,14 +113,16 @@ class Refusal extends Error {
   constructor(message, refusal, recovery) { super(message); if (refusal) this.refusal = refusal; if (recovery) this.recovery = recovery; }
 }
 
-async function readSource(kind, filePath, capture) {
+const CI_ACT_RETRY = "Re-run scripts/loop/emit-fixer-work-order.mjs --phase full --ci-file <wait-pr-checks JSON> --act-list-file <judge-pass --out> --gate <gate> with valid inputs (issue 3420).";
+
+async function readSource(kind, filePath, capture, recovery) {
   const bytes = await capture.read(filePath);
-  if (bytes === null) throw new Refusal(`required fixer source ${kind} is missing or unreadable: ${filePath}`);
+  if (bytes === null) throw new Refusal(`required fixer source ${kind} is missing or unreadable: ${filePath}`, undefined, recovery);
   let parsed;
   try { parsed = JSON.parse(bytes.toString("utf8")); } catch {
     // An empty or truncated delta result gets the one typed evidence refusal and its producer-rerun remedy (GATE-EXEC-EVIDENCE-SEALED).
     if (kind === "delta-result") throw new Refusal(`delta result ${filePath} refused (GATE-EXEC-EVIDENCE-SEALED): ${new EvidenceSealError("evidence_malformed", `${filePath} is empty or not valid JSON; re-run the producer`).message}`);
-    throw new Refusal(`required fixer source ${kind} is not JSON: ${filePath}`);
+    throw new Refusal(`required fixer source ${kind} is not JSON: ${filePath}`, undefined, recovery);
   }
   return { read: { kind, path: filePath, sha256: sha256(bytes), bytes: bytes.length, required: true }, parsed };
 }
@@ -587,8 +589,8 @@ async function emitPlan({
   // A --ci-file source may carry the act list of a round whose verdict post was refused for red CI (the act list then rides as a second read).
   if ([ciFile ? undefined : actListFile, threadsFile, reviewId, ciFile].filter(Boolean).length !== 1) throw new Refusal("pass exactly one of --act-list-file, --threads-file, --review-id and --ci-file (--act-list-file may accompany --ci-file)", "ambiguous_source", "Pass one source flag; to fix an unposted act list together with red CI, pass --ci-file <wait-pr-checks JSON> --act-list-file <judge-pass --out> --gate <gate>.");
   if (completionOnly && (phase !== "full" || reviewId || ciFile || deltaResult || allowedPaths.length || operatorFocusFile)) throw new Refusal("--completion-only takes --phase full and one --act-list-file or --threads-file source, with no --review-id, --ci-file, --delta-result, --allowed-path or --operator-focus-file: the incomplete plan pins them");
-  if (actListFile && !GATE_NAMES.includes(gate)) throw new Refusal(`--act-list-file needs --gate ${GATE_NAMES.join("|")}, got ${gate}`);
-  if (!actListFile && gate) throw new Refusal("--gate applies only to an --act-list-file source");
+  if (actListFile && !GATE_NAMES.includes(gate)) throw new Refusal(`--act-list-file needs --gate ${GATE_NAMES.join("|")}, got ${gate}`, undefined, `Add --gate ${GATE_NAMES.join("|")} to the command (issue 3420).`);
+  if (!actListFile && gate) throw new Refusal("--gate applies only to an --act-list-file source", undefined, "Drop --gate, or pass --act-list-file <judge-pass --out> with it (issue 3420).");
   if ((reviewId || ciFile) && deltaResult) throw new Refusal("--delta-result applies only to an --act-list-file source");
   const ciActFile = ciFile ? actListFile : undefined;
   if (ciActFile) actListFile = undefined;
@@ -627,19 +629,20 @@ async function emitPlan({
   }
   if (ciFile) {
     const ci = source.parsed, next = "run scripts/github/wait-pr-checks.mjs on the PR head and pass its JSON";
-    if (ci?.ok !== true || ci.status !== "failure" || ci.ciStatus !== "failure") throw new Refusal(`ci file ${ciFile} is not a red wait-pr-checks result (status ${JSON.stringify(ci?.status)}, ciStatus ${JSON.stringify(ci?.ciStatus)}); a green, pending or failed read has nothing to fix; ${next}`);
-    if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`);
-    if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`);
+    if (ci?.ok !== true || ci.status !== "failure" || ci.ciStatus !== "failure") throw new Refusal(`ci file ${ciFile} is not a red wait-pr-checks result (status ${JSON.stringify(ci?.status)}, ciStatus ${JSON.stringify(ci?.ciStatus)}); a green, pending or failed read has nothing to fix; ${next}`, undefined, `${next}, then ${CI_ACT_RETRY}`);
+    if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`, undefined, `${next}, then ${CI_ACT_RETRY}`);
+    if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`, undefined, `${next}, then ${CI_ACT_RETRY}`);
   }
   const isActItem = (f) => f?.judgeDisposition === "act" && (gate === "draft_gate" ? hasSeverityText(f) : typeof f.severity === "string" && VALID_SEVERITIES.has(f.severity)) && typeof f.summary === "string" && f.summary.trim() !== "";
-  let ciActRead;
+  let ciActRead, ciActParsed;
   if (ciActFile) {
-    const act = await readSource("act-list", abs(ciActFile), capture);
+    const act = await readSource("act-list", abs(ciActFile), capture, CI_ACT_RETRY);
     if (!GATE_NAMES.includes(gate) || !(Array.isArray(act.parsed) && act.parsed.length > 0 && act.parsed.every(isActItem))) throw new Refusal(`act list ${ciActFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings for --gate ${GATE_NAMES.join("|")}`, "invalid_act_list", "Pass the round's judge-pass --out file and its --gate.");
     // Pin the emitter's own copy, as the plain act-list source does.
     const copyPath = path.join(dir, executionIdentity, "act-list.json");
     await capture.write(copyPath, await capture.read(act.read.path));
     ciActRead = { ...act.read, path: copyPath };
+    ciActParsed = act.parsed;
   }
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
@@ -957,7 +960,7 @@ async function emitPlan({
     contracts,
     requiredReads: [source.read, ...(ciActRead ? [ciActRead] : []), ...(delta ? [delta.read] : []), ...(completionRead ? [completionRead] : [])],
     outputRefs: [outputRef],
-    siteCoverage: actListFile && !completion ? buildSiteCoverageSkeleton(source.parsed) : undefined,
+    siteCoverage: actListFile && !completion ? buildSiteCoverageSkeleton(source.parsed) : ciActParsed ? buildSiteCoverageSkeleton(ciActParsed) : undefined,
     handbackCheck: phase === "commit_only" && actListFile
       ? `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(actListCopy)} --baseline ${headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(outputRef)} --repo ${repo} --pr ${Number(pr)}`
       : undefined,

@@ -6,7 +6,7 @@ const FIELD_CHECKS = {
   workerRunning: (v) => typeof v === "boolean",
 };
 
-// A round whose verdict post was refused for red CI hands back the CI route (issue 3414).
+// A round whose verdict post was refused for red CI hands back the CI route.
 export const CI_ROUTE_NEXT_ACTION = "fix_ci_failure";
 const VERDICT_REFUSAL_RECOVERY = `Hand back verdictRefusal { reason: "ci_red", actListPath: <the round's judge-pass act list> } with nextAction "${CI_ROUTE_NEXT_ACTION}"; the fixer order then takes the act list and the CI failure together: scripts/loop/emit-fixer-work-order.mjs --phase full --ci-file <wait-pr-checks JSON> --act-list-file <actListPath> --gate <gate>.`;
 

@@ -3747,6 +3747,14 @@ test("issue 3414: --ci-file with --act-list-file feeds the unposted act list and
   });
 });
 
+test("issue 3414: --ci-file with a malformed act list refuses with a retry recovery, and a threads file with both is ambiguous", async () => {
+  await withFixture(async (fx) => {
+    await writeFile(fx.files.actList, "not json");
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), (error) => /act-list is not JSON/.test(error.message) && /--ci-file .* --act-list-file/.test(error.recovery));
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate", threadsFile: fx.files.threads }), (error) => error.refusal === "ambiguous_source" && /--ci-file/.test(error.recovery));
+  });
+});
+
 test("issue 2787 C17: a ci-failure plan emits the claude, pi and codex adapter payloads", async () => {
   await withFixture(async (fx) => {
     const unit = await emitCi(fx);
