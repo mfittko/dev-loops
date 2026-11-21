@@ -828,6 +828,8 @@ test("CLI persists a keyed carry-forward plan artifact at the CURRENT head befor
       "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
     ], { repoRoot });
     assert.equal(result.ok, true);
+    // The stdout result reports the absolute path it wrote, for --carry-forward-plan-file.
+    assert.equal(result.carryForwardPlanPath, planPath);
     // The resolver recorded its plan keyed to the CURRENT head, self-describing.
     const persisted = JSON.parse(await readFile(planPath, "utf8"));
     assert.equal(persisted.ok, true);

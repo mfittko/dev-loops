@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { readSealed } from "./_gate-artifact-seal.mjs";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
-import { validateZeroUnitCarryProof } from "./_carried-angles.mjs";
+import { requireAbsolutePlanFilePath, validateCarryForwardPlanShape, validateZeroUnitCarryProof, verifyCarryForwardPlanIdentity } from "./_carried-angles.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { VERIFIED_ITEMS_ANGLES, baseAngleName } from "@dev-loops/core/loop/gate-fanin";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -84,15 +84,22 @@ Optional:
                                fanout.groups only when pendingGroups is ABSENT (an
                                older artifact); a PRESENT-but-empty pendingGroups
                                requires every resolved angle to be carried with
-                               --carry-forward-plan proof, or refuses zero units.
+                               --carry-forward-plan-file (or --carry-forward-plan)
+                               proof, or refuses zero units.
                                The persisted plan also keeps the completed prior
                                units marked "resumed": true, so its count can
                                exceed the stdout count. Only the stdout "units"
                                are dispatched, and --expected-dispatch-units
                                takes the stdout count.
-  --carry-forward-plan <json>  Resolver output (or its carried array). Required
-                               for a zero-unit pending round; persisted with the
-                               keyed plan for fan-in and provenance verification.
+  --carry-forward-plan <json>  Resolver output (or its carried array). The
+                               alternative to --carry-forward-plan-file, one of
+                               which is required for a zero-unit pending round;
+                               persisted with the keyed plan for fan-in and
+                               provenance verification.
+  --carry-forward-plan-file <absolute path>  Same shape, read from a file (the keyed
+                               <gate>-<headSha>.carry-forward-plan.json). Keeps
+                               finding text off the command line. Passing both
+                               plan flags is refused.
   --operator-focus-file <path> A JSON file { round?: string } rendered as a bounded, sanitized
                                "Operator focus" section in every unit's prompt and pinned by the
                                unit work-order digest (GATE-EXEC-OPERATOR-FOCUS). Items are refused.
@@ -492,6 +499,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const jq = jqArg === null ? undefined : jqArg;
   const silent = argv.includes("--silent") || argv.includes("-s");
   const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
+  if (argv.includes("--carry-forward-plan") && argv.includes("--carry-forward-plan-file")) {
+    return finish({ ok: false, error: "--carry-forward-plan and --carry-forward-plan-file are mutually exclusive", recovery: "Pass only --carry-forward-plan-file <keyed carry-forward-plan.json path>." }, false);
+  }
 
   // The same config write-gate-context resolved against (this step runs in that
   // worktree). A config load error refuses before any artifact is read.
@@ -617,6 +627,19 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   if (!Array.isArray(units) || (units.length === 0 && !allCarried)) {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout dispatch plan resolves zero units (${pendingOnly ? "pendingGroups" : "groups"}) — nothing to dispatch` }, false);
   }
+  // A plan file is validated on every round that passes it, so a bad path fails before any reviewer is dispatched.
+  const planFile = resolveFlagValue(argv, "--carry-forward-plan-file");
+  let planFileProof;
+  if (planFile !== null) {
+    try {
+      requireAbsolutePlanFilePath(planFile);
+      planFileProof = JSON.parse(await readFile(planFile, "utf8"));
+      verifyCarryForwardPlanIdentity(planFileProof, { headSha, gate, repo, pr });
+      try { validateCarryForwardPlanShape(planFileProof); } catch (shapeError) { throw new Error(shapeError.message.replace(/^--carry-forward-plan(?=\s)/, "--carry-forward-plan-file")); }
+    } catch (error) {
+      return finish({ ok: false, error: `${units.length === 0 ? "zero-unit carry proof" : "carry-forward plan file"} refused: ${error.message}`, recovery: "Pass --carry-forward-plan-file <keyed carry-forward-plan.json path> with the resolver's complete plan, or rebuild the context and dispatch every angle." }, false);
+    }
+  }
   let carryProof;
   if (units.length === 0) {
     try {
@@ -624,7 +647,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       if (angles.some((angle) => angleReviewSurface(angle).kind !== "kinds")) {
         throw new Error("zero-unit plan cannot carry mandatory, always-run, or unknown angles");
       }
-      const rawProof = JSON.parse(resolveFlagValue(argv, "--carry-forward-plan") ?? "null");
+      const rawProof = planFile !== null ? planFileProof : JSON.parse(resolveFlagValue(argv, "--carry-forward-plan") ?? "null");
       carryProof = validateZeroUnitCarryProof(rawProof, angles);
       // A proof resolved from a head whose log was quarantined no longer counts (GATE-EXEC-FINDINGS-LOG-QUARANTINE):
       // fail closed so the caller rebuilds the context and dispatches every angle.
@@ -637,7 +660,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
         }
       }
     } catch (error) {
-      return finish({ ok: false, error: `zero-unit carry proof refused: ${error.message}` }, false);
+      // Name the flag the caller passed, not the inline one the shape check words its errors with.
+      const message = resolveFlagValue(argv, "--carry-forward-plan-file") !== null ? error.message.replace(/^--carry-forward-plan(?=\s)/, "--carry-forward-plan-file") : error.message;
+      return finish({ ok: false, error: `zero-unit carry proof refused: ${message}`, recovery: "Pass --carry-forward-plan-file <keyed carry-forward-plan.json path> with the resolver's complete plan, or rebuild the context and dispatch every angle." }, false);
     }
   }
   // An angle-less resolved unit is a malformed plan: refuse rather than silently
