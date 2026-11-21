@@ -12,7 +12,7 @@
   "scripts/github/edit-comment.mjs": 1,
   "scripts/github/edit-issue.mjs": 1,
   "scripts/github/edit-pr.mjs": 1,
-  "scripts/github/emit-fanout-dispatch.mjs": 18,
+  "scripts/github/emit-fanout-dispatch.mjs": 17,
   "scripts/github/emit-reviewer-blocked.mjs": 1,
   "scripts/github/fetch-ci-logs.mjs": 1,
   "scripts/github/merge-pr.mjs": 12,

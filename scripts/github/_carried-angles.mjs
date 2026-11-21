@@ -1,3 +1,4 @@
+import path from "node:path";
 import { SEVERITY_ORDER, VALID_SEVERITIES, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 const CARRIED_FROM_HEAD_RE = /^[0-9a-f]{7,64}$/i;
 
@@ -138,6 +139,30 @@ export function verifyZeroUnitCarryProvenance(proof, rows) {
     }
     if (row.carriedVerdict !== (entry.prevVerdict ?? "clean")) {
       throw new Error(`zero-unit carry proof differs from provenance for ${entry.angle}.carriedVerdict`);
+    }
+  }
+}
+
+const PLAN_FILE_RECOVERY = "Recovery: pass the absolute keyed <gate>-<headSha>.carry-forward-plan.json path written by resolve-angle-carry-forward.mjs (its carryForwardPlanPath field)";
+
+// --carry-forward-plan-file must be an absolute path: a relative one resolves against a process cwd that can be the primary checkout.
+export function requireAbsolutePlanFilePath(value) {
+  if (typeof value !== "string" || !path.isAbsolute(value)) {
+    throw new Error(`--carry-forward-plan-file must be an absolute path, got ${JSON.stringify(value)}. ${PLAN_FILE_RECOVERY}`);
+  }
+  return value;
+}
+
+// A plan object that states its identity must match this round, so a stale prior-head plan cannot pass as proof.
+// A bare array carries no identity and stays accepted; a round flag the caller did not pass is not compared.
+export function verifyCarryForwardPlanIdentity(raw, round) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+  for (const field of ["headSha", "gate", "repo", "pr"]) {
+    const planned = raw[field];
+    const expected = round[field];
+    if (planned === undefined || planned === null || expected === undefined || expected === null) continue;
+    if (String(planned).trim().toLowerCase() !== String(expected).trim().toLowerCase()) {
+      throw new Error(`--carry-forward-plan-file ${field} ${JSON.stringify(planned)} does not match this round's ${JSON.stringify(expected)}. ${PLAN_FILE_RECOVERY}`);
     }
   }
 }
