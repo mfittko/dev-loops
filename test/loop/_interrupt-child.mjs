@@ -11,7 +11,10 @@ import { buildGateContextPath, buildGateFaninLedgerPath, buildGateReviewsDir, re
 const [unit, root] = process.argv.slice(2);
 const consolidateScript = new URL("../../scripts/loop/consolidate-fanin.mjs", import.meta.url).pathname;
 // The production paths of one draft_gate round: gate context, per-angle findings directory and fan-in ledger.
-const HEAD = process.env.GATE_HEAD; // one head, defined in interrupt-recovery.test.mjs
+const FIXER_HEAD = process.env.GATE_HEAD; // the PR head the gh stub reports, defined in interrupt-recovery.test.mjs
+// The reviewer sentinel is keyed by the checkout's real head (verify-fresh-review-context.mjs), so the round's
+// sentinel, findings artifact, ledger and retirement all use that one head.
+const HEAD = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 const gateKey = { repo: "owner/repo", pr: 266, gate: "draft_gate", headSha: HEAD, tmpRoot: path.join(root, "tmp") };
 const contextFile = buildGateContextPath(gateKey);
 const angleFile = path.join(buildGateReviewsDir(gateKey), "coverage.json");
@@ -26,7 +29,7 @@ const plan = path.join(planDir, "fixer-emit-plan.json");
 const tempPlan = `${plan}.tmp-f${Date.now()}${process.pid}-${process.pid.toString(16).padStart(8, "0")}`;
 // A full-phase plan whose digest the coordinator verifies, so it reports the fixer disposition as incomplete (a
 // hand-built order: the real emitter needs a worktree, delta record and review fixtures this child does not have).
-const fixerOrder = { role: "fixer", target: { repo: "owner/repo", pr: 266 }, phase: "full", source: "threads", headSha: HEAD, outputRefs: [] };
+const fixerOrder = { role: "fixer", target: { repo: "owner/repo", pr: 266 }, phase: "full", source: "threads", headSha: FIXER_HEAD, outputRefs: [] };
 // PREFIX_HASH models a rebuilt briefing; SAME_HEAD_RETRY is the sanctioned retry for a reviewer killed after its sentinel.
 const prefixHash = process.env.PREFIX_HASH ?? "a".repeat(64);
 let emission;
@@ -35,9 +38,7 @@ const UNITS = {
   round: {
     // Rebuilding the context retires the undispatched or partial round at this head first (issue 3416), as write-gate-context.mjs does.
     context: async () => {
-      // The sentinel is keyed by the checkout's real head (verify-fresh-review-context.mjs), not by the stubbed gate head.
-      const realHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-      const stale = await retireStaleRound({ ...gateKey, headSha: realHead });
+      const stale = await retireStaleRound(gateKey);
       if (stale.refusal) { process.stderr.write(JSON.stringify(stale.refusal)); process.exit(5); }
       atomicWrite(contextFile, "{}\n");
     },

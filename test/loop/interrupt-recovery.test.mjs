@@ -74,7 +74,8 @@ async function snapshot(root) {
     return "";
   };
   const out = [];
-  const key = { ...GATE_KEY, tmpRoot: path.join(root, "tmp") }; // the key _interrupt-child.mjs writes its round artifacts under
+  // The key _interrupt-child.mjs writes its round artifacts under: the checkout's real head.
+  const key = { ...GATE_KEY, headSha: runGitFixture(root, ["rev-parse", "HEAD"]).trim(), tmpRoot: path.join(root, "tmp") };
   const rel = (p) => path.relative(root, p);
   const dirs = [...new Set(["tmp", rel(path.dirname(buildGateContextPath(key))), rel(buildGateReviewsDir(key)), rel(path.dirname(buildGateFaninLedgerPath(key))), `tmp/gate-fixer/${repoSlugFor("owner/repo")}/pr-266`])];
   for (const dir of dirs) {
@@ -143,6 +144,18 @@ test("a reviewer re-fanned after a context rebuild at the same head passes the s
   assert.equal(killed.signal, "SIGKILL", killed.stderr);
   const redo = runChild("round", root, { PREFIX_HASH: "b".repeat(64) });
   assert.equal(redo.status, 0, redo.stdout + redo.stderr);
+});
+
+// A round that already recorded its verdict (fan-in ledger) is never retired by a context rebuild: it refuses.
+test("a context rebuild over a round with a posted verdict refuses and keeps the round", async () => {
+  const root = await makeRoot();
+  const done = runChild("round", root);
+  assert.equal(done.status, 0, done.stderr);
+  const before = await snapshot(root);
+  const redo = runChild("round", root, { INTERRUPT_AFTER: "context" });
+  assert.equal(redo.status, 5, redo.stdout + redo.stderr);
+  assert.match(redo.stderr, /a verdict is already recorded/);
+  assert.deepEqual(await snapshot(root), before);
 });
 
 // A fix pass killed after the plan is on disk leaves the carry-forward plan file for the next fan-in: the coordinator

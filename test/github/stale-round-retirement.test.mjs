@@ -41,8 +41,24 @@ test("a round with a posted verdict at the head is refused with a recovery and l
     await writeFile(ledger, "{}").catch(async () => { await mkdir(path.dirname(ledger), { recursive: true }); await writeFile(ledger, "{}"); });
     const result = await retireStaleRound({ ...KEY, tmpRoot });
     assert.equal(result.retiredRound, undefined);
-    assert.match(result.refusal.recovery, /retire-gate-round\.mjs/);
+    assert.match(result.refusal.recovery, /dev-loops-run scripts\/github\/retire-gate-round\.mjs/);
+    assert.ok(result.refusal.recovery.includes(`--tmp-root ${tmpRoot}`));
+    assert.ok(result.refusal.recovery.includes(`--findings-dir ${buildGateReviewsDir({ ...KEY, tmpRoot })}`));
+    assert.doesNotMatch(result.refusal.recovery, /<why>/);
     assert.equal(existsSync(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`)), true);
+  });
+});
+
+test("a recorded verdict with no live round (retired manually) does not refuse", async () => {
+  await withRound(async (tmpRoot) => {
+    const ledger = buildGateFaninLedgerPath({ ...KEY, tmpRoot });
+    await mkdir(path.dirname(ledger), { recursive: true });
+    await writeFile(ledger, "{}");
+    await rm(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`));
+    await rm(path.join(tmpRoot, `checkpoint-dispatch-prompt-draft-gate-coverage-${HEAD}.json`));
+    await rm(buildGateReviewsDir({ ...KEY, tmpRoot }), { recursive: true });
+    assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot }), { retiredRound: null });
+    assert.equal(existsSync(ledger), true);
   });
 });
 

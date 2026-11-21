@@ -3395,7 +3395,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       if (stillLive.length > 0) {
         // AC2: name the in-flight head and point at the reviewers already briefed on the prior bytes (their sentinel files + the recorded hash they carry).
         const recovery = retireCommand;
-        throw Object.assign(new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes while a fan-out for head ${options.headSha} is in flight (${options.gate}): ${liveSentinelNames.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one was briefed on the prior prefix hash ${priorPrefixHash} and would fail closed on the new hash ${newPrefixHash}, splitting the round. Reviewers already briefed on the prior bytes: ${liveSentinelNames.map((n) => `tmp/${n}`).sort().join(", ")}. Retire the round explicitly before rebuilding: ${retireCommand}`), { recovery });
+        throw Object.assign(new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes while a fan-out for head ${options.headSha} is in flight (${options.gate}): ${stillLive.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one was briefed on the prior prefix hash ${priorPrefixHash} and would fail closed on the new hash ${newPrefixHash}, splitting the round. Reviewers already briefed on the prior bytes: ${stillLive.map((n) => `tmp/${n}`).sort().join(", ")}. Retire the round explicitly before rebuilding: ${retireCommand}`), { recovery });
       }
     }
     // liveSentinelNames.length === 0: the round is not in flight (already
@@ -3567,7 +3567,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       const cause = scanError !== null
         ? `the live-sentinel scan failed (${scanError.code ?? scanError.message}), so an in-flight fan-out cannot be ruled out`
         : `${names.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist: ${names.map((n) => `tmp/${n}`).sort().join(", ")}`;
-      throw new Error(`Refusing to rewrite required read(s) ${changedOutOfPrefix.join(", ")} with DIFFERENT bytes while a fan-out for head ${options.headSha} may be in flight (${options.gate}): ${cause}. Retire the round explicitly before rebuilding: ${retireCommand}`);
+      throw Object.assign(new Error(`Refusing to rewrite required read(s) ${changedOutOfPrefix.join(", ")} with DIFFERENT bytes while a fan-out for head ${options.headSha} may be in flight (${options.gate}): ${cause}. Retire the round explicitly before rebuilding: ${retireCommand}`), { recovery: retireCommand });
     }
   }
 

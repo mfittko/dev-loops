@@ -668,9 +668,15 @@ verified to exist before citation, never assumed from a probe that could have fa
 
 <!-- rule: GATE-EXEC-ROUND-RETIREMENT -->
 `GATE-EXEC-ROUND-RETIREMENT`: A legitimate same-head rebuild, including correction
-of stale/bad seeding, MUST retire the round FIRST. Phase 1's builder refuses changed
-prefix bytes, or a rewrite of a prior-dispositions or scoped-variant
-file, while this gate+head has live sentinels; it never retires implicitly.
+of stale/bad seeding, MUST retire the round FIRST. When no verdict is posted at that
+head (no fan-in ledger and no findings log), Phase 1's builder retires the live round
+automatically on a prefix-byte change, and a full `emit-fanout-dispatch.mjs` emission
+does the same (see Automatic retirement above). When a verdict is posted, both refuse with a
+`recovery` field that names the explicit command below. A rewrite of a prior-dispositions
+or scoped-variant file under live sentinels still refuses until the round is retired explicitly.
+The automatic retirement does not check for a reviewer still writing into the round: it retires
+the live sentinels of that gate+head at once, so a reviewer dispatched under the old prefix and
+still running can write a same-head artifact into the recreated findings directory (accepted race, ADR 0314).
 Rebuilding while reviewers run remains forbidden. A round already stranded by old
 tooling or an out-of-band prefix change also uses retirement: `--same-head-retry`
 cannot repair its hash mismatch. A PR-body-only edit is the one exception: the

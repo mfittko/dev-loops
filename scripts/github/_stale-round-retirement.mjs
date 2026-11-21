@@ -1,6 +1,8 @@
-import { access } from "node:fs/promises";
+import { access, readdir } from "node:fs/promises";
 import path from "node:path";
 import { retireGateRound } from "./retire-gate-round.mjs";
+import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
+import { gateScopePrefix } from "./_gate-names.mjs";
 import { buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
 
 const exists = (file) => access(file).then(() => true, () => false);
@@ -18,6 +20,13 @@ const FULL_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 export async function retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdictRoots = [tmpRoot] }) {
   const head = String(headSha).trim().toLowerCase();
   if (!FULL_SHA_RE.test(head)) return { retiredRound: null };
+  const findingsDir = buildGateReviewsDir({ repo, pr, gate, headSha: head, tmpRoot });
+  const hasFindings = await exists(findingsDir);
+  // A verdict marker alone is not a live round: a manual retirement leaves the ledger and log in place.
+  const names = await readdir(tmpRoot).catch(() => []);
+  const suffix = `-${head}.json`;
+  const prefixes = [`${CHECKPOINT_SENTINEL_PREFIX}${gateScopePrefix(gate)}`, `checkpoint-dispatch-prompt-${gateScopePrefix(gate)}`];
+  if (!hasFindings && !names.some((n) => n.endsWith(suffix) && prefixes.some((p) => n.startsWith(p)))) return { retiredRound: null };
   for (const root of verdictRoots) {
     const key = { repo, pr, gate, headSha: head, tmpRoot: root };
     for (const marker of [buildGateFaninLedgerPath(key), buildLogPath(key)]) {
@@ -25,14 +34,12 @@ export async function retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdi
         return {
           refusal: {
             error: `GATE-EXEC-ROUND-RETIREMENT: refusing to retire the ${gate} round at head ${head}: a verdict is already recorded at ${marker}. A posted verdict is never retired automatically.`,
-            recovery: `operator: confirm the verdict at ${marker} is superseded, then run \`node scripts/github/retire-gate-round.mjs --gate ${gate} --head-sha ${head} --reason "<why>" --repo ${repo} --pr ${pr}\``,
+            recovery: `operator: confirm the verdict at ${marker} is superseded, then run \`dev-loops-run scripts/github/retire-gate-round.mjs --gate ${gate} --head-sha ${head} --reason "operator confirmed the verdict at ${head} is superseded" --tmp-root ${tmpRoot} ${hasFindings ? `--findings-dir ${findingsDir}` : `--repo ${repo} --pr ${pr}`}\``,
           },
         };
       }
     }
   }
-  const findingsDir = buildGateReviewsDir({ repo, pr, gate, headSha: head, tmpRoot });
-  const hasFindings = await exists(findingsDir);
   const result = await retireGateRound({
     gate, headSha: head, tmpRoot, repo, pr,
     reason: "automatic: the gate context was rebuilt or the round re-emitted at the same head before any verdict was recorded",

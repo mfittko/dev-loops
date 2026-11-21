@@ -319,3 +319,21 @@ test("issue 3416: a blocked result never overwrites a finished artifact and carr
     assert.deepEqual(await readArtifacts(findingsDir), [finished]);
   });
 });
+
+test("issue 3416: an over-budget run that covered every angle still writes blocked results over its own clean artifacts", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const findingsDir = path.join(tmpDir, "findings");
+    await mkdir(findingsDir, { recursive: true });
+    for (const angle of ["a", "b"]) await writeFile(path.join(findingsDir, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }));
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = () => true;
+    let code;
+    try {
+      code = await main(["--run", RUN, "--head-sha", HEAD_SHA, "--angles", "a,b", "--completed-angles", "a,b", "--model-turns", "10", "--tool-calls", "51", "--findings-dir", findingsDir]);
+    } finally {
+      process.stdout.write = write;
+    }
+    assert.equal(code, 0);
+    assert.deepEqual((await readArtifacts(findingsDir)).map((a) => a.verdict), ["blocked", "blocked"]);
+  });
+});

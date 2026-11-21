@@ -182,8 +182,9 @@ export async function main(argv = process.argv.slice(2), { mkdirFn = mkdir, writ
   }
 
   // Issue 3416: a reviewer refused by the sentinel never overwrites a finished artifact (any verdict but blocked).
+  // An over-budget run that covered every angle blocks them all, over its own clean artifacts, so the guard skips that case.
   const finished = [];
-  for (const angle of anglesToBlock) {
+  for (const angle of result.unreviewedAngles.length > 0 ? anglesToBlock : []) {
     const existingPath = path.join(findingsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`);
     const existing = await readFile(existingPath, "utf8").then((text) => JSON.parse(text), () => null);
     if (existing && typeof existing === "object" && existing.verdict !== "blocked") finished.push(existingPath);
