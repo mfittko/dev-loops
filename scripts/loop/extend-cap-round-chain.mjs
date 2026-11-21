@@ -85,7 +85,7 @@ export async function extendCapRoundChain(options, {
   const repoRoot = resolveRepoRoot(cwd);
   // The ledger and the record are read from this checkout, keyed by the --repo slug: it must be --repo.
   const originSlug = detectOriginSlug(repoRoot);
-  if (!originSlug || !repoSlugEquals(originSlug, options.repo)) return refuse("repo_mismatch", `the checkout origin (${originSlug ?? "unresolved"}) is not ${options.repo}; rerun with --repo ${originSlug ?? "<origin slug>"} from a clone of ${options.repo}`, rerun(originSlug ?? "<origin slug>", pr));
+  if (!originSlug || !repoSlugEquals(originSlug, options.repo)) return refuse("repo_mismatch", `the checkout origin (${originSlug ?? "unresolved"}) is not ${options.repo}; rerun with --repo ${originSlug ?? "<origin slug>"} from a clone of ${options.repo}`, originSlug ? rerun(originSlug, pr) : undefined);
   // Every later path (ledger directory, proof, messages) uses the origin slug, so a case variant of --repo cannot miss the ledger on a case-sensitive filesystem.
   const repo = originSlug;
   const state = await fetchPr({ repo, pr }, { env, ghCommand, runChild });
@@ -93,7 +93,11 @@ export async function extendCapRoundChain(options, {
   const baseRefName = state?.baseRefName;
   if (!/^[0-9a-f]{40}$/u.test(prHead) || !baseRefName) return refuse("pr_state_unreadable", `cannot read PR #${pr} head and base; check \`gh auth status\` and rerun with --repo ${repo} --pr ${pr}`, "gh auth status");
   const head = git(cwd, ["rev-parse", "HEAD"]).toLowerCase();
-  if (head !== prHead) return refuse("head_mismatch", `the worktree HEAD ${head.slice(0, 7)} is not the PR head ${prHead.slice(0, 7)}; check out and push the PR head, then rerun`, `gh pr checkout ${pr} --repo ${repo}`);
+  if (head !== prHead) {
+    // A local commit ahead of the PR head is unpushed: `gh pr checkout` would not fix it and the branch name is unknown here, so no recovery command is named.
+    const ahead = (() => { try { git(cwd, ["merge-base", "--is-ancestor", prHead, head]); return true; } catch { return false; } })();
+    return refuse("head_mismatch", `the worktree HEAD ${head.slice(0, 7)} is not the PR head ${prHead.slice(0, 7)}; check out and push the PR head, then rerun`, ahead ? undefined : `gh pr checkout ${pr} --repo ${repo}`);
+  }
 
   // The proof, the chain-end discovery and the range all read origin/<base>: fetch it fresh (bounded, prompt-free) first or refuse.
   try {

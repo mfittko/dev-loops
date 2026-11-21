@@ -25,6 +25,8 @@ import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { readSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { assertDeltaClearsFullPhase, assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
+import { resolveCapRound } from "../../scripts/github/write-gate-context.mjs";
+import { extendCapRoundChain } from "../../scripts/loop/extend-cap-round-chain.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { addLocalOrigin, ensureOriginHead, makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
@@ -1484,8 +1486,8 @@ test("GATE-EXEC-ROUND-CAP: a medium act list reaches the fixer below and at the 
     assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
     // Cap round (count equal to the cap, findings_present): emits.
     await prior("d", "findings_present");
-    // The cap round needs its own current-head findings log: an absent one is refused (fail closed).
-    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached" && /does not exist/.test(e.message));
+    // Issue 3437: no cap round is closed yet (the shared resolveCapRound is null), so a head without its own ledger is the round being posted, not past the cap: it emits.
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
     const currentLog = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${head}.json`);
     await writeFile(currentLog, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "findings_present", findings: [] }));
     assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
@@ -1495,6 +1497,30 @@ test("GATE-EXEC-ROUND-CAP: a medium act list reaches the fixer below and at the 
     await assert.rejects(emit(), (e) => e.refusal === "round_cap_reached");
     await prior("f", "blocked");
     await assert.rejects(emit(), (e) => e.refusal === "round_cap_reached" && /no fixer order follows/.test(e.message));
+  });
+});
+
+// Issue 3437 (PR 3433 shape): the emitter, extend-cap-round-chain and gate-coordination read one cap resolver, so they agree on whether a head is in the cap round.
+test("issue 3437: 3 closed rounds at cap 4 are not the cap round for the emitter or extend-cap-round-chain; 4 closed rounds are the cap round for both", async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
+    const closed = async (sha) => {
+      const file = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${sha.repeat(40)}.json`);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha.repeat(40), verdict: "findings_present", findings: [] }));
+    };
+    const extend = () => extendCapRoundChain({ repo: REPO, pr: PR, worktree: wt }, { detectOriginSlug: () => REPO, fetchPr: async () => ({ headRefOid: head, baseRefName: "main" }), fetchBaseBranch: () => {} });
+    for (const sha of ["d", "e", "f"]) await closed(sha);
+    assert.equal(await resolveCapRound({ repo: REPO, pr: PR, headSha: head }, { repoRoot: root }), null);
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    const notCap = await extend();
+    assert.equal(notCap.reason, "no_cap_round_chain");
+    assert.match(notCap.detail, /no resolved draft_gate cap round/);
+    await closed("a");
+    assert.notEqual(await resolveCapRound({ repo: REPO, pr: PR, headSha: head }, { repoRoot: root }), null);
+    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached");
+    assert.doesNotMatch((await extend()).detail ?? "", /no resolved draft_gate cap round/);
   });
 });
 
@@ -3515,10 +3541,10 @@ test("issue 2752 slice 4: every fail-closed case keeps the verdict_not_posted re
       await assert.rejects(fx.emit(over(posted, baseRefName)), notPosted, name);
     });
   }
-  // At the cap round the unaccepted seam leaves the missing-ledger refusal in place (still fail closed).
+  // At the cap round the unaccepted seam still refuses (fail closed): no cap round is closed (resolveCapRound null, issue 3437), so the unposted round refuses on its verdict.
   await withFixture(async (fx) => {
     const { over } = await verdictCarryScenario(fx, { ownChangeAfterMerge: true });
-    await assert.rejects(fx.emit(over()), (e) => e.refusal === "round_cap_reached");
+    await assert.rejects(fx.emit(over()), notPosted);
   });
 });
 
@@ -4654,8 +4680,9 @@ test("an emit that reaches both baseRefName reads calls fetchPr once for them, a
     const { over } = await verdictCarryScenario(fx, { ownChangeAfterMerge: true });
     const base = over();
     let calls = 0;
-    await assert.rejects(fx.emit({ ...base, fetchPr: async (args) => { calls += 1; return base.fetchPr(args); } }), (e) => e.refusal === "round_cap_reached");
-    assert.equal(calls, 1);
+    await assert.rejects(fx.emit({ ...base, fetchPr: async (args) => { calls += 1; return base.fetchPr(args); } }), (e) => e.refusal === "verdict_not_posted");
+    // One memoized baseRefName read for the carry lookup and the cap-round walk, plus the live read that precedes the verdict refusal (issue 3437: the emit no longer stops at the cap-round ledger check).
+    assert.equal(calls, 2);
   });
   // Pins unchanged behavior (also passes without the memo): accepted seam makes one baseRefName read plus the live read.
   await withFixture(async (fx) => {

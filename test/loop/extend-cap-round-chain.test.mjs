@@ -114,6 +114,10 @@ test("refuses a PR head that is not the worktree HEAD and a PR with no cap-round
     const mismatch = await extend(root, "9".repeat(40));
     assert.equal(mismatch.reason, "head_mismatch");
     assert.match(mismatch.recovery, /^gh pr checkout \d+ --repo \S+$/u); // RECOVERY-COMMAND-REQUIRED (issue 3437)
+    // An unpushed local commit ahead of the PR head: checkout would not fix it, so no recovery is named.
+    const ahead = await extend(root, String(runGitFixture(root, ["rev-parse", "HEAD~1"])).trim());
+    assert.equal(ahead.reason, "head_mismatch");
+    assert.equal(ahead.recovery, undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -398,6 +402,9 @@ test("a --repo that differs from the checkout origin refuses repo_mismatch and w
     for (const origin of ["owner/other", "Owner/Repo-x", null]) {
       const result = await extend(root, D, { detectOriginSlug: () => origin, fetchPr: async () => { throw new Error("fetchPr must not run"); } });
       assert.equal(result.reason, "repo_mismatch");
+      // No `<origin slug>` placeholder: an unresolved origin leaves the recovery undefined.
+      if (origin) assert.ok(result.recovery.endsWith(`gate extend-cap-round-chain --repo ${origin} --pr ${PR}`));
+      else assert.equal(result.recovery, undefined);
     }
     // repoSlugEquals normalization: a case variant of --repo is accepted and the origin slug keys the ledger path.
     const variant = await extendCapRoundChain({ repo: "Owner/Repo", pr: PR, worktree: root }, { detectOriginSlug: () => REPO, fetchPr: async () => ({ headRefOid: D, baseRefName: "main" }), fetchBaseBranch: () => {} });

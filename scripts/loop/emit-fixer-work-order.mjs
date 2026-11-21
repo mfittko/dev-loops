@@ -27,7 +27,7 @@ import { OperatorFocusRefusal, bindOperatorFocusItems, operatorFocusDigestEntry,
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
-import { closureFromHeadOf, clearingChainWalk, readClosedPriorRoundLogs, renderRequiredReadLine, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
+import { closureFromHeadOf, clearingChainWalk, readClosedPriorRoundLogs, renderRequiredReadLine, resolveCapRound, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { fixerEmitCarryAccepts } from "../github/_carried-verdict.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
@@ -715,8 +715,9 @@ async function emitPlan({
       // Slice 4: a head with no ledger of its own reads the origin head's ledger (the act list's round) when the carry seam accepts that head.
       let ledgerFile = ledgerPath(capRoundHead);
       if (!existsSync(ledgerFile)) { const origin = await carryOriginHead(); if (origin) ledgerFile = ledgerPath(origin); }
-      if (!existsSync(ledgerFile)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist; failing closed at the cap round`);
-      const { findings: ledgerFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
+      // Issue 3437: resolveCapRound (the cap resolver gate-coordination and extend-cap-round-chain use) says whether a cap round is closed. When none is, the round being posted is the cap round and has no ledger yet: it is not past the cap, so the act list alone is checked (the posted-verdict check below still refuses an unposted round).
+      if (!existsSync(ledgerFile) && await resolveCapRound({ repo, pr, headSha }, { repoRoot: resolveRepoRoot(cwd) })) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist; failing closed at the cap round`);
+      const { findings: ledgerFindings } = !existsSync(ledgerFile) ? { findings: [] } : await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
       // A later cap-round pass fixes only the cap round's findings: an act item outside the cap-round ledger would open a new round past the cap.
       // The bound limits the act items of each pass. The fixer route's own pre-push delta seals the next chain link, so the number of passes has no separate bound. The ADR 0197 base-only merge path skips this bound.
       if (laterPass) {

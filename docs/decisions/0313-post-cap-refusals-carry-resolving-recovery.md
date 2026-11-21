@@ -17,6 +17,8 @@ A cap round whose fixer handed back `ci_failed` left the operator in a cycle. Th
   - A sealed record at the cap-round head does not cover the cap round's act set: the replacement-PR command (`pr create --head <new-branch> --allow-replacement-pr <n>`). That record is never overwritten, so a reviewer-only run at that head refuses.
   - No record at the cap-round head: a reviewer-only run at that head (`loop pre-push-delta --reviewer-only --baseline <cap-round head> ...`).
 - The `delta_range_mismatch` and `logic_commit_in_range` refusals set `recovery` to the reviewer-only run from the start of the logic range.
+- `emit-fixer-work-order` asks `resolveCapRound`, the cap resolver that `gate-coordination` and `extend-cap-round-chain` use, whether a cap round is closed. With no closed cap round, a head without its own ledger is the round being posted and is not past the cap, so the emitter checks the act list alone instead of refusing `round_cap_reached`. The cap is unchanged.
+- A refusal leaves `recovery` undefined when no single command resolves it: `repo_mismatch` with an unresolved origin slug, and `head_mismatch` when the worktree HEAD is ahead of the PR head (an unpushed commit that `gh pr checkout` would not fix).
 - Both `formatCliError` implementations (`scripts/lib/format-cli-error.mjs` and `packages/core/src/github/review-threads.mjs`) copy a string `recovery` from the error onto the CLI payload.
 - The `GATE-EXEC-ROUND-CAP-CHAIN-EXTEND` paragraph in `skills/docs/gate-review-sub-loop-contract.md` states these cases.
 
