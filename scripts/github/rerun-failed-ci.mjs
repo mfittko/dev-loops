@@ -115,7 +115,7 @@ export async function rerunFailedCi(options, runtime = {}) {
   const { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = runtime;
   const run = await waitForHeadCiRun(options, runtime);
   if (!run) throw new Error(`no_run: no ci.yml run found for head ${options.headSha}`);
-  if (run.status !== "completed") throw new Error(`run_in_progress: CI run ${run.databaseId} is still ${run.status} after waiting up to ${(runtime.waitBudgetMs ?? WAIT_BUDGET_MS) / 1000}s; run this script again to keep waiting`);
+  if (run.status !== "completed") throw Object.assign(new Error(`run_in_progress: CI run ${run.databaseId} is still ${run.status} after waiting up to ${(runtime.waitBudgetMs ?? WAIT_BUDGET_MS) / 1000}s; run this script again to keep waiting`), { recovery: `dev-loops-run scripts/github/rerun-failed-ci.mjs --repo ${options.repo} --head-sha ${options.headSha}` });
   if (run.conclusion === "success") throw new Error(`run_succeeded: CI run ${run.databaseId} completed green with no failed job; run wait-pr-checks.mjs for a fresh read and do not emit a ci-failure fixer order`);
   if (!isRerunnableAttempt(run.attempt)) throw new Error(`attempt_cap: CI run ${run.databaseId} is at attempt ${run.attempt} of ${DEFAULT_MAX_ATTEMPTS}; emit the ci-failure fixer order instead`);
   if (!await isSmokeTimeoutOnlyRun({ repo: options.repo, runId: run.databaseId }, runtime)) throw new Error(`not_smoke_timeout: CI run ${run.databaseId} has a failed job that is not a timed-out smoke job; emit the ci-failure fixer order instead`);
@@ -132,7 +132,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
 
 if (isDirectCliRun(import.meta.url)) {
   main().then((code) => { process.exitCode = code; }).catch((error) => {
-    process.stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
+    process.stderr.write(`${JSON.stringify({ ...JSON.parse(formatCliError(error, { usage: USAGE })), ...(error.recovery ? { recovery: error.recovery } : {}) })}\n`);
     process.exitCode = 1;
   });
 }

@@ -35,7 +35,7 @@ test("the verify aggregator failing beside a timed-out smoke job still re-runs, 
 
 test("refuses a run still in progress after the bounded wait, without a re-run call", async () => {
   const { call, calls } = await run([list({ status: "in_progress" }), list({ status: "in_progress" })]);
-  await assert.rejects(call(), /run_in_progress.*run this script again/);
+  await assert.rejects(call(), (error) => /run_in_progress.*run this script again/.test(error.message) && error.recovery === `dev-loops-run scripts/github/rerun-failed-ci.mjs --repo ${opts.repo} --head-sha ${opts.headSha}`);
   assert.equal(calls.length, 2);
 });
 

@@ -3745,7 +3745,8 @@ test("issue 3251: a smoke-only red head whose failed jobs carry GitHub timeout a
     ]);
     const ghCalls = (mock) => mock.calls.filter((c) => c.command === "gh").length;
     const timedOut = gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }], ["The action 'Run inspect-run viewer WebKit smoke' has timed out after 10 minutes."]);
-    await assert.rejects(emitCi(fx, { runChild: timedOut.runChild }, smokeOnly), /timed-out smoke job.*rerun-failed-ci\.mjs/);
+    const recovery = `dev-loops-run scripts/github/rerun-failed-ci.mjs --repo ${REPO} --head-sha ${fx.head}`;
+    await assert.rejects(emitCi(fx, { runChild: timedOut.runChild }, smokeOnly), (error) => /timed-out smoke job.*rerun-failed-ci\.mjs/.test(error.message) && error.recovery === recovery);
     const realFailure = gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }], ["Process completed with exit code 1."]);
     assert.equal((await emitCi(fx, { runChild: realFailure.runChild }, smokeOnly)).workOrder.source, "ci-failure");
     // list, view and one annotations read for viewer-smoke; verify annotations are never read.
@@ -3769,7 +3770,7 @@ test("issue 3251: a smoke-only red head whose failed jobs carry GitHub timeout a
     assert.equal(ghCalls(loneVerifyOther), 2);
     // A re-run already started (attempt 2 in progress): emit nothing until CI settles.
     const inProgress = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "in_progress", attempt: 2 }]) }]);
-    await assert.rejects(emitCi(fx, { runChild: inProgress.runChild }, smokeOnly), /in_progress, not completed.*rerun-failed-ci\.mjs/);
+    await assert.rejects(emitCi(fx, { runChild: inProgress.runChild }, smokeOnly), (error) => /in_progress, not completed.*rerun-failed-ci\.mjs/.test(error.message) && error.recovery === recovery);
     assert.equal(ghCalls(inProgress), 1);
     // The re-run completed green: the red ci file is stale, so no fixer order.
     const green = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", conclusion: "success", attempt: 2 }]) }]);
