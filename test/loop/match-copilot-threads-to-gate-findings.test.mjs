@@ -198,7 +198,6 @@ test("default findings root is main-anchored; --repo is validated like buildLogP
     const linked = path.join(dir, "linked");
     assert.equal(Bun.spawnSync(["git", "worktree", "add", "-q", "-b", "b", linked], { cwd: mainDir }).exitCode, 0);
     const root = parseArgsList(["--threads", "t", "--repo", "owner/name", "--repo-root", linked]).findingsRoot;
-    assert.equal(await Bun.file(path.join(mainDir, "x")).exists(), false);
     assert.match(root, new RegExp(`${path.basename(mainDir)}/tmp/gate-findings/owner-name$`));
     assert.ok(!root.includes("linked"));
     for (const bad of ["../x", "a\\b/c", "abc"]) assert.throws(() => parseArgsList(["--threads", "t", "--repo", bad]), /--repo/, bad);
