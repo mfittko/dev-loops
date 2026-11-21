@@ -1,7 +1,7 @@
 // Leaf module (PRE-PR-DEVELOPER-SELF-CHECK): the constraint ids the brief emits and the record writer requires.
 // The writer never imports the brief, so the shared id derivation lives here.
 import { execFileSync } from "node:child_process";
-import { loadDevLoopConfig, loadDevLoopConfigStrict, resolveGateAngles, resolveGateAnglesDynamic, resolveReviewerRole } from "@dev-loops/core/config";
+import { findAngleEntry, loadDevLoopConfig, loadDevLoopConfigStrict, resolveGateAngles, resolveGateAnglesDynamic } from "@dev-loops/core/config";
 import { PRE_PR_SELF_CHECK_MISSING } from "./_pre-pr-review-record.mjs";
 import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
 
@@ -24,7 +24,7 @@ async function selectedAngleNames(config, paths) {
   return (await resolveGateAnglesDynamic(config, "draft", { diff })).recommendedAngles ?? resolveGateAngles(config, "draft") ?? [];
 }
 
-/** The `developer-checklist` lines of the draft_gate angles selected for `paths`, in config order, as { id, angle, check, finalStep? }; at most 15 with the shipped defaults. Best-effort falls back to the shipped defaults when the .devloops layer does not load (strict, the record path: throws pre_pr_self_check_missing). A duplicate id across selected angles is a config error (strict: throws pre_pr_self_check_missing; best-effort: empty). */
+/** The `developer-checklist` lines of the draft_gate angles selected for `paths`, in config order, as { id, angle, check, finalStep? }; at most 19 with the shipped defaults. Best-effort falls back to the shipped defaults when the .devloops layer does not load (strict, the record path: throws pre_pr_self_check_missing). A duplicate id across selected angles is a config error (strict: throws pre_pr_self_check_missing; best-effort: empty). */
 export async function resolveChecklistItems(root, paths, { strict = false, config: loaded } = {}) {
   try {
     const config = loaded ?? await loadConfig(root, strict);
@@ -54,7 +54,7 @@ export async function resolveSelfCheckAngles(root, paths, { strict = false, conf
   try {
     const config = loaded ?? await loadConfig(root, strict);
     const names = await selectedAngleNames(config, paths);
-    return names.slice(0, MAX_ANGLE_LINES).map((angle) => ({ id: `${ANGLE_ID_PREFIX}${angle}`, angle, constraint: condenseAnglePrompt(resolveReviewerRole(config, angle).prompt, angle) }));
+    return names.slice(0, MAX_ANGLE_LINES).map((angle) => ({ id: `${ANGLE_ID_PREFIX}${angle}`, angle, constraint: condenseAnglePrompt(findAngleEntry(config, angle)?.prompt, angle) })); // the raw entry prompt: the rendered one ends in the checklist block
   } catch (error) { if (strict) throw configFailed(error); return []; }
 }
 

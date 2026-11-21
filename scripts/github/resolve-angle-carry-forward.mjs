@@ -593,10 +593,11 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // Persist the keyed plan artifact BEFORE emitting to stdout, so the proof
     // that carry-forward ran at head B is durable on disk regardless of how the
     // stdout emit is shaped (--jq/--silent) or whether the caller captures it.
-    await persistCarryForwardPlan(result, {
+    const carryForwardPlanPath = await persistCarryForwardPlan(result, {
       repoRoot, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot,
     });
-    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
+    // Report the written absolute path so the coordinator passes it to --carry-forward-plan-file instead of rebuilding it by convention.
+    process.exitCode = emitResult({ ...result, carryForwardPlanPath }, { jq: options.jq, silent: options.silent });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // FAIL-CLOSED full-fallback: record a marker ONLY for a genuine carry-forward
