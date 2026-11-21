@@ -8,7 +8,8 @@ import { spawnSync } from "node:child_process";
 import { test } from "bun:test";
 import {
   approvalDir, buildApprovalQuestion, extractYesApproval, writeApprovalRecord, buildApprovalComment,
-  filterAskApprovalComments, parseMarkedComment, ASK_APPROVAL_RECOVERY,
+  filterAskApprovalComments, parseMarkedComment, parseApprovalQuestion, approvalKeyPresent,
+  ASK_APPROVAL_RECOVERY, ASK_APPROVAL_KEY_RECOVERY, ASK_APPROVAL_NO_DIALOG_RECOVERY,
 } from "@dev-loops/core/github/ask-merge-approval";
 import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
 
@@ -247,8 +248,110 @@ test("a key that is not 32 bytes, a loose directory mode or a symlinked key is r
   fs.symlinkSync(elsewhere, keyPath);
   const { comments, refusals } = filter(f.env, [comment(id)]);
   assert.equal(comments.length, 0, "symlinked key");
-  assert.ok(refusals[0].includes(ASK_APPROVAL_RECOVERY));
+  assert.ok(refusals[0].includes(ASK_APPROVAL_KEY_RECOVERY), "a key problem names its own recovery");
+  assert.equal(refusals[0].includes(ASK_APPROVAL_RECOVERY), false, "not the ask-again recovery");
   assert.throws(() => ask(f.env), /private regular file/);
+});
+
+// M-1, M-4: only ENOENT is absent; key and directory problems name the concrete fix
+test("a 0-byte key, a wrong-size key and an unreadable key directory each refuse with the key recovery", () => {
+  const f = fixture();
+  const { id } = ask(f.env);
+  const keyPath = path.join(f.dir, ".key");
+  const key = fs.readFileSync(keyPath);
+  for (const bad of [Buffer.alloc(0), key.subarray(0, 31), Buffer.concat([key, key])]) {
+    fs.writeFileSync(keyPath, bad, { mode: 0o600 });
+    const { comments, refusals } = filter(f.env, [comment(id), { login: "operator", body: `approve merge ${HEAD}` }]);
+    assert.equal(comments.length, 0, `${bad.length} bytes`);
+    assert.equal(refusals.length, 2);
+    for (const r of refusals) assert.ok(r.includes(ASK_APPROVAL_KEY_RECOVERY) && !r.includes(ASK_APPROVAL_RECOVERY), r);
+    assert.match(refusals[0], /exactly 32/);
+  }
+  fs.writeFileSync(keyPath, key, { mode: 0o600 });
+  fs.chmodSync(f.dir, 0o000);
+  try {
+    assert.equal(approvalKeyPresent(f.env), true, "EACCES is not absent");
+    const { comments, refusals } = filter(f.env, [{ login: "operator", body: `approve merge ${HEAD}` }, comment(id)]);
+    assert.equal(comments.length, 0);
+    assert.equal(refusals.length, 2);
+    for (const r of refusals) assert.ok(r.includes(ASK_APPROVAL_KEY_RECOVERY) && r.includes("where the verifier can read the approval directory"), r);
+  } finally { fs.chmodSync(f.dir, 0o700); }
+  fs.rmSync(keyPath);
+  assert.equal(approvalKeyPresent(f.env), false, "ENOENT is absent");
+});
+
+test("creating the key leaves no temp file, and an unwritable directory is a key problem", () => {
+  const f = fixture();
+  ask(f.env);
+  assert.deepEqual(fs.readdirSync(f.dir).filter((n) => n.startsWith(".key")), [".key"]);
+  const g = fixture();
+  fs.chmodSync(g.root, 0o500);
+  try {
+    assert.throws(() => ask(g.env), (error) => error.keyProblem === true && /not usable/.test(error.message));
+  } finally { fs.chmodSync(g.root, 0o700); }
+});
+
+// M-5: Pi on a machine that holds the key
+test("Pi on a machine with the key is refused with a Pi-capable recovery (accepted H1 consequence)", () => {
+  const f = fixture();
+  ask(f.env);
+  const { comments, refusals } = filter(f.env, [{ login: "operator", body: `approve merge ${HEAD} patch-id ${PATCH}` }]);
+  assert.equal(comments.length, 0);
+  assert.ok(refusals[0].includes(ASK_APPROVAL_NO_DIALOG_RECOVERY));
+  assert.match(ASK_APPROVAL_NO_DIALOG_RECOVERY, /APPROVED review/);
+  assert.match(ASK_APPROVAL_NO_DIALOG_RECOVERY, /Claude Code/);
+  assert.equal(verifyFreshHumanApproval({ approvedBy: "operator", currentHeadSha: HEAD, reviews: [{ user: { login: "operator" }, state: "APPROVED", commit_id: HEAD }] }).satisfied, true);
+});
+
+// H-A: the patch-id is optional end to end (the merge check prints none when the head lacks the base tip)
+test("an approval question without a patch-id is recorded, posted and verified by head only", () => {
+  const f = fixture();
+  const text = buildApprovalQuestion({ repo: REPO, pr: 7, headSha: HEAD });
+  assert.equal(text, `Approve merge of ${REPO} PR #7 at head ${HEAD}?`);
+  assert.equal(extractYesApproval(askPayload(text)).patchId, null);
+  assert.equal(parseApprovalQuestion(`${text} with patch-id ${PATCH} patch-id ${OTHER_PATCH}`), null, "two patch-ids stay ambiguous");
+  const r = runHook(POST_HOOK, askPayload(text), f.env);
+  assert.equal(r.status, 0, r.stderr);
+  const body = fs.readFileSync(f.out, "utf8").split("\n").slice(6).join("\n");
+  assert.match(body, new RegExp(`^approve merge ${HEAD}\\n<!-- dev-loops:ask-approval id=`));
+  assert.equal(parseMarkedComment(body).patchId, null);
+  const { comments, refusals } = filter(f.env, [{ login: "operator", body }], { currentPatchId: null });
+  assert.deepEqual(refusals, []);
+  assert.equal(verifyFreshHumanApproval({ approvedBy: "operator", currentHeadSha: HEAD, currentPatchId: null, comments }).satisfied, true);
+  // A head-only record does not survive a head change, even with no current patch-id on either side.
+  assert.equal(filter(f.env, [{ login: "operator", body }], { currentHeadSha: OTHER_HEAD, currentPatchId: null }).comments.length, 0);
+  assert.equal(filter(f.env, [{ login: "operator", body }], { currentHeadSha: OTHER_HEAD, currentPatchId: PATCH }).comments.length, 0);
+});
+
+test("a record with a patch-id is refused when the head moved and no current patch-id is known", () => {
+  const f = fixture();
+  const { id } = ask(f.env);
+  assert.equal(filter(f.env, [comment(id)], { currentHeadSha: OTHER_HEAD, currentPatchId: null }).comments.length, 0);
+  assert.equal(filter(f.env, [comment(id)], { currentPatchId: null }).comments.length, 1, "same head still matches");
+});
+
+// L-2
+test("the repo comparison is case-folded", () => {
+  const f = fixture();
+  const { id } = ask(f.env);
+  assert.equal(filter(f.env, [comment(id)], { repo: "Example/Fixture" }).comments.length, 1);
+});
+
+// M-3: the verifier ignores the process environment override and $HOME
+test("the verifier ignores the process-env override and $HOME", () => {
+  const saved = { dir: process.env.DEVLOOPS_APPROVAL_DIR, flag: process.env.DEVLOOPS_APPROVAL_TEST_MODE, home: process.env.HOME };
+  try {
+    process.env.DEVLOOPS_APPROVAL_DIR = "/x/approvals";
+    process.env.DEVLOOPS_APPROVAL_TEST_MODE = "1";
+    process.env.HOME = "/x/home";
+    const expected = path.join(os.userInfo().homedir, ".config", "dev-loops", "merge-approvals");
+    assert.equal(approvalDir(), expected);
+    assert.equal(approvalDir({ HOME: "/x/home" }), expected);
+  } finally {
+    for (const [k, v] of [["DEVLOOPS_APPROVAL_DIR", saved.dir], ["DEVLOOPS_APPROVAL_TEST_MODE", saved.flag], ["HOME", saved.home]]) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
 });
 
 test("a symlinked approval directory is refused for writing and reading", () => {
@@ -298,6 +401,12 @@ test("the guard denies case-folded, symlinked, Glob, Grep glob and MCP arguments
     { tool_name: "Grep", tool_input: { pattern: "mac", glob: "**/Merge-Approvals/*.json", path: f.root } },
     { tool_name: "mcp__files__read", tool_input: { target: { uri: path.join(f.dir, ".key") } } },
     { tool_name: "Bash", tool_input: { command: "echo $DEVLOOPS_APPROVAL_TEST_MODE" } },
+    // M-1, M-2: the parent directory and a key path under it
+    { tool_name: "Bash", tool_input: { command: "ls -la ~/.config/dev-loops" } },
+    { tool_name: "Bash", tool_input: { command: "cat ~/.config/dev-loops/merge-approvals/.key" } },
+    { tool_name: "Glob", tool_input: { pattern: "**/.config/dev-loops/**" } },
+    { tool_name: "Grep", tool_input: { pattern: ".", path: path.join(os.userInfo().homedir, ".config", "dev-loops") } },
+    { tool_name: "Read", tool_input: { file_path: path.join(os.userInfo().homedir, ".config", "dev-loops", "merge-approvals", ".key") } },
   ];
   for (const input of denied) assert.equal(decision(runHook(GUARD_HOOK, { ...input, cwd }, f.env)), "deny", JSON.stringify(input));
   const prose = { tool_name: "Write", tool_input: { file_path: path.join(f.root, "doc.md"), content: "keys live in merge-approvals" }, cwd };

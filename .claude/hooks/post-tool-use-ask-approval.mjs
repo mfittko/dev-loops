@@ -10,7 +10,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { readHookInput } from "./_hook-io.mjs";
-import { extractYesApproval, hasApprovalQuestion, writeApprovalRecord, buildApprovalComment, ASK_APPROVAL_RECOVERY } from "./_ask-merge-approval.mjs";
+import { extractYesApproval, hasApprovalQuestion, writeApprovalRecord, buildApprovalComment, ASK_APPROVAL_RECOVERY, ASK_APPROVAL_KEY_RECOVERY } from "./_ask-merge-approval.mjs";
 
 const tell = (additionalContext) => process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext } })}\n`);
 
@@ -18,12 +18,13 @@ const input = readHookInput();
 const approval = extractYesApproval(input);
 if (approval) {
   try {
-    const { id } = writeApprovalRecord({ approval, session: input?.session_id ?? null });
+    // A copy of the harness env: this hook, not an agent, owns it, so the test override applies here only.
+    const { id } = writeApprovalRecord({ approval, session: input?.session_id ?? null }, { ...process.env });
     const body = buildApprovalComment({ id, headSha: approval.headSha, patchId: approval.patchId });
     execFileSync(process.env.DEVLOOPS_GH_COMMAND || "gh", ["pr", "comment", String(approval.pr), "--repo", approval.repo, "--body", body], { stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 });
     tell(`MERGE-ASK-APPROVAL: recorded the yes answer and posted the approve-merge line for ${approval.repo}#${approval.pr} at head ${approval.headSha}.`);
   } catch (error) {
-    tell(`MERGE-ASK-APPROVAL: could not record or post the approval (${error?.message ?? error}). ${ASK_APPROVAL_RECOVERY}`);
+    tell(`MERGE-ASK-APPROVAL: could not record or post the approval (${error?.message ?? error}). ${error?.keyProblem ? ASK_APPROVAL_KEY_RECOVERY : ASK_APPROVAL_RECOVERY}`);
   }
 } else if (hasApprovalQuestion(input)) {
   tell(`MERGE-ASK-APPROVAL: no approval recorded. The answer was not exactly "Yes" to an approval question whose options are exactly Yes and No (single select). ${ASK_APPROVAL_RECOVERY}`);

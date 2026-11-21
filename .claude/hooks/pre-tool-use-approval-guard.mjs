@@ -4,8 +4,10 @@
  * Denies the tool calls it can judge that read, write or name the record directory or its key:
  * every string argument is compared case-folded and realpath-resolved, and scanned for the
  * directory name (this covers Bash commands, Glob patterns, Grep globs and MCP tool arguments).
- * It cannot see through a wrapper script or shell indirection; the shipped permission and sandbox
- * read denies are the second layer. Only the PostToolUse hook touches the directory. Agent posts of
+ * It also denies arguments naming the parent `.config/dev-loops`. It cannot see through a wrapper
+ * script, shell globbing or other shell indirection; the shipped permission denies (and the sandbox
+ * read deny when the sandbox is enabled) are the second layer. A bare mention in a commit message
+ * or body flag is denied too. An error in this hook denies (exit 2). Only the PostToolUse hook touches the directory. Agent posts of
  * the `approve merge` line stay denied by the raw comment write deny and the comment writers
  * (OPERATOR-OWNED-LINE).
  */
@@ -23,10 +25,18 @@ function stringArgs(value, key = "", depth = 0, out = []) {
   return out;
 }
 
-const input = readHookInput();
-const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
-const hit = stringArgs(input?.tool_input).some((s) => commandNamesApprovalDir(s) || isApprovalPath(path.resolve(cwd, s)));
-if (hit) {
-  emitDeny(`MERGE-ASK-APPROVAL: the merge approval record directory is written by the harness hook only. No agent tool reads, writes or names it. ${ASK_APPROVAL_RECOVERY}`);
+// A hook error must not fall through to allow: deny with exit 2 (stderr reaches the model).
+try {
+  const input = readHookInput();
+  const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+  // A copy of the harness env, so the test override widens the guard next to the default directory.
+  const env = { ...process.env };
+  const hit = stringArgs(input?.tool_input).some((s) => commandNamesApprovalDir(s, env) || isApprovalPath(path.resolve(cwd, s), env));
+  if (hit) {
+    emitDeny(`MERGE-ASK-APPROVAL: the merge approval record directory is written by the harness hook only. No agent tool reads, writes or names it. ${ASK_APPROVAL_RECOVERY}`);
+  }
+} catch (error) {
+  process.stderr.write(`MERGE-ASK-APPROVAL: the approval guard failed (${error?.message ?? error}), so the call is denied. Retry the call; if it keeps failing, report it to the operator.\n`);
+  process.exit(2);
 }
 emitAllow();
