@@ -407,15 +407,29 @@ describe("withGraphqlRateLimitWait", () => {
 describe("secondary rate limit backoff", () => {
   const limited = { code: 1, stdout: "", stderr: "You have exceeded a secondary rate limit\n" };
   const ok = { code: 0, stdout: '{"ok":true}', stderr: "" };
+  // A gh stub on PATH that plays `results` in order (the last repeats) and counts its runs; the default runner owns the retry.
+  const dirs = [];
+  afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
   function harness(results) {
-    const log = { runs: 0, sleeps: [] };
+    const dir = mkdtempSync(path.join(os.tmpdir(), "issue-3340-harness-"));
+    dirs.push(dir);
+    results.forEach((r, i) => {
+      writeFileSync(path.join(dir, `out.${i}`), r.stdout);
+      writeFileSync(path.join(dir, `err.${i}`), r.stderr);
+      writeFileSync(path.join(dir, `code.${i}`), String(r.code));
+    });
+    writeFileSync(path.join(dir, "gh"), [
+      "#!/bin/sh",
+      `d="${dir}"`,
+      'echo run >> "$d/count"',
+      'n=$(wc -l < "$d/count" | tr -d " "); i=$((n-1)); [ -f "$d/out.$i" ] || i=' + (results.length - 1),
+      'cat "$d/out.$i"; cat "$d/err.$i" >&2; exit "$(cat "$d/code.$i")"',
+    ].join("\n"), { mode: 0o755 });
+    const log = { sleeps: [], runs: () => readFileSync(path.join(dir, "count"), "utf8").trim().split("\n").length };
     return {
       log,
-      opts: {
-        sleep: async (ms) => { log.sleeps.push(ms); },
-        backoffMs: 7,
-        runChild: async () => { log.runs += 1; return results.shift(); },
-      },
+      env: { PATH: `${dir}:/bin:/usr/bin`, DEV_LOOPS_GH_STUB: "1" },
+      opts: { sleep: async (ms) => { log.sleeps.push(ms); }, backoffMs: 7 },
     };
   }
 
@@ -427,32 +441,33 @@ describe("secondary rate limit backoff", () => {
   });
 
   test("a secondary rate limit backs off then retries and succeeds", async () => {
-    const { log, opts } = harness([limited, ok]);
-    assert.deepEqual(await ghJson(["api", "x"], opts), { ok: true });
+    const { log, env, opts } = harness([limited, ok]);
+    assert.deepEqual(await ghJson(["api", "x"], { ...opts, env }), { ok: true });
     assert.deepEqual(log.sleeps, [7]);
-    assert.equal(log.runs, 2);
+    assert.equal(log.runs(), 2);
   });
 
   test("a second secondary rate limit throws RATE_LIMITED with a null resetAt that isRateLimitError matches", async () => {
-    const { log, opts } = harness([limited, limited]);
-    await assert.rejects(() => ghJson(["api", "x"], opts), (error) => {
+    const { log, env, opts } = harness([limited, limited]);
+    await assert.rejects(() => ghJson(["api", "x"], { ...opts, env }), (error) => {
       assert.equal(error.code, "RATE_LIMITED");
       assert.equal(error.resetAt, null);
       assert.ok(isRateLimitError(error));
       assert.deepEqual(rateLimitedResult(error), { ok: false, code: "RATE_LIMITED", error: error.message, resetAt: null });
       return true;
     });
-    assert.equal(log.runs, 2);
+    assert.equal(log.runs(), 2);
   });
 
   test("RATE_LIMITED keeps the ghJson label prefix and the ghGraphql prefix", async () => {
-    await assert.rejects(() => ghJson(["api", "x"], { ...harness([limited, limited]).opts, label: "fetch ci logs" }), (error) => {
+    const g = harness([limited, limited]);
+    await assert.rejects(() => ghJson(["api", "x"], { ...g.opts, env: g.env, label: "fetch ci logs" }), (error) => {
       assert.equal(error.code, "RATE_LIMITED");
       assert.match(error.message, /^fetch ci logs failed: /);
       return true;
     });
-    const { runChild, ...rest } = harness([limited, limited]).opts;
-    await assert.rejects(() => ghGraphql("query{}", {}, {}, runChild, rest), (error) => {
+    const g2 = harness([limited, limited]);
+    await assert.rejects(() => ghGraphql("query{}", {}, g2.env, undefined, g2.opts), (error) => {
       assert.equal(error.code, "RATE_LIMITED");
       assert.match(error.message, /^gh api graphql failed: /);
       return true;
@@ -546,16 +561,15 @@ describe("secondary rate limit backoff", () => {
   });
 
   test("a non-rate-limit failure is untouched and not retried", async () => {
-    const { log, opts } = harness([{ code: 1, stdout: "", stderr: "not found" }]);
-    await assert.rejects(() => ghJson(["api", "x"], opts), { code: "GH_API_ERROR", message: "gh command failed: not found" });
-    assert.equal(log.runs, 1);
+    const { log, env, opts } = harness([{ code: 1, stdout: "", stderr: "not found" }]);
+    await assert.rejects(() => ghJson(["api", "x"], { ...opts, env }), { code: "GH_API_ERROR", message: "gh command failed: not found" });
+    assert.equal(log.runs(), 1);
     assert.deepEqual(log.sleeps, []);
   });
 
   test("ghGraphql backs off on a secondary rate limit then succeeds", async () => {
-    const { log, opts } = harness([limited, { code: 0, stdout: '{"data":{}}', stderr: "" }]);
-    const { runChild, ...rest } = opts;
-    assert.deepEqual(await ghGraphql("query{}", {}, {}, runChild, rest), { data: {} });
-    assert.equal(log.runs, 2);
+    const { log, env, opts } = harness([limited, { code: 0, stdout: '{"data":{}}', stderr: "" }]);
+    assert.deepEqual(await ghGraphql("query{}", {}, env, undefined, opts), { data: {} });
+    assert.equal(log.runs(), 2);
   });
 });

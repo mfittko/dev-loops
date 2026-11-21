@@ -12,8 +12,8 @@
  * (probe-ci-status). The one exception to `GH_API_ERROR` is a second secondary
  * rate limit: after one `backoffMs` backoff (default 30000) and one retry, both
  * helpers throw `code: "RATE_LIMITED"` with `resetAt: null` and their own message
- * prefix. An injected `runChild` is not retried unless the caller passes
- * `backoffMs` or `sleep`. `ghGraphql` reproduces scripts/projects/add-queue-item.mjs's
+ * prefix. An injected `runChild` runs once with no retry.
+ * `ghGraphql` reproduces scripts/projects/add-queue-item.mjs's
  * superset (`gh api graphql failed` / `GraphQL errors:` with GH_API_ERROR /
  * GRAPHQL_ERROR; `parseJsonText` → `Invalid JSON input`).
  *
@@ -64,16 +64,8 @@ async function runWithBackoff(runChild, command, args, env, { backoffMs, sleep }
       return { code: 1, stdout: "", stderr: error.message.replace(/^gh command failed: /, ""), rateLimited: true };
     }
   }
-  // An injected runner (a caller with its own rate-limit handling, or a test stub) is not retried unless the caller passes a backoff seam.
-  if (backoffMs === undefined && sleep === undefined) return runChild(command, args, env);
-  backoffMs ??= SECONDARY_RATE_LIMIT_BACKOFF_MS;
-  sleep ??= realSleep;
-  const isSecondaryLimit = (result) => result.code !== 0 && isSecondaryRateLimitError(result.stderr);
-  let result = await runChild(command, args, env);
-  if (!isSecondaryLimit(result)) return result;
-  await sleep(backoffMs);
-  result = await runChild(command, args, env);
-  return isSecondaryLimit(result) ? { ...result, rateLimited: true } : result;
+  // An injected runner (a caller with its own rate-limit handling, or a test stub) runs once with no retry.
+  return runChild(command, args, env);
 }
 
 // A thrown error or a resolved `{ code, stderr }` result that carries a secondary limit.
@@ -120,7 +112,7 @@ export async function withSecondaryLimitBackoff(attempt, { backoffMs = SECONDARY
  *   except a second secondary rate limit, which carries `code: "RATE_LIMITED"`
  *   with the same prefix.
  * @param {number} [opts.backoffMs] - secondary rate limit backoff before the one
- *   retry (default 30000). Passing it, or `sleep`, also retries an injected `runChild`.
+ *   retry (default 30000).
  * @param {(ms: number) => Promise<void>} [opts.sleep] - injectable backoff sleep.
  */
 export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRunChild, label, backoffMs, sleep } = {}) {
