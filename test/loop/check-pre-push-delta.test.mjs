@@ -2231,6 +2231,8 @@ test("issue 3364: a siteless residue is cleared by a PR body edit after the seal
   calls.length = 0;
   assert.ok((await fx.run(atC, ["--handback", ...target], withBody("tradeoff: fixed"))).ok);
   assert.deepEqual(calls, [{ repo: "o/r", pr: 7 }]);
+  // A case variant of the sealed repo is the same target.
+  assert.ok((await fx.run(atC, ["--handback", "--repo", "O/R", "--pr", "7"], withBody("tradeoff: fixed"))).ok);
   // A code-site residue keeps refusing after a body edit.
   sealedWith([RESIDUE_FINDING]);
   await assert.rejects(fx.run(atC, ["--handback", ...target], withBody("tradeoff: fixed")), /open task/);
@@ -2319,4 +2321,8 @@ test("issue 3364: the ACT --result run without --repo/--pr seals the live body d
   const coded = await run([finding({ site: "src/a.mjs:10" })]);
   assert.equal(coded.record.bodySha256, undefined);
   assert.deepEqual(coded.calls, []);
+  // An explicit --repo/--pr that differs from the authenticated plan target is refused.
+  const file = path.join(dir, "act-result-mismatch.json");
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(result, "utf8")), newFindings: [finding()], outcome: "needs_fix" }));
+  await assert.rejects(runCli(["--act-list", actList, "--baseline", A, "--result", file, "--invocation", "1", "--repo", "o/r", "--pr", "8"], { ...headAt(B), fetchPr: async () => ({ body: "x" }) }), /target_mismatch|Delta coverage binding: wrong role, target/);
 });

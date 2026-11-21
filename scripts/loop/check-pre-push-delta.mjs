@@ -34,6 +34,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
+import { repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { createEvidenceRun, EvidenceSealError, mintEvidenceRunId, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
@@ -633,6 +634,15 @@ function planTarget(fixerPlan) {
   try { const target = JSON.parse(readFileSync(fixerPlan, "utf8")).workOrder?.target; return target?.repo && target.pr ? target : null; } catch { return null; }
 }
 
+// The explicit --repo/--pr pair may not override an authenticated target: a differing pair is refused, so a digest never seals or clears against another PR's body.
+function resolveBodyTarget(options, authenticated) {
+  const explicit = options.repo && options.pr ? { repo: options.repo, pr: options.pr } : null;
+  if (explicit && authenticated && (!repoSlugEquals(explicit.repo, authenticated.repo) || Number(explicit.pr) !== Number(authenticated.pr))) {
+    throw new Error(`target_mismatch: --repo ${explicit.repo} --pr ${explicit.pr} differ from the fixer plan target ${authenticated.repo}#${authenticated.pr}; pass the plan target or omit --repo and --pr`);
+  }
+  return explicit ?? authenticated ?? null;
+}
+
 // Issue 2447: a handback at the candidate that a fix_and_rereview record reviewed is refused while must-fix work is open there: a lifecycle finding, or a residue finding with no skip reason recorded for its site.
 // A record of another act set (a closed sequence or a replaced act list) names residue refs this sequence lacks, so no skip reason could clear it: it does not apply.
 // Issue 3364: a residue with no site (a PR-body item no commit can fix) is also cleared when the live PR body digest differs from the digest the sealed record took (the issue 3309 body rule). An unreadable body fails closed.
@@ -647,7 +657,7 @@ async function assertNoOpenWorkAtCandidate(prior, { handbackHead, siteCoverage, 
     if (bodyEdited !== undefined) return bodyEdited;
     bodyEdited = false;
     // The digest counts only against the PR it was sealed from: a record without a sealed target, or a handback naming another PR, keeps the residue open.
-    if (typeof prior.bodySha256 !== "string" || !target || prior.bodyTarget?.repo !== target.repo || prior.bodyTarget?.pr !== Number(target.pr)) return bodyEdited;
+    if (typeof prior.bodySha256 !== "string" || !target || !repoSlugEquals(prior.bodyTarget?.repo, target.repo) || prior.bodyTarget?.pr !== Number(target.pr)) return bodyEdited;
     try {
       const state = await fetchPr(target, { env: process.env, ghCommand: "gh" });
       bodyEdited = typeof state?.body === "string" && prBodySha256(state.body) !== prior.bodySha256;
@@ -659,7 +669,7 @@ async function assertNoOpenWorkAtCandidate(prior, { handbackHead, siteCoverage, 
     if (isLifecycleFinding(f) || (f.residueOf && !skipped(f) && !(typeof f.site !== "string" && await bodyChanged()))) open.push(f);
   }
   const sitelessFps = open.filter((f) => typeof f.site !== "string").map((f) => { const item = actItems.find((a) => a.ref === f.residueOf); return item ? (item.fingerprint ?? item.ref) : f.residueOf; });
-  const sitelessHint = sitelessFps.length ? `; for a residue with no site edit the PR body (pass --repo and --pr) or record a sitelessSkipReason in the siteCoverage entry for ${[...new Set(sitelessFps)].join(", ")}${typeof prior.bodySha256 === "string" ? "" : "; the sealed record has no bodySha256, and a --result re-run with --repo and --pr seals the current body, so when the body is already fixed record a sitelessSkipReason or edit the body again after the re-run"}` : "";
+  const sitelessHint = sitelessFps.length ? `; for a residue with no site edit the PR body (pass --repo and --pr equal to the sealed bodyTarget; another PR or an unreadable body keeps it open) or record a sitelessSkipReason in the siteCoverage entry for ${[...new Set(sitelessFps)].join(", ")}${typeof prior.bodySha256 === "string" ? "" : "; the sealed record has no bodySha256, and a --result re-run with --repo and --pr seals the current body, so when the body is already fixed record a sitelessSkipReason or edit the body again after the re-run"}` : "";
   if (open.length) throw new Error(`the handback is at ${handbackHead}, the candidate the sealed delta record reviewed, and ${open.length} open task(s) remain: ${open.map((f) => JSON.stringify(f.summary)).join("; ")}. Commit the fix on top of ${handbackHead} and hand back that new commit${open.every((f) => !isLifecycleFinding(f)) ? ` (or record a skip reason for each residue site${sitelessHint})` : ""}`);
 }
 
@@ -794,7 +804,7 @@ export async function runCli(
       }
       for (const guardedHead of new Set(closure ? [record.headSha, currentHead] : [record.headSha])) {
         if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === guardedHead && unsealed.actSetId === sequence.actSetId) throw new Error(`delta_record_unsealed: a delta record exists for ${sequence.reviewBaselineHead} but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record`);
-        await assertNoOpenWorkAtCandidate(sealed, { handbackHead: guardedHead, siteCoverage: record.siteCoverage ?? [], actItems: sequence.actItems, actSetId: sequence.actSetId, target: options.repo && options.pr ? { repo: options.repo, pr: options.pr } : planTarget(options.fixerPlan), fetchPr });
+        await assertNoOpenWorkAtCandidate(sealed, { handbackHead: guardedHead, siteCoverage: record.siteCoverage ?? [], actItems: sequence.actItems, actSetId: sequence.actSetId, target: resolveBodyTarget(options, planTarget(options.fixerPlan)), fetchPr });
       }
     }
     if (closure) {
@@ -860,7 +870,7 @@ export async function runCli(
     }
     // A residue with no site is a PR-body item: seal the live body digest so the handback can see a later body edit (issue 3364). An unreadable body records no digest and the handback stays refused.
     let bodySha256, sealedTarget;
-    const bodyTarget = options.repo && options.pr ? { repo: options.repo, pr: options.pr } : authenticatedTarget;
+    const bodyTarget = resolveBodyTarget(options, authenticatedTarget);
     if (bodyTarget && deltaFixerFindings(result).some((f) => f.residueOf && typeof f.site !== "string")) {
       try { const state = await fetchPr(bodyTarget, { env: process.env, ghCommand: "gh" }); if (typeof state?.body === "string") { bodySha256 = prBodySha256(state.body); sealedTarget = { repo: bodyTarget.repo, pr: Number(bodyTarget.pr) }; } } catch { /* fail closed */ }
     }
