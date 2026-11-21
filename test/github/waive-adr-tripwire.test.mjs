@@ -329,6 +329,14 @@ test("cap-round-fixed proof with no verdict writes the line (GATE-EXEC-ROUND-CAP
   assert.deepEqual(calls[0].o, { repo: "o/n", pr: 9, headSha: HEAD, baseRefName: "main" });
 });
 
+test("a clean cap-round proof with no posted cap-round draft_gate review refuses clean_cap_verdict_unposted and posts no waiver", async () => {
+  const clean = async () => ({ round: 4, log: { verdict: "clean", findings: [], headSha: HEAD, specAuthority: { specDigest: DIGEST } }, residue: [] });
+  const result = await assertRefusal({ ...NO_VERDICT, resolveCapRoundFixed: clean }, "clean_cap_verdict_unposted");
+  assert.match(result.detail, /--post-sealed-cap-round/);
+  const posted = harness({ fetchDraftGateEvidence: async () => ({ currentHeadClean: false, preApprovalCurrentHeadClean: false, draftGatePostedHeads: [{ head: HEAD.slice(0, 7), round: 4 }] }), resolveCapRoundFixed: clean });
+  assert.equal((await posted.run()).action, "waiver_written");
+});
+
 test("cap-round-fixed proof with a stale ledger digest refuses spec_digest_mismatch", async () => {
   await assertRefusal({ ...NO_VERDICT, resolveCapRoundFixed: capProof("sha256:stale") }, "spec_digest_mismatch");
   await assertRefusal({ ...NO_VERDICT, resolveCapRoundFixed: async () => ({ log: {} }) }, "spec_digest_unrecorded");

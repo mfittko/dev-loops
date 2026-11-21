@@ -115,9 +115,10 @@ export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied
 
 /**
  * The one cap-round-fixed fact of a PR coordination context (issue 3139): `{ capRoundFixed, failure }`, `failure` the typed `resolveCapRoundFixed` `onFailure` condition
- * (`cap_round_unresolved` on a throw or a cap reached with an unreadable ledger; a PR below the cap reports `failure: null`). The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
+ * (`cap_round_unresolved` on a throw or a cap reached with an unreadable ledger; a PR below the cap reports `failure: null`), or `clean_cap_verdict_unposted` for a clean cap round with no posted draft_gate review at its head (read from `prData.reviews`, trusted authors only).
+ * `requirePostedCleanCap` (default true) turns that posted-verdict check off; `trustRuntime` is the runtime the trusted-evidence predicate reads. The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
  * A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
- * @param {{ repo: string, pr: number, currentHeadSha: string, prData?: { isDraft?: boolean, baseRefName?: string } }} context
+ * @param {{ repo: string, pr: number, currentHeadSha: string, prData?: { isDraft?: boolean, baseRefName?: string, reviews?: object[] } }} context
  */
 export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = resolveCapRoundFixed, requirePostedCleanCap = true, trustRuntime = {} }) {
   let failure = null;

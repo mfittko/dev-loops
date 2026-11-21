@@ -197,6 +197,7 @@ async function roundStartedAtCurrentBase(options, headSha, repoRoot, base) {
 const roundCapReachedError =(round, cap) => new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs and no fixer follows. After the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`; pre_approval_gate judges what remains. When every open act item is a PR-body item, edit the PR body and run \`--converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`);
 
 const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>; on --gate review, --findings-ledger alone suffices; a draft_gate post requires --findings-ledger carrying overallVerdict while gates.draft.maxReviewRounds > 0) [--next-action <text> (required except on --gate review)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
+   or: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --gate draft_gate --post-sealed-cap-round (head, verdict and findings derive from the sealed clean cap-round ledger)
 The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin, except on --gate draft_gate while gates.draft.maxReviewRounds > 0 (GATE-EXEC-ROUND-CAP): there --findings-ledger carrying overallVerdict is the only accepted input, and --findings-json and --findings-file posts are refused (an inline clean with only --findings-summary stays accepted, as reconcile-draft-gate posts it, except at round N+1, where every post but --converged-json is refused with round_cap_reached, ADR 0208).
 Post the gate round's SINGLE visible surface: one PR review of type COMMENT whose
 body carries the checkpoint verdict fields and, with --findings-ledger, the
@@ -219,7 +220,7 @@ force a fresh review round instead.
 Required:
   --repo <owner/name>
   --pr <number>
-  --head-sha <sha>                            FULL current head commit SHA (40 or 64 hex chars) — a short prefix is rejected (with --gate draft_gate and a clean verdict, the head of a completed clean cap round that the PR head descends from is also accepted)
+  --head-sha <sha>                            FULL current head commit SHA (40 or 64 hex chars), except with --post-sealed-cap-round, which refuses it — a short prefix is rejected (with --gate draft_gate and a clean verdict, the head of a completed clean cap round that the PR head descends from is also accepted)
   --verdict <clean|findings_present|blocked>   Optional when --findings-ledger
                                             carries the consolidator's
                                             overallVerdict (the durable
@@ -233,7 +234,8 @@ Required:
                                             GATE-COMMENT-VERDICT-VALUES).
                                             Required otherwise.
   --findings-summary <text>                 Findings summary as a single argument
-                                            (use --findings-file for multi-line)
+                                            (use --findings-file for multi-line;
+                                            refused with --post-sealed-cap-round)
   --findings-file <path>                    Read findings summary from file;
                                             alternative to --findings-summary.
                                             Refused on draft_gate while

@@ -93,6 +93,12 @@ test("a cap-round refusal with no reported condition names cap_round_unresolved,
   assert.ok(!reason.includes("no_clearing_record"));
 });
 
+test("a draft clean_cap_verdict_unposted refusal does not claim a missing fixer pass", () => {
+  const { reason } = draftAt({ draftRoundRefused: true, draftCapRoundFailure: "clean_cap_verdict_unposted" });
+  assert.ok(reason.includes("Condition clean_cap_verdict_unposted:"));
+  assert.ok(!reason.includes("fixer pass"));
+});
+
 // The unposted clean cap round (a local ledger only): a ready PR is never final_approval_ready on it, and the one exit is the ledger-derived post.
 test("a ready PR whose clean cap-round verdict is unposted reports blocked with the sealed-ledger post as its remedy", () => {
   const result = evaluatePrGateCoordination({

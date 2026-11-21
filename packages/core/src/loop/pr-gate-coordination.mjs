@@ -1714,7 +1714,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
           ? `The PR is still draft at the round cap (\`round_cap_reached\`, ADR 0208) and the current head's act list names a human decision (GATE-EXEC-SOFT-CAP): ${actBlockers.map((b) => b?.item).join("; ")}. Round N+1 never runs.`
           : bodyOnlyList
             ? `The PR is still draft at the round cap (\`round_cap_reached\`, ADR 0208) and every open act item of the current head is a PR-body item (ADR 0271). Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true). Round N+1 never runs.`
-          : `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but the cap round's fixer pass is not proven landed with a cleared pre-push delta. ${Object.hasOwn(CAP_ROUND_REFUSAL, input.draftCapRoundFailure) ? CAP_ROUND_REFUSAL[input.draftCapRoundFailure] : CAP_ROUND_REFUSAL.cap_round_unresolved} Round N+1 never runs.`,
+          : `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but ${input.draftCapRoundFailure === "clean_cap_verdict_unposted" ? "the clean cap round's draft_gate verdict is not posted" : "the cap round's fixer pass is not proven landed with a cleared pre-push delta"}. ${Object.hasOwn(CAP_ROUND_REFUSAL, input.draftCapRoundFailure) ? CAP_ROUND_REFUSAL[input.draftCapRoundFailure] : CAP_ROUND_REFUSAL.cap_round_unresolved} Round N+1 never runs.`,
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,
