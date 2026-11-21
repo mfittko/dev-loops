@@ -1,7 +1,7 @@
 // Dependency refresh for a worktree. Imports only node builtins so resolve-pr-conflicts works when node_modules is stale.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 // Fail-soft `bun install --frozen-lockfile` in a worktree without its own node_modules so it never
@@ -28,7 +28,7 @@ export function depsFingerprint(worktreePath) {
 export const DEPS_STAMP = path.join("node_modules", ".dev-loops-deps-stamp");
 
 function warn(message) {
-  process.stderr.write(`[ensure-worktree] WARN ${message}\n`);
+  process.stderr.write(`[worktree-deps] WARN ${message}\n`);
 }
 
 // Runs the install only when the lockfile or a workspace package.json differs from the stamp written by the last
@@ -53,6 +53,7 @@ export function ensureDeps(worktreePath, installDeps = defaultInstallDeps) {
     } catch (err) {
       warn(`deps fingerprint failed (continuing): ${err?.message ?? err}`);
     }
+    rmSync(path.join(worktreePath, DEPS_STAMP), { force: true }); // only a completed install may leave a stamp
     let result;
     try {
       result = installDeps(worktreePath) ?? { ok: false, reason: "installDeps returned nothing" };

@@ -35,7 +35,8 @@ Output (stdout, JSON with --json):
   ("clean_merge" covers an already-up-to-date branch; "resolved" is the
    auto-resolved additive-CHANGELOG case. "verified" is true when post-resolve
    verification ran; it is absent with --no-verify. "deps" is present only when the
-   base merge changed the lockfile and the dependency install ran.)
+   dependency install ran, that is when the fingerprint of bun.lock and the workspace
+   package.json files differs from the stamp or no stamp exists.)
 Error output:
   { "ok": false, "error": "...", "conflictFiles": ["..."] }
 
