@@ -3735,11 +3735,13 @@ test("issue 2787 C11: --ci-file emits a ci-failure order that names the failing 
 
 test("issue 3414: --ci-file with --act-list-file feeds the unposted act list and the CI failure to one fixer order", async () => {
   await withFixture(async (fx) => {
-    await writeCurrentLog(path.join(fx.root, "tmp"), fx.head);
+    await writeCurrentLog(path.join(fx.root, "tmp"), fx.head, ACT);
     const unit = await emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" });
     assert.equal(unit.workOrder.source, "ci-failure");
     assert.equal(unit.workOrder.gate, "draft_gate");
     assert.deepEqual(unit.workOrder.requiredReads.map((read) => read.kind), ["ci-failure", "act-list"]);
+    // No commit_only handback writes or checks site coverage on this route, so the order carries no skeleton (ADR 0311).
+    assert.equal(unit.workOrder.siteCoverage, undefined);
     const text = await readFile(unit.promptPath, "utf8");
     assert.match(text, /Also fix every act item in the `act-list` read/);
     assert.equal(pull(unit, fx.root).status, 0);
@@ -3756,7 +3758,7 @@ test("issue 3414: --ci-file with --act-list-file refuses what the plain act-list
     const { fingerprint, ...noFingerprint } = ACT[0];
     // A list with no ledger for this head is another round's list (stale_act_list).
     await assert.rejects(combined(), (e) => e.refusal === "stale_act_list");
-    await writeCurrentLog(path.join(root, "tmp"), head);
+    await writeCurrentLog(path.join(root, "tmp"), head, ACT);
     // Rejected input forms: a missing fingerprint, a non-canonical fingerprint, and clusterSeverities [] .
     await writeFile(files.actList, JSON.stringify([noFingerprint]));
     await assert.rejects(combined(), /whose fingerprint is missing/);
@@ -3776,6 +3778,32 @@ test("issue 3414: --ci-file with --act-list-file refuses what the plain act-list
     await writeFile(files.actList, JSON.stringify(ACT));
     for (const sha of ["d", "e"]) await writeCurrentLog(path.join(root, "tmp"), sha.repeat(40));
     await assert.rejects(combined(), (e) => e.refusal === "round_cap_reached");
+  });
+});
+
+test("issue 3414: a carried act list must match an act finding of the head's ledger, not only a ledger's existence", async () => {
+  await withFixture(async (fx) => {
+    const other = withFp({ ...ACT[0], summary: "an older head's finding" });
+    await writeCurrentLog(path.join(fx.root, "tmp"), fx.head, [other]);
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), (e) => e.refusal === "stale_act_list" && /not an act finding/.test(e.message));
+    await writeCurrentLog(path.join(fx.root, "tmp"), fx.head, [{ ...ACT[0], judgeDisposition: "reject" }]);
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), (e) => e.refusal === "stale_act_list");
+    await writeCurrentLog(path.join(fx.root, "tmp"), fx.head, ACT);
+    assert.equal((await emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" })).workOrder.source, "ci-failure");
+  });
+});
+
+for (const gated of [true, false]) test(`issue 3414: locateFixerUnit ${gated ? "reports a gated ci-failure order retired with its round" : "does not retire a gate-less ci-failure order"}`, async () => {
+  await withFixture(async (fx) => {
+    const { root, wt, head, files } = fx;
+    await writeCurrentLog(path.join(root, "tmp"), head, ACT);
+    const unit = await emitCi(fx, gated ? { actListFile: files.actList, gate: "draft_gate" } : {});
+    const retired = path.join(root, "tmp", "retired-gate-rounds", head, "r1");
+    await mkdir(retired, { recursive: true });
+    await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: new Date(clock + 60_000).toISOString() }));
+    const { stale } = await locateFixerUnit({ ref: unit.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] });
+    if (gated) assert.match(stale, /retired/);
+    else assert.equal(stale, undefined);
   });
 });
 

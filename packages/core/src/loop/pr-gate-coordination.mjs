@@ -134,7 +134,8 @@ function ciAgentRemedy(input, ciStatus) {
       command: `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${repo} --pr ${pr} --timeout 0`,
       summary: "Read the red head's checks, save that JSON to a file, then emit the CI fixer order: dev-loops-run scripts/loop/emit-fixer-work-order.mjs --phase full --ci-file <that file> (add --act-list-file <act list> --gate draft_gate when a round's act list is unposted). Re-run gate coordination once CI is green.",
     }));
-    return remedy.agentRemedy ? { ...remedy, recovery: remedy.agentRemedy.command } : remedy;
+    // The recovery advances the loop: the wait command only saves the red head's checks, and the CI fixer order clears the block.
+    return remedy.agentRemedy ? { ...remedy, recovery: `route fix_ci_failure: run ${remedy.agentRemedy.command}, save that JSON to a file, then run dev-loops-run scripts/loop/emit-fixer-work-order.mjs --phase full --ci-file <that file>` } : remedy;
   }
   return remedyOrOperator(input, (repo, pr) => ({
     command: `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${repo} --pr ${pr} --timeout 600`,

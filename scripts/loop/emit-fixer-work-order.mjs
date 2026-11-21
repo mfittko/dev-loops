@@ -752,7 +752,17 @@ async function emitPlan({
     }
   }
   // A carried act list is bound to this head's round: its findings ledger must exist here (or at the carry origin), so an older-head or foreign list refuses.
-  if (ciActFile && !existsSync(ledgerPath(capRoundHead)) && !(await carryOriginHead())) throw new WorkOrderRefusal("stale_act_list", `stale_act_list: no ${gate} findings ledger exists for this head (${ledgerPath(capRoundHead)}); act list ${ciActFile} is not this head's round; re-run judge-pass at the PR head`);
+  if (ciActFile) {
+    const staleRecovery = "re-run judge-pass at the PR head";
+    let ledgerFile = ledgerPath(capRoundHead);
+    if (!existsSync(ledgerFile)) { const origin = await carryOriginHead(); if (origin) ledgerFile = ledgerPath(origin); }
+    if (!existsSync(ledgerFile)) throw new WorkOrderRefusal("stale_act_list", `stale_act_list: no ${gate} findings ledger exists for this head (${ledgerPath(capRoundHead)}); act list ${ciActFile} is not this head's round; ${staleRecovery}`);
+    // Existence alone does not bind the list to the round: every carried act item must be an act finding of that ledger.
+    const { findings: roundFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("stale_act_list", `stale_act_list: ${m}; ${staleRecovery}`) });
+    const roundRefs = new Set(roundFindings.filter((f) => f.judgeDisposition === "act").map(fingerprintFinding));
+    const foreign = ciActParsed.find((f) => !roundRefs.has(fingerprintFinding(f)));
+    if (foreign) throw new WorkOrderRefusal("stale_act_list", `stale_act_list: act item ${JSON.stringify(foreign.summary)} is not an act finding of the ${gate} findings ledger ${ledgerFile}; act list ${ciActFile} is not this head's round; ${staleRecovery}`);
+  }
   // The verify-time act-thread guard matches open gate threads by fingerprint, so a missing or wrong one would let a matching thread pass as threadless.
   const badFingerprint = guardFile ? guardParsed.find((f) => f.fingerprint !== fingerprintFinding(f)) : undefined;
   if (badFingerprint) {
@@ -963,7 +973,8 @@ async function emitPlan({
     contracts,
     requiredReads: [source.read, ...(ciActRead ? [ciActRead] : []), ...(delta ? [delta.read] : []), ...(completionRead ? [completionRead] : [])],
     outputRefs: [outputRef],
-    siteCoverage: actListFile && !completion ? buildSiteCoverageSkeleton(source.parsed) : ciActParsed ? buildSiteCoverageSkeleton(ciActParsed) : undefined,
+    // A ci-failure order has no commit_only handback that writes or checks site coverage, so it carries no skeleton (ADR 0311).
+    siteCoverage: actListFile && !ciFile && !completion ? buildSiteCoverageSkeleton(source.parsed) : undefined,
     handbackCheck: phase === "commit_only" && actListFile
       ? `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(actListCopy)} --baseline ${headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(outputRef)} --repo ${repo} --pr ${Number(pr)}`
       : undefined,

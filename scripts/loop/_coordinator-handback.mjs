@@ -13,7 +13,7 @@ export const CI_ROUTE_NEXT_ACTION = "fix_ci_failure";
 export const CI_NOT_GREEN_OBSERVATION = "ci_not_green";
 /** Returns null for settled green CI at headSha, else { observation, nextAction: "fix_ci_failure"|"wait_for_ci", ciStatus }. */
 export function preFanoutCiObservation(ci, headSha) {
-  if (ci?.ok === true && ci.headSha === headSha && ci.settled === true && (ci.ciStatus === "success" || ci.ciStatus === "none")) return null;
+  if (ci?.ok === true && ci.headSha === headSha && ci.settled === true && ci.ciStatus === "success") return null;
   const red = ci?.ciStatus === "failure" && ci.headSha === headSha;
   return { observation: CI_NOT_GREEN_OBSERVATION, nextAction: red ? CI_ROUTE_NEXT_ACTION : "wait_for_ci", ciStatus: ci?.ciStatus ?? "unknown" };
 }
