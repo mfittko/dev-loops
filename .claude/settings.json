@@ -2,7 +2,18 @@
   "env": {
     "DEVLOOPS_COORDINATOR_READONLY": "1"
   },
+  "sandbox": {
+    "filesystem": {
+      "denyRead": ["~/.config/dev-loops/merge-approvals"]
+    }
+  },
   "permissions": {
+    "deny": [
+      "Read(~/.config/dev-loops/merge-approvals/**)",
+      "Edit(~/.config/dev-loops/merge-approvals/**)",
+      "Write(~/.config/dev-loops/merge-approvals/**)",
+      "NotebookEdit(~/.config/dev-loops/merge-approvals/**)"
+    ],
     "ask": [
       "Bash(dev-loops-run cli/index.mjs decision record *)",
       "Bash(dev-loops-run --repo-root * cli/index.mjs decision record *)"
@@ -15,7 +26,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|Read|Edit|Write|NotebookEdit|Grep|Glob",
+        "matcher": "Bash|Read|Edit|Write|NotebookEdit|Grep|Glob|mcp__.*",
         "hooks": [
           {
             "type": "command",

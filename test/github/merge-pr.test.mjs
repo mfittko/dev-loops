@@ -11,6 +11,8 @@ import os from "node:os";
 import path from "node:path";
 import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 
+// The ask-approval directory is isolated and absent, so no host hook key makes every plain approve-merge comment need a record (MERGE-ASK-APPROVAL).
+const TEST_ENV = { GH_TOKEN: "t", DEVLOOPS_APPROVAL_TEST_MODE: "1", DEVLOOPS_APPROVAL_DIR: path.join(os.tmpdir(), `pr-no-approval-key-${process.pid}`) };
 const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
 const MERGE_COMMIT = "aaaa1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
 
@@ -74,7 +76,7 @@ function makeRuntime({
   return {
     calls,
     runtime: {
-      env: { GH_TOKEN: "t" },
+      env: { ...TEST_ENV },
       ghJson: async (args) => {
         calls.ghJson.push(args);
         if (args.join(" ").includes("/files?")) {
@@ -356,7 +358,7 @@ test("fully-satisfied standing-authorized drain merge succeeds, stamps the appro
   assert.equal(calls.runChild.length, 1);
   assert.deepEqual(calls.runChild[0].args, ["pr", "merge", "5", "--repo", "mfittko/dev-loops", "--squash", "--match-head-commit", HEAD]);
   // env is passed positionally (a real GH_TOKEN reaches the child), not as { env }.
-  assert.deepEqual(calls.runChild[0].env, { GH_TOKEN: "t" });
+  assert.deepEqual(calls.runChild[0].env, TEST_ENV);
   assert.ok(!calls.runChild.some((c) => c.args.join(" ").match(/release|publish|tag/)));
 });
 
@@ -1716,17 +1718,18 @@ test("a patch-id marker for a different patch-id is refused with the stale-appro
   assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "merge_approval" && /no fresh mfittko approval on head/.test(f.reason)));
 });
 
-async function askApprovalRuntime({ forge }) {
+// mode: "record" (marked comment with its record), "forge" (marked comment, made-up id) or "typed" (hand-typed line while the hook key exists).
+async function askApprovalRuntime({ mode }) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "pr-ask-merge-"));
-  const env = { ...process.env, DEVLOOPS_APPROVAL_DIR: path.join(dir, "approvals") };
-  const approval = extractYesApproval({
-    tool_input: { questions: [{ question: buildApprovalQuestion({ repo: "mfittko/dev-loops", pr: 5, headSha: OLD_HEAD, patchId: PATCH_ID }) }] },
-    tool_response: { answers: { [buildApprovalQuestion({ repo: "mfittko/dev-loops", pr: 5, headSha: OLD_HEAD, patchId: PATCH_ID })]: "Yes" } },
-  });
-  const id = forge ? "f".repeat(64) : writeApprovalRecord({ approval }, env).id;
+  const env = { ...process.env, DEVLOOPS_APPROVAL_TEST_MODE: "1", DEVLOOPS_APPROVAL_DIR: path.join(dir, "approvals") };
+  const text = buildApprovalQuestion({ repo: "mfittko/dev-loops", pr: 5, headSha: OLD_HEAD, patchId: PATCH_ID });
+  const q = { question: text, options: [{ label: "Yes" }, { label: "No" }], multiSelect: false };
+  const approval = extractYesApproval({ tool_input: { questions: [q] }, tool_response: { answers: { [text]: "Yes" } } });
+  const written = mode === "forge" ? null : writeApprovalRecord({ approval }, env);
+  const body = mode === "typed" ? `approve merge ${OLD_HEAD} patch-id ${PATCH_ID}` : buildApprovalComment({ id: written?.id ?? "f".repeat(64), headSha: OLD_HEAD, patchId: PATCH_ID });
   const { runtime } = makeRuntime({
     evidence: ESCALATED_EVIDENCE,
-    comments: [{ user: { login: "mfittko" }, body: buildApprovalComment({ id, headSha: OLD_HEAD, patchId: PATCH_ID }) }],
+    comments: [{ user: { login: "mfittko" }, body }],
   });
   runtime.env = env;
   runtime.computePatchId = () => PATCH_ID;
@@ -1734,15 +1737,17 @@ async function askApprovalRuntime({ forge }) {
 }
 
 test("a hook-marked approval comment with its harness record approves an escalated merge (MERGE-ASK-APPROVAL)", async () => {
-  const result = await mergePr(baseOptions({ standingAuthorization: false }), await askApprovalRuntime({ forge: false }));
+  const result = await mergePr(baseOptions({ standingAuthorization: false }), await askApprovalRuntime({ mode: "record" }));
   assert.equal(result.ok, true);
   assert.equal(result.approvalMatch, "patch_id");
 });
 
-test("a hook-marked approval comment without a harness record fails closed with a recovery", async () => {
-  const threw = await mergePr(baseOptions({ standingAuthorization: false }), await askApprovalRuntime({ forge: true })).catch((e) => e);
-  assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "merge_approval" && /Recovery: ask the operator the approval question again/.test(f.reason)));
-});
+for (const mode of ["forge", "typed"]) {
+  test(`an approve-merge comment without a harness record fails closed with a recovery (${mode})`, async () => {
+    const threw = await mergePr(baseOptions({ standingAuthorization: false }), await askApprovalRuntime({ mode })).catch((e) => e);
+    assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "merge_approval" && /Recovery: ask the operator the approval question again/.test(f.reason)));
+  });
+}
 
 test("a patch-id marker is refused when the base is not contained (no patch-id computed)", async () => {
   const { runtime } = makeRuntime({

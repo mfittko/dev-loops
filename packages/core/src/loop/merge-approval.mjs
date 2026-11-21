@@ -187,7 +187,7 @@ export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, currentPa
     satisfied: false,
     via: null,
     matchKind: null,
-    reason: `no fresh ${approvedBy} approval on head ${head} (need an APPROVED review, an "approve merge ${head}" operator comment, or an "approve merge <sha> patch-id <patch-id>" comment matching the current diff)`,
+    reason: `no fresh ${approvedBy} approval on head ${head} (need an APPROVED review, an "approve merge ${head}" operator comment, or an "approve merge <sha> patch-id <patch-id>" comment matching the current diff; under Claude Code the operator answers the approval question, MERGE-ASK-APPROVAL)`,
   };
 }
 
