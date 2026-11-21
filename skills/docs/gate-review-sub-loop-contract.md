@@ -985,7 +985,8 @@ source-changed reference as `stale_dispatch` and a missing local work order as
 `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/<roundId>/` — its only writes: the relevance verdict
 (`judge-verdict.json`) and the spec-authority verdict (`spec-authority-verdict.json`, see
 `agents/judge.agent.md` "Immutable spec authority"). The relevance verdict's shape is validated
-by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
+by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`). The same `<gate>-<headSha>` directory also holds the
+round's judge-pass act list at `act-list.json` (the `judge-pass --out` path), where the `ci_red` recovery finds it:
 
 ```json
 {
@@ -1092,7 +1093,7 @@ all-stale fallback):
 ```sh
 node <dev-loops-package-root>/cli/index.mjs gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha <current_head_sha> \
   --findings-file <ledger-path> --judge-verdict <verdict-path> --judge-plan <judge-plan-path> \
-  --out <act-list-path> --ledger-out <enriched-ledger-path> \
+  --out tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<head>/act-list.json --ledger-out <enriched-ledger-path> \
   --spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict <spec-authority-verdict-path> \
   [--prior-approvals <prior-approvals-path> --approvals-out <approvals-out-path>] \
   [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>]

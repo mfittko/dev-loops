@@ -166,6 +166,15 @@ test("issue 3414 ac:3 a verdict post refused for red CI is recorded with the CI 
   assert.match(await rule(), /verdictRefusal/);
 });
 
+test("issue 3414 ac:3 judge-pass --out and the ci_red recovery name the same act-list path", async () => {
+  const ACT = "tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<head>/act-list.json";
+  const recovery = validateCoordinatorHandback({ pr: 7, head: HEAD, nextAction: "run_draft_gate", workerRunning: false, verdictRefusal: { reason: "ci_red" } }).recovery;
+  assert.ok(recovery.includes(ACT), "VERDICT_REFUSAL_RECOVERY names the act-list path");
+  for (const file of [MAIN, "skills/copilot-pr-followup/SKILL.md", "skills/docs/gate-review-sub-loop-contract.md"]) {
+    assert.ok((await readRepo(file)).includes(ACT), `${file} names the act-list path`);
+  }
+});
+
 test("issue 3414 the emitter refusal JSON for a bad CI source carries a recovery key", () => {
   const result = spawnSync("node", [path.resolve("scripts/loop/emit-fixer-work-order.mjs"), "--harness", "claude", "--repo", "o/r", "--pr", "7", "--head-sha", HEAD, "--phase", "full", "--ci-file", "ci.json", "--threads-file", "threads.json"], { encoding: "utf8" });
   const out = JSON.parse(result.stdout);
