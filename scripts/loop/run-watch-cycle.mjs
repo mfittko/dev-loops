@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 import { spawn } from "node:child_process";
-import { takeGhSlot } from "@dev-loops/core/github/gh-throttle";
+import { isUnpaced, takeGhSlot } from "@dev-loops/core/github/gh-throttle";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -103,7 +103,8 @@ export async function watchWorkflowRun(
     clearTimeoutImpl = clearTimeout,
   },
 ) {
-  if (ghCommand === "gh") await takeGhSlot({ env });
+  // No await for an attested stub: spawn must stay synchronous with the call.
+  if (ghCommand === "gh" && !isUnpaced(env)) await takeGhSlot({ env });
   return new Promise((resolve, reject) => {
     const child = spawnImpl(
       ghCommand,
