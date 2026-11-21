@@ -653,7 +653,8 @@ async function assertNoOpenWorkAtCandidate(prior, { handbackHead, siteCoverage, 
   for (const f of prior.findings ?? []) {
     if (isLifecycleFinding(f) || (f.residueOf && !skipped(f) && !(typeof f.site !== "string" && await bodyChanged()))) open.push(f);
   }
-  const sitelessHint = open.some((f) => typeof f.site !== "string") ? `; for a residue with no site edit the PR body (pass --repo and --pr) or record a sitelessSkipReason${typeof prior.bodySha256 === "string" ? "" : "; the sealed record has no bodySha256, so re-run the --result step with --repo and --pr first"}` : "";
+  const sitelessFps = open.filter((f) => typeof f.site !== "string").map((f) => { const item = actItems.find((a) => a.ref === f.residueOf); return item ? (item.fingerprint ?? item.ref) : f.residueOf; });
+  const sitelessHint = sitelessFps.length ? `; for a residue with no site edit the PR body (pass --repo and --pr) or record a sitelessSkipReason in the siteCoverage entry for ${[...new Set(sitelessFps)].join(", ")}${typeof prior.bodySha256 === "string" ? "" : "; the sealed record has no bodySha256, so re-run the --result step with --repo and --pr first"}` : "";
   if (open.length) throw new Error(`the handback is at ${handbackHead}, the candidate the sealed delta record reviewed, and ${open.length} open task(s) remain: ${open.map((f) => JSON.stringify(f.summary)).join("; ")}. Commit the fix on top of ${handbackHead} and hand back that new commit${open.every((f) => !isLifecycleFinding(f)) ? ` (or record a skip reason for each residue site${sitelessHint})` : ""}`);
 }
 
