@@ -778,7 +778,7 @@ Required:
 - `--repo <owner/name>` — selects the default findings dir `<main-checkout>/tmp/gate-findings/<owner-name>/` (the main-anchored ledger, validated like `gate-finding-classes.mjs`) (not needed with `--findings-root`)
 
 Optional:
-- `--findings-root <dir>` — directory holding `pr-<N>/draft_gate-*.json` round files (other files are ignored; a malformed one is skipped and counted in `summary.skippedRoundFiles`)
+- `--findings-root <dir>` — directory holding `pr-<N>/draft_gate-<sha>.json` and `pr-<N>/draft_gate-<sha>.round-<N>.json` round files, the only ones read (other files are ignored; a malformed one is skipped and counted in `summary.skippedRoundFiles`)
 - `--repo-root <dir>` — checkout whose main worktree anchors the default findings dir (default: cwd)
 
 Matching rule:

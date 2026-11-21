@@ -52,7 +52,7 @@ export const CLASS_ANGLES = {
   "edge-case-input-validation": ["input-validation", "correctness", "state-concurrency", "determinism"],
   "docs-help-description": ["contract-surface", "pr-description", "link-check"],
   tests: ["coverage"],
-  other: ["correctness", "holistic"],
+  other: ["correctness", "holistic", "state-concurrency", "contract-surface", "determinism", "packaging-runtime", "contradiction-lens"],
 };
 
 // The same bucket table as gate-finding-classes.mjs, so the brief and this report give one class per thread.

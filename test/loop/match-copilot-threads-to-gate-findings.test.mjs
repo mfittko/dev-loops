@@ -208,6 +208,8 @@ test("matches by line window when both sides carry a line, else by file", () => 
   const index = { index: new Map([[7, new Map([["a.mjs", [{ angle: "x", line: 10 }]]])]]) };
   const matched = (thread) => matchThreads([{ pr: 7, ...thread }], index).threads[0].matched;
   assert.equal(matched({ path: "a.mjs", line: 12 }), true);
+  assert.equal(matched({ path: "a.mjs", line: 35 }), true);
+  assert.equal(matched({ path: "a.mjs", line: 36 }), false);
   assert.equal(matched({ path: "a.mjs" }), true);
   assert.equal(matched({ path: "a.mjs", line: 400 }), false);
   assert.equal(matched({ path: "b.mjs", line: 10 }), false);
@@ -230,4 +232,10 @@ test("default findings root is main-anchored; --repo is validated like buildLogP
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("an unmatched other-class thread lists packaging-runtime in shouldHaveCaughtAngles", () => {
+  const thread = matchThreads([{ pr: 7, path: "z.mjs", body: "unrelated remark" }], { index: new Map() }).threads[0];
+  assert.equal(thread.class, "other");
+  assert.ok(thread.shouldHaveCaughtAngles.includes("packaging-runtime"));
 });
