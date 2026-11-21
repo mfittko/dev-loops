@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -9,6 +9,7 @@ import { buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "../
 
 const HEAD = "d".repeat(40);
 const KEY = { repo: "owner/repo", pr: 7, gate: "draft_gate", headSha: HEAD };
+const FINISHED = JSON.stringify({ angle: "coverage", verdict: "clean", headSha: HEAD, findings: [] });
 
 async function withRound(fn) {
   const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "stale-round-"));
@@ -17,7 +18,8 @@ async function withRound(fn) {
     await writeFile(path.join(tmpRoot, `checkpoint-dispatch-prompt-draft-gate-coverage-${HEAD}.json`), "{}");
     const dir = buildGateReviewsDir({ ...KEY, tmpRoot });
     await mkdir(dir, { recursive: true });
-    await writeFile(path.join(dir, "coverage.json"), "{}");
+    // The reviewer finished: a valid artifact newer than the sentinel, so the round is not live.
+    await writeFile(path.join(dir, "coverage.json"), FINISHED);
     return await fn(tmpRoot);
   } finally {
     await rm(tmpRoot, { recursive: true, force: true });
@@ -129,5 +131,78 @@ test("a dispatch-record-only round is retired under liveOnly, with the findings 
   } finally {
     await rm(sentinelRoot, { recursive: true, force: true });
     await rm(findingsRoot, { recursive: true, force: true });
+  }
+});
+
+const SENTINEL = `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`;
+
+test("a live reviewer sentinel (no valid artifact newer than it) is refused with a recovery and left in place", async () => {
+  for (const artifact of [null, "{}", JSON.stringify({ angle: "coverage", verdict: "clean", headSha: "e".repeat(40), findings: [] })]) {
+    await withRound(async (tmpRoot) => {
+      const file = path.join(buildGateReviewsDir({ ...KEY, tmpRoot }), "coverage.json");
+      if (artifact === null) await rm(file); else await writeFile(file, artifact);
+      const result = await retireStaleRound({ ...KEY, tmpRoot });
+      assert.equal(result.retiredRound, undefined);
+      assert.match(result.refusal.error, /reviewer sentinel\(s\) have no findings artifact newer than them/);
+      assert.match(result.refusal.recovery, /--pending/);
+      assert.match(result.refusal.recovery, /retire-gate-round\.mjs/);
+      assert.equal(existsSync(path.join(tmpRoot, SENTINEL)), true);
+    });
+  }
+});
+
+test("an artifact older than the sentinel belongs to an earlier round, so the sentinel is live", async () => {
+  await withRound(async (tmpRoot) => {
+    const old = new Date(Date.now() - 60_000);
+    await utimes(path.join(buildGateReviewsDir({ ...KEY, tmpRoot }), "coverage.json"), old, old);
+    assert.match((await retireStaleRound({ ...KEY, tmpRoot })).refusal.error, /still be running/);
+  });
+});
+
+test("a group unit sentinel is finished once any valid artifact is newer than it", async () => {
+  await withRound(async (tmpRoot) => {
+    await rm(path.join(tmpRoot, SENTINEL));
+    await writeFile(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-group-docs-${HEAD}.json`), "{}");
+    await utimes(path.join(buildGateReviewsDir({ ...KEY, tmpRoot }), "coverage.json"), new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+    assert.equal((await retireStaleRound({ ...KEY, tmpRoot })).retiredRound.retired, 1);
+  });
+});
+
+test("an error other than ENOENT reading a verdict marker fails closed instead of retiring (ENOTDIR, EACCES, EIO share one path)", async () => {
+  // ENOTDIR: the ledger's parent is a file, so access() fails with ENOTDIR, not ENOENT.
+  await withRound(async (tmpRoot) => {
+    const ledger = buildGateFaninLedgerPath({ ...KEY, tmpRoot });
+    let parent = path.dirname(ledger);
+    while (path.dirname(parent) !== tmpRoot) parent = path.dirname(parent);
+    await writeFile(parent, "not a directory");
+    await assert.rejects(retireStaleRound({ ...KEY, tmpRoot }), (err) => err.code === "ENOTDIR");
+    assert.equal(existsSync(path.join(tmpRoot, SENTINEL)), true);
+  });
+  // EACCES: the ledger's parent lacks search permission (a no-op check as root, which ignores modes).
+  if (process.getuid?.() !== 0) {
+    await withRound(async (tmpRoot) => {
+      const ledger = buildGateFaninLedgerPath({ ...KEY, tmpRoot });
+      await mkdir(path.dirname(ledger), { recursive: true });
+      await writeFile(ledger, "{}");
+      await chmod(path.dirname(ledger), 0o000);
+      try {
+        await assert.rejects(retireStaleRound({ ...KEY, tmpRoot }), (err) => err.code === "EACCES");
+        assert.equal(existsSync(path.join(tmpRoot, SENTINEL)), true);
+      } finally {
+        await chmod(path.dirname(ledger), 0o755);
+      }
+    });
+  }
+});
+
+test("an unreadable tmp root (ENOTDIR) is not treated as an empty round", async () => {
+  const base = await mkdtemp(path.join(os.tmpdir(), "stale-round-"));
+  try {
+    const tmpRoot = path.join(base, "file");
+    await writeFile(tmpRoot, "x");
+    await assert.rejects(retireStaleRound({ ...KEY, tmpRoot }), (err) => err.code === "ENOTDIR");
+    assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot: path.join(base, "missing") }), { retiredRound: null });
+  } finally {
+    await rm(base, { recursive: true, force: true });
   }
 });

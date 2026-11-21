@@ -5264,6 +5264,16 @@ test("issue 3416: a rebuild at a full head retires the partial round and reports
     await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Original body."]), { repoRoot });
     const sentinel = path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${fullSha}.json`);
     await writeFile(sentinel, "{}\n", "utf8");
+    // A reviewer that has not written its findings may still be running: the rebuild refuses and keeps the round.
+    await assert.rejects(
+      writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Corrected body."]), { repoRoot }),
+      (err) => /may still be running/.test(err.message) && /--pending/.test(err.recovery) && /retire-gate-round\.mjs/.test(err.recovery),
+    );
+    assert.equal((await readFile(sentinel, "utf8")).trim(), "{}");
+    // Once it finished (a valid artifact newer than the sentinel) the round retires.
+    const reviewsDir = path.resolve(repoRoot, buildGateReviewsDir({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: fullSha, tmpRoot: "tmp" }));
+    await mkdir(reviewsDir, { recursive: true });
+    await writeFile(path.join(reviewsDir, "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", headSha: fullSha, findings: [] }), "utf8");
     const rebuilt = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Corrected body."]), { repoRoot });
     assert.equal(rebuilt.retiredRound.retired, 1);
     await assert.rejects(readFile(sentinel), /ENOENT/);
@@ -10882,8 +10892,8 @@ test("issue 3416: the rebuilt context plans a retired clean angle as pending, no
     try {
       await run("Original body.");
       await mkdir(path.resolve(repoRoot, buildGateReviewsDir(key)), { recursive: true });
-      await writeFile(path.resolve(repoRoot, buildGateReviewsDir(key), "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", headSha: fullSha, findings: [] }));
       await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${fullSha}.json`), "{}\n", "utf8");
+      await writeFile(path.resolve(repoRoot, buildGateReviewsDir(key), "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", headSha: fullSha, findings: [] }));
       assert.deepEqual(await readCompletedAnglesForHead(key, { repoRoot }), ["scope"]);
       await run("Corrected body.");
     } finally {
@@ -10923,12 +10933,41 @@ test("issue 3416: with --tmp-root set, the retirement still moves the sentinels 
     await mkdir(path.resolve(repoRoot, "tmp"), { recursive: true });
     const sentinel = path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${fullSha}.json`);
     await writeFile(sentinel, "{}\n", "utf8");
+    // The finished reviewer's artifact lives under --tmp-root, while its sentinel lives under tmp/.
+    const reviewsDir = path.resolve(repoRoot, buildGateReviewsDir({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: fullSha, tmpRoot: "other-tmp" }));
+    await mkdir(reviewsDir, { recursive: true });
+    await writeFile(path.join(reviewsDir, "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", headSha: fullSha, findings: [] }), "utf8");
     const rebuilt = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Corrected body."]), { repoRoot });
     assert.equal(rebuilt.retiredRound.retired, 1);
     await assert.rejects(readFile(sentinel), /ENOENT/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+test("issue 3416: a failure after the retirement carries retiredRound on the error and in the CLI stderr JSON", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-retire-error-"));
+  const fullSha = "abc1234567890def".padEnd(40, "0");
+  const realOut = process.stdout.write;
+  const realErr = process.stderr.write;
+  let err = "";
+  try {
+    const baseArgs = ["--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate", "--head-sha", fullSha, "--angles", '["scope"]', "--acceptance-criteria", "#9"];
+    process.stdout.write = () => true;
+    await main([...baseArgs, "--issue-body", "Original body."], { repoRoot, run: stubGhRun });
+    // An undispatched round (a dispatch record only) retires, then the unreadable --known-findings path throws.
+    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-dispatch-prompt-draft-gate-scope-${fullSha}.json`), "{}\n", "utf8");
+    process.stderr.write = (chunk) => { err += chunk; return true; };
+    await main([...baseArgs, "--issue-body", "Corrected body.", "--known-findings", path.resolve(repoRoot, "missing-known-findings.json")], { repoRoot, run: stubGhRun });
+  } finally {
+    process.stdout.write = realOut;
+    process.stderr.write = realErr;
+    process.exitCode = 0;
+    await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+  const payload = JSON.parse(err.trim().split("\n").at(-1));
+  assert.equal(payload.ok, false);
+  assert.equal(payload.retiredRound.dispatchPromptRecords.length, 1);
 });
 
 test("issue 3416: the CLI refusal for a live round at an abbreviated head carries a concrete recovery key", async () => {

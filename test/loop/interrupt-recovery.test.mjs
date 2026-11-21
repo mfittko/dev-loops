@@ -136,14 +136,29 @@ describe("interrupt a stubbed draft_gate round and fix pass after each step", as
   }
 });
 
-// A coordinator that rebuilds the gate context at the same head changes the briefing prefix hash. The rebuild retires the
-// killed reviewer's stale round, so the fresh reviewer passes the sentinel without the same-head retry (issue 3416).
-test("a reviewer re-fanned after a context rebuild at the same head passes the sentinel", async () => {
+// The child's `context` step calls the shared retirement helper directly (it never runs write-gate-context.mjs), so these
+// tests cover the helper step; the write-gate-context.test.mjs 3416 tests cover the builder path (issue 3416).
+// A changed briefing prefix retires a finished round (the killed harness left a findings artifact newer than the
+// sentinel), so the fresh reviewer passes the sentinel without the same-head retry.
+test("the shared retirement helper step retires a finished round, so a re-fanned reviewer passes the sentinel", async () => {
   const root = await makeRoot();
-  const killed = runChild("round", root, { INTERRUPT_AFTER: "sentinel" });
+  const killed = runChild("round", root, { INTERRUPT_AFTER: "artifact" });
   assert.equal(killed.signal, "SIGKILL", killed.stderr);
   const redo = runChild("round", root, { PREFIX_HASH: "b".repeat(64) });
   assert.equal(redo.status, 0, redo.stdout + redo.stderr);
+});
+
+// A reviewer killed after its sentinel leaves no findings artifact: its round looks live, so the helper refuses with a recovery.
+test("the shared retirement helper step refuses a round whose reviewer may still be running", async () => {
+  const root = await makeRoot();
+  const killed = runChild("round", root, { INTERRUPT_AFTER: "sentinel" });
+  assert.equal(killed.signal, "SIGKILL", killed.stderr);
+  const before = await snapshot(root);
+  const redo = runChild("round", root, { PREFIX_HASH: "b".repeat(64) });
+  assert.equal(redo.status, 5, redo.stdout + redo.stderr);
+  assert.match(redo.stderr, /reviewer sentinel\(s\) have no findings artifact newer than them/);
+  assert.match(redo.stderr, /retire-gate-round\.mjs/);
+  assert.deepEqual(await snapshot(root), before);
 });
 
 // A round that already recorded its verdict (fan-in ledger) is never retired by the retirement helper: it refuses.
@@ -152,7 +167,7 @@ test("the retirement step over a round with a posted verdict refuses and keeps t
   const done = runChild("round", root);
   assert.equal(done.status, 0, done.stderr);
   const before = await snapshot(root);
-  const redo = runChild("round", root, { INTERRUPT_AFTER: "context" });
+  const redo = runChild("round", root, { INTERRUPT_AFTER: "context", PREFIX_HASH: "b".repeat(64) });
   assert.equal(redo.status, 5, redo.stdout + redo.stderr);
   assert.match(redo.stderr, /a verdict is already recorded/);
   assert.deepEqual(await snapshot(root), before);

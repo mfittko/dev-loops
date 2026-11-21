@@ -32,13 +32,13 @@ import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveFanoutSizeTier, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveGateDispatchMode, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves, validateAngleResult } from "@dev-loops/core/loop/gate-fanin";
+import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
 import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { retireGateRound } from "./retire-gate-round.mjs";
-import { buildRetireCommand, retireStaleRound } from "./_stale-round-retirement.mjs";
+import { buildRetireCommand, isFinishedArtifact, retireStaleRound } from "./_stale-round-retirement.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities, splitDiffIntoParts, DIFF_PART_MAX_BYTES, DIFF_PART_MAX_LINES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
@@ -306,6 +306,7 @@ Optional:
                                  findings-log ledgers are read from the MAIN worktree's tmp/ (the stable
                                  per-repo ledger location); an explicit path pins both.
 Prior dispositions (no flag): every closed prior round of this gate on this PR (a findings-log ledger at any other head) contributes its reject/defer-disposed findings; the latest disposition of a finding wins. The cumulative list, scoped to angles re-running this round (not in --carried-angles), is written in full to <gate>-<headSha>.prior-dispositions.json and hash-bound as a required \`prior-dispositions\` read (a "do not re-raise" hint, skills/docs/gate-review-sub-loop-contract.md). A ledger that is unreadable, malformed, of a foreign identity, or not clean/findings_present contributes nothing; no usable ledger omits the read.
+Output: the artifact summary on stdout. When the rebuild retired a stale round at this head it adds "retiredRound" ({ retirementDir, retired, sentinels, dispatchPromptRecords, findingsDirRetired }); a failure after that retirement carries the same key on stderr. A refusal (exit 1) carries a "recovery" field with the runnable command or stop route. A round with a posted verdict, or with a live reviewer sentinel (no findings artifact newer than it), is refused, never retired.
 
 ${JQ_OUTPUT_USAGE}
 `.trim();
@@ -3018,7 +3019,18 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
  * @param {{ repoRoot?: string }} [runtime]
  * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, evidencePath: string|null, prefixHash: string, prefixMode: "inline"|"pointer"|"file", warning?: string, volatilePath: string, requestPlanPath: string, requestPlan: object }>}
  */
-export async function writeGateContext(options, { repoRoot = process.cwd() } = {}) {
+export async function writeGateContext(options, deps = {}) {
+  const state = { retiredRound: null };
+  try {
+    return await writeGateContextBody(options, deps, state);
+  } catch (error) {
+    // Any failure after the stale-round retirement still tells the caller that state moved (the CLI copies the key into its stderr JSON).
+    if (state.retiredRound && error && typeof error === "object") error.retiredRound = state.retiredRound;
+    throw error;
+  }
+}
+
+async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, state) {
   // Validate/dedupe options.angles BEFORE any file write. The CLI path
   // already validates via parseAnglesJson; a programmatic caller
   // (buildGateContext or a direct writeGateContext call) may pass an
@@ -3404,6 +3416,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       const stale = await retireStaleRound({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: scanRoot, findingsTmpRoot: findingsRoot, verdictRoots: [findingsRoot, scanRoot, resolveGateArtifactTmpRoot(repoRoot)], liveOnly: true });
       if (stale.refusal) throw Object.assign(new Error(`${stale.refusal.error} recovery: ${stale.refusal.recovery}`), { recovery: stale.refusal.recovery });
       retiredRound = stale.retiredRound;
+      state.retiredRound = retiredRound;
       const { names: stillLive } = await scanLiveSentinels();
       if (stillLive.length > 0) {
         // AC2: name the in-flight head and point at the reviewers already briefed on the prior bytes (their sentinel files + the recorded hash they carry).
@@ -3645,21 +3658,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       const wantHead = String(options.headSha).trim().toLowerCase();
       // An artifact proves its unit finished only when it is newer than the sentinel (an older one belongs to an earlier round)
       // and parses as findings JSON that names this head and this angle; a truncated or foreign file is still in flight.
-      const finishedArtifact = async (angle, sentinel) => {
-        try {
-          const file = artifactOf(angle);
-          if ((await stat(file)).mtimeMs < (await stat(path.resolve(repoRoot, "tmp", sentinel))).mtimeMs) return false;
-          const parsed = JSON.parse(await readFile(file, "utf8"));
-          const head = String(parsed?.headSha ?? "").trim().toLowerCase();
-          // The artifact must stamp a full SHA; only an abbreviated --head-sha may match by prefix.
-          const isFullSha = (sha) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha);
-          // A reviewer that exited through emit-reviewer-blocked.mjs writes verdict "blocked" with no findings; it is a finished unit.
-          const wellFormed = validateAngleResult(parsed?.verdict === "blocked" && Array.isArray(parsed.findings) && parsed.findings.length === 0 ? { ...parsed, verdict: "clean" } : parsed) === null;
-          return wellFormed && isFullSha(head) && (isFullSha(wantHead) ? head === wantHead : wantHead.length > 0 && head.startsWith(wantHead)) && String(parsed.angle).trim().toLowerCase() === String(angle).trim().toLowerCase();
-        } catch {
-          return false;
-        }
-      };
+      const finishedArtifact = (angle, sentinel) => isFinishedArtifact({
+        file: artifactOf(angle),
+        sentinelFile: path.resolve(repoRoot, "tmp", sentinel),
+        wantHead,
+        sameAngle: (parsedAngle) => parsedAngle.trim().toLowerCase() === String(angle).trim().toLowerCase(),
+      });
       const refuseInFlight = (scope) => {
         throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}) while unit ${scope} is in flight; wait for it to write its findings, or retire the round: ${retireCommand}`);
       };
@@ -4618,7 +4622,8 @@ export async function main(
   } catch (error) {
     // A refusal that carries a recovery keeps it in the CLI JSON (RECOVERY-COMMAND-REQUIRED).
     const recovery = typeof error?.recovery === "string" && error.recovery.length > 0 ? { recovery: error.recovery } : {};
-    process.stderr.write(`${JSON.stringify({ ...JSON.parse(formatCliError(error)), ...recovery })}\n`);
+    const retired = error?.retiredRound ? { retiredRound: error.retiredRound } : {};
+    process.stderr.write(`${JSON.stringify({ ...JSON.parse(formatCliError(error)), ...recovery, ...retired })}\n`);
     process.exitCode = 1;
   }
 }

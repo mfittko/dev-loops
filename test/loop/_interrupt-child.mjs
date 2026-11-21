@@ -38,10 +38,10 @@ let emission;
 // A reviewer unit and a fixer emission unit; each step is one durable state change.
 const UNITS = {
   round: {
-    // This step runs the shared retirement helper on every run (issue 3416). It models the retire-then-rebuild step only:
-    // write-gate-context.mjs retires only when the prefix bytes change, which this child does not model.
+    // This step runs the shared retirement helper (issue 3416) only for a rebuilt briefing (PREFIX_HASH), because
+    // write-gate-context.mjs retires only when the prefix bytes change. It never runs write-gate-context.mjs itself.
     context: async () => {
-      const stale = await retireStaleRound(gateKey);
+      const stale = process.env.PREFIX_HASH ? await retireStaleRound(gateKey) : {};
       if (stale.refusal) { process.stderr.write(JSON.stringify(stale.refusal)); process.exit(5); }
       atomicWrite(contextFile, "{}\n");
     },

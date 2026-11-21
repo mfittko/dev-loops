@@ -121,8 +121,10 @@ Output (stdout, JSON):
   resolved unit bound.
   "retiredRound" ({ "retirementDir", "retired", "sentinels", "dispatchPromptRecords",
   "findingsDirRetired" }) is present only when a full emission retired a stale round at
-  this head; a --pending emission never retires, so it omits the key. A refusal or failure
-  after that retirement carries the same "retiredRound" key.
+  this head; a --pending emission never retires, so it omits the key. A refusal (exit 1, stdout) or
+  failure (exit 2, stderr) after that retirement carries the same "retiredRound" key. A full emission
+  refuses (exit 1, with a "recovery") when a reviewer sentinel at this head has no findings artifact newer
+  than it, because that reviewer may still be running: resume with --pending instead of re-emitting.
   Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
   gates.fanout.sequential is set). Do NOT use the artifact's fanout.wavePlan to
   bound this step: that plan is computed over the UNSPLIT resolveFanoutGroups
@@ -508,6 +510,12 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // A full emission retires the stale round before its later steps, so every failure after that reports what moved.
   let retiredRound = null;
   const finish = (payload, ok) => emitResult(retiredRound && !ok ? { ...payload, retiredRound } : payload, { jq, silent, ok });
+  // An exit-2 failure writes the error JSON to stderr; after a retirement it carries retiredRound too.
+  const failAfterRetirement = (err) => {
+    const cli = JSON.parse(formatCliError(err));
+    process.stderr.write(`${JSON.stringify(retiredRound ? { ...cli, retiredRound } : cli)}\n`);
+    return 2;
+  };
   if (argv.includes("--carry-forward-plan") && argv.includes("--carry-forward-plan-file")) {
     return finish({ ok: false, error: "--carry-forward-plan and --carry-forward-plan-file are mutually exclusive", recovery: "Pass only --carry-forward-plan-file <keyed carry-forward-plan.json path>." }, false);
   }
@@ -787,7 +795,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   if (!pendingOnly) {
     let stale;
     try {
-      stale = await retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdictRoots: [tmpRoot, ledgerTmpRoot] });
+      // Sentinels always live under <cwd>/tmp (verify-fresh-review-context); the round's findings follow --tmp-root;
+      // a verdict marker may sit under --tmp-root, the ledger root or the main worktree's tmp.
+      stale = await retireStaleRound({ repo, pr, gate, headSha, tmpRoot: tmpRootDefault, findingsTmpRoot: tmpRoot, verdictRoots: [...new Set([tmpRoot, ledgerTmpRoot, ledgerTmpRootDefault])] });
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;
@@ -830,8 +840,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       await mkdir(path.dirname(suffixPath), { recursive: true });
       await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound, resolutionDeltaPaths, resolutionDeltaMerges, resolutionDeltaFullPaths), "utf8");
     } catch (err) {
-      process.stderr.write(`${formatCliError(err)}\n`);
-      return 2;
+      return failAfterRetirement(err);
     }
 
     let result;
@@ -843,8 +852,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
         prefixSha256 ??= createHash("sha256").update(await readFile(result.prefixPath)).digest("hex");
       }
     } catch (err) {
-      process.stderr.write(`${formatCliError(err)}\n`);
-      return 2;
+      return failAfterRetirement(err);
     }
     if (!result.composed || !result.recorded) {
       return finish({ ok: false, error: `failed to compose reviewer prompt for unit ${JSON.stringify(unit?.name)} (scope ${scope}): ${result.reason}` }, false);
@@ -953,8 +961,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     } catch {
       // Best-effort clear only — never mask the original persist failure.
     }
-    process.stderr.write(`${formatCliError(err)}\n`);
-    return 2;
+    return failAfterRetirement(err);
   }
   try {
     const result = finish(payload, true);
