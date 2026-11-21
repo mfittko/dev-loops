@@ -942,7 +942,7 @@ async function emitPlan({
     outputRefs: [outputRef],
     siteCoverage: actListFile && !completion ? buildSiteCoverageSkeleton(source.parsed) : undefined,
     handbackCheck: phase === "commit_only" && actListFile
-      ? `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(actListCopy)} --baseline ${headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(outputRef)}`
+      ? `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(actListCopy)} --baseline ${headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(outputRef)} --repo ${repo} --pr ${Number(pr)}`
       : undefined,
     executionRules: {
       contract: fileURLToPath(new URL("agents/fixer.agent.md", PACKAGE_ROOT)),

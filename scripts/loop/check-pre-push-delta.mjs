@@ -72,7 +72,7 @@ import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } fro
 import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --result-path <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
-       check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--worktree <dir>]   (fixer handbackCheck run)
+       check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--repo <owner/name> --pr <n>] [--worktree <dir>]   (fixer handbackCheck run)
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
        check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list; with no unresolved thread the --fixer-plan's operator focus round is the one act item)
        check-pre-push-delta.mjs --reviewer-only --repo <owner/name> --pr <n> --baseline <sha> --pr-head <sha> --findings-log <cap-round log> --spec-identity <id> --result-path <path> [--worktree <dir>]   (code-range clearing, act list derived from the ledger)
@@ -126,7 +126,7 @@ Result JSON (--result, DeltaPrePushReviewResult):
     "widenedReads": [{ "path": "...", "reason": "..." }],   (objects, not strings; [] when none)
     "outcome": "locally_clear|needs_fix|bounded_out" }
 
-  Residue with no site (issue 3364): with --repo and --pr the --result run seals bodySha256 (the live PR body digest) in the record, and the --handback run clears that residue when the live body digest differs, or when the act item's site coverage record carries a noSitesReason; an unreadable body keeps it open.
+  Residue with no site (issue 3364): with --repo and --pr the --result run seals bodySha256 (the live PR body digest) in the record, and the --handback run clears that residue when the live body digest differs, or when the act item's site coverage record carries a sitelessSkipReason (noSitesReason does not clear it); the coordinator input run (with --fixer-plan) falls back to the plan target when no --repo/--pr is given; an unreadable body keeps it open.
 
   ACT results additionally require this binding from input.resultShape:
     { "coverageProtocol": "pulled_commit_only_v1",
@@ -623,6 +623,12 @@ async function lifecycleRefusals({ options, ownPaths, changedPaths, changelog, d
   return findings;
 }
 
+// The target the fixer plan names, for the body-edit clear when no --repo/--pr is given; an unreadable plan yields no target (the residue stays open).
+function planTarget(fixerPlan) {
+  if (!fixerPlan) return null;
+  try { const target = JSON.parse(readFileSync(fixerPlan, "utf8")).workOrder?.target; return target?.repo && target.pr ? target : null; } catch { return null; }
+}
+
 // Issue 2447: a handback at the candidate that a fix_and_rereview record reviewed is refused while must-fix work is open there: a lifecycle finding, or a residue finding with no skip reason recorded for its site.
 // A record of another act set (a closed sequence or a replaced act list) names residue refs this sequence lacks, so no skip reason could clear it: it does not apply.
 // Issue 3364: a residue with no site (a PR-body item no commit can fix) is also cleared when the live PR body digest differs from the digest the sealed record took (the issue 3309 body rule). An unreadable body fails closed.
@@ -647,7 +653,8 @@ async function assertNoOpenWorkAtCandidate(prior, { handbackHead, siteCoverage, 
   for (const f of prior.findings ?? []) {
     if (isLifecycleFinding(f) || (f.residueOf && !skipped(f) && !(typeof f.site !== "string" && await bodyChanged()))) open.push(f);
   }
-  if (open.length) throw new Error(`the handback is at ${handbackHead}, the candidate the sealed delta record reviewed, and ${open.length} open task(s) remain: ${open.map((f) => JSON.stringify(f.summary)).join("; ")}. Commit the fix on top of ${handbackHead} and hand back that new commit${open.every((f) => !isLifecycleFinding(f)) ? " (or record a skip reason for each residue site; edit the PR body for a residue with no site, passing --repo and --pr)" : ""}`);
+  const sitelessHint = open.some((f) => typeof f.site !== "string") ? `; for a residue with no site edit the PR body (pass --repo and --pr) or record a sitelessSkipReason${typeof prior.bodySha256 === "string" ? "" : "; the sealed record has no bodySha256, so re-run the --result step with --repo and --pr first"}` : "";
+  if (open.length) throw new Error(`the handback is at ${handbackHead}, the candidate the sealed delta record reviewed, and ${open.length} open task(s) remain: ${open.map((f) => JSON.stringify(f.summary)).join("; ")}. Commit the fix on top of ${handbackHead} and hand back that new commit${open.every((f) => !isLifecycleFinding(f)) ? ` (or record a skip reason for each residue site${sitelessHint})` : ""}`);
 }
 
 export async function runCli(
@@ -781,7 +788,7 @@ export async function runCli(
       }
       for (const guardedHead of new Set(closure ? [record.headSha, currentHead] : [record.headSha])) {
         if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === guardedHead && unsealed.actSetId === sequence.actSetId) throw new Error(`delta_record_unsealed: a delta record exists for ${sequence.reviewBaselineHead} but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record`);
-        await assertNoOpenWorkAtCandidate(sealed, { handbackHead: guardedHead, siteCoverage: record.siteCoverage ?? [], actItems: sequence.actItems, actSetId: sequence.actSetId, target: options.repo && options.pr ? { repo: options.repo, pr: options.pr } : null, fetchPr });
+        await assertNoOpenWorkAtCandidate(sealed, { handbackHead: guardedHead, siteCoverage: record.siteCoverage ?? [], actItems: sequence.actItems, actSetId: sequence.actSetId, target: options.repo && options.pr ? { repo: options.repo, pr: options.pr } : planTarget(options.fixerPlan), fetchPr });
       }
     }
     if (closure) {

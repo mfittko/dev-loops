@@ -2231,6 +2231,50 @@ test("issue 3364: a siteless residue is cleared by a PR body edit after the seal
 
 test("issue 3364: a siteless residue is cleared by a recorded skip reason that carries no site", async () => {
   const fx = openRecordFixture([{ severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" }]);
-  const skipped = fx.handback(B, [{ fingerprint: ACT.fingerprint ?? FP, returnedSites: [], noSitesReason: "a PR-body item with no code site", sites: [] }]);
+  const skipped = fx.handback(B, [{ fingerprint: ACT.fingerprint ?? FP, returnedSites: [], noSitesReason: "query empty", sitelessSkipReason: "a PR-body item with no code site", sites: [] }]);
   assert.ok((await fx.run(skipped, ["--handback"])).ok);
+});
+
+test("issue 3364: noSitesReason alone does not clear a siteless residue at the handback", async () => {
+  const fx = openRecordFixture([{ severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" }]);
+  const noSites = fx.handback(B, [{ fingerprint: ACT.fingerprint ?? FP, returnedSites: [], noSitesReason: "the query returned nothing", sites: [] }]);
+  await assert.rejects(fx.run(noSites, ["--handback"]), /open task/);
+});
+
+test("issue 3364: a sealed record with no bodySha256 names the --result re-run as the remedy", async () => {
+  const fx = openRecordFixture([{ severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" }]);
+  await assert.rejects(fx.run(fx.handback(B), ["--handback", "--repo", "o/r", "--pr", "7"]), /no bodySha256[^]*re-run the --result step with --repo and --pr/);
+});
+
+test("issue 3364: the coordinator input run reads the PR target from --fixer-plan when --repo and --pr are absent", async () => {
+  const { prBodySha256 } = await import("../../scripts/github/write-gate-context.mjs");
+  const fx = openRecordFixture([{ severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" }]);
+  const recordPath = gateDeltaRecordPath(fx.tmpRoot, A);
+  writeSealedGateDeltaRecord(fx.tmpRoot, A, { ...JSON.parse(fs.readFileSync(recordPath, "utf8")), bodySha256: prBodySha256("old body") });
+  const plan = path.join(path.dirname(fx.tmpRoot), "issue-3364-plan.json");
+  fs.writeFileSync(plan, JSON.stringify({ workOrder: { target: { repo: "o/r", pr: 7 } } }));
+  const atC = fx.handback(B);
+  const withBody = (body) => ({ ...headAt(B), fetchPr: async () => ({ body }) });
+  await assert.rejects(fx.run(atC, ["--fixer-plan", plan, "--findings-log", logFor(A)], withBody("old body")), /open task/);
+  // An edited body clears the guard; the run then fails on the unauthenticated plan, not on open work.
+  await assert.rejects(fx.run(atC, ["--fixer-plan", plan, "--findings-log", logFor(A)], withBody("new body")), (error) => !/open task/.test(error.message));
+});
+
+test("issue 3364: the --result run seals the live body digest for a siteless residue and records none when the body is unreadable", async () => {
+  const { prBodySha256 } = await import("../../scripts/github/write-gate-context.mjs");
+  const { dir, threadsFile, planPath } = await focusEmission("tighten the summary wording");
+  const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ref: "operator-focus", angle: "operator-focus", summary: "tighten the summary wording", judgeDisposition: "act" }] });
+  const result = path.join(dir, "siteless-result.json");
+  fs.writeFileSync(result, JSON.stringify({
+    reviewBaselineHead: A, candidateHead: B, actSetId: sequence.actSetId,
+    actionableItems: [{ ref: "operator-focus", status: "resolved", evidence: ["e"] }],
+    newFindings: [{ severity: "low", summary: "body tradeoff stale", evidence: ["pr body"], residueOf: "operator-focus" }], widenedReads: [], outcome: "needs_fix",
+  }));
+  const run = async (fetchPr) => {
+    const seam = { ...headAt(B), fetchPr };
+    await runCli(threadArgs(threadsFile, "--result", result, "--invocation", "1", "--fixer-plan", planPath), seam);
+    return JSON.parse(fs.readFileSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`), "utf8"));
+  };
+  assert.equal((await run(async () => ({ baseRefName: "main", body: "live body" }))).bodySha256, prBodySha256("live body"));
+  assert.equal((await run(async () => { throw new Error("gh offline"); })).bodySha256, undefined);
 });

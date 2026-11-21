@@ -160,6 +160,11 @@ function normalizeSiteCoverage(entry, label, ruleIds) {
     out.noSitesReason = entry.noSitesReason.trim();
     if (out.noSitesReason.startsWith("FILL:")) throw new Error(`${label} noSitesReason is the unedited skeleton placeholder; replace it with the outcome of running the siteQuery`);
   }
+  if (entry.sitelessSkipReason !== undefined) {
+    if (!isNonEmptyString(entry.sitelessSkipReason)) throw new Error(`${label} sitelessSkipReason must be a non-empty string`);
+    out.sitelessSkipReason = entry.sitelessSkipReason.trim();
+    if (out.sitelessSkipReason.startsWith("FILL:")) throw new Error(`${label} sitelessSkipReason is the unedited skeleton placeholder; replace it with the reason or delete the field`);
+  }
   if (entry.ruleCitations !== undefined) {
     if (!Array.isArray(entry.ruleCitations) || !entry.ruleCitations.every((id) => typeof id === "string" && RULE_ID_PATTERN.test(id.trim()))) {
       throw new Error(`${label} ruleCitations must be rule IDs such as LOCAL-COMMENT-DISCIPLINE`);
@@ -226,9 +231,9 @@ export function siteCoverageGaps(actItems, siteCoverage, residualRefs = new Set(
   return gaps;
 }
 
-/** The recorded skip reason for a site of an act item, or null. A residue with no site is skipped by the record's `noSitesReason`. */
+/** The recorded skip reason for a site of an act item, or null. A residue with no site (a PR-body item) is skipped only by the record's `sitelessSkipReason`; `noSitesReason` never skips it (issue 3364). */
 export function recordedSkipReason(siteCoverage, fingerprint, site) {
-  if (typeof site !== "string") return (siteCoverage ?? []).find((record) => record.fingerprint === fingerprint)?.noSitesReason ?? null;
+  if (typeof site !== "string") return (siteCoverage ?? []).find((record) => record.fingerprint === fingerprint)?.sitelessSkipReason ?? null;
   const sites = (siteCoverage ?? []).find((record) => record.fingerprint === fingerprint)?.sites ?? [];
   // Resolve the exact site first, then filter by status, so a fixed exact form is not shadowed by a skipped trimmed location.
   const found = sites.find((s) => s.site === site) ?? sites.find((s) => s.kind !== "input_form" && s.site === site.trim());
@@ -242,7 +247,7 @@ export function recordedSkipReason(siteCoverage, fingerprint, site) {
  * threadId/fixingCommitSha/disposition on any entry, an unrecognized
  * disposition value, or a duplicate threadId across entries.
  *
- * Each entry also carries the optional site coverage fields `sites`, `returnedSites`, `noSitesReason` and
+ * Each entry also carries the optional site coverage fields `sites`, `returnedSites`, `noSitesReason`, `sitelessSkipReason` and
  * `ruleCitations`; the handoff may carry a top-level `siteCoverage[]`.
  *
  * @param {object} raw

@@ -323,3 +323,22 @@ test("a doc_lag item needs a fixed or skipped site for every stated surface", ()
   const full = record([coverageItem({ returnedSites: ["JSDoc", "changes fragment"], sites: [{ site: "JSDoc", status: "fixed" }, { site: "changes fragment", status: "skipped", reason: "no fragment for this change" }] })]);
   assert.deepEqual(siteCoverageGaps([item], full), []);
 });
+
+// Issue 3364: a residue with no site is skipped only by sitelessSkipReason; noSitesReason is a routine "query returned nothing" field.
+test("a siteless residue is skipped only by sitelessSkipReason, never by noSitesReason", () => {
+  const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: [actEntry()] });
+  const reason = "a PR-body item with no code site";
+  const run = (extra) => decideDeltaNextStep({
+    sequence,
+    result: deltaResult(sequence, { newFindings: [{ severity: "low", summary: "body tradeoff stale", evidence: ["pr body"], residueOf: "fp1", skipReason: reason }] }),
+    invocation: 1,
+    currentHead: CANDIDATE,
+    siteCoverage: record([coverageItem({ returnedSites: [], sites: [], noSitesReason: "the query returned nothing at the head", ...extra })]),
+  });
+  assert.equal(run({ sitelessSkipReason: reason }).outcome, "locally_clear");
+  const open = run({});
+  assert.equal(open.outcome, "needs_fix");
+  assert.ok(open.errors.some((e) => /PRE-PUSH-DELTA-RESIDUE/.test(e)));
+  assert.throws(() => record([coverageItem({ sitelessSkipReason: " " })]), /sitelessSkipReason must be a non-empty string/);
+  assert.throws(() => record([coverageItem({ sitelessSkipReason: "FILL: x" })]), /sitelessSkipReason is the unedited skeleton placeholder/);
+});

@@ -3056,7 +3056,7 @@ test("commit_only work order carries a siteCoverage skeleton built from the act 
     assert.match(query.noSitesReason, /^FILL:/);
     assert.match(await readFile(promptPath, "utf8"), /Start from the `siteCoverage` skeleton/);
     assert.match(await readFile(promptPath, "utf8"), /run the work order's `handbackCheck` command/);
-    assert.equal(workOrder.handbackCheck, `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(workOrder.requiredReads.find((r) => r.kind === "act-list").path)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])}`);
+    assert.equal(workOrder.handbackCheck, `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(workOrder.requiredReads.find((r) => r.kind === "act-list").path)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])} --repo ${workOrder.mutationAuthority.repo} --pr ${workOrder.mutationAuthority.pr}`);
     const threads = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     assert.equal(threads.workOrder.siteCoverage, undefined);
     const threadsPrompt = await readFile(threads.promptPath, "utf8");
