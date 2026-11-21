@@ -317,6 +317,8 @@ test("wait-pr-checks --help prints usage and exits 0", async () => {
   assert(result.stdout.includes("wait-pr-checks.mjs"));
   assert(result.stdout.includes("--timeout"));
   assert(result.stdout.includes("--poll"));
+  assert(result.stdout.includes("A GraphQL limit alone switches the head read to REST"));
+  assert(result.stdout.includes("Only when the REST head read also fails does the"));
   // USAGE must match the actual exit-code behavior: argument/gh/runtime errors
   // exit 1 (repo convention, asserted above), exit 2 is not-settled only.
   assert(result.stdout.includes('1  Red (status "failure"), or an argument/gh/runtime error'));
@@ -360,7 +362,7 @@ test("wait-pr-checks waits for the GraphQL reset inside its --timeout budget, he
   let code;
   try {
     code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "300"], {
-      stdout, stderr: makeStream(), env: {}, runChild, delayImpl, now: () => clock,
+      stdout, stderr: makeStream(), env: {}, runChild, ensureOwnershipImpl: async () => ({ ok: true }), delayImpl, now: () => clock,
     });
   } finally {
     process.stderr.write = originalWrite;
@@ -485,7 +487,7 @@ test("wait-pr-checks returns pending with a re-issue, not RATE_LIMITED, when the
   const stdout = makeStream();
   const stderr = makeStream();
   const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "600"], {
-    stdout, stderr, env: {}, runChild, delayImpl: async (ms) => { clock += ms; }, now: () => clock,
+    stdout, stderr, env: {}, runChild, ensureOwnershipImpl: async () => ({ ok: true }), delayImpl: async (ms) => { clock += ms; }, now: () => clock,
   });
   const result = JSON.parse(stdout.text());
   assert.equal(code, 2);
@@ -583,7 +585,7 @@ test("wait-pr-checks clamps a poll interval above the cap so a check-less head s
       let t = 1_000_000;
       const stdout = makeStream();
       const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "200", "--timeout", "600"], {
-        stdout, stderr: makeStream(), env, ghCommand: "gh", now: () => t, delayImpl: async (ms) => { t += ms; },
+        stdout, stderr: makeStream(), env, ghCommand: "gh", ensureOwnershipImpl: async () => ({ ok: true }), now: () => t, delayImpl: async (ms) => { t += ms; },
       });
       const result = JSON.parse(stdout.text());
       assert.equal(code, 0);
@@ -591,4 +593,159 @@ test("wait-pr-checks clamps a poll interval above the cap so a check-less head s
       assert.ok(t - 1_000_000 <= 170_000 + 10_000, `waited ${t - 1_000_000} ms`);
     },
   );
+});
+
+// Secondary limit: GraphQL `pr view` fails `failures` times with `message`, while
+// `api rate_limit` shows every primary budget with headroom (or core exhausted).
+function secondaryLimitedRunChild({ failures = 1, message = "GraphQL: You have exceeded a secondary rate limit.", messages = [], coreRemaining = 4767, coreReset = 2_000_000_000, limitsReadable = true } = {}) {
+  let prViews = 0;
+  const runChild = async (_command, args) => {
+    const argv = args.join(" ");
+    if (argv === "api rate_limit" && !limitsReadable) return { code: 1, stdout: "", stderr: "boom" };
+    if (argv === "api rate_limit") {
+      return { code: 0, stdout: JSON.stringify({ resources: { graphql: { remaining: 3056, reset: 2_000_000_000 }, core: { remaining: coreRemaining, reset: coreReset } } }), stderr: "" };
+    }
+    if (argv.startsWith("pr view")) {
+      prViews += 1;
+      if (prViews <= failures) return { code: 1, stdout: "", stderr: messages[prViews - 1] ?? message };
+      return { code: 0, stdout: prView("sha-a", ["build"]), stderr: "" };
+    }
+    if (argv.includes("check-runs")) return { code: 0, stdout: checkRuns([{ status: "completed", conclusion: "success", name: "build" }]), stderr: "" };
+    if (argv.includes("/status")) return { code: 0, stdout: statuses([]), stderr: "" };
+    return { code: 97, stdout: "", stderr: `unexpected gh args: ${argv}` };
+  };
+  return runChild;
+}
+
+async function runSecondary(runChild, { timeout = "300", random = () => 0 } = {}) {
+  let clock = 1_000_000_000_000;
+  const delays = [];
+  const stdout = makeStream();
+  const stderr = makeStream();
+  const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", timeout], {
+    stdout, stderr, env: {}, runChild, random, ensureOwnershipImpl: async () => ({ ok: true }), delayImpl: async (ms) => { delays.push(ms); clock += ms; }, now: () => clock,
+  });
+  return { code, delays, result: JSON.parse(stdout.text()), stderr: stderr.text() };
+}
+
+test("wait-pr-checks backs off on a secondary limit with jitter, retries and settles on the check result", async () => {
+  const { code, delays, result } = await runSecondary(secondaryLimitedRunChild(), { random: () => 0 });
+  assert.equal(code, 0);
+  assert.equal(result.status, "success");
+  // 30 s step at the 50 percent jitter floor.
+  assert.equal(delays[0], 15_000);
+});
+
+test("wait-pr-checks sleeps the retry-after seconds from the error text on a secondary limit", async () => {
+  const runChild = secondaryLimitedRunChild({ message: "GraphQL: You have exceeded a secondary rate limit. retry-after: 20" });
+  const { code, delays, result } = await runSecondary(runChild);
+  assert.equal(code, 0);
+  assert.equal(result.status, "success");
+  assert.equal(delays[0], 20_000);
+});
+
+test("wait-pr-checks returns RATE_LIMITED budget secondary when the backoff cannot fit the timeout", async () => {
+  const runChild = secondaryLimitedRunChild({ failures: 99, message: "GraphQL: You have exceeded a secondary rate limit. retry-after: 90" });
+  const { code, result, stderr } = await runSecondary(runChild, { timeout: "60" });
+  assert.equal(code, 1);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "RATE_LIMITED");
+  assert.equal(result.budget, "secondary");
+  assert.ok(!("status" in result));
+  assert.match(stderr, /RATE_LIMITED/);
+  assert.equal(result.resetAt, new Date(1_000_000_000_000 + 90_000).toISOString());
+  assert.match(result.error, /secondary rate limit/);
+});
+
+test("wait-pr-checks returns RATE_LIMITED with resetAt null for an absurd retry-after", async () => {
+  const runChild = secondaryLimitedRunChild({ failures: 99, message: "GraphQL: You have exceeded a secondary rate limit. retry-after: 99999999999999" });
+  const { code, result } = await runSecondary(runChild, { timeout: "60" });
+  assert.equal(code, 1);
+  assert.equal(result.code, "RATE_LIMITED");
+  assert.equal(result.budget, "secondary");
+  assert.equal(result.resetAt, null);
+});
+
+test("wait-pr-checks keeps the summed secondary backoff within the timeout and ends pending", async () => {
+  const { code, delays, result } = await runSecondary(secondaryLimitedRunChild({ failures: 99 }), { timeout: "300", random: () => 0 });
+  assert.equal(code, 2);
+  assert.equal(result.outcome, "pending");
+  assert.ok(delays.reduce((a, b) => a + b, 0) <= 170_000, `waited ${delays.join(",")}`);
+});
+
+test("wait-pr-checks keeps the exponential step as the floor when retry-after is 0", async () => {
+  const runChild = secondaryLimitedRunChild({ failures: 3, message: "GraphQL: You have exceeded a secondary rate limit. retry-after: 0" });
+  const { code, delays } = await runSecondary(runChild, { random: () => 0 });
+  assert.equal(code, 0);
+  // The heartbeat wait slices each sleep at 45 s, so the third step is 120 s at a 60 s jitter floor, which the 45 s heartbeat slice shows as 45 s first.
+  assert.deepEqual(delays.slice(0, 3), [15_000, 30_000, 45_000]);
+});
+
+test("wait-pr-checks does not carry a previous retry-after into the next backoff", async () => {
+  const runChild = secondaryLimitedRunChild({
+    failures: 2,
+    messages: ["GraphQL: You have exceeded a secondary rate limit. retry-after: 90", "GraphQL: You have exceeded a secondary rate limit."],
+  });
+  const { delays } = await runSecondary(runChild, { random: () => 0 });
+  assert.deepEqual(delays.slice(0, 3), [45_000, 45_000, 30_000]);
+});
+
+test("wait-pr-checks treats an unreadable rate_limit as a secondary limit", async () => {
+  const { code, delays, result } = await runSecondary(secondaryLimitedRunChild({ limitsReadable: false }));
+  assert.equal(code, 0);
+  assert.equal(result.status, "success");
+  assert.equal(delays[0], 15_000);
+});
+
+test("wait-pr-checks --jq keeps the secondary RATE_LIMITED envelope with budget on stderr", async () => {
+  const runChild = secondaryLimitedRunChild({ failures: 99, message: "GraphQL: You have exceeded a secondary rate limit. retry-after: 90" });
+  const stdout = makeStream();
+  const stderr = makeStream();
+  await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "60", "--jq", ".status"], {
+    stdout, stderr, env: {}, runChild, ensureOwnershipImpl: async () => ({ ok: true }), delayImpl: async () => {}, now: () => 1_000_000_000_000,
+  });
+  const envelope = JSON.parse(stderr.text().trim().split("\n")[0]);
+  assert.equal(envelope.code, "RATE_LIMITED");
+  assert.equal(envelope.budget, "secondary");
+});
+
+test("wait-pr-checks returns the pending re-issue for a secondary delay past the cap that fits the requested budget", async () => {
+  const runChild = secondaryLimitedRunChild({ failures: 99, message: "GraphQL: You have exceeded a secondary rate limit. retry-after: 200" });
+  const { code, result } = await runSecondary(runChild, { timeout: "600" });
+  assert.equal(code, 2);
+  assert.equal(result.status, "timeout");
+  assert.equal(result.outcome, "pending");
+  assert.ok(result.reissue);
+});
+
+test("wait-pr-checks returns primary_core at once with the core reset", async () => {
+  const { code, delays, result } = await runSecondary(secondaryLimitedRunChild({ failures: 99, coreRemaining: 0 }));
+  assert.equal(code, 1);
+  assert.equal(result.code, "RATE_LIMITED");
+  assert.equal(result.budget, "primary_core");
+  assert.equal(result.resetAt, new Date(2_000_000_000 * 1000).toISOString());
+  assert.equal(delays.length, 0);
+});
+
+test("wait-pr-checks returns primary_core with resetAt null for an absurd core reset", async () => {
+  const { code, result } = await runSecondary(secondaryLimitedRunChild({ failures: 99, coreRemaining: 0, coreReset: 1e17 }));
+  assert.equal(code, 1);
+  assert.equal(result.budget, "primary_core");
+  assert.equal(result.resetAt, null);
+});
+
+test("wait-pr-checks names primary_graphql in the RATE_LIMITED budget", async () => {
+  const clock = 1_000_000_000_000;
+  const { runChild } = rateLimitedRunChild(clock / 1000 + 900);
+  const stdout = makeStream();
+  await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "600"], {
+    stdout, stderr: makeStream(), env: {}, runChild, delayImpl: async () => {}, now: () => clock,
+  });
+  assert.equal(JSON.parse(stdout.text()).budget, "primary_graphql");
+});
+
+test("wait-pr-checks --help documents the secondary backoff and the budget field", async () => {
+  const stdout = makeStream();
+  assert.equal(await runCli(["--help"], { stdout }), 0);
+  for (const text of ["budget", "primary_core", "secondary", "retry-after", "jitter", "over REST", "fresh backoff"]) assert(stdout.text().includes(text), text);
 });

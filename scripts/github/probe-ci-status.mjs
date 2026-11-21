@@ -4,7 +4,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { ghJson } from "@dev-loops/core/github/gh";
+import { ghJson, isRateLimitError } from "@dev-loops/core/github/gh";
 import { WAIT_CAP_MS, capWait, parseBaselineSha, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import {
@@ -72,6 +72,9 @@ No-checks rule (grace, race-safe):
   is pending (checks expected, not yet reported), never none. A gh-api / parse
   failure is never treated as empty — it forces pending so the watch keeps
   polling, and a persistent error settles as "timeout", never fabricated green.
+  Exception: when the GraphQL head read is rate limited, the head is read over
+  REST, expected checks are unknown, and a check-less head stays pending (no
+  grace settle and no --timeout 0 settle).
   (--timeout 0 single check has no waiting budget, so a clean no-checks head
   settles immediately.)
 Diagnostic output (stderr):
@@ -193,16 +196,29 @@ function extractPrVisibleCheckNames(statusCheckRollup) {
     .filter((name) => typeof name === "string" && name.length > 0);
 }
 
+// A rate-limited GraphQL read falls back to the REST pulls endpoint, which has no
+// statusCheckRollup: prVisibleCheckNames stays null (expected checks unknown), so
+// every non-loop check-run counts and a check-less head stays pending.
 async function fetchPrHeadSha({ repo, pr }, { env, ghCommand, runChild }) {
-  const payload = await ghJson(
-    ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,statusCheckRollup"],
-    { env, ghCommand, runChild },
-  );
-  const headSha = typeof payload.headRefOid === "string" ? payload.headRefOid.trim() : "";
+  let headSha;
+  let prVisibleCheckNames = null;
+  try {
+    const payload = await ghJson(
+      ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,statusCheckRollup"],
+      { env, ghCommand, runChild },
+    );
+    headSha = typeof payload.headRefOid === "string" ? payload.headRefOid.trim() : "";
+    prVisibleCheckNames = extractPrVisibleCheckNames(payload.statusCheckRollup);
+  } catch (error) {
+    if (!isRateLimitError(error)) throw error;
+    // A failed REST read surfaces the original rate-limit error so the caller's wait path engages.
+    const rest = await ghJson(["api", `repos/${repo}/pulls/${pr}`], { env, ghCommand, runChild }).catch(() => { throw error; });
+    headSha = typeof rest?.head?.sha === "string" ? rest.head.sha.trim() : "";
+  }
   if (headSha.length === 0) {
     throw new Error("Missing required PR facts: headRefOid");
   }
-  return { headSha, prVisibleCheckNames: extractPrVisibleCheckNames(payload.statusCheckRollup) };
+  return { headSha, prVisibleCheckNames };
 }
 
 /**
@@ -289,6 +305,8 @@ async function fetchHeadCiState(
     !fetchError &&
     checkRunsCount === 0 &&
     statusesCount === 0 &&
+    // null = expected checks unknown (every REST head read leaves them unknown): stay pending.
+    prVisibleCheckNames !== null &&
     !(nonLoopDerivedPrVisibleNames?.length > 0);
   // Zero-allocation stall (#1631): at least one real check-run, ALL of them
   // still `queued` (no runner allocated / no job picked up), and no other
