@@ -6,6 +6,8 @@ Accepted — 2026-10-26 ([issue 2937](https://github.com/mfittko/dev-loops/issue
 
 Amends [ADR 0191](./0191-past-cap-judge-disposition-of-a-medium-is-final.md) for the count of a head that only merges the PR base after the cap round and for the diff of the closure round. All other decisions of ADR 0191 are unchanged. The record of ADR 0191 stays unedited.
 
+Amended by [ADR 0298](./0298-clean-overlapping-merge-is-not-base-only.md): `isBaseOnlyMergeSince` carries a merge that resolves a PR-own file to the merged base version when the head holds that file byte-identical to `fromHead` (an identical change on both parents). The refusal for a PR-own file resolved to the base version otherwise stays in force.
+
 ## Context
 
 On PR 2944, the `draft_gate` cap round 4 at `e869fb2f8f8ac9c425bd703ea4bbe8aa0e158623` held 2 medium and 3 low act items with judge-specified remedies. The branch then merged `origin/main` (head `1da7a33`, empty PR-own delta). The merged head has no ledger, so `countCompletedRounds` counted it as round 5, and `emit-fixer-work-order.mjs` refused the cap-round act list with `round_cap_reached`. The closure round diffed from `fromHead` and held the content of `main` and none of the PR's own files, so the gate coordinator stopped with `closure_delta_excludes_pr_content`.
