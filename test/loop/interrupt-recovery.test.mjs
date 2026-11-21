@@ -4,7 +4,7 @@
 // the suite passes now, and a known failure that starts recovering fails the suite until its entry is removed.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -36,8 +36,8 @@ afterAll(() => Promise.all(roots.map((dir) => rm(dir, { recursive: true, force: 
 // An attested gh stub that answers by argument shape, so every coordinator run sees the same PR.
 const GH_STUB = `#!/bin/sh
 case "$*" in
-"pr view"*headRefOid) echo '{"headRefOid":"def56789abcdef"}';;
-"pr view"*) echo '{"number":266,"state":"OPEN","isDraft":true,"headRefOid":"def56789abcdef","statusCheckRollup":[],"reviews":[]}';;
+"pr view"*headRefOid) echo '{"headRefOid":"${GATE_HEAD}"}';;
+"pr view"*) echo '{"number":266,"state":"OPEN","isDraft":true,"headRefOid":"${GATE_HEAD}","statusCheckRollup":[],"reviews":[]}';;
 *requested_reviewers*) echo '{"users":[],"teams":[]}';;
 *graphql*) echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}';;
 *comments*|*reviews*) echo '[[]]';;
@@ -59,18 +59,27 @@ async function makeRoot() {
 
 const env = (root, extra = {}) => runIdFreeEnv({
   PATH: `${path.join(root, "tmp", "bin")}${path.delimiter}${process.env.PATH}`,
-  DEV_LOOPS_GH_STUB: "1", DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_OWNERSHIP_BYPASS: "1", DEVLOOPS_RUN_ID: "", ...extra,
+  DEV_LOOPS_GH_STUB: "1", DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_OWNERSHIP_BYPASS: "1", DEVLOOPS_RUN_ID: "", GATE_HEAD, ...extra,
 });
 const runChild = (unit, root, extra) => spawnSync("node", [CHILD, unit, root], { cwd: root, encoding: "utf8", env: env(root, extra) });
 const coordinate = (root) => spawnSync("node", [COORDINATION, "--repo", "owner/repo", "--pr", "266"], { cwd: root, encoding: "utf8", env: env(root) });
 
-// File names only: sentinels, plans and temporary files carry pids and times.
+// File names for every file (sentinels, plans and temporary files carry pids and times), plus the content of the
+// deterministic ones: the per-angle coverage.json and the fan-in ledger's verdict and findings.
 async function snapshot(root) {
   const walk = async (dir) => (await readdir(dir, { withFileTypes: true })).flatMap((e) => e.name === "bin" || e.name === ".git" ? [] : e.isDirectory() ? [] : [e.name]).sort();
+  const content = async (file, name) => {
+    if (name === "coverage.json") return ` ${JSON.stringify(JSON.parse(await readFile(file, "utf8")))}`;
+    if (name.endsWith(".fanin-ledger.json")) { const { overallVerdict, findings } = JSON.parse(await readFile(file, "utf8")); return ` ${JSON.stringify({ overallVerdict, findings })}`; }
+    return "";
+  };
   const out = [];
   const slug = repoSlugFor("owner/repo");
   const dirs = ["tmp", `tmp/gate-context/${slug}/pr-266`, `tmp/gate-reviews/${slug}/pr-266/draft_gate-${GATE_HEAD}`, `tmp/gate-fixer/${slug}/pr-266`];
-  for (const dir of dirs) if (existsSync(path.join(root, dir))) out.push(...(await walk(path.join(root, dir))).map((n) => `${dir}/${n.replace(/\.tmp-f[0-9]+-[0-9a-f]{8}$/, ".tmp-<id>")}`.replace(/[0-9a-f]{40}/g, "<head>")));
+  for (const dir of dirs) {
+    if (!existsSync(path.join(root, dir))) continue;
+    for (const n of await walk(path.join(root, dir))) out.push(`${dir}/${n.replace(/\.tmp-f[0-9]+-[0-9a-f]{8}$/, ".tmp-<id>")}${await content(path.join(root, dir, n), n)}`.replace(/[0-9a-f]{40}/g, "<head>"));
+  }
   return out;
 }
 
@@ -103,6 +112,9 @@ describe("interrupt a stubbed draft_gate round and fix pass after each step", as
   test("the coordination comparison is sensitive: the finished fixer plan changes the coordinator output", async () => {
     assert.notEqual(baselines.fixer.coordination, coordinate(await makeRoot()).stdout);
   });
+  // The coordinator does not read round state at the shared head (its output equals an empty root's), so the round
+  // unit's evidence is the on-disk snapshot (names plus deterministic content); its coordination check only proves
+  // the coordinator keeps answering. The fixer unit above is the coordinator-sensitive one.
   for (const [unit, steps] of Object.entries(EMITTER_STEPS)) {
     for (const step of steps) {
       const [known, refusal] = KNOWN_FAILURES.get(`${unit}:${step}`) ?? [];

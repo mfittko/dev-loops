@@ -10,7 +10,7 @@ import { buildGateContextPath, buildGateFaninLedgerPath, buildGateReviewsDir, re
 const [unit, root] = process.argv.slice(2);
 const consolidateScript = new URL("../../scripts/loop/consolidate-fanin.mjs", import.meta.url).pathname;
 // The production paths of one draft_gate round: gate context, per-angle findings directory and fan-in ledger.
-const HEAD = "abcdef0123456789abcdef0123456789abcdef01";
+const HEAD = process.env.GATE_HEAD; // one head, defined in interrupt-recovery.test.mjs
 const gateKey = { repo: "owner/repo", pr: 266, gate: "draft_gate", headSha: HEAD, tmpRoot: path.join(root, "tmp") };
 const contextFile = buildGateContextPath(gateKey);
 const angleFile = path.join(buildGateReviewsDir(gateKey), "coverage.json");
@@ -25,7 +25,7 @@ const plan = path.join(planDir, "fixer-emit-plan.json");
 const tempPlan = `${plan}.tmp-f${Date.now()}${process.pid}-${process.pid.toString(16).padStart(8, "0")}`;
 // A full-phase plan whose digest the coordinator verifies, so it reports the fixer disposition as incomplete (a
 // hand-built order: the real emitter needs a worktree, delta record and review fixtures this child does not have).
-const fixerOrder = { role: "fixer", target: { repo: "owner/repo", pr: 266 }, phase: "full", source: "threads", headSha: "def56789abcdef", outputRefs: [] };
+const fixerOrder = { role: "fixer", target: { repo: "owner/repo", pr: 266 }, phase: "full", source: "threads", headSha: HEAD, outputRefs: [] };
 // PREFIX_HASH models a rebuilt briefing; SAME_HEAD_RETRY is the sanctioned retry for a reviewer killed after its sentinel.
 const prefixHash = process.env.PREFIX_HASH ?? "a".repeat(64);
 let emission;
