@@ -362,7 +362,7 @@ test("record mode refuses with pre_pr_self_check_missing for a missing flag, fil
 test("the required self-check ids are the resolved draft_gate angle ids plus the checklist ids of the selected angles, and a missing angle or checklist id refuses", async () => {
   const angleIds = IDS.filter((id) => id.startsWith("angle:"));
   assert.ok(angleIds.length > 0, "the default config resolves at least one draft_gate angle");
-  assert.deepEqual(IDS.filter((id) => !id.startsWith("angle:")), ["C1", "C2", "C3", "C4", "K1", "CS1", "CS2", "I1", "I2", "S1", "P1", "P2", "K2"]);
+  assert.deepEqual(IDS.filter((id) => !id.startsWith("angle:")), ["C1", "C2", "C3", "C4", "K1", "CS1", "CS2", "A4", "I1", "I2", "S1", "A3", "A6", "P1", "P2", "K2"]);
   const dir = fixtureRepo();
   try {
     git(dir, "checkout", "-q", "-b", "feature");
