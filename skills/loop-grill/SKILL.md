@@ -105,7 +105,7 @@ Additional gaps discovered through semantic reading of the spec are also recorde
 ### Recovery rows for new state or refusals
 
 <!-- rule-ref: REFINE-STATE-RECOVERY-ROWS -->
-`REFINE-STATE-RECOVERY-ROWS`, owned by the refiner agent, `agents/refiner.agent.md`: detect a spec that adds persistent state (a lock, lockfile, sentinel, receipt, cache, marker file or plan) without acceptance rows for recovery after a crash, after a rebuild at the same head and after replacement by a later step. Detect a spec that adds a fail-closed refusal without a named `recovery`. Record each omission as a gap before synthesis. With `--auto`, draft the missing rows into the `## AC / DoD matrix`.
+`REFINE-STATE-RECOVERY-ROWS`, owned by the refiner agent, `agents/refiner.agent.md`: detect a spec that adds persistent state (a lock, lockfile, sentinel, receipt, cache, marker file or plan file) without acceptance rows for recovery after a crash, after a rebuild at the same head and after replacement by a later step. Detect a spec that adds a fail-closed refusal without a named `recovery`. Record each omission as a gap before synthesis. With `--auto`, draft the missing rows into the `## AC / DoD matrix`.
 
 ### Self-gate path
 
