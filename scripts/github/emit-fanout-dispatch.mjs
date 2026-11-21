@@ -735,9 +735,6 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     return finish({ ok: false, error: err.message }, false);
   }
   const findingsDir = path.resolve(buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot }));
-  // This emission's round identity. Its ms timestamp lets the pull tool tell a
-  // round retired after it (GATE-EXEC-ROUND-RETIREMENT record) from a typo.
-  const roundId = injectedRoundId ?? `r${Date.now()}-${randomBytes(4).toString("hex")}`;
   // Each unit's budget scales with the filtered diff it reads. A thin briefing
   // records no diff read, so every unit gets the floor.
   const diffReads = artifact.scope?.diffSource === "none" ? [] : sharedReads.filter((read) => read?.kind === "diff");
@@ -766,6 +763,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     if (stale.refusal) return finish({ ok: false, error: stale.refusal.error, recovery: stale.refusal.recovery }, false);
     retiredRound = stale.retiredRound;
   }
+  // This emission's round identity, minted after the retirement above. Its ms timestamp lets the pull tool tell a
+  // round retired after it (GATE-EXEC-ROUND-RETIREMENT record) from a typo, so the new round must not predate the retirement.
+  const roundId = injectedRoundId ?? `r${Date.now() + 1}-${randomBytes(4).toString("hex")}`;
   let prefixSha256 = null;
   const emitted = [];
   const seenScopes = new Set();

@@ -33,7 +33,7 @@ const ALLOWLIST = [
     "scripts/loop/standing-authorization.mjs", "scripts/loop/pre-write-remote-freshness-guard.mjs", "scripts/github/_work-order-protocol.mjs",
     "scripts/github/_draft-transition.mjs", "scripts/github/_fixer-act-thread-bindings.mjs", "scripts/github/_legacy-fixer-revalidation.mjs",
     "scripts/github/observe-head-ci.mjs", "scripts/github/_commit-containment.mjs", "scripts/github/_patch-id.mjs",
-    "scripts/github/head-declared-keys-schema.mjs", "scripts/github/verify-briefing-prefixes.mjs",
+    "scripts/github/head-declared-keys-schema.mjs", "scripts/github/verify-briefing-prefixes.mjs", "scripts/github/_stale-round-retirement.mjs",
     "packages/core/src/loop/cli-command.mjs", "packages/core/src/loop/copilot-ci-status.mjs", "packages/core/src/loop/copilot-loop-state.mjs",
     "packages/core/src/loop/fix-push-authority.mjs", "packages/core/src/loop/merge-approval.mjs", "packages/core/src/loop/queue-parallel.mjs",
     "packages/core/src/loop/run-context.mjs", "packages/core/src/loop/work-order-digest.mjs", "packages/core/src/loop/worktree-guard.mjs",
