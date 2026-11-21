@@ -291,7 +291,9 @@ async function fetchPrMergeable({ repo, pr }, { env = process.env, ghCommand = "
 // reads `UNKNOWN`. After the initial fetch, re-poll up to `maxPolls` more times
 // while the value stays UNKNOWN (so at most 1 + maxPolls total fetches) before
 // deciding; never treat a transient UNKNOWN as a pass — the caller fails closed
-// to recheck if it never settles.
+// to recheck if it never settles. If the last allowed re-poll sees a new head, the
+// result is `{ headRefOid: <new>, headMoved: true, mergeable: "UNKNOWN", stale: true }`
+// with no other field.
 export async function fetchPrFactsWithSettledMergeable(
   options,
   {
@@ -317,7 +319,9 @@ export async function fetchPrFactsWithSettledMergeable(
       polls += 1;
       prData = await fetch(options, { env, ghCommand, runChild });
     } else {
-      break;
+      // Cap edge: the last narrow re-poll saw a new head and no further gh call is allowed.
+      // Return only the new head with `stale: true`, so no superseded-head field reads as current.
+      return { headRefOid: next.headRefOid, headMoved: true, mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN", stale: true };
     }
   }
   return prData;

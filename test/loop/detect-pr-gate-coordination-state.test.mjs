@@ -220,6 +220,18 @@ test("fetchPrFactsWithSettledMergeable stops re-polling at the cap and returns t
   assert.equal(result.mergeable, "UNKNOWN");
 });
 
+test("fetchPrFactsWithSettledMergeable returns the new head, headMoved and stale markers when the last re-poll sees a new head", async () => {
+  const { fieldLists, runChild } = stubPrViewGh([
+    { headRefOid: "aaa", body: "old", files: [{ path: "x" }], mergeable: "UNKNOWN" },
+    { headRefOid: "aaa", mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
+    { headRefOid: "aaa", mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
+    { headRefOid: "bbb", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" },
+  ]);
+  const result = await fetchPrFactsWithSettledMergeable({ repo: "owner/repo", pr: 1 }, { runChild, sleep: async () => {}, maxPolls: 3 });
+  assert.deepEqual(fieldLists, [FULL_FIELDS, NARROW_FIELDS, NARROW_FIELDS, NARROW_FIELDS]);
+  assert.deepEqual(result, { headRefOid: "bbb", headMoved: true, mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN", stale: true });
+});
+
 test("fetchPrFactsWithSettledMergeable never exceeds 1 + maxPolls gh calls when the head keeps changing", async () => {
   const unknown = (head) => ({ headRefOid: head, mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" });
   for (const maxPolls of [1, 2, 3]) {
