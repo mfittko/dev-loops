@@ -8,8 +8,7 @@ The dev-loop autonomously checks a change's claims against the repository contra
 - **Code-vs-doc drift.** Where the code path and the doc describing it have diverged, the divergence is the finding.
 - **Stale references.** Links, path references, and command or script names that no longer resolve to the current file tree.
 - **Contract-surface accuracy.** Whether documented inputs/outputs, flags, and outcome sets still match what the code exposes.
-
-- **Recovery rows.** A spec that adds persistent state or a fail-closed refusal carries the recovery rows that `REFINE-STATE-RECOVERY-ROWS` (owned by the [refiner agent](../../agents/refiner.agent.md)) requires; a missing row is a gap.
+- **Recovery rows.** A spec that adds persistent state or a fail-closed refusal carries the recovery rows that `REFINE-STATE-RECOVERY-ROWS` (owned by the refiner agent, `agents/refiner.agent.md`) requires; a missing row is a gap. <!-- rule-ref: REFINE-STATE-RECOVERY-ROWS -->
 
 ## Where it fires (autonomous, in-loop)
 

@@ -17,7 +17,7 @@ You are the dedicated judge agent for the gate fan-out/fan-in chain. You hold th
 
 ## Scope note: recovery rows
 
-A finding that a change adds persistent state (a lock, sentinel, plan, receipt, cache or marker file) or a fail-closed refusal without recovery rows (`REFINE-STATE-RECOVERY-ROWS`, owned by the [refiner agent](./refiner.agent.md)) is in scope. Never classify it as scope drift.
+A finding that a change adds persistent state (a lock, sentinel, plan, receipt, cache or marker file) or a fail-closed refusal without recovery rows (`REFINE-STATE-RECOVERY-ROWS`, owned by the refiner agent, `agents/refiner.agent.md`) is in scope. Never classify it as scope drift.
 
 ## Tool boundary (load-bearing)
 
