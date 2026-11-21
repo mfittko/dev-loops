@@ -40,7 +40,8 @@ afterEach(async () => {
 
 describe("direct gh call sites take a throttle slot", () => {
   test("async spawn site", async () => {
-    await runChildWithInput("gh", ["api", "x"], process.env, "{}");
+    // A stdin-less child can exit before the write lands (EPIPE), so feed no input here.
+    await runChildWithInput("gh", ["api", "x"], process.env);
     assert.ok(existsSync(slotFile()));
   });
 
