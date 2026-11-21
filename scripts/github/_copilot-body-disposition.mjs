@@ -7,9 +7,13 @@
 // current head (format owned by skills/docs/copilot-loop-state-graph.md):
 //   <!-- dev-loops:copilot-body-disposition review=<review id> head=<40-hex> fix=<40-hex> -->
 //   <!-- dev-loops:copilot-body-disposition review=<review id> head=<40-hex> operator -->
+//   <!-- dev-loops:copilot-body-disposition review=<review id> head=<40-hex> reject=<gate> -->
+//   <!-- dev-loops:copilot-body-disposition review=<review id> head=<40-hex> defer=<gate> -->
 // `fix` names a commit strictly after the dispositioned review's commit that
 // the head contains, so a `fix` record never clears a review of the current
 // head. `operator` is a human operator decision with no fixing commit.
+// `reject` and `defer` clear a current-head review only, when the named gate's findings ledger at the current head
+// holds the review's `copilot-body` findings (stamped with its reviewId) with a judge `reject` (or `defer` for `defer`) and none high or critical.
 //
 // FAIL CLOSED: no record, a record for another head, a foreign review id, an
 // untrusted author, a fix commit not after the review commit or not in the
@@ -25,9 +29,12 @@ import { bareMarkdown, parseCopilotBodyDispositionMarker } from "@dev-loops/core
 import { isSanctionedCopilotReviewerLogin, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { readSealed } from "./_gate-artifact-seal.mjs";
 import path from "node:path";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
-import { repoSlugFor } from "./_gate-artifact-paths.mjs";
+import { VALID_SEVERITIES, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
+import { buildLogPath, repoSlugFor } from "./_gate-artifact-paths.mjs";
+import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 
 // Synthetic angle name of the judge finding built from a Copilot review body (not a gate angle).
 export const COPILOT_BODY_ANGLE = "copilot-body";
@@ -103,6 +110,52 @@ async function isFixAfterReviewAndInHead({ repo, fixSha, reviewCommitSha, headSh
   return (await isCommitContainedByHead({ repo, commitSha: fixSha, headSha }, runtime)).contained;
 }
 
+const JUDGE_ACTION_DISPOSITIONS = { reject: ["reject"], defer: ["defer", "reject"] };
+
+// The judge-bound forms clear only against the live gate ledger at the head. Every existing ledger copy must
+// parse and every copilot-body finding stamped with this review's id must carry an allowed judge disposition and
+// a valid severity below high; at least one copy must hold such a finding. A finding with no reviewId, a missing
+// or unreadable copy that exists, another head's file, act or no disposition all refuse.
+const findingClears = (finding, binding) => {
+  const severity = normalizeSeverity(finding.severity);
+  return JUDGE_ACTION_DISPOSITIONS[binding.action].includes(finding.judgeDisposition)
+    && VALID_SEVERITIES.has(severity) && severity !== "high" && severity !== "critical";
+};
+const JUDGE_GATES = ["draft_gate", "pre_approval_gate"];
+async function judgeLedgerClears({ repo, pr, headSha, reviewId, binding }, runtime) {
+  let checkouts;
+  try {
+    checkouts = runtime.ledgerCheckouts ?? resolveLedgerCheckouts(runtime.cwd ?? runtime.repoRoot ?? process.cwd());
+  } catch {
+    return false;
+  }
+  let passing = 0;
+  // The named gate must supply a passing finding; the other gate's ledger at the same head may only agree or be silent.
+  for (const gate of [binding.gate, ...JUDGE_GATES.filter((g) => g !== binding.gate)]) {
+    let ledgerPath;
+    try {
+      ledgerPath = buildLogPath({ repo, pr, gate, headSha, tmpRoot: "tmp" });
+    } catch {
+      return false;
+    }
+    for (const root of checkouts) {
+      let findings;
+      try {
+        findings = JSON.parse(await readSealed(path.resolve(root, ledgerPath)))?.findings;
+      } catch (error) {
+        if (error?.code === "ENOENT") continue;
+        return false;
+      }
+      if (!Array.isArray(findings)) return false;
+      const mine = findings.filter((f) => f?.angle === COPILOT_BODY_ANGLE && typeof f.reviewId === "string" && f.reviewId === reviewId);
+      if (mine.length === 0) continue;
+      if (!mine.every((f) => findingClears(f, binding))) return false;
+      if (gate === binding.gate) passing += 1;
+    }
+  }
+  return passing > 0;
+}
+
 /**
  * Whether a trusted record clears the body finding of Copilot review
  * `reviewId` for `headSha` (always the PR's current head). `reviewCommitSha`
@@ -139,6 +192,14 @@ export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewI
     if (marker.operator) {
       return { cleared: true, disposition: marker, reason: `operator disposition recorded for review ${marker.reviewId} at head ${normalizedHead}` };
     }
+    if (marker.judgeBinding) {
+      // The judge-bound forms clear a current-head review only.
+      if (reviewCommitSha?.trim().toLowerCase() !== normalizedHead) continue;
+      if (await judgeLedgerClears({ repo, pr, headSha: normalizedHead, reviewId: marker.reviewId, binding: marker.judgeBinding }, runtime)) {
+        return { cleared: true, disposition: marker, reason: `judge-bound ${marker.judgeBinding.action} record for review ${marker.reviewId} at head ${normalizedHead} matches the ${marker.judgeBinding.gate} ledger` };
+      }
+      continue;
+    }
     if (await isFixAfterReviewAndInHead({ repo, fixSha: marker.fixSha, reviewCommitSha, headSha: normalizedHead }, runtime)) {
       return { cleared: true, disposition: marker, reason: `fix commit ${marker.fixSha} disposes review ${marker.reviewId} at head ${normalizedHead}` };
     }
@@ -160,7 +221,7 @@ export function buildJudgeFinding(review) {
   const firstLine = text.split("\n").map((line) => line.trim()).find((line) => line && !line.startsWith("#"));
   const severity = classifyCopilotReviewBodyDisposition(review?.state, review?.body) === COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK ? "low" : "medium";
   // The full body is preserved; only the summary is bounded.
-  return { angle: COPILOT_BODY_ANGLE, findings: [{ severity, summary: (firstLine ?? "Copilot review body feedback").slice(0, 300), recommendation: text }] };
+  return { angle: COPILOT_BODY_ANGLE, findings: [{ severity, summary: (firstLine ?? "Copilot review body feedback").slice(0, 300), recommendation: text, ...(review?.id != null ? { reviewId: String(review.id) } : {}) }] };
 }
 
 const BODY_ONLY_BLOCKING_DISPOSITIONS = new Set([
@@ -228,7 +289,7 @@ export function reviewHasOwnThread(reviewThreads, reviewId) {
  * is the parsed thread list (parseReviewThreads().threads).
  *
  * Current head: a body finding on a current-head review stays unresolved
- * unless an `operator` record names it (its review commit is the head, so no
+ * unless an `operator`, `reject=` or `defer=` record names it (its review commit is the head, so no
  * `fix` commit can be after it).
  *
  * Earlier head: when the latest Copilot review sits on an earlier head and is
@@ -272,19 +333,23 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
       currentReviews = signaling.filter((r) => (reviewSubmittedAt(r) ?? "") === latest);
     }
     if (currentReviews.length === 0) currentReviews = [resolveLatestCopilotReview({ reviews: effective }).review];
+    const judgeFinding = { angle: COPILOT_BODY_ANGLE, findings: currentReviews.flatMap((r) => buildJudgeFinding(r).findings) };
+    // A judge-bound record clears only while the ledger carries the finding, so the detector keeps the judge finding and a re-run ledger keeps it.
     return record.cleared
-      ? { ...settled, bodyDisposition: record.disposition }
+      ? { ...settled, bodyDisposition: record.disposition, judgeFinding: record.disposition?.judgeBinding ? judgeFinding : null }
       : {
         ...settled,
         copilotBodyFeedbackUnresolved: true,
         dispositionRequired: {
           reviewId: currentReviewId ?? null,
           reviewCommitSha: headSha,
-          reason: "the current-head Copilot review carries body feedback with no trusted operator copilot-body-disposition record",
+          reason: currentReviewId
+            ? "the current-head Copilot review carries body feedback with no trusted copilot-body-disposition record; after the gate judge disposes the finding as defer or reject, an agent-writable reject=<gate> or defer=<gate> record clears it"
+            : "two or more tied current-head Copilot reviews carry body feedback, so no single copilot-body-disposition record can clear it",
           ...(record.reasonCode ? { reasonCode: record.reasonCode, reason: record.reason } : {}),
           markerLine: currentReviewId ? markerLineFor(currentReviewId, headSha) : null,
         },
-        judgeFinding: { angle: COPILOT_BODY_ANGLE, findings: currentReviews.flatMap((r) => buildJudgeFinding(r).findings) },
+        judgeFinding,
       };
   }
   const { review, ambiguousBlockingTie, blockingReviews } = resolveLatestCopilotReview({ reviews: reviewSummary?.effectiveCopilotReviews });
