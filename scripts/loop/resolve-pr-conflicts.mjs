@@ -125,7 +125,7 @@ export function parseResolvePrConflictsCliArgs(argv) {
 
 function run(command, args, { cwd, env = process.env } = {}) {
   const attempt = async () => {
-    if (command === "gh") await takeGhSlot({ env });
+    if (command === "gh") await takeGhSlot({ env, cwd });
     return spawnChild(command, args, { cwd, env });
   };
   return command === "gh" ? withSecondaryLimitBackoff(attempt) : attempt();
