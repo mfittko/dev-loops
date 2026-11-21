@@ -1,2 +1,2 @@
 ### Added
-- `loop implementation-brief` carries a bounded `selfCheck` of per-angle constraint lines, top gate and Copilot finding classes and a 14-line developer checklist sourced from the `developer-checklist` key of `gates.draft.angles` in the config; `loop pre-pr-review` requires per-angle evidence in `--self-check-file`; `gate finding-classes` reports top first-round gate classes and, from a local `--copilot-file` export, Copilot classes (#3395)
+- The implementation brief carries a config-sourced developer checklist and per-angle constraints; `loop pre-pr-review` requires per-id evidence; `gate finding-classes` reports top classes (#3395)
