@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { recordGhCall } from "@dev-loops/core/github/gh-call-log";
 import { realpathSync, readFileSync, constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
 import https from "node:https";
@@ -486,6 +487,13 @@ const SUBCOMMAND_DESCRIPTIONS = {
   },
 };
 
+function ghAuthStatusOk(cwd) {
+  const started = Date.now();
+  const result = spawnResult("gh", ["auth", "status"], { cwd });
+  recordGhCall(["auth", "status"], { durationMs: Date.now() - started, status: result.ok ? 0 : 1, stderr: result.stderr });
+  return result.ok;
+}
+
 function spawnResult(command, args, options = {}) {
   try {
     const result = spawnSync(command, args, { encoding: "utf8", ...options });
@@ -613,7 +621,7 @@ export function createCliRuntime({
     surface: "cli",
     cwd: effectiveCwd,
     async commandExists(command) { return commandExists(command, { searchPath: effectiveSearchPath, platform: effectivePlatform, pathExt: effectivePathExt }); },
-    async ghAuthOk() { return spawnResult("gh", ["auth", "status"], { cwd: effectiveCwd }).ok; },
+    async ghAuthOk() { return ghAuthStatusOk(effectiveCwd); },
     async insideGitRepo() { return spawnResult("git", ["rev-parse", "--is-inside-work-tree"], { cwd: effectiveCwd }).ok; },
     // The managed viewer record is repo-root-relative, so `inspect` needs the
     // toplevel — not cwd — to address the same viewer Pi's extension manages.

@@ -26,6 +26,7 @@
  * jq-output.mjs).
  */
 import { execFileSync } from "node:child_process";
+import { execFileSyncRecorded } from "@dev-loops/core/github/gh-call-log";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { resolveNpmDistTag } from "./resolve-npm-dist-tag.mjs";
 import { isDirectCliRun } from "../lib/direct-run.mjs";
@@ -277,7 +278,7 @@ export function resolveApprovalState({ version, operator, comments, releaseRef }
 }
 
 /** Run a bounded `gh` call; throws (fail closed) on any non-zero exit. */
-function runGh(args, { ghCommand = "gh", runChild = execFileSync } = {}) {
+function runGh(args, { ghCommand = "gh", runChild = execFileSyncRecorded } = {}) {
   const stdout = runChild(ghCommand, args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
   return stdout;
 }
@@ -363,7 +364,7 @@ export function resolveReleaseCommitDate({ override = null, gitCommand = "git", 
   return date;
 }
 
-export function verifyReleaseApproval({ version, repo, operator = null, releaseCommitDate = null, ghCommand = "gh", runChild = execFileSync, runGit = execFileSync } = {}) {
+export function verifyReleaseApproval({ version, repo, operator = null, releaseCommitDate = null, ghCommand = "gh", runChild = execFileSyncRecorded, runGit = execFileSync } = {}) {
   version = version.trim();
   const distTag = resolveNpmDistTag(version); // throws on garbage -> usage error upstream
   if (distTag !== "latest") {

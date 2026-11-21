@@ -1,18 +1,20 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "bun:test";
 import { runChild } from "@dev-loops/core/cli/primitives";
-import { classifyGhCall, ghSync, GH_CALL_LOG_ENV, recordGhCall, summarizeGhCalls } from "@dev-loops/core/github/gh-call-log";
+import { classifyGhCall, ghAsync, ghSync, GH_CALL_LOG_ENV, recordGhCall, resolveGhCallLogPath, summarizeGhCallLog, summarizeGhCalls } from "@dev-loops/core/github/gh-call-log";
 import { runCli } from "../../scripts/loop/gh-calls.mjs";
+import { readdirSync, statSync } from "node:fs";
 import { withTempDir } from "../_helpers.mjs";
 
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const MODULE_URL = new URL("../../packages/core/src/github/gh-call-log.mjs", import.meta.url).href;
 
-afterEach(() => { delete process.env[GH_CALL_LOG_ENV]; });
+const SAVED_LOG = process.env[GH_CALL_LOG_ENV];
+afterEach(() => { if (SAVED_LOG === undefined) delete process.env[GH_CALL_LOG_ENV]; else process.env[GH_CALL_LOG_ENV] = SAVED_LOG; });
 
 const readLog = (file) => readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l));
 
@@ -110,21 +112,103 @@ test("ghSync records a success, and records then rethrows a failure", async () =
   });
 });
 
-test("every direct gh call site goes through ghSync", () => {
-  const sites = [
-    "scripts/loop/emit-fixer-work-order.mjs",
-    "scripts/loop/resolve-dev-loop-startup.mjs",
-    "scripts/loop/info.mjs",
-    "scripts/loop/run-post-merge-actions.mjs",
-    "scripts/loop/ui-review-diagnose.mjs",
-    "scripts/ci-test-timings.mjs",
-    "packages/core/src/debt/remediation-to-issue.mjs",
-  ];
-  for (const site of sites) {
-    const source = readFileSync(path.join(REPO_ROOT, site), "utf8");
-    assert.doesNotMatch(source, /execFileSync\(\s*"gh"/u, `${site} calls gh directly`);
-    assert.match(source, /ghSync\(/u, `${site} does not use ghSync`);
-  }
+const DIRECT_GH_SPAWN = /(?:spawn|spawnSync|execFile|execFileSync|execFileAsync)\(\s*(?:"gh"|ghCommand)\b|ghCommand[^\n]*\b(?:exec|runChild)\s*=\s*execFileSync\b/u;
+const ALLOWED_SPAWNERS = new Set(["packages/core/src/github/gh-call-log.mjs", "packages/core/src/cli/primitives.mjs"]);
+
+function sourceFiles(dir) {
+  return readdirSync(path.join(REPO_ROOT, dir)).flatMap((name) => {
+    const rel = `${dir}/${name}`;
+    if (name === "node_modules" || name === "test" || name === "tests") return [];
+    if (statSync(path.join(REPO_ROOT, rel)).isDirectory()) return sourceFiles(rel);
+    return rel.endsWith(".mjs") && !/\.test\.mjs$/u.test(name) ? [rel] : [];
+  });
+}
+
+test("no non-test source spawns gh outside the recording helpers", () => {
+  const offenders = ["scripts", "packages", "cli"]
+    .flatMap((dir) => (dir === "cli" ? ["cli/index.mjs"] : sourceFiles(dir)))
+    .filter((file) => !ALLOWED_SPAWNERS.has(file) && DIRECT_GH_SPAWN.test(readFileSync(path.join(REPO_ROOT, file), "utf8")));
+  assert.deepEqual(offenders, []);
+});
+
+test("recordGhCall extracts the PR number per command kind", () => {
+  const prOf = (args) => {
+    const logPath = path.join(REPO_ROOT, "tmp", "issue-3338-pr-probe.jsonl");
+    mkdirSync(path.dirname(logPath), { recursive: true });
+    writeFileSync(logPath, "");
+    recordGhCall(args, { durationMs: 1, status: 0, logPath });
+    return readLog(logPath)[0].pr;
+  };
+  assert.equal(prOf(["api", "repos/o/r/pulls/12/reviews", "--paginate"]), 12);
+  assert.equal(prOf(["api", "repos/o/r/issues/13/comments"]), 13);
+  assert.equal(prOf(["api", "repos/o/r/pulls"]), null);
+  assert.equal(prOf(["api", "graphql", "-F", "pr=14", "-f", "query=q"]), 14);
+  assert.equal(prOf(["api", "graphql", "--raw-field", "number=15", "-f", "query=q"]), 15);
+  assert.equal(prOf(["api", "graphql", "-f", "query=q", "-F", "first=50"]), null);
+  assert.equal(prOf(["pr", "view", "--repo", "o/r", "16"]), 16);
+  assert.equal(prOf(["pr", "list", "--limit", "50"]), null);
+});
+
+test("the log path env override resolves against the main checkout when relative", () => {
+  assert.equal(resolveGhCallLogPath(REPO_ROOT, { [GH_CALL_LOG_ENV]: "/abs/x.jsonl" }), "/abs/x.jsonl");
+  assert.ok(path.isAbsolute(resolveGhCallLogPath(REPO_ROOT, { [GH_CALL_LOG_ENV]: "rel/x.jsonl" })));
+});
+
+test("recordGhCall flags the secondary submission refusal as rate limited", async () => {
+  await withTempDir(async (dir) => {
+    const logPath = path.join(dir, "log.jsonl");
+    recordGhCall(["pr", "comment"], { durationMs: 1, status: 1, stderr: "was submitted too quickly", logPath });
+    assert.equal(readLog(logPath)[0].rateLimited, true);
+  });
+});
+
+test("search is classified as rest", () => {
+  assert.equal(classifyGhCall(["search", "issues"]), "rest");
+});
+
+test("ghSync with an unwritable log path still returns the gh output", async () => {
+  await withTempDir(async (dir) => {
+    const blocker = path.join(dir, "file");
+    writeFileSync(blocker, "x");
+    process.env[GH_CALL_LOG_ENV] = path.join(blocker, "sub", "log.jsonl");
+    const saved = process.env.PATH;
+    try {
+      process.env.PATH = fakeGhEnv(dir).PATH;
+      assert.equal(ghSync(["pr", "list"], { encoding: "utf8", timeout: 10_000 }).trim(), "[]");
+    } finally { process.env.PATH = saved; }
+  });
+});
+
+test("ghAsync records a failure and rethrows it", async () => {
+  await withTempDir(async (dir) => {
+    const logPath = path.join(dir, "log.jsonl");
+    process.env[GH_CALL_LOG_ENV] = logPath;
+    const saved = process.env.PATH;
+    try {
+      process.env.PATH = fakeGhEnv(dir, { code: 4, stderr: "boom" }).PATH;
+      await assert.rejects(ghAsync(["api", "graphql"], { timeout: 10_000 }));
+    } finally { process.env.PATH = saved; }
+    assert.deepEqual(readLog(logPath).map((r) => [r.status, r.kind]), [[4, "graphql"]]);
+  });
+});
+
+test("recordGhCall on a directory log path never throws (write-side EISDIR)", async () => {
+  await withTempDir(async (dir) => {
+    assert.doesNotThrow(() => recordGhCall(["pr", "list"], { durationMs: 1, status: 0, logPath: dir }));
+  });
+});
+
+test("summarizeGhCallLog rethrows a read error other than ENOENT (EISDIR)", async () => {
+  await withTempDir(async (dir) => {
+    assert.throws(() => summarizeGhCallLog(dir), { code: "EISDIR" });
+  });
+});
+
+test("gh-calls CLI prints help and rejects an unknown flag", async () => {
+  let out = "";
+  await runCli(["--help"], { stdout: { write: (s) => { out += s; } } });
+  assert.match(out, /Usage:/u);
+  await assert.rejects(runCli(["--bogus"], { stdout: { write() {} } }));
 });
 
 test("summarizeGhCalls counts per script, pr and minute, graphql share and refusals, skipping bad lines", () => {
@@ -138,6 +222,7 @@ test("summarizeGhCalls counts per script, pr and minute, graphql share and refus
     perScript: { "a.mjs": 2, "b.mjs": 1 }, perPr: { 1: 2 },
     perMinute: { "2026-11-20T10:00": 2, "2026-11-20T10:01": 1 },
   });
+  assert.equal(summarizeGhCalls("[1,2]").total, 0);
 });
 
 test("gh-calls CLI summarizes a fixture log and treats a missing log as empty", async () => {

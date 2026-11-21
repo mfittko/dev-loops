@@ -120,7 +120,7 @@ function loadPrInfo(pr, repo, cwd) {
  * patch the anchor mapping needs; no ad-hoc file/hunk API stitching. */
 function loadPrDiff(pr, repo, cwd) {
   return ghSync(["pr", "diff", String(pr), "--repo", repo], {
-    cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024,
+    cwd, timeout: 60_000, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024,
   });
 }
 

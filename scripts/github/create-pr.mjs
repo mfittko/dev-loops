@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { spawn, execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import {
@@ -15,6 +15,7 @@ import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { main as addQueueItemMain } from "../projects/add-queue-item.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
+import { spawnRecorded } from "@dev-loops/core/github/gh-call-log";
 import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { detectLinkedIssuePr } from "./detect-linked-issue-pr.mjs";
 import { evaluateCommentDiscipline } from "../loop/check-comment-discipline.mjs";
@@ -436,7 +437,7 @@ export function spawnCreatePr(ghArgs, { ghCommand = "gh", env = process.env } = 
     // the captured path ignores it rather than inheriting: inheriting a
     // never-closing stdin (e.g. an in-process test runner) would hang any child
     // that waits for stdin to end.
-    const child = spawn(ghCommand, ghArgs, {
+    const child = spawnRecorded(ghCommand, ghArgs, {
       env,
       stdio: captureStdout ? ["ignore", "pipe", "inherit"] : "inherit",
     });

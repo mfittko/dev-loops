@@ -86,7 +86,7 @@ function validateRepo(repo) {
 
 function ghJson(args, cwd) {
   try {
-    const stdout = ghSync(args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const stdout = ghSync(args, { cwd, timeout: 60_000, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     return JSON.parse(stdout);
   } catch (err) {
     throw new Error(`gh command failed: ${err instanceof Error ? err.message : String(err)}`);

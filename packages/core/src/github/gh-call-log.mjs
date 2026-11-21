@@ -4,31 +4,32 @@
  * Records the subcommand and its `--json` field list, never bodies or
  * responses. A logging failure never fails or alters the `gh` call.
  */
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 import { parseMainWorktreePath } from "../loop/worktree-guard.mjs";
 
 export const GH_CALL_LOG_ENV = "DEVLOOPS_GH_CALL_LOG";
 const GIT_TIMEOUT_MS = 5000;
-const RATE_LIMIT_PATTERN = /rate limit/i;
+const RATE_LIMIT_PATTERN = /rate limit|was submitted too quickly/i;
 // `gh` implements these command groups on GraphQL; `pr diff` is a REST call.
-const GRAPHQL_GROUPS = new Set(["pr", "issue", "project", "repo", "search", "release"]);
+const GRAPHQL_GROUPS = new Set(["pr", "issue", "project", "repo", "release"]);
 
-let cachedLogPath;
+let cachedMainCheckout;
 
-/** Log path: env override, else `<main checkout>/tmp/gh-calls.jsonl` (resolved once per process). */
+/** Log path: env override (relative paths resolve against the main checkout), else `<main checkout>/tmp/gh-calls.jsonl`. */
 export function resolveGhCallLogPath(cwd = process.cwd(), env = process.env) {
-  if (env[GH_CALL_LOG_ENV]) return env[GH_CALL_LOG_ENV];
-  if (cachedLogPath === undefined) {
+  if (env[GH_CALL_LOG_ENV] && path.isAbsolute(env[GH_CALL_LOG_ENV])) return env[GH_CALL_LOG_ENV];
+  if (cachedMainCheckout === undefined) {
     let main = cwd;
     try {
       const listing = execFileSync("git", ["worktree", "list"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: GIT_TIMEOUT_MS });
       main = parseMainWorktreePath(listing) ?? cwd;
     } catch { /* not a git checkout: log under cwd */ }
-    cachedLogPath = path.join(main, "tmp", "gh-calls.jsonl");
+    cachedMainCheckout = main;
   }
-  return cachedLogPath;
+  return env[GH_CALL_LOG_ENV] ? path.resolve(cachedMainCheckout, env[GH_CALL_LOG_ENV]) : path.join(cachedMainCheckout, "tmp", "gh-calls.jsonl");
 }
 
 /** Classify a `gh` argv as `graphql` or `rest`. */
@@ -36,6 +37,25 @@ export function classifyGhCall(args) {
   if (args[0] === "api") return args[1] === "graphql" ? "graphql" : "rest";
   if (args[0] === "pr" && args[1] === "diff") return "rest";
   return GRAPHQL_GROUPS.has(args[0]) ? "graphql" : "rest";
+}
+
+const PR_PATH = /\/(?:pulls|issues)\/(\d+)(?:\/|$)/u;
+const FIELD_FLAGS = new Set(["-F", "-f", "--field", "--raw-field"]);
+
+/** PR number from the argv shape of each command kind; only the number is kept, never other values. */
+function extractPr(args) {
+  let found = null;
+  if (args[0] === "api" && args[1] === "graphql") {
+    args.forEach((arg, i) => {
+      const m = FIELD_FLAGS.has(args[i - 1]) ? /^(?:pr|number)=(\d+)$/u.exec(arg) : null;
+      if (m) found = m[1];
+    });
+  } else if (args[0] === "api") {
+    found = args.slice(1).filter((a) => !a.startsWith("-")).map((a) => PR_PATH.exec(a)?.[1]).find(Boolean) ?? null;
+  } else if (args[0] === "pr") {
+    found = args.slice(2).find((a, i, rest) => /^\d+$/u.test(a) && !(rest[i - 1] ?? "").startsWith("-")) ?? null;
+  }
+  return found === null ? null : Number(found);
 }
 
 function describeGhCall(args) {
@@ -46,10 +66,7 @@ function describeGhCall(args) {
   }
   const jsonAt = args.indexOf("--json");
   const fields = jsonAt >= 0 && args[jsonAt + 1] ? ` --json ${args[jsonAt + 1]}` : "";
-  const prAt = args.indexOf("--pr");
-  const prArg = prAt >= 0 ? args[prAt + 1] : (args[0] === "pr" ? args[2] : undefined);
-  const pr = /^\d+$/u.test(prArg ?? "") ? Number(prArg) : null;
-  return { subcommand: `${words.join(" ")}${fields}`, pr };
+  return { subcommand: `${words.join(" ")}${fields}`, pr: extractPr(args) };
 }
 
 /** Append one record. Swallows every error: logging must never affect the `gh` call. */
@@ -86,6 +103,34 @@ export function ghSync(args, options = {}) {
   }
 }
 
+/** Command-aware `execFileSync` default for seams that take a command: records only `gh` calls. */
+export function execFileSyncRecorded(command, args, options) {
+  return command === "gh" ? ghSync(args, options) : execFileSync(command, args, options);
+}
+
+const execFileAsync = promisify(execFile);
+
+/** `execFile("gh", args, options)` that records the call; resolves `{ stdout, stderr }`, rethrows the original error. */
+export async function ghAsync(args, options = {}) {
+  const started = Date.now();
+  try {
+    const out = await execFileAsync("gh", args, options);
+    recordGhCall(args, { durationMs: Date.now() - started, status: 0 });
+    return out;
+  } catch (err) {
+    recordGhCall(args, { durationMs: Date.now() - started, status: typeof err?.code === "number" ? err.code : 1, stderr: err?.stderr ?? err?.message });
+    throw err;
+  }
+}
+
+/** `spawn(command, args, options)` that records the call when `command` is `gh`; returns the child. */
+export function spawnRecorded(command, args, options) {
+  const started = Date.now();
+  const child = spawn(command, args, options);
+  if (command === "gh") child.on("close", (code) => recordGhCall(args, { durationMs: Date.now() - started, status: code ?? 1 }));
+  return child;
+}
+
 const tally = (map, key) => { map[key] = (map[key] ?? 0) + 1; };
 
 /** Summarize JSONL log text. Malformed lines are skipped. */
@@ -94,7 +139,7 @@ export function summarizeGhCalls(text) {
   for (const line of text.split("\n")) {
     let rec;
     try { rec = JSON.parse(line); } catch { continue; }
-    if (!rec || typeof rec !== "object") continue;
+    if (!rec || typeof rec !== "object" || Array.isArray(rec)) continue;
     summary.total += 1;
     if (rec.kind === "graphql") summary.graphql += 1;
     if (rec.rateLimited) summary.rateLimited += 1;
@@ -109,6 +154,6 @@ export function summarizeGhCalls(text) {
 /** Read and summarize the log at `logPath`; a missing log is an empty summary. */
 export function summarizeGhCallLog(logPath = resolveGhCallLogPath()) {
   let text = "";
-  try { text = readFileSync(logPath, "utf8"); } catch { /* no log yet */ }
+  try { text = readFileSync(logPath, "utf8"); } catch (err) { if (err?.code !== "ENOENT") throw err; }
   return summarizeGhCalls(text);
 }
