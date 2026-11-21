@@ -66,7 +66,7 @@ check-pre-push-delta --result), and any non-clearing record for the head refuses
 --phase commit_only first. The mutation authority is
 the PR's own head branch (gh pr view headRefName) and the --allowed-path selectors
 (default "." = the whole repository). A PR head other than --head-sha refuses.
-An --act-list-file source also refuses with verdict_not_posted until the --gate verdict review for --head-sha is posted on the PR (GATE-EXEC-POST-BEFORE-FIX; post it with dev-loops gate upsert-verdict --findings-ledger).
+An --act-list-file source without --ci-file also refuses with verdict_not_posted until the --gate verdict review for --head-sha is posted on the PR (GATE-EXEC-POST-BEFORE-FIX; post it with dev-loops gate upsert-verdict --findings-ledger).
 An --act-list-file of only PR-body items refuses --phase commit_only with delta_body_only_act_set and writes no marker.
 A commit_only or full emission writes its sequence marker under the head's sequence lock (the keyed no-commit re-emission below writes none); while a concurrent close or pull holds that lock it refuses with sequence_lock_busy (retryable: no work order was made current, re-run the same emit once the close or pull finishes).
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
