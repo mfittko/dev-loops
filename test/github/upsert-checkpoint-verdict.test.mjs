@@ -10296,6 +10296,27 @@ test("#1616: upsert derives the verdict from the ledger's overallVerdict when --
   }, { prefix: "dev-loops-1616-derive-" });
 });
 
+test("issue 2926: a draft_gate post carries the judge-skipped line only for a zero-finding ledger", async () => {
+  const SKIP_LINE = "**Judge:** skipped, the round has no findings to dispose";
+  const post = async (tempDir, ledgerOptions, extraArgs, stdinAssertion) => {
+    const ledgerPath = await writeVerdictLedger(tempDir, ledgerOptions);
+    const env = await writeGhStub(tempDir, verdictEnforcementEntries().map((entry) => (entry.assertArgs.includes("POST") ? { ...entry, ...stdinAssertion } : entry)));
+    return runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--findings-ledger", ledgerPath, "--next-action", "stay draft and fix", "--execution-mode", "fanout_fanin", ...extraArgs,
+    ], { env });
+  };
+  await withTempDir(async (tempDir) => {
+    const result = await post(tempDir, { overallVerdict: "clean", provenance: DRAFT_GATE_PROVENANCE }, ["--findings-summary", "no issues found", "--findings-severity-counts", '{"high":0,"medium":0,"low":0,"question":0,"nit":0}'], { assertStdinIncludes: [SKIP_LINE] });
+    assert.equal(result.code, 0, result.stderr);
+  }, { prefix: "dev-loops-2926-skip-line-" });
+  await withTempDir(async (tempDir) => {
+    const findings = [{ severity: "low", angle: "holistic", summary: "one", judgeDisposition: "reject" }];
+    const result = await post(tempDir, { overallVerdict: "clean", findings, provenance: DRAFT_GATE_PROVENANCE }, ["--findings-summary", "one judged finding", "--findings-severity-counts", '{"high":0,"medium":0,"low":1,"question":0,"nit":0}'], { assertStdinNotIncludes: [SKIP_LINE] });
+    assert.equal(result.code, 0, result.stderr);
+  }, { prefix: "dev-loops-2926-no-skip-line-" });
+});
+
 test("#1616: upsert accepts a matching explicit --verdict unchanged", async () => {
   await withTempDir(async (tempDir) => {
     const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "clean" });

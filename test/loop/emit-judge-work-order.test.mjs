@@ -15,7 +15,7 @@ import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { ensureTrustConfigCheckout, initGitFixture, withTempDir, writeGhStub } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { bindEvidenceToPrBody, seedJudgeSources } from "./_judge-delivery-fixture.mjs";
-import { SPEC_AUTHORITY_OUTCOME_VALUES, SPEC_AUTHORITY_VERDICT_SCHEMA, validateSpecAuthorityVerdict } from "../../packages/core/src/loop/spec-authority.mjs";
+import { SPEC_AUTHORITY_OUTCOME_VALUES, SPEC_AUTHORITY_VERDICT_SCHEMA, computeSpecDigest, validateSpecAuthorityVerdict } from "../../packages/core/src/loop/spec-authority.mjs";
 
 const HEAD = "d".repeat(40);
 const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { prefix: "dev-loops-judge-wo-" });
@@ -844,6 +844,10 @@ test("issue 2926: a well-formed empty ledger with no pinned Copilot body skips t
       const out = await emitJudgeWorkOrder(sources);
       const identity = JSON.parse(await readFile(path.join(root, sources.identityFile), "utf8"));
       assert.deepEqual(out.judgeSkipped, { reason: "no_findings", specDigest: identity.specDigest });
+      assert.equal(out.judgeSkipped.specDigest, computeSpecDigest(JSON.parse(await readFile(path.join(root, sources.specFile), "utf8"))));
+      // The skip digest comes from the spec, so a validly re-stamped identity with another contentDigest yields the same one.
+      await writeFile(path.join(root, sources.identityFile), JSON.stringify({ ...identity, contentDigest: `sha256:${"f".repeat(64)}` }));
+      assert.equal((await emitJudgeWorkOrder(sources)).judgeSkipped.specDigest, identity.specDigest);
       assert.equal(out.scopeDrift.verdict, "within_scope");
       assert.equal(out.scopeDrift.derivedFrom, "spec_identity");
       assert.deepEqual(out.scopeDrift.driftedAreas, []);

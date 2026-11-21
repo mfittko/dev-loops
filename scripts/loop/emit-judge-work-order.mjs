@@ -229,6 +229,8 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   // The judge pass appends the pinned finding after the findings read, so its cluster id is the array index of the first appended finding (the read length; 0 for an empty read).
   const findingsRead = parseSource(findings);
   const copilotBodyClusterId = (Array.isArray(findingsRead) ? findingsRead : findingsRead?.findings ?? []).length;
+  // Read before the skip check so a bad --operator-focus-file refuses on both branches.
+  const operatorFocus = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined);
   // A well-formed empty ledger with no pinned Copilot body has nothing to dispose (GATE-EXEC-JUDGE-PHASE); write no plan, work order or index entry.
   const ledgerFindings = Array.isArray(findingsRead) ? findingsRead : findingsRead?.findings;
   if (Array.isArray(ledgerFindings) && ledgerFindings.length === 0 && !copilotBody) {
@@ -238,7 +240,6 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
       nextStep: "Dispatch no judge, run no judge-pass, and write the findings log without --judge-verdict.",
     };
   }
-  const operatorFocus = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined);
   // Slice linkage arms from the sha-verified pr-body read. An empty body is the absence sentinel line and arms nothing.
   const prBodyText = prBody.bytes.toString("utf8").replace(/\n$/, "");
   const linkageIssues = sliceLinkageIssues(parseSource(spec).nonGoals, prBodyText === PR_BODY_ABSENT_SENTINEL ? "" : prBodyText, repo);
