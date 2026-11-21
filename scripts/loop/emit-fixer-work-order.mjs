@@ -572,6 +572,23 @@ export async function emitFixerWorkOrder({ harness, ...args }) {
   }
 }
 
+/**
+ * Issue 3437, GATE-EXEC-ROUND-CAP: the one decision for a cap-round head with no findings ledger. It returns undefined when the head is the round being posted (no cap round closed,
+ * no unreadable prior ledger, no blocked verdict posted, one artifact root), else the refusal suffix. Every unreadable input fails closed.
+ */
+export async function missingCapLedgerRefusal({ repo, pr, gate, headSha, tmpRoot, repoRoot, probeVerdict }) {
+  // resolveCapRound reads the main-anchored root: a different --tmp-root would split the cap-round decision from the ledger it guards.
+  if (path.resolve(repoRoot, tmpRoot) !== path.resolve(repoRoot, resolveGateArtifactTmpRoot(repoRoot))) return " under an explicit --tmp-root that differs from the main-anchored root, which the cap-round decision reads";
+  let failClosed = false, unreadable = 0;
+  const capClosed = await resolveCapRound({ repo, pr, headSha }, { repoRoot, onFailClosed: () => { failClosed = true; } });
+  await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot, onUnreadable: () => { unreadable += 1; } });
+  if (failClosed || unreadable > 0) return " or a prior ledger is unreadable";
+  // A posted blocked verdict has its ledger, so ledger-only blockers still apply; a failed probe cannot rule it out.
+  let blockedPosted;
+  try { blockedPosted = (await probeVerdict())?.[gate]?.verdict === "blocked"; } catch { return " or the blocked-verdict probe failed"; }
+  return capClosed || blockedPosted ? "" : undefined;
+}
+
 async function emitPlan({
   repo, pr, headSha, phase, actListFile, gate, threadsFile, reviewId, ciFile, completionOnly = false, deltaResult, allowedPaths = [], operatorFocusFile, cwd = process.cwd(), tmpRoot,
   fetchPr = defaultFetchPr, fetchVerdictMarkers = defaultFetchVerdictMarkers, fetchReview = defaultFetchReview, executionIdentity = `f${Date.now()}-${randomBytes(4).toString("hex")}`,
@@ -717,12 +734,8 @@ async function emitPlan({
       if (!existsSync(ledgerFile)) { const origin = await carryOriginHead(); if (origin) ledgerFile = ledgerPath(origin); }
       // Issue 3437: a missing ledger skips the refusal only for the round being posted: no cap round closed, no unreadable prior ledger and no blocked verdict posted at this head. A posted blocked verdict has its ledger, so ledger-only blockers still apply.
       if (!existsSync(ledgerFile)) {
-        let failClosed = false, unreadable = 0;
-        const capClosed = await resolveCapRound({ repo, pr, headSha }, { repoRoot: resolveRepoRoot(cwd), onFailClosed: () => { failClosed = true; } });
-        await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), onUnreadable: () => { unreadable += 1; } });
-        let blockedPosted = false;
-        try { blockedPosted = (await fetchVerdictMarkers({ repo, pr, headSha: capRoundHead, gate, runtime: { env, ghCommand, runChild } }))?.[gate]?.verdict === "blocked"; } catch { /* unreadable: the posted-verdict check below refuses */ }
-        if (capClosed || failClosed || unreadable > 0 || blockedPosted) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist${failClosed || unreadable > 0 ? " or a prior ledger is unreadable" : ""}; failing closed at the cap round`);
+        const refusal = await missingCapLedgerRefusal({ repo, pr, gate, headSha, tmpRoot, repoRoot: resolveRepoRoot(cwd), probeVerdict: () => fetchVerdictMarkers({ repo, pr, headSha: capRoundHead, gate, runtime: { env, ghCommand, runChild } }) });
+        if (refusal !== undefined) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist${refusal}; failing closed at the cap round`);
       }
       const { findings: ledgerFindings } = !existsSync(ledgerFile) ? { findings: [] } : await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
       // A later cap-round pass fixes only the cap round's findings: an act item outside the cap-round ledger would open a new round past the cap.

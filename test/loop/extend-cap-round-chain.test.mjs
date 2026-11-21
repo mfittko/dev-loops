@@ -208,7 +208,10 @@ test("the cap-round head equal to the head, or an unfetched cap-round head, refu
     runGitFixture(root, ["checkout", "-q", A]);
     const equal = await extend(root, A);
     assert.equal(equal.reason, "no_cap_round_chain");
-    assert.match(equal.detail, /loop pre-push-delta --reviewer-only --repo \S+ --pr \d+ --baseline/);
+    // The cap-round head is the PR head: a reviewer-only run with that baseline is refused, so the recovery names the head-moving commit instead.
+    assert.match(equal.detail, /the cap-round head is the PR head, so no commit follows it/u);
+    assert.match(equal.recovery, /^operator: push one docs or tests commit to the PR branch, then rerun /u);
+    assert.doesNotMatch(equal.recovery, /--reviewer-only/u);
     const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
     const gone = "a".repeat(40);
     const dir = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`);
@@ -605,6 +608,9 @@ test("a clean cap round whose plain clearing chain ends at the PR head refuses c
     const result = await extend(root, D);
     assert.equal(result.reason, "chain_reaches_head");
     assert.match(result.detail, /further docs or tests commit/u);
+    // RECOVERY-COMMAND-REQUIRED: a rerun at the unchanged head refuses again, so the recovery names the head-moving commit and is never the bare rerun.
+    assert.match(result.recovery, /^operator: push one docs or tests commit to the PR branch, then rerun /u);
+    assert.notEqual(result.recovery, `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo ${REPO} --pr ${PR}`);
     assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), A).extension, undefined);
     assert.equal(existsSync(gateDeltaRecordPath(path.join(root, "tmp"), D)), false);
     // The exit the remedy names: one further docs commit moves the head past the chain end, and the extension binds there.
