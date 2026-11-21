@@ -94,7 +94,8 @@ coordinator returns only the round's typed result: the verdict, the execution mo
 (`fanout_fanin` or `inline_single_agent`, plus the inline reason and findings summary when the
 round resolves to `inline_single_agent`), the severity counts, the fan-in output path, the
 durable findings-log path, the act-list path, the spec-authority identity path, and the judge
-summary. The result also carries the optional `escalations[]` that `judge-pass` returned
+summary. On a zero-finding skip (`GATE-EXEC-JUDGE-PHASE`) the result carries the emitter's `judgeSkipped` and
+`scopeDrift` in place of the judge summary and omits the act-list path. The result also carries the optional `escalations[]` that `judge-pass` returned
 and the optional `escalationsSkipped` reason (`GATE-EXEC-RECURRENCE-ESCALATION`). Reviewer and judge outputs stay in the gate coordinator's context and never propagate
 to the dev-loop coordinator. The gate coordinator materializes and binds the round's evidence
 through the context builder's `requiredReads` and emits compact work orders; it never relays bulk
@@ -933,6 +934,13 @@ scope, and the prior rounds' judge ledgers, and decides — per cluster — whet
 the place to act on it. This is the relevance axis; it is distinct from and complementary
 to the ledger `disposition`, which fan-in leaves `unjudged` (the judge is the only
 authority for a disposition).
+
+**Zero-finding skip (ADR 0302):** when `emit-judge-work-order.mjs` returns `judgeSkipped` (a
+well-formed ledger with zero findings and no pinned `copilot-body-feedback` read), the round has
+nothing to dispose. The gate coordinator dispatches no judge, runs no `judge-pass`, and writes the
+durable log with `write-gate-findings-log.mjs` without `--judge-verdict` and without `--ledger-out`.
+This is the same rule as `REVIEW-GATE-JUDGE-PHASE` on the review gate. A skipped round has no
+`judge-emit-plan.json` and no approvals record.
 
 **Inputs:** the consolidated disposition ledger (`consolidate-fanin`'s `{overallVerdict,
 findings}`), the linked issue's AC / DoD / non-goals, the PR's declared scope, the

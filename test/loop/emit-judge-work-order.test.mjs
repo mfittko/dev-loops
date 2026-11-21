@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
@@ -14,7 +15,7 @@ import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { ensureTrustConfigCheckout, initGitFixture, withTempDir, writeGhStub } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { bindEvidenceToPrBody, seedJudgeSources } from "./_judge-delivery-fixture.mjs";
-import { SPEC_AUTHORITY_OUTCOME_VALUES, SPEC_AUTHORITY_VERDICT_SCHEMA, validateSpecAuthorityVerdict } from "../../packages/core/src/loop/spec-authority.mjs";
+import { SPEC_AUTHORITY_OUTCOME_VALUES, SPEC_AUTHORITY_VERDICT_SCHEMA, computeSpecDigest, validateSpecAuthorityVerdict } from "../../packages/core/src/loop/spec-authority.mjs";
 
 const HEAD = "d".repeat(40);
 const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { prefix: "dev-loops-judge-wo-" });
@@ -364,7 +365,7 @@ test("J4: two checkout roots emit the same digest; a conflicting rewrite under t
     assert.equal(pa.workOrderDigest, pb.workOrderDigest);
     assert.notEqual(pa.materializationHash, pb.materializationHash);
     const sources = await seed(a);
-    await writeFile(path.join(a, sources.findingsFile), JSON.stringify({ findings: [] }));
+    await writeFile(path.join(a, sources.findingsFile), JSON.stringify({ findings: [{ severity: "low", summary: "changed" }] }));
     await assert.rejects(emitJudgeWorkOrder({ ...sources, roundId: "j1-000000aa" }), /already exists with different content/);
   }));
 });
@@ -832,6 +833,49 @@ test("issue 3080 AC11: the work order stamps copilotBodyClusterId as the finding
     assert.ok(!text.includes("note it in the scopeDrift rationale"));
     await writeFile(path.join(root, sources.findingsFile), JSON.stringify({ overallVerdict: "clean", findings: [] }));
     assert.equal((await emitJudgeWorkOrder(sources)).workOrder.copilotBodyClusterId, 0, "an empty read gives cluster 0");
+  });
+});
+
+test("issue 2926: a well-formed empty ledger with no pinned Copilot body skips the judge and writes nothing", async () => {
+  await withDir(async (root) => {
+    for (const ledger of [[], { findings: [] }]) {
+      const sources = await seed(root);
+      await writeFile(path.join(root, sources.findingsFile), JSON.stringify(ledger));
+      const out = await emitJudgeWorkOrder(sources);
+      const identity = JSON.parse(await readFile(path.join(root, sources.identityFile), "utf8"));
+      assert.deepEqual(out.judgeSkipped, { reason: "no_findings", specDigest: identity.specDigest });
+      assert.equal(out.judgeSkipped.specDigest, computeSpecDigest(JSON.parse(await readFile(path.join(root, sources.specFile), "utf8"))));
+      // The skip digest comes from the spec, so a validly re-stamped identity with another contentDigest yields the same one.
+      await writeFile(path.join(root, sources.identityFile), JSON.stringify({ ...identity, contentDigest: `sha256:${"f".repeat(64)}` }));
+      assert.equal((await emitJudgeWorkOrder(sources)).judgeSkipped.specDigest, identity.specDigest);
+      assert.equal(out.scopeDrift.verdict, "within_scope");
+      assert.equal(out.scopeDrift.derivedFrom, "spec_identity");
+      assert.deepEqual(out.scopeDrift.driftedAreas, []);
+      assert.match(out.nextStep, /run no judge-pass/);
+      assert.equal(out.planPath, undefined);
+      assert.equal(existsSync(path.join(root, "tmp", "gate-judge")), false, "no plan or work order");
+      assert.equal(existsSync(path.join(root, "tmp", "work-order-executions")), false, "no execution-index entry");
+    }
+    const sources = await seed(root);
+    await writeFile(path.join(root, sources.findingsFile), JSON.stringify({ overallVerdict: "clean", findings: [] }));
+    const { code, stdout } = await runJudgeMain(root, sources, []);
+    assert.equal(code, 0);
+    const printed = JSON.parse(stdout);
+    assert.equal(printed.ok, true);
+    assert.equal(printed.judgeSkipped.reason, "no_findings");
+    assert.ok(printed.scopeDrift && printed.nextStep);
+    assert.equal("dispatchPrompt" in printed, false);
+    assert.equal("planPath" in printed, false);
+  });
+});
+
+test("issue 2926: a ledger object with no findings array is never skipped", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    await writeFile(path.join(root, sources.findingsFile), JSON.stringify({ overallVerdict: "clean" }));
+    const out = await emitJudgeWorkOrder(sources);
+    assert.equal(out.judgeSkipped, undefined);
+    assert.ok(out.planPath);
   });
 });
 
