@@ -10,7 +10,7 @@ import { afterEach, test } from "bun:test";
 
 import { runCli } from "../../cli/index.mjs";
 import { pathsMissingFromMatrix } from "../../scripts/github/waive-adr-tripwire.mjs";
-import { indexDecisionRecords, lintContractDocsInMatrix, lintRuleOwnerDocsInMatrix, lintSimplestDesign, lintSizeForecast, lintSpec, main } from "../../scripts/loop/spec-lint.mjs";
+import { indexDecisionRecords, lintContractDocsInMatrix, lintRuleOwnerDocsInMatrix, lintSimplestDesign, lintSizeForecast, lintSpec, lintStateRecoveryRows, main } from "../../scripts/loop/spec-lint.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const tempDirs = [];
@@ -542,4 +542,24 @@ test("contract_doc_not_in_matrix: a cited rule ID owned by a contract doc needs 
   const body =`${ruleMatrix("`XXX-YYY-ZZZ` holds.")}${FORECAST.replace("files=a.mjs", `files=${owner}`)}`;
   const found = (await lintSpec({ body, repoRoot: root })).findings.filter((f) => f.kind === "contract_doc_not_in_matrix");
   assert.deepEqual(found.map((f) => f.id), [owner]);
+});
+
+const recoverySpec = (...rows) => ["## AC / DoD matrix", "", "| Acceptance criterion | Completion evidence |", "| --- | --- |", ...rows.map((r) => `| ${r[0]} | ${r[1]} |`), ""].join("\n");
+
+test("state_recovery_rows_missing: a spec adding a lock file without recovery rows is flagged (REFINE-STATE-RECOVERY-ROWS)", () => {
+  const flagged = lintStateRecoveryRows(recoverySpec(["The loop writes a lock file per run", "unit test"]));
+  assert.deepEqual(flagged.map((f) => f.id), ["crash", "rebuild at the same head", "replacement by a later step"]);
+  assert.ok(flagged.every((f) => f.kind === "state_recovery_rows_missing"));
+  assert.deepEqual(lintStateRecoveryRows(recoverySpec(["A fail-closed refusal on stale heads", "unit test"])).map((f) => f.id), ["named recovery"]);
+});
+
+test("state_recovery_rows_missing: a spec with the three recovery rows and a named recovery yields no finding", () => {
+  const clean = recoverySpec(
+    ["The loop writes a lock file and refuses fail-closed on a stale head, returning the recovery command", "unit test"],
+    ["The lock survives a crash and is reclaimed", "unit test"],
+    ["A rebuild at the same head reuses the lock", "unit test"],
+    ["A later step replacement of the lock is detected", "unit test"],
+  );
+  assert.deepEqual(lintStateRecoveryRows(clean), []);
+  assert.deepEqual(lintStateRecoveryRows("no matrix here, a lock"), []);
 });

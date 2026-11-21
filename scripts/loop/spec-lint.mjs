@@ -299,6 +299,26 @@ export function lintContractDocsInMatrix(body) {
     .map((doc) => ({ kind: "contract_doc_not_in_matrix", id: doc, detail: { reason: `contract doc \`${doc}\` is in the Size forecast files but no AC / DoD matrix row names it in backticks` } }));
 }
 
+const STATE_RE = /\b(lock|sentinel|receipt|cache|marker file|plan file)\b/i;
+const REFUSAL_RE = /\bfail-closed\b/i;
+const RECOVERY_ROW_RES = [
+  ["crash", /\bcrash/i],
+  ["rebuild at the same head", /\bsame[- ]head\b/i],
+  ["replacement by a later step", /\breplac(?:e|ed|ement)\b/i],
+];
+
+/** REFINE-STATE-RECOVERY-ROWS: matrix rows adding persistent state or a fail-closed refusal need the recovery rows or a named `recovery`. */
+export function lintStateRecoveryRows(body) {
+  const matrix = detectAcDodMatrix(body);
+  if (!matrix.found || !matrix.valid) return [];
+  const text = matrix.rows.map((row) => `${row.criterion}\n${row.evidence}`).join("\n");
+  const missing = [
+    ...(STATE_RE.test(text) ? RECOVERY_ROW_RES.filter(([, re]) => !re.test(text)).map(([name]) => name) : []),
+    ...(REFUSAL_RE.test(text) && !/\brecovery\b/i.test(text) ? ["named recovery"] : []),
+  ];
+  return missing.map((name) => ({ kind: "state_recovery_rows_missing", id: name, detail: { reason: `the matrix adds persistent state or a fail-closed refusal but no row covers: ${name} (REFINE-STATE-RECOVERY-ROWS)` } }));
+}
+
 /** A rule ID cited in a matrix row whose owner is a contract doc needs that doc named, backticked, in a matrix row. */
 export async function lintRuleOwnerDocsInMatrix(body, repoRoot) {
   const matrix = detectAcDodMatrix(body);
@@ -341,6 +361,7 @@ export async function lintSpec({ body, repoRoot }) {
   checks.sizeForecast = { status: "ran", band: { minLoc, softLoc, waiverLoc, absoluteHardLoc } };
   findings.push(...lintSimplestDesign(body));
   findings.push(...lintContractDocsInMatrix(body));
+  findings.push(...lintStateRecoveryRows(body));
   const forecastDocs = new Set(findings.filter((f) => f.kind === "contract_doc_not_in_matrix").map((f) => f.id));
   findings.push(...(await lintRuleOwnerDocsInMatrix(body, repoRoot)).filter((f) => !forecastDocs.has(f.id)));
   const decisionsDir = path.join(repoRoot, "docs", "decisions");
