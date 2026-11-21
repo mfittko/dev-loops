@@ -1186,7 +1186,7 @@ export async function consolidateGateFanin(options) {
         throw new Error(`"${filePath}": angle "${angle}" has no valid "headSha" stamp (unknown provenance) — required when consolidating with --head-sha ${options.headSha}, unless the angle is declared in --carried-angles`);
       }
       if (stamp !== options.headSha) {
-        throw new Error(`"${filePath}": angle "${angle}" is stamped for head ${stamp} but this round consolidates head ${options.headSha} — a stale artifact must not pass as a fresh verdict; re-run the angle or declare it carried forward via --carried-angles/--carry-forward-plan`);
+        throw new Error(`"${filePath}": angle "${angle}" is stamped for head ${stamp} but this round consolidates head ${options.headSha} — a stale artifact must not pass as a fresh verdict; re-run the angle or declare it carried forward via --carried-angles and the carry-forward plan (--carry-forward-plan-file or --carry-forward-plan)`);
       }
     }
     if (!angleSourceFiles.has(angle)) angleSourceFiles.set(angle, []);
@@ -1593,7 +1593,7 @@ export async function consolidateGateFanin(options) {
     if (missingAngles.length > 0) {
       const misplaced = await detectMisplacedFindingsDiagnostic(options.findingsDir, options.repoRoot ?? process.cwd());
       throw new Error(
-        `GATE-EXEC-RESOLVED-ANGLE-EVIDENCE: fan-in computed a "clean" verdict but --resolved-angles names angle(s) with no evidence at all: ${missingAngles.join(", ")} — each expected either a per-angle findings artifact in --findings-dir or a proven carried-forward entry in --carried-angles/--carry-forward-plan; neither was found${misplaced}`,
+        `GATE-EXEC-RESOLVED-ANGLE-EVIDENCE: fan-in computed a "clean" verdict but --resolved-angles names angle(s) with no evidence at all: ${missingAngles.join(", ")} — each expected either a per-angle findings artifact in --findings-dir or a proven carried-forward entry in --carried-angles and the carry-forward plan (--carry-forward-plan-file or --carry-forward-plan); neither was found${misplaced}`,
       );
     }
   }
