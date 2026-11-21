@@ -33,8 +33,8 @@ Self-check (record mode, PRE-PR-DEVELOPER-SELF-CHECK):
   --self-check-file <path>  Required. JSON array of { "id", "status": "done"|"na", "evidence": "<non-empty>" }
                        covering every constraint id of the developer brief selfCheck: one "angle:<name>" per
                        draft_gate angle resolved for the base...HEAD changed paths (the first 8 recommended angles, in
-                       recommendation order), plus each developer-checklist id of the resolved config (the shipped default holds
-                       14 ids, C1 to K2; P2, CS1 and CS2 are the finalStep ids, a fixed list in code), in config order. The angle ids
+                       recommendation order), plus each developer-checklist id of the selected angles (at most 14;
+                       P2, CS1 and CS2 are the finalStep ids, a fixed list in code), in config order. The angle ids
                        come from base...HEAD at record time and can differ from the brief: rerun the brief with --paths set to the
                        actual changed paths first. The evidence states what was done while writing (test names, synced files).
                        Any violation refuses with pre_pr_self_check_missing; PRE-PR-DEVELOPER-SELF-CHECK lists every cause.

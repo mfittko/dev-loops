@@ -16,7 +16,7 @@ test("the config schema rejects a malformed, blank or empty developer-checklist"
   }
 });
 
-test("the shipped defaults carry exactly the 14 checklist ids under the mapped angles", async () => {
+test("the shipped defaults carry the checklist ids under the mapped angles", async () => {
   const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
   const byAngle = Object.fromEntries(config.gates.draft.angles.filter((a) => a["developer-checklist"]).map((a) => [a.name, a["developer-checklist"].map((l) => l.split(":")[0])]));
   assert.deepEqual(byAngle, {
@@ -33,8 +33,9 @@ test("the shipped defaults carry exactly the 14 checklist ids under the mapped a
 });
 
 test("resolveChecklistItems splits id and text and marks only the final-step ids", async () => {
-  const items = await resolveChecklistItems(process.cwd());
-  assert.equal(items.length, 14);
+  const items = await resolveChecklistItems(process.cwd(), ["src/b.mjs"]);
+  assert.ok(items.length > 0 && items.length <= 14);
+  assert.ok(!items.some((i) => i.id === "T1"), "T1 rides only a seam diff");
   assert.deepEqual(items.filter((i) => i.finalStep).map((i) => i.id).sort(), [...FINAL_STEP_CHECKLIST_IDS].sort());
   const c1 = items.find((i) => i.id === "C1");
   assert.equal(c1.angle, "coverage");

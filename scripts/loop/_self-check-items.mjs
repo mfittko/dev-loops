@@ -16,11 +16,18 @@ export const FINAL_STEP_CHECKLIST_IDS = Object.freeze(["P2", "CS1", "CS2"]);
 // `strict` (the record path) turns a config load error into pre_pr_self_check_missing; the brief stays best-effort.
 const configFailed = (error) => Object.assign(new Error(`${PRE_PR_SELF_CHECK_MISSING}: cannot derive the required self-check ids from the dev-loops config: ${error.message} (PRE-PR-DEVELOPER-SELF-CHECK)`), { code: PRE_PR_SELF_CHECK_MISSING });
 
-/** The `developer-checklist` lines of every draft_gate angle, in config order, as { id, angle, check, finalStep? }; empty when the config does not load (strict: throws). A duplicate id across angles is a config error (strict: throws pre_pr_self_check_missing; best-effort: empty). */
-export async function resolveChecklistItems(root, { strict = false } = {}) {
+// The angle names the draft_gate selects for `paths`: the enabled flag, the pool and the threat-model seam override, the same selection the gate runs.
+async function selectedAngleNames(config, paths) {
+  const diff = { nameStatusOutput: paths.map((p) => `M\t${p}`).join("\n") };
+  return (await resolveGateAnglesDynamic(config, "draft", { diff })).recommendedAngles ?? resolveGateAngles(config, "draft") ?? [];
+}
+
+/** The `developer-checklist` lines of the draft_gate angles selected for `paths`, in config order, as { id, angle, check, finalStep? }; at most 14 with the shipped default. Empty when the config does not load (strict: throws). A duplicate id across selected angles is a config error (strict: throws pre_pr_self_check_missing; best-effort: empty). */
+export async function resolveChecklistItems(root, paths, { strict = false } = {}) {
   try {
     const { config } = await (strict ? loadDevLoopConfigStrict : loadDevLoopConfig)({ repoRoot: root });
-    const items = (config.gates?.draft?.angles ?? []).filter((entry) => entry.enabled !== false).flatMap((entry) => (entry["developer-checklist"] ?? []).map((line) => {
+    const selected = new Set(await selectedAngleNames(config, paths));
+    const items = (config.gates?.draft?.angles ?? []).filter((entry) => selected.has(entry.name)).flatMap((entry) => (entry["developer-checklist"] ?? []).map((line) => {
       const split = line.indexOf(": ");
       const id = line.slice(0, split);
       return { id, angle: entry.name, check: line.slice(split + 2), ...(FINAL_STEP_CHECKLIST_IDS.includes(id) ? { finalStep: true } : {}) };
@@ -43,8 +50,7 @@ export function condenseAnglePrompt(prompt, angle) {
 export async function resolveSelfCheckAngles(root, paths, { strict = false } = {}) {
   try {
     const { config } = await (strict ? loadDevLoopConfigStrict : loadDevLoopConfig)({ repoRoot: root });
-    const diff = { nameStatusOutput: paths.map((p) => `M\t${p}`).join("\n") };
-    const names = (await resolveGateAnglesDynamic(config, "draft", { diff })).recommendedAngles ?? resolveGateAngles(config, "draft") ?? [];
+    const names = await selectedAngleNames(config, paths);
     return names.slice(0, MAX_ANGLE_LINES).map((angle) => ({ id: `${ANGLE_ID_PREFIX}${angle}`, angle, constraint: condenseAnglePrompt(resolveReviewerRole(config, angle).prompt, angle) }));
   } catch (error) { if (strict) throw configFailed(error); return []; }
 }
@@ -55,7 +61,7 @@ export async function requiredSelfCheckIds(cwd, base, head = "HEAD") {
   try {
     paths = execFileSync("git", ["diff", "--name-only", `${base}...${head}`], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: gitEnvNoDirOverrides(), timeout: GIT_DIFF_TIMEOUT_MS }).split("\n").filter(Boolean);
   } catch (error) { throw configFailed(new Error(`git diff ${base}...${head} failed: ${error.message}`)); }
-  const ids = [...(await resolveSelfCheckAngles(cwd, paths, { strict: true })).map((a) => a.id), ...(await resolveChecklistItems(cwd, { strict: true })).map((i) => i.id)];
+  const ids = [...(await resolveSelfCheckAngles(cwd, paths, { strict: true })).map((a) => a.id), ...(await resolveChecklistItems(cwd, paths, { strict: true })).map((i) => i.id)];
   if (!ids.length) throw configFailed(new Error("the config resolves no self-check ids"));
   return ids;
 }

@@ -23,7 +23,7 @@ test("strict resolvers throw pre_pr_self_check_missing on a config load error", 
   const dir = mkdtempSync(path.join(os.tmpdir(), "issue-3395-strict-"));
   try {
     writeFileSync(path.join(dir, ".devloops"), "{not json");
-    await assert.rejects(resolveChecklistItems(dir, { strict: true }), { code: "pre_pr_self_check_missing" });
+    await assert.rejects(resolveChecklistItems(dir, ["a.mjs"], { strict: true }), { code: "pre_pr_self_check_missing" });
     await assert.rejects(resolveSelfCheckAngles(dir, ["a.mjs"], { strict: true }), { code: "pre_pr_self_check_missing" });
     await assert.rejects(requiredSelfCheckIds(dir, "main"), { code: "pre_pr_self_check_missing" });
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -32,8 +32,8 @@ test("strict resolvers throw pre_pr_self_check_missing on a config load error", 
 test("a duplicate developer-checklist id across angles is refused in strict mode and empty in best-effort mode", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "issue-3395-dup-"));
   try {
-    writeFileSync(path.join(dir, ".devloops"), JSON.stringify({ version: 1, gates: { draft: { angles: [{ name: "coverage", "developer-checklist": ["C1: reuse"] }, { name: "extra", "developer-checklist": ["C1: clash"] }] } } }));
-    await assert.rejects(resolveChecklistItems(dir, { strict: true }), { code: "pre_pr_self_check_missing", message: /duplicate developer-checklist id C1/u });
+    writeFileSync(path.join(dir, ".devloops"), JSON.stringify({ version: 1, gates: { draft: { angles: [{ name: "coverage", "developer-checklist": ["C1: reuse"] }, { name: "correctness", "developer-checklist": ["C1: clash"] }] } } }));
+    await assert.rejects(resolveChecklistItems(dir, ["a.mjs"], { strict: true }), { code: "pre_pr_self_check_missing", message: /duplicate developer-checklist id C1/u });
     assert.deepEqual(await resolveChecklistItems(dir), []);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -42,8 +42,8 @@ test("resolveChecklistItems skips the checklist of an angle a consumer layer dis
   const dir = mkdtempSync(path.join(os.tmpdir(), "issue-3395-disabled-"));
   try {
     writeFileSync(path.join(dir, ".devloops"), JSON.stringify({ version: 1, gates: { draft: { angles: [{ name: "threat-model", enabled: false }] } } }));
-    assert.ok(!(await resolveChecklistItems(dir, { strict: true })).some((i) => i.id === "T1"));
-    assert.ok((await resolveChecklistItems(dir, { strict: true })).some((i) => i.id === "C1"));
+    assert.ok(!(await resolveChecklistItems(dir, ["a.mjs"], { strict: true })).some((i) => i.id === "T1"));
+    assert.ok((await resolveChecklistItems(dir, ["a.mjs"], { strict: true })).some((i) => i.id === "C1"));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
