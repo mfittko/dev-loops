@@ -6,6 +6,7 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { classifyBaseMergeCarry, validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-verdict-carry";
+import { resolveBaseMergeAngleCarry } from "@dev-loops/core/loop/gate-carry-forward";
 import { buildBaseMergeCarryPath, computeBaseMergeCarry, main, runPinnedGit } from "../../scripts/github/classify-base-merge-carry.mjs";
 
 const A = "a".repeat(40);
@@ -114,7 +115,7 @@ test("git: .devloops base move forces full re-gate", async () => {
   assert.deepEqual(ev.gateToolingPaths, [".devloops"]);
 });
 
-test("git: base move touching a PR path forces full re-gate", async () => {
+test("git: distant base edit in a PR file partial-carries that file only", async () => {
   const s = setup();
   s.put("base.txt", `PR\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits top of base.txt");
   const prev = s.head();
@@ -123,18 +124,64 @@ test("git: base move touching a PR path forces full re-gate", async () => {
   // distant hunks merge cleanly; the base delta still touches a PR path
   s.git("merge", "-q", "--no-edit", "main");
   const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
-  assert.equal(ev.decision, "full_regate", ev.reason);
+  assert.equal(ev.decision, "partial_carry", ev.reason);
+  assert.deepEqual(ev.rerunPaths, ["base.txt"]);
+  assert.equal(validateBaseMergeCarryEvidence(ev).ok, true);
 });
 
-test("git: base edit above the PR hunk (same file, line shift) forces full re-gate", async () => {
+test("git: base edit above the PR hunk (same file, line shift) partial-carries", async () => {
   const s = setup();
   s.put("base.txt", `${LINES.slice(0, -7)}PR\n`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits bottom of base.txt");
   const prev = s.head();
   s.git("checkout", "-q", "main"); s.put("base.txt", `TOP1\nTOP2\n${LINES}`); s.git("add", "-A"); s.git("commit", "-qm", "main inserts at top");
   s.git("checkout", "-q", "pr"); s.git("merge", "-q", "--no-edit", "main");
   const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
-  assert.equal(ev.decision, "full_regate", ev.reason);
+  assert.equal(ev.decision, "partial_carry", ev.reason);
   assert.deepEqual(ev.pathIntersection, ["base.txt"]);
+  assert.deepEqual(ev.rerunPaths, ["base.txt"]);
+  assert.equal(ev.prHunkDigests["base.txt"].before, ev.prHunkDigests["base.txt"].after);
+  assert.equal(validateBaseMergeCarryEvidence(ev).ok, true);
+  assert.equal(validateBaseMergeCarryEvidence({ ...ev, decision: "carry_verdict" }).ok, false);
+});
+
+test("git: conflicting base edit inside the PR hunk runs the resolution delta", async () => {
+  const s = setup();
+  s.put("base.txt", `${LINES.slice(0, -7)}PR\n`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits bottom");
+  const prev = s.head();
+  s.git("checkout", "-q", "main"); s.put("base.txt", `${LINES.slice(0, -7)}MAIN\n`); s.git("add", "-A"); s.git("commit", "-qm", "main edits same lines");
+  s.git("checkout", "-q", "pr");
+  try { s.git("merge", "--no-edit", "main"); } catch { /* conflict expected */ }
+  s.put("base.txt", `${LINES.slice(0, -7)}PR\nMAIN\n`); s.git("add", "-A"); s.git("commit", "-qm", "resolve");
+  const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
+  assert.equal(ev.decision, "resolution_delta", ev.reason);
+  assert.deepEqual(ev.resolutionPaths, ["base.txt"]);
+  assert.deepEqual(ev.rerunPaths, ["base.txt"]);
+  assert.equal(validateBaseMergeCarryEvidence(ev).ok, true);
+});
+
+test("pure: partial carry needs equal digests, a base touch and no tooling; binary digest is null", () => {
+  const prBlobsAfter = [`src/x.mjs\t100644\t${"2".repeat(40)}`];
+  const base = { ...ok, prBlobsAfter, baseDeltaPaths: ["src/x.mjs"] };
+  const d = (before, after) => ({ "src/x.mjs": { before, after } });
+  assert.equal(classifyBaseMergeCarry({ ...base, prHunkDigests: d("h", "h") }).decision, "partial_carry");
+  assert.equal(classifyBaseMergeCarry({ ...base, prHunkDigests: d("h", "g") }).decision, "full_regate");
+  assert.equal(classifyBaseMergeCarry({ ...base, prHunkDigests: d(null, null) }).decision, "full_regate");
+  assert.equal(classifyBaseMergeCarry({ ...base }).decision, "full_regate");
+  assert.equal(classifyBaseMergeCarry({ ...base, baseDeltaPaths: ["docs/y.md"], prHunkDigests: d("h", "h") }).decision, "full_regate");
+  assert.equal(classifyBaseMergeCarry({ ...base, baseDeltaPaths: ["src/x.mjs", ".devloops"], prHunkDigests: d("h", "h") }).decision, "full_regate");
+});
+
+test("angles: partial and resolution carry re-run only angles meeting rerunPaths", () => {
+  const prevAngles = ["correctness", "docs"];
+  assert.equal(resolveBaseMergeAngleCarry({ decision: "full_regate", rerunPaths: ["a.mjs"] }, prevAngles), null);
+  assert.equal(resolveBaseMergeAngleCarry({ decision: "partial_carry", rerunPaths: [] }, prevAngles), null);
+  for (const decision of ["partial_carry", "resolution_delta"]) {
+    const r = resolveBaseMergeAngleCarry({ decision, rerunPaths: ["README.md"] }, prevAngles);
+    assert.equal(r.carried.length + r.mustRerun.length, 2);
+    assert.ok(r.carried.length > 0 || r.mustRerun.length > 0);
+    const code = resolveBaseMergeAngleCarry({ decision, rerunPaths: ["src/a.mjs"] }, ["correctness"]);
+    assert.equal(code.mustRerun.length, 1);
+  }
 });
 
 test("git: hostile ambient env and repo-local config never change the evidence", async () => {
@@ -358,7 +405,7 @@ test("gate tooling matcher rejects look-alike non-tooling paths", () => {
   }
 });
 
-test("git: hand-resolved conflict merge forces full re-gate", async () => {
+test("git: hand-resolved conflict merge runs a resolution delta", async () => {
   const s = setup();
   s.put("base.txt", `PR\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits line0");
   const prev = s.head();
@@ -368,10 +415,10 @@ test("git: hand-resolved conflict merge forces full re-gate", async () => {
   s.put("base.txt", `PR\nMAIN\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "resolve");
   const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
   assert.equal(ev.conflictResolutionHunks, true);
-  assert.equal(ev.decision, "full_regate");
+  assert.equal(ev.decision, "resolution_delta");
 });
 
-test("git: clean base merge after a resolved conflict merge still forces full re-gate", async () => {
+test("git: clean base merge after a resolved conflict merge still runs the resolution delta", async () => {
   const s = setup();
   s.put("base.txt", `PR\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits line0");
   const prev = s.head();
@@ -383,7 +430,7 @@ test("git: clean base merge after a resolved conflict merge still forces full re
   s.git("checkout", "-q", "pr"); s.git("merge", "-q", "--no-edit", "main");
   const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
   assert.equal(ev.conflictResolutionHunks, true);
-  assert.equal(ev.decision, "full_regate");
+  assert.equal(ev.decision, "resolution_delta");
 });
 
 test("main: writes the keyed evidence artifact and refuses a short prev-head", async () => {

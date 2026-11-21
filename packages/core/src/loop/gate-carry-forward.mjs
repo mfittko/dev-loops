@@ -273,6 +273,21 @@ export function resolveCarryForwardAngles({ prevAngles, changedFiles, options = 
 }
 
 /**
+ * Angle partition for a base merge whose evidence decided partial_carry or resolution_delta (issue 3284):
+ * the angles whose surface meets `evidence.rerunPaths` re-run; the rest carry. Any other decision returns
+ * null, so the caller keeps the full-gate or whole-verdict path.
+ *
+ * @param {{ decision: string, rerunPaths?: string[] }} evidence recorded base-merge carry evidence
+ * @param {string[]} prevAngles angles that were clean at the prior head
+ * @returns {{ carried: Array<{ angle: string, reason: string }>, mustRerun: Array<{ angle: string, reason: string }> } | null}
+ */
+export function resolveBaseMergeAngleCarry(evidence, prevAngles, { options, rules } = {}) {
+  if (evidence?.decision !== "partial_carry" && evidence?.decision !== "resolution_delta") return null;
+  if (!Array.isArray(evidence.rerunPaths) || evidence.rerunPaths.length === 0) return null;
+  return resolveCarryForwardAngles({ prevAngles, changedFiles: evidence.rerunPaths, options, rules });
+}
+
+/**
  * The file surface kinds the external Copilot code review actually reviews. Docs
  * and comment-only prose are NOT part of it; everything a Copilot review could
  * legitimately raise a code nit about is (code, tests, config, CI).

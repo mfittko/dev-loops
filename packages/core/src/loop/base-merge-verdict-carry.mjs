@@ -8,13 +8,19 @@
  * Decision values:
  * - carry_verdict: every PR path has the same mode and blob oid at both heads, the base
  *   delta does not intersect the PR paths, and it touches no gate tooling or config.
- * - full_regate: a PR blob changed, the base delta overlaps the PR paths, gate tooling
- *   in the base delta, or conflict-resolution hunks.
+ * - partial_carry: a PR blob changed only because the base delta edited the same file; the PR's own -U0 hunk
+ *   digest (hunk bodies without line numbers) is equal at both heads. `rerunPaths` lists those files; only
+ *   angles whose surface meets them re-run (issue 3284).
+ * - resolution_delta: the merge hand-resolved conflicts. `rerunPaths` lists the resolution files plus any
+ *   changed file whose hunk digest differs; the delta review covers the resolution hunks and the other
+ *   angles carry (issue 3284).
+ * - full_regate: a PR hunk changed, a changed file has no digest, gate tooling in the base delta, or the
+ *   base delta overlaps the PR paths without a blob change.
  * - fallback_full: any detection failure or malformed input.
  */
 import { isDevLoopConfigSourcePath } from "../analysis/diff-analyzer.mjs";
 
-export const BASE_MERGE_CARRY_DECISIONS = Object.freeze(["carry_verdict", "full_regate", "fallback_full"]);
+export const BASE_MERGE_CARRY_DECISIONS = Object.freeze(["carry_verdict", "partial_carry", "resolution_delta", "full_regate", "fallback_full"]);
 
 // Paths that can change a gate outcome (ADR 0296, amends ADR 0096 and ADR 0156): .devloops config
 // (isDevLoopConfigSourcePath), reviewer, judge, gate-coordinator and docs agents with their .claude mirror,
@@ -46,6 +52,7 @@ export function isGateToolingPath(filePath) {
 }
 
 const FULL_SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+const entryPath = (e) => e.split("\t").slice(0, -2).join("\t");
 const isPathList = (v) => Array.isArray(v) && v.every((p) => typeof p === "string" && p.length > 0);
 // A carry needs real facts: a nonempty array of nonempty strings (numbers, booleans, empty strings and empty lists refuse).
 const isFactList = (v) => Array.isArray(v) && v.length > 0 && isPathList(v);
@@ -58,10 +65,13 @@ const isFactList = (v) => Array.isArray(v) && v.length > 0 && isPathList(v);
  * @param {string[]} input.prBlobsAfter  the same at B (merge-base B..B)
  * @param {string[]} input.baseDeltaPaths paths the base delta (merge-base A..B) touched
  * @param {boolean} [input.conflictResolutionHunks] true when the merge resolved conflicts
+ * @param {string[]} [input.resolutionPaths] files the combined (--cc) diff of those merges touched
+ * @param {Object<string, {before: string|null, after: string|null}>} [input.prHunkDigests] per changed PR path, the
+ *   sha256 of the PR's own -U0 hunk bodies at each head (null when no sound digest exists, e.g. binary)
  * @param {string} [input.detectionError] set when computing any input failed
  */
 export function classifyBaseMergeCarry(input = {}, { ignoreGateTooling = false } = {}) {
-  const { sourceHead, newHead, prBlobsBefore, prBlobsAfter, baseDeltaPaths, conflictResolutionHunks = false, detectionError } = input;
+  const { sourceHead, newHead, prBlobsBefore, prBlobsAfter, baseDeltaPaths, conflictResolutionHunks = false, resolutionPaths = [], prHunkDigests = {}, detectionError } = input;
   const evidence = {
     sourceHead: sourceHead ?? null,
     newHead: newHead ?? null,
@@ -70,6 +80,9 @@ export function classifyBaseMergeCarry(input = {}, { ignoreGateTooling = false }
     prDiffPaths: null,
     baseDeltaPaths: baseDeltaPaths ?? null,
     conflictResolutionHunks: conflictResolutionHunks ?? null,
+    resolutionPaths,
+    prHunkDigests,
+    rerunPaths: [],
     pathIntersection: [],
     gateToolingPaths: [],
     decision: "fallback_full",
@@ -82,18 +95,36 @@ export function classifyBaseMergeCarry(input = {}, { ignoreGateTooling = false }
     return done("fallback_full", "sourceHead/newHead must be distinct full SHAs");
   }
   if (!isFactList(prBlobsBefore) || !isFactList(prBlobsAfter)) return done("fallback_full", "blob facts missing or malformed");
-  if (!isPathList(baseDeltaPaths) || typeof conflictResolutionHunks !== "boolean") {
+  if (!isPathList(baseDeltaPaths) || !isPathList(resolutionPaths) || typeof conflictResolutionHunks !== "boolean" || !prHunkDigests || typeof prHunkDigests !== "object") {
     return done("fallback_full", "malformed path lists");
   }
   // Derived from the blob facts, never trusted as an input: the PR paths at either head.
-  evidence.prDiffPaths = [...new Set([...prBlobsBefore, ...prBlobsAfter].map((e) => e.split("\t").slice(0, -2).join("\t")))].sort();
+  evidence.prDiffPaths = [...new Set([...prBlobsBefore, ...prBlobsAfter].map(entryPath))].sort();
   const prPaths = new Set(evidence.prDiffPaths);
   evidence.pathIntersection = [...new Set(baseDeltaPaths.filter((p) => prPaths.has(p)))].sort();
   evidence.gateToolingPaths = [...new Set(baseDeltaPaths.filter(isGateToolingPath))].sort();
 
-  if (JSON.stringify([...prBlobsBefore].sort()) !== JSON.stringify([...prBlobsAfter].sort())) return done("full_regate", "PR blob changed between heads");
-  if (conflictResolutionHunks) return done("full_regate", "merge carries conflict-resolution hunks");
   if (!ignoreGateTooling && evidence.gateToolingPaths.length > 0) return done("full_regate", "base delta touches gate tooling or config");
+  const before = new Map(prBlobsBefore.map((e) => [entryPath(e), e]));
+  const after = new Map(prBlobsAfter.map((e) => [entryPath(e), e]));
+  const changed = evidence.prDiffPaths.filter((p) => before.get(p) !== after.get(p));
+  // A changed file carries only when the base delta touched it and both heads show the same PR hunks.
+  const sameHunks = (p) => {
+    const d = prHunkDigests[p];
+    return baseDeltaPaths.includes(p) && typeof d?.before === "string" && d.before === d.after;
+  };
+  const shifted = changed.filter(sameHunks);
+  const moved = changed.filter((p) => !sameHunks(p));
+  if (conflictResolutionHunks) {
+    if (resolutionPaths.length === 0) return done("full_regate", "merge carries conflict-resolution hunks without resolution paths");
+    evidence.rerunPaths = [...new Set([...resolutionPaths, ...moved])].sort();
+    return done("resolution_delta", "merge carries conflict-resolution hunks; delta review of the resolution hunks, other angles carry");
+  }
+  if (moved.length > 0) return done("full_regate", "PR hunk changed between heads");
+  if (shifted.length > 0) {
+    evidence.rerunPaths = shifted;
+    return done("partial_carry", "PR hunks identical at both heads; base edits in the same file only shift or surround them");
+  }
   if (evidence.pathIntersection.length > 0) return done("full_regate", "base delta overlaps PR paths");
   // The fixer-emit seam (ADR 0156 amendment) skips the tooling rule. Its own reason text keeps that evidence
   // from ever validating under the default rule, so it cannot satisfy gate coordination or merge-pr.
@@ -119,10 +150,11 @@ export function validateBaseMergeCarryEvidence(evidence, { expectedSourceHead, e
   if (expectedSourceHead !== undefined && evidence.sourceHead !== expectedSourceHead) return { ok: false, reason: "sourceHead mismatch" };
   if (expectedNewHead !== undefined && evidence.newHead !== expectedNewHead) return { ok: false, reason: "newHead mismatch" };
   if (evidence.decision === "fallback_full") return { ok: true, reason: "" }; // never carries
+  for (const k of ["resolutionPaths", "rerunPaths"]) if (k in evidence && !isPathList(evidence[k])) return { ok: false, reason: `malformed ${k}` };
   const re = classifyBaseMergeCarry(evidence, { ignoreGateTooling });
   if (re.decision !== evidence.decision) return { ok: false, reason: `decision recomputes to ${re.decision}` };
-  for (const k of ["prDiffPaths", "pathIntersection", "gateToolingPaths", "reason"]) {
-    if (JSON.stringify(re[k]) !== JSON.stringify(evidence[k])) return { ok: false, reason: `${k} does not match recomputed value` };
+  for (const k of ["prDiffPaths", "pathIntersection", "gateToolingPaths", "rerunPaths", "reason"]) {
+    if (JSON.stringify(re[k]) !== JSON.stringify(evidence[k] ?? (k === "rerunPaths" ? [] : undefined))) return { ok: false, reason: `${k} does not match recomputed value` };
   }
   return { ok: true, reason: "" };
 }
