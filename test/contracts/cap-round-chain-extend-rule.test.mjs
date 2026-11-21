@@ -31,5 +31,7 @@ test("GATE-EXEC-ROUND-CAP-CHAIN-EXTEND describes the CI-failed cap-round path wi
   assert.match(rule, /CI-failed cap-round path \(issue 3437\)/);
   assert.match(rule, /`ci_failed`/);
   assert.match(rule, /MUST start at that candidate, never at the cap-round head/);
-  assert.match(rule, /`no_cap_round_chain`, `logic_commit_in_range`, `delta_range_mismatch`\) return `recovery`/);
+  assert.match(rule, /`logic_commit_in_range` and `delta_range_mismatch` refusals return `recovery` naming the reviewer-only run at the start of the logic range/);
+  assert.match(rule, /`no_cap_round_chain` returns `recovery` by case: `loop gate-coordination` when no cap round resolves/);
+  assert.match(rule, /A replacement PR is the recovery for an orphaned baseline, for a candidate or cap-round head outside the PR head's history, and for that non-covering record/);
 });
