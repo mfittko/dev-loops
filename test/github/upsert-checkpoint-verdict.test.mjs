@@ -994,7 +994,9 @@ const snapshotCoordinationEntries = (headRefOid = SNAPSHOT_HEAD) => [
   { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid }) + "\n" },
   { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
 ];
-const snapshotLiveHeadEntry = (headRefOid = SNAPSHOT_HEAD, isDraft = true) => ({ assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft"], stdout: JSON.stringify({ headRefOid, isDraft }) + "\n" });
+const snapshotLiveHeadEntry = (headRefOid = SNAPSHOT_HEAD, isDraft = true, extra = {}) => ({ assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,body"], stdout: JSON.stringify({ headRefOid, isDraft, state: "OPEN", body: DEFAULT_TEST_PR_BODY, ...extra }) + "\n" });
+const snapshotThreadsEntry = (nodes = []) => ({ assertArgs: ["api", "graphql", "pr=17"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) + "\n" });
+const snapshotThread = (author, body) => ({ id: "THREAD_1", isResolved: false, isOutdated: false, path: "a.mjs", line: 1, comments: { nodes: [{ id: "gid-1", databaseId: 601, body, authorAssociation: "OWNER", author: { login: author, __typename: "User" } }] } });
 const snapshotPostEntries = () => [
   { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n' },
 ];
@@ -1010,11 +1012,11 @@ const seedCoordinationSnapshot = async (root) => {
 test("upsert-checkpoint-verdict reuses the coordination snapshot, re-reads the live head and verdict comments, and deletes the snapshot after posting", async () => {
   await withTempDir(async (tempDir) => {
     const snapshotFile = await seedCoordinationSnapshot(tempDir);
-    const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(), ...snapshotCoordinationEntries().slice(3), ...snapshotPostEntries()]);
+    const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(), snapshotThreadsEntry(), ...snapshotCoordinationEntries().slice(3), ...snapshotPostEntries()]);
     const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
     assert.equal(result.code, 0, result.stderr);
     const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
-    assert.match(ghArgs[0], /pr view 17 --repo owner\/repo --json headRefOid,isDraft$/);
+    assert.match(ghArgs[0], /pr view 17 --repo owner\/repo --json headRefOid,isDraft,state,body$/);
     assert.equal(ghArgs.some((a) => a.includes("--json number,state,isDraft")), false, "the coordination context is not refetched");
     assert.equal(ghArgs.some((a) => a.includes("issues/17/comments")), true, "the verdict comments are re-read live");
     assert.match(ghArgs.at(-1), /pulls\/17\/reviews/);
@@ -1025,7 +1027,7 @@ test("upsert-checkpoint-verdict reuses the coordination snapshot, re-reads the l
 test("upsert-checkpoint-verdict deletes the snapshot when the post fails", async () => {
   await withTempDir(async (tempDir) => {
     const snapshotFile = await seedCoordinationSnapshot(tempDir);
-    const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(), ...snapshotCoordinationEntries().slice(3)]);
+    const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(), snapshotThreadsEntry(), ...snapshotCoordinationEntries().slice(3)]);
     const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
     assert.notEqual(result.code, 0);
     assert.equal(await readFile(snapshotFile, "utf8").catch(() => null), null);
@@ -1042,7 +1044,7 @@ test("upsert-checkpoint-verdict discards a reused snapshot whose head moved and 
     ]);
     const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
     const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
-    assert.match(ghArgs[0], /--json headRefOid,isDraft$/);
+    assert.match(ghArgs[0], /--json headRefOid,isDraft,state,body$/);
     assert.match(ghArgs[1], /--json number,state,isDraft,headRefOid/);
   }, { prefix: "dev-loops-upsert-snapshot-moved-" });
 });
@@ -1057,12 +1059,52 @@ test("upsert-checkpoint-verdict discards a reused snapshot whose live draft stat
   }, { prefix: "dev-loops-upsert-snapshot-draft-moved-" });
 });
 
+for (const [name, live] of [["PR state became MERGED", { state: "MERGED" }], ["PR state became CLOSED", { state: "CLOSED" }], ["PR body changed", { body: "## Summary\nedited after the pre-flight\n" }]]) {
+  test(`upsert-checkpoint-verdict discards a reused snapshot when the live ${name} and loads fresh`, async () => {
+    await withTempDir(async (tempDir) => {
+      await seedCoordinationSnapshot(tempDir);
+      const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(SNAPSHOT_HEAD, true, live), ...snapshotCoordinationEntries(), ...snapshotPostEntries()]);
+      const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+      const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
+      assert.match(ghArgs[0], /--json headRefOid,isDraft,state,body$/);
+      assert.match(ghArgs[1], /--json number,state,isDraft,headRefOid/, result.stderr);
+    }, { prefix: "dev-loops-upsert-snapshot-live-field-" });
+  });
+}
+
+test("upsert-checkpoint-verdict discards a reused snapshot when the live unresolved thread count differs and loads fresh", async () => {
+  await withTempDir(async (tempDir) => {
+    await seedCoordinationSnapshot(tempDir);
+    const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(), snapshotThreadsEntry([snapshotThread("someone", "please rename this")]), ...snapshotCoordinationEntries(), ...snapshotPostEntries()]);
+    const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+    const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
+    assert.match(ghArgs[2], /--json number,state,isDraft,headRefOid/, result.stderr);
+  }, { prefix: "dev-loops-upsert-snapshot-threads-moved-" });
+});
+
+test("upsert-checkpoint-verdict discards a reused snapshot when the live gate-authored thread count differs and loads fresh", async () => {
+  await withTempDir(async (tempDir) => {
+    await seedCoordinationSnapshot(tempDir);
+    const gateThread = snapshotThread("gate-bot", buildFindingMarker({ fp: "e95771ac1b533743", severity: "medium", angle: "correctness", round: 1 }));
+    const env = await writeGhStub(tempDir, [
+      snapshotLiveHeadEntry(),
+      snapshotThreadsEntry([gateThread]),
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      ...snapshotCoordinationEntries(),
+      ...snapshotPostEntries(),
+    ]);
+    const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+    const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
+    assert.match(ghArgs[3], /--json number,state,isDraft,headRefOid/, result.stderr);
+  }, { prefix: "dev-loops-upsert-snapshot-gate-threads-moved-" });
+});
+
 test("upsert-checkpoint-verdict discards a reused snapshot when the head moves between the live reads", async () => {
   await withTempDir(async (tempDir) => {
     await seedCoordinationSnapshot(tempDir);
     const moved = "def4567000000000000000000000000000000000";
     const env = await writeGhStub(tempDir, [
-      snapshotLiveHeadEntry(),
+      snapshotLiveHeadEntry(), snapshotThreadsEntry(),
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid: moved }) + "\n" },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
       ...snapshotCoordinationEntries(moved),
@@ -1079,7 +1121,7 @@ test("upsert-checkpoint-verdict discards a reused snapshot when the live draft_g
     await seedCoordinationSnapshot(tempDir);
     const comment = buildGateComment({ commentId: 7 });
     const env = await writeGhStub(tempDir, [
-      snapshotLiveHeadEntry(),
+      snapshotLiveHeadEntry(), snapshotThreadsEntry(),
       ...snapshotCoordinationEntries().slice(3, 4),
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[comment]]) + "\n" },
       ...snapshotCoordinationEntries(),

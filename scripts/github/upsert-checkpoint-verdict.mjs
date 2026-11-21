@@ -14,7 +14,7 @@ import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defa
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { minimizeSupersededGateReviews } from "./_minimize-superseded-verdicts.mjs";
-import { deletePrGateCoordinationSnapshot, loadPrGateCoordinationContext, loadPrGateCoordinationContextReusingSnapshot, loadRefinementArtifact } from "../loop/detect-pr-gate-coordination-state.mjs";
+import { deletePrGateCoordinationSnapshot, fetchLiveThreadCounts, loadPrGateCoordinationContext, loadPrGateCoordinationContextReusingSnapshot, loadRefinementArtifact } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
 import { CHECKBOX_ROW_RE, checklistLineScopes, checklistSectionLineIndices, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { applyTick } from "./tick-verified-checkboxes.mjs";
@@ -2936,19 +2936,30 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     const loaded = await loadPrGateCoordinationContextReusingSnapshot(coordinationOptions, gh, { expectedHeadSha: options.headSha });
     coordinationContext = loaded.context;
     if (loaded.reused) {
-      // A reused snapshot is only as current as its head, draft state, draft_gate evidence and verdict comments: re-read them live; CI, threads and Copilot state stay snapshot-fresh.
+      // Every input that can change a verdict is read live: head, draft and PR state, PR body, both thread counts, draft_gate evidence, verdict comments and the refinement artifact. Only CI and Copilot request state stay snapshot-fresh.
+      // Any live difference from the snapshot loads the whole context fresh.
       const snapshotHead = String(coordinationContext.currentHeadSha ?? "").toLowerCase();
-      const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,isDraft"], { env, ghCommand, runChild });
+      const prev = coordinationContext.prData ?? {};
+      const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,isDraft,state,body"], { env, ghCommand, runChild });
+      const upper = (value) => String(value ?? "").toUpperCase();
       let freshEvidence = null;
-      if (String(live?.headRefOid ?? "").toLowerCase() === snapshotHead && Boolean(live?.isDraft) === Boolean(coordinationContext.prData?.isDraft)) {
-        freshEvidence = await detectCheckpointEvidence(coordinationOptions, { ...gh, cwd: gh.repoRoot, unresolvedGateThreadCount: coordinationContext.unresolvedGateThreadCount, recordCarry: true });
+      if (String(live?.headRefOid ?? "").toLowerCase() === snapshotHead && Boolean(live?.isDraft) === Boolean(prev.isDraft)
+        && upper(live?.state) === upper(prev.state) && (live?.body ?? "") === (prev.body ?? "")) {
+        const counts = await fetchLiveThreadCounts(coordinationOptions, gh);
+        if (counts.unresolvedThreadCount === coordinationContext.snapshot?.unresolvedThreadCount && counts.unresolvedGateThreadCount === coordinationContext.unresolvedGateThreadCount) {
+          freshEvidence = await detectCheckpointEvidence(coordinationOptions, { ...gh, cwd: gh.repoRoot, unresolvedGateThreadCount: counts.unresolvedGateThreadCount, recordCarry: true });
+        }
       }
       // A push between the reads, or a changed draft_gate verdict, invalidates the snapshot's Copilot round reset, reviewSummary and interpretation.
       if (!freshEvidence || String(freshEvidence.currentHeadSha ?? "").toLowerCase() !== snapshotHead
         || JSON.stringify(freshEvidence.draftGate ?? null) !== JSON.stringify(coordinationContext.gateEvidence?.draftGate ?? null)) {
         coordinationContext = await loadPrGateCoordinationContext(coordinationOptions, gh);
       } else {
-        coordinationContext = { ...coordinationContext, gateEvidence: freshEvidence };
+        const refinementArtifact = await loadRefinementArtifact(
+          { repo: options.repo, prData: prev, prDraft: Boolean(prev.isDraft), prClosed: upper(prev.state) === "CLOSED", prMerged: upper(prev.state) === "MERGED" },
+          gh,
+        );
+        coordinationContext = { ...coordinationContext, gateEvidence: freshEvidence, refinementArtifact };
       }
     }
     evidence = coordinationContext.gateEvidence;

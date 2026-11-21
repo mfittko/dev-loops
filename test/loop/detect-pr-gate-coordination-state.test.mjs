@@ -11,7 +11,7 @@ const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir,
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 
-import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot, PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
@@ -5223,6 +5223,45 @@ describe("pull-request coordination snapshot", () => {
     });
   });
 
+  it("the pre-flight writes a sealed snapshot with the loaded head and the pre-load fetch time", async () => {
+    await withRoot(async (root) => {
+      const env = { [GH_MOCK_ENTRIES]: pathAGhEntries({ reviewBody: "ok", atCap: false }) };
+      const base = buildMockRuntime(env, { repoRoot: capFixtureRepoRoot, coordinationSnapshotRoot: root });
+      let firstCallAtMs = null;
+      const runtime = { ...base, runChild: async (...args) => { if (firstCallAtMs === null) { firstCallAtMs = Date.now(); await new Promise((r) => setTimeout(r, 5)); } return base.runChild(...args); } };
+      await detectPrGateCoordinationState({ repo: "owner/repo", pr: 266 }, runtime);
+      const file = snapshotFile(root).replace("pr-10", "pr-266");
+      const snap = JSON.parse(await readFile(file, "utf8"));
+      assert.equal(snap.headSha, snap.context.currentHeadSha);
+      assert.equal(typeof snap.headSha, "string");
+      assert.ok(snap.fetchedAtMs <= firstCallAtMs, "fetchedAtMs is captured before the load");
+      assert.match(await readFile(`${file}.seal`, "utf8"), /^[0-9a-f]{64}\n$/);
+    });
+  });
+
+  it("a tampered snapshot fails its seal and the reader fetches fresh", async () => {
+    await withRoot(async (root) => {
+      await writePrGateCoordinationSnapshot(options, { coordinationSnapshotRoot: root }, context, 1000);
+      const file = snapshotFile(root);
+      await writeFile(file, (await readFile(file, "utf8")).replace("false", "true"));
+      const { runtime, calls } = failingRuntime(root);
+      await assert.rejects(loadPrGateCoordinationContextReusingSnapshot(options, runtime, { expectedHeadSha: HEAD, nowMs: 1001 }), /fresh fetch attempted/);
+      assert.ok(calls.length > 0);
+    });
+  });
+
+  it("a delete between the load and the write leaves no snapshot", async () => {
+    await withRoot(async (root) => {
+      const runtime = { coordinationSnapshotRoot: root };
+      const fetchedAtMs = Date.now();
+      await deletePrGateCoordinationSnapshot(options, runtime);
+      await writePrGateCoordinationSnapshot(options, runtime, context, fetchedAtMs);
+      assert.equal(await readFile(snapshotFile(root), "utf8").catch(() => null), null);
+      await writePrGateCoordinationSnapshot(options, runtime, context, Date.now() + 10);
+      assert.notEqual(await readFile(snapshotFile(root), "utf8").catch(() => null), null);
+    });
+  });
+
   it("a real loaded context survives the JSON round trip through the snapshot", async () => {
     await withRoot(async (root) => {
       const env = { [GH_MOCK_ENTRIES]: pathAGhEntries({ reviewBody: "ok", atCap: false }) };
@@ -5232,7 +5271,7 @@ describe("pull-request coordination snapshot", () => {
       await writePrGateCoordinationSnapshot(real, runtime, live);
       const snap = JSON.parse(await readFile(snapshotFile(root).replace("pr-10", "pr-266"), "utf8"));
       assert.equal(snap.headSha, live.currentHeadSha);
-      assert.deepEqual(snap.context, JSON.parse(JSON.stringify(live)));
+      assert.deepEqual(snap.context, live);
       assert.equal(typeof snap.fetchedAtMs, "number");
     });
   });

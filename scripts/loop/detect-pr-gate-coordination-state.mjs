@@ -23,7 +23,7 @@ import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-co
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
-import { OUT_OF_BAND_WRITE } from "../github/_gate-artifact-seal.mjs";
+import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
@@ -1012,8 +1012,27 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
 // The trusted marker commits for every review-body entry of the handoff; no review-body entry means no read.
 const readHandoffReviewMarkers = (handoff, ctx, runtime) => readReviewMarkerCommits(handoff.dispositions.filter((entry) => entry.reviewId).map((entry) => entry.reviewId), ctx, runtime);
 
+// Gate-authored unresolved thread count (ADR 0088) from a raw thread payload; an unreadable payload or login fails closed (-1).
+async function countUnresolvedGateThreads(threadsPayload, runtime) {
+  try {
+    if (countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload) === 0) return 0;
+    return countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload, await resolveAuthenticatedLogin(runtime));
+  } catch {
+    return -1;
+  }
+}
+
+/** One live thread read: the generic and the gate-authored unresolved counts. */
+export async function fetchLiveThreadCounts(options, runtime = {}) {
+  const threadsPayload = await fetchGithubReviewThreadsPayload(options, runtime);
+  return {
+    unresolvedThreadCount: parseReviewThreads(threadsPayload).summary.unresolvedThreads,
+    unresolvedGateThreadCount: await countUnresolvedGateThreads(threadsPayload, runtime),
+  };
+}
+
 export async function loadPrGateCoordinationContext(options, runtime = {}) {
-  const prData = await fetchPrFactsWithSettledMergeable(options, runtime);
+  const prData =await fetchPrFactsWithSettledMergeable(options, runtime);
   const currentHeadSha = typeof prData?.headRefOid === "string" && prData.headRefOid.trim().length > 0
     ? prData.headRefOid.trim()
     : null;
@@ -1045,18 +1064,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // (buildGateCoordinationEvaluatorInput below) is what reconciles this
   // detector with detect-checkpoint-evidence.mjs: neither can report
   // mark_ready_for_review/clean while the other reports unresolved threads.
-  let unresolvedGateThreadCount;
-  try {
-    const markerOnlyCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload);
-    if (markerOnlyCount === 0) {
-      unresolvedGateThreadCount = 0;
-    } else {
-      const login = await resolveAuthenticatedLogin(runtime);
-      unresolvedGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload, login);
-    }
-  } catch {
-    unresolvedGateThreadCount = -1;
-  }
+  const unresolvedGateThreadCount = await countUnresolvedGateThreads(threadsPayload, runtime);
   // Injects the login-narrowed count computed just above so
   // detectCheckpointEvidence's own draftGateSatisfied fold (ADR 0088) agrees
   // with this detector without a second thread-payload fetch or a second
@@ -1284,23 +1292,28 @@ const coordinationSnapshotPath = (options, runtime) => {
   return root && path.join(root, "gate-coordination", repoSlugFor(options.repo), `pr-${options.pr}`, "context-snapshot.json");
 };
 
-/** Persists the loaded context atomically; a write failure never fails the caller. */
+const deletionStampPath = (file) => `${file}.deleted`;
+
+/** Persists the loaded context sealed; `nowMs` is the fetch time and must be captured before the load. A write failure never fails the caller. */
 export async function writePrGateCoordinationSnapshot(options, runtime, context, nowMs = Date.now()) {
   try {
     const file = coordinationSnapshotPath(options, runtime);
     if (!file) return;
     await mkdir(path.dirname(file), { recursive: true });
-    const tempPath = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    // A delete at or after the fetch time means the loaded data predates a draft flip or a verdict post: do not resurrect it.
+    if (Number(await readFile(deletionStampPath(file), "utf8").catch(() => 0)) >= nowMs) return;
     const snapshot = { repo: options.repo, pr: options.pr, headSha: context.currentHeadSha, lightweight: options.lightweight === true, fetchedAtMs: nowMs, context };
-    await writeFile(tempPath, JSON.stringify(snapshot));
-    await rename(tempPath, file);
+    await writeSealed(file, JSON.stringify(snapshot));
   } catch { /* best effort */ }
 }
 
 export async function deletePrGateCoordinationSnapshot(options, runtime = {}) {
   try {
     const file = coordinationSnapshotPath(options, runtime);
-    if (file) await rm(file, { force: true });
+    if (!file) return;
+    await rm(file, { force: true });
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(deletionStampPath(file), String(Date.now()));
   } catch { /* best effort */ }
 }
 
@@ -1310,7 +1323,8 @@ export async function deletePrGateCoordinationSnapshot(options, runtime = {}) {
 export async function loadPrGateCoordinationContextReusingSnapshot(options, runtime = {}, { expectedHeadSha, matchLightweight = true, maxAgeMs = PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS, nowMs = Date.now() } = {}) {
   if (typeof expectedHeadSha === "string" && /^([0-9a-f]{40}|[0-9a-f]{64})$/i.test(expectedHeadSha)) {
     try {
-      const snap = JSON.parse(await readFile(coordinationSnapshotPath(options, runtime) ?? "", "utf8"));
+      // A seal mismatch (out-of-band edit) throws and falls to the fresh load.
+      const snap = JSON.parse(await readSealed(coordinationSnapshotPath(options, runtime) ?? ""));
       if (snap.repo === options.repo && snap.pr === options.pr && (!matchLightweight || snap.lightweight === (options.lightweight === true))
         && typeof snap.headSha === "string" && snap.headSha.toLowerCase() === expectedHeadSha.toLowerCase()
         && Number.isFinite(snap.fetchedAtMs) && nowMs >= snap.fetchedAtMs && nowMs - snap.fetchedAtMs < maxAgeMs && snap.context) {
@@ -1487,8 +1501,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // The config loads first: a config load error refuses before any gh read.
   const config = (await loadDevLoopConfigStrict({ repoRoot })).config ?? {};
   // ADR 0117 (issue 3139): an open self-hosting PR is answered by its own head's toolchain; another checkout refuses inside the loader, before any shared gate state is written.
+  const fetchedAtMs = Date.now();
   const context = await loadPrGateCoordinationContext(options, { ...runtime, guardToolchain: true });
-  await writePrGateCoordinationSnapshot(options, runtime, context);
+  await writePrGateCoordinationSnapshot(options, runtime, context, fetchedAtMs);
   const { toolchain } = context;
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
