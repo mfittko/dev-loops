@@ -769,6 +769,28 @@ Failure behavior:
 
 Use `--force` only after the user explicitly authorizes ignoring the current-head CI failure for this one gate-comment upsert. Prefer the normal paths first: green current-head CI, or the draft-gate policy knob `gates.draft.requireCi` (issue #351) for a durable draft-gate policy.
 
+### `scripts/loop/match-copilot-threads-to-gate-findings.mjs`
+
+Marks each exported Copilot review thread as matched or Copilot-only against the local gate-finding round files, classifies the Copilot-only ones by keyword, and names the `draft_gate` angles that should have caught each class. Reads local files only; makes no GitHub call.
+
+Required:
+- `--threads <jsonl>` — one JSON thread per line; uses `pr` (integer), `path` (string), optional `line` (integer), `author` and `body`; only lines whose `author` is the Copilot reviewer login are read; other fields are ignored
+- `--repo <owner/name>` — selects the default findings dir `<main-checkout>/tmp/gate-findings/<owner-name>/` (the main-anchored ledger, validated like `gate-finding-classes.mjs`) (not needed with `--findings-root`)
+
+Optional:
+- `--findings-root <dir>` — directory holding `pr-<N>/draft_gate-<sha>.json` and `pr-<N>/draft_gate-<sha>.round-<N>.json` round files, the only ones read (other files are ignored; a malformed one is skipped and counted in `summary.skippedRoundFiles`)
+- `--repo-root <dir>` — checkout whose main worktree anchors the default findings dir (default: cwd)
+
+Matching rule:
+- a thread is matched when a finding of the same PR lists the thread path in `files[]` (or the singular `file`) and, when both the thread and the finding carry a line, the thread line is within 25 lines of the finding line; when either side has no line the file match alone counts, so the Copilot-only count is then a lower bound
+
+Success output shape (stdout):
+- `{ "threads": [{ "pr", "path", "matched", "matchedAngles", "class", "shouldHaveCaughtAngles" }], "summary": { "total", "copilotOnly", "byClass", "byAngle", "skippedRoundFiles" } }`
+- `class` is one of `edge-case-input-validation`, `docs-help-description`, `tests`, `other`, the `COPILOT_BUCKETS` table of `gate-finding-classes.mjs` (first keyword match wins in that order)
+
+Failure behavior:
+- unknown flags, a missing required flag, an unreadable input, malformed JSONL, a thread without an integer `pr` and string `path` emit `{ "ok": false, "error": "...", ... }` on stderr and exit `2`
+
 ### `scripts/loop/run-refinement-audit.mjs`
 
 Runs one deterministic bounded refinement audit over explicit repo paths and emits one machine-readable planning artifact.

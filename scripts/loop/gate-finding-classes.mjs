@@ -36,11 +36,11 @@ const EXAMPLE_MAX = 160;
 // Code-unit comparison: the order never depends on the runtime locale or ICU data.
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 // The sanctioned Copilot reviewer login (GATE-REVIEW-COMMENT-TRUST), compared case-insensitively.
-const COPILOT_AUTHOR = /^(?:copilot-pull-request-reviewer(?:\[bot\])?|copilot)$/iu;
+export const COPILOT_AUTHOR = /^(?:copilot-pull-request-reviewer(?:\[bot\])?|copilot)$/iu;
 
 const trim = (s) => (s.length > EXAMPLE_MAX ? `${s.slice(0, EXAMPLE_MAX - 3)}...` : s);
 
-const COPILOT_BUCKETS = [
+export const COPILOT_BUCKETS = [
   ["edge-case-input-validation", /\b(edge[- ]cases?|empty|null|undefined|missing|invalid|malformed|validat\w*|unhandled|input|fails? (?:open|closed)|throws?)\b/iu],
   ["docs-help-description", /\b(docs?|documentation|help|usage|description|readme|contract|changelog|comment|stale|wording)\b/iu],
   ["tests", /\b(tests?|coverage|assert\w*|regression)\b/iu],
