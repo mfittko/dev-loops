@@ -4,7 +4,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { ghJson } from "@dev-loops/core/github/gh";
+import { ghJson, isRateLimitError } from "@dev-loops/core/github/gh";
 import { WAIT_CAP_MS, capWait, parseBaselineSha, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import {
@@ -193,16 +193,29 @@ function extractPrVisibleCheckNames(statusCheckRollup) {
     .filter((name) => typeof name === "string" && name.length > 0);
 }
 
-async function fetchPrHeadSha({ repo, pr }, { env, ghCommand, runChild }) {
-  const payload = await ghJson(
-    ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,statusCheckRollup"],
-    { env, ghCommand, runChild },
-  );
-  const headSha = typeof payload.headRefOid === "string" ? payload.headRefOid.trim() : "";
+// `lastNames` carries the expected check names of the last successful GraphQL read.
+// A rate-limited GraphQL read falls back to the REST pulls endpoint, which has no
+// statusCheckRollup: it reuses those names, or null (expected checks unknown) when
+// no GraphQL read has succeeded yet.
+async function fetchPrHeadSha({ repo, pr }, { env, ghCommand, runChild, lastNames = { names: null } }) {
+  let headSha;
+  try {
+    const payload = await ghJson(
+      ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,statusCheckRollup"],
+      { env, ghCommand, runChild },
+    );
+    headSha = typeof payload.headRefOid === "string" ? payload.headRefOid.trim() : "";
+    if (headSha.length > 0) lastNames.names = extractPrVisibleCheckNames(payload.statusCheckRollup);
+  } catch (error) {
+    if (!isRateLimitError(error)) throw error;
+    // A failed REST read surfaces the original rate-limit error so the caller's wait path engages.
+    const rest = await ghJson(["api", `repos/${repo}/pulls/${pr}`], { env, ghCommand, runChild }).catch(() => { throw error; });
+    headSha = typeof rest?.head?.sha === "string" ? rest.head.sha.trim() : "";
+  }
   if (headSha.length === 0) {
     throw new Error("Missing required PR facts: headRefOid");
   }
-  return { headSha, prVisibleCheckNames: extractPrVisibleCheckNames(payload.statusCheckRollup) };
+  return { headSha, prVisibleCheckNames: lastNames.names };
 }
 
 /**
@@ -289,6 +302,8 @@ async function fetchHeadCiState(
     !fetchError &&
     checkRunsCount === 0 &&
     statusesCount === 0 &&
+    // null = expected checks unknown (REST head read before any GraphQL read): stay pending.
+    prVisibleCheckNames !== null &&
     !(nonLoopDerivedPrVisibleNames?.length > 0);
   // Zero-allocation stall (#1631): at least one real check-run, ALL of them
   // still `queued` (no runner allocated / no job picked up), and no other
@@ -382,12 +397,13 @@ export async function watchCiStatus(
     onStall = undefined,
   } = {},
 ) {
+  const lastNames = { names: null };
   const leaseCwd = resolveRepoRoot(process.cwd());
   // options.baselineSha lets a retried watch keep the first watch's baseline, so a
   // push between the two still short-circuits to "changed".
   const baselineSha = options.baselineSha ?? (await fetchPrHeadSha(
     { repo: options.repo, pr: options.pr },
-    { env, ghCommand, runChild },
+    { env, ghCommand, runChild, lastNames },
   )).headSha;
   onBaseline?.(baselineSha);
   const attemptBudget = buildAttemptBudget(options.timeoutMs, options.pollIntervalMs);
@@ -446,7 +462,7 @@ export async function watchCiStatus(
     // "changed" so the caller re-baselines instead of waiting on a stale head.
     const { headSha: currentSha, prVisibleCheckNames: currentNames } = await fetchPrHeadSha(
       { repo: options.repo, pr: options.pr },
-      { env, ghCommand, runChild },
+      { env, ghCommand, runChild, lastNames },
     );
     if (currentSha !== baselineSha) {
       const changedState = await fetchHeadCiState(
@@ -495,7 +511,7 @@ export async function watchCiStatus(
   // budget reports "timeout".
   const { headSha: finalSha, prVisibleCheckNames: finalNames } = await fetchPrHeadSha(
     { repo: options.repo, pr: options.pr },
-    { env, ghCommand, runChild },
+    { env, ghCommand, runChild, lastNames },
   );
   if (finalSha !== baselineSha) {
     const changedState = await fetchHeadCiState(
@@ -509,7 +525,7 @@ export async function watchCiStatus(
   }
   const finalState = await fetchHeadCiState(
     { repo: options.repo, headSha: finalSha, prVisibleCheckNames: finalNames },
-    { env, ghCommand, runChild },
+    { env, ghCommand, runChild, lastNames },
   );
   return settledResult({ ...finalState, headSha: finalSha, attempts: attemptBudget }, {
     settled: false,

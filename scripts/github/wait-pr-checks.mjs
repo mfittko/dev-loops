@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { WAIT_CAP_MS, capWait, parseBaselineSha, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
-import { parsePositiveInteger, parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import {
@@ -15,12 +15,15 @@ import {
 // process-exit-code contract for shell/scripted callers.
 import { watchCiStatus } from "./probe-ci-status.mjs";
 import { setTimeout as delay } from "node:timers/promises";
-import { rateLimitedResult, withGraphqlRateLimitWait } from "@dev-loops/core/github/gh";
+import { ghJson, isRateLimitError, rateLimitedResult, withGraphqlRateLimitWait } from "@dev-loops/core/github/gh";
 import { waitWithHeartbeat } from "./_watch-heartbeat.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 
 const DEFAULT_TIMEOUT_SECONDS = Math.floor(COPILOT_REVIEW_WAIT_TIMEOUT_MS / 1000);
+const BACKOFF_BASE_MS = 30_000;
+const BACKOFF_MAX_MS = 120_000;
+
 const DEFAULT_POLL_SECONDS = Math.floor(DEFAULT_POLL_INTERVAL_MS / 1000);
 
 const USAGE = `Usage: wait-pr-checks.mjs --repo <owner/name> --pr <number> [--timeout <seconds>] [--poll <seconds>]
@@ -59,12 +62,22 @@ Diagnostic output (stderr):
   { "ok": true, "type": "watch_heartbeat", "elapsedMs": N, "totalBudgetMs": N, "poll": N, "maxPolls": N }
   { "ok": false, "error": "...", "usage"?: "..." }
 GraphQL rate limit (JSON, exit 1):
-  { "ok": false, "code": "RATE_LIMITED", "error": "...", "resetAt": "<ISO 8601>"|null }
+  { "ok": false, "code": "RATE_LIMITED", "error": "...", "resetAt": "<ISO 8601>"|null,
+    "budget": "primary_graphql"|"primary_core"|"secondary" }
+"budget" names the limit that was hit, read from \`gh api rate_limit\`: GraphQL
+remaining 0 is "primary_graphql", core remaining 0 is "primary_core" (returned at
+once with the core reset as resetAt), anything else is a "secondary" burst limit.
+A rate limit is never reported as CI success or failure.
 The RATE_LIMITED envelope is written to stdout when output is unfiltered, and
 always to stderr.
 On GraphQL rate-limit exhaustion the tool waits for the reset inside the
 remaining --timeout budget (heartbeats continue) and retries once; otherwise
-it returns RATE_LIMITED at once. When the reset falls past this call's ~${WAIT_CAP_MS / 1000} s
+it returns RATE_LIMITED at once. On a secondary limit it backs off and retries inside
+--timeout: the delay is the error's retry-after seconds when present, otherwise
+exponential with jitter (${BACKOFF_BASE_MS / 1000} s base, doubling, capped at ${BACKOFF_MAX_MS / 1000} s, each delay drawn from
+50 to 100 percent of the step). A delay past the requested budget returns
+RATE_LIMITED; a delay past the cap that fits the budget is returned like a reset
+past the cap (see below). When the reset falls past this call's ~${WAIT_CAP_MS / 1000} s
 cap but inside the requested budget, it sleeps within the cap and returns
 status "timeout" with outcome "pending", ciStatus "pending", the baseline
 headSha (null when none was read yet), "rateLimitResetAt" (ISO 8601) and a
@@ -179,7 +192,8 @@ export async function runCli(
     ghCommand = "gh",
     delayImpl = delay,
     now = Date.now,
-    runChild = undefined,
+    runChild: runChildImpl = defaultRunChild,
+    random = Math.random,
     ensureOwnershipImpl = ensureAsyncRunnerOwnership,
   } = {},
 ) {
@@ -191,6 +205,13 @@ export async function runCli(
   // One call waits at most the cap (GATE-EXEC-BOUNDED-WAIT-CAP); a longer request returns a pending result.
   const { timeoutMs: cappedMs, remainingMs: capRemainingMs } = capWait(requested.timeoutMs);
   const options = { ...requested, timeoutMs: cappedMs };
+  // Remember the last rate-limit text gh printed: the shared wait helper rethrows its own message, which drops retry-after.
+  let lastLimitText = "";
+  const runChild = async (...args) => {
+    const out = await runChildImpl(...args);
+    if (out?.code !== 0 && isRateLimitError(out?.stderr ?? "")) lastLimitText = String(out.stderr);
+    return out;
+  };
   const startedAt = now();
   const remainingMs = () => options.timeoutMs - (now() - startedAt);
   let result;
@@ -207,7 +228,8 @@ export async function runCli(
       repo: options.repo, pr: options.pr, env, cwd: resolveRepoRoot(process.cwd()), claimIfMissing: true, requireExisting: false,
     }),
   });
-  try {
+  let backoffStep = 0;
+  for (;;) try {
     result = await withGraphqlRateLimitWait(
       () => {
         // The retry after a rate-limit wait only gets the remaining budget. The
@@ -230,23 +252,53 @@ export async function runCli(
         now,
         env,
         ghCommand,
-        ...(runChild ? { runChild } : {}),
+        runChild,
       },
     );
+    break;
   } catch (error) {
     if (error?.code !== "RATE_LIMITED") throw error;
     const budgetLeftMs = requested.timeoutMs - (now() - startedAt);
-    const resetInMs = Date.parse(error.resetAt ?? "") - now();
+    let budget = "secondary";
+    let limits = null;
+    try {
+      limits = (await ghJson(["api", "rate_limit"], { env, ghCommand, runChild }))?.resources;
+    } catch {
+      // unreadable: treat as a secondary limit, which stays bounded by the budget
+    }
+    if (limits?.graphql?.remaining === 0) budget = "primary_graphql";
+    else if (limits?.core?.remaining === 0) budget = "primary_core";
+    if (budget === "primary_core") {
+      const resetAt = Number.isFinite(limits.core.reset) ? new Date(limits.core.reset * 1000).toISOString() : null;
+      result = { ...rateLimitedResult(Object.assign(new Error(`GitHub core rate limit exhausted; retry after ${resetAt ?? "unknown reset"}`), { resetAt })), budget };
+      stderr.write(`${JSON.stringify(result)}\n`);
+      break;
+    }
+    let resetAt = error.resetAt;
+    let resetInMs = Date.parse(resetAt ?? "") - now();
+    if (budget === "secondary") {
+      const retryAfter = /retry-after:?\s*(\d+)/i.exec(lastLimitText);
+      const stepMs = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** backoffStep);
+      resetInMs = retryAfter ? Number(retryAfter[1]) * 1000 : stepMs * (0.5 + random() * 0.5);
+      backoffStep += 1;
+      resetAt = new Date(now() + resetInMs).toISOString();
+      if (resetInMs <= remainingMs()) {
+        await waitResetWithHeartbeat(resetInMs);
+        continue;
+      }
+    }
     if (capRemainingMs > 0 && resetInMs > 0 && resetInMs <= budgetLeftMs) {
       // The reset is past this call's cap but inside the requested budget: the re-issue waits it out.
-      result = { ok: true, status: "timeout", settled: false, repo: options.repo, pr: options.pr, ciStatus: "pending", headSha: baselineSha ?? null, rateLimitResetAt: error.resetAt };
+      result = { ok: true, status: "timeout", settled: false, repo: options.repo, pr: options.pr, ciStatus: "pending", headSha: baselineSha ?? null, rateLimitResetAt: resetAt };
       // Sleep inside this call's cap first: a re-issue that hits the same limit at once would loop hot.
       await waitResetWithHeartbeat(Math.min(resetInMs, Math.max(0, options.timeoutMs - (now() - startedAt))));
       pendingRemainingMs = requested.timeoutMs - (now() - startedAt);
+      break;
     } else {
-      result = rateLimitedResult(error);
+      result = { ...rateLimitedResult(error), budget };
       // --jq/--silent would filter the envelope away; always keep code/resetAt on stderr.
       stderr.write(`${JSON.stringify(result)}\n`);
+      break;
     }
   }
   pendingRemainingMs ??= capRemainingMs > 0 ? requested.timeoutMs - (now() - startedAt) : 0;
