@@ -553,6 +553,18 @@ test("state_recovery_rows_missing: a spec adding a lock file without recovery ro
   assert.deepEqual(lintStateRecoveryRows(recoverySpec(["A fail-closed refusal on stale heads", "unit test"])).map((f) => f.id), ["named recovery"]);
 });
 
+test("state_recovery_rows_missing: plurals and lockfile trigger the state check", () => {
+  for (const word of ["locks", "receipts", "marker files", "caches", "sentinels", "a lockfile"]) {
+    const ids = lintStateRecoveryRows(recoverySpec([`The loop writes ${word}`, "unit test"])).map((f) => f.id);
+    assert.equal(ids.length, 3, word);
+  }
+});
+
+test("state_recovery_rows_missing: only criterion text is scanned, per row", () => {
+  assert.deepEqual(lintStateRecoveryRows(recoverySpec(["The parser rejects bad input", "test/cache.test.mjs covers it"])), []);
+  assert.deepEqual(lintStateRecoveryRows(recoverySpec(["The parser rejects bad input", "fail-closed in test/lock.test.mjs"])), []);
+});
+
 test("state_recovery_rows_missing: a spec with the three recovery rows and a named recovery yields no finding", () => {
   const clean = recoverySpec(
     ["The loop writes a lock file and refuses fail-closed on a stale head, returning the recovery command", "unit test"],
