@@ -10,7 +10,7 @@ A `draft_gate` or `pre_approval_gate` round with zero consolidated findings stil
 
 ## Decision
 
-`emitJudgeWorkOrder` decides the skip. After source validation, it returns `judgeSkipped: { reason: "no_findings", specDigest }`, a `within_scope` `scopeDrift` derived from the spec identity, and a `nextStep` when the findings read is a well-formed ledger with zero entries and no `copilot-body-feedback` read is pinned (`GATE-EXEC-COPILOT-BODY-TO-JUDGE`). It writes no work order, execution-index entry or `judge-emit-plan.json`. The skip applies on every gate and execution mode. On a skip the gate coordinator runs no `judge-pass` and writes the findings log without `--judge-verdict` and `--ledger-out`. `renderGateReviewCommentBody` renders `**Judge:** skipped, the round has no findings to dispose` for any post whose findings ledger holds zero findings.
+`emitJudgeWorkOrder` decides the skip. After source validation, it returns `judgeSkipped: { reason: "no_findings", specDigest }`, a `within_scope` `scopeDrift` derived from the spec identity, and a `nextStep` when the findings read is a well-formed ledger with zero entries and no `copilot-body-feedback` read is pinned (`GATE-EXEC-COPILOT-BODY-TO-JUDGE`). It writes no work order, execution-index entry or `judge-emit-plan.json`. The skip applies on every gate and execution mode. On a skip the gate coordinator runs no `judge-pass` and writes the findings log without `--judge-verdict` and `--ledger-out`. `renderGateReviewCommentBody` renders `**Judge:** skipped, the round has no findings to dispose` for any post whose findings ledger holds zero findings and that carries no `--judge-spec-source`.
 
 ## Consequences
 

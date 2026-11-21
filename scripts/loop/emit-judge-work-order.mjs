@@ -41,6 +41,7 @@ ledger (consolidate-fanin --ledger-out), the structured spec and identity stamp
 prior-round judge verdicts. It writes the immutable work order under
 <tmp-root>/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/ and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, planPath }.
+On a well-formed empty ledger with no pinned Copilot body it writes nothing and prints { ok, judgeSkipped, scopeDrift, nextStep } (GATE-EXEC-JUDGE-PHASE, ADR 0302).
 The work order's two verdict outputRefs sit under that directory's <roundId>/ segment.
 --harness overrides the harness resolved from the environment (CLAUDECODE, CODEX_THREAD_ID, else pi); claude or pi omits the Codex-only setup paragraph from the work order, codex keeps it. A coordinator that dispatches a judge to a harness other than its own must pass --harness.
 A --prior-verdict named judge-verdict.json also pins the spec-authority-verdict.json beside it when that file exists.

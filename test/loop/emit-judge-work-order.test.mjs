@@ -853,7 +853,8 @@ test("issue 2926: a well-formed empty ledger with no pinned Copilot body skips t
       assert.deepEqual(out.scopeDrift.driftedAreas, []);
       assert.match(out.nextStep, /run no judge-pass/);
       assert.equal(out.planPath, undefined);
-      assert.equal(existsSync(path.join(root, "tmp", "gate-judge")), false, "no plan, work order or index entry");
+      assert.equal(existsSync(path.join(root, "tmp", "gate-judge")), false, "no plan or work order");
+      assert.equal(existsSync(path.join(root, "tmp", "work-order-executions")), false, "no execution-index entry");
     }
     const sources = await seed(root);
     await writeFile(path.join(root, sources.findingsFile), JSON.stringify({ overallVerdict: "clean", findings: [] }));
