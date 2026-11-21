@@ -317,6 +317,12 @@ test("all-carried rounds consume the real emitter's keyed zero-unit plan through
       assert.match(out, expected, label);
       assert.match(out, /recovery/, label);
     }
+    // A malformed plan file names the file flag, not the inline one.
+    const shapeFile = path.join(repoRoot, "carry-plan-shape.json");
+    await writeFile(shapeFile, JSON.stringify({ carried: "x" }), "utf8");
+    const shapeRefused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", shapeFile], { cwd: repoRoot });
+    assert.notEqual(shapeRefused.status, 0);
+    assert.match(shapeRefused.stdout + shapeRefused.stderr, /--carry-forward-plan-file must have a .{1,3}carried.{1,3} array/);
     const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", planFile], { cwd: repoRoot });
     assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
     const emitPlan = path.join(contextDir, `${gate}-${HEAD_SHA}.emit-plan.json`);

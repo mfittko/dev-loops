@@ -650,7 +650,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
         }
       }
     } catch (error) {
-      return finish({ ok: false, error: `zero-unit carry proof refused: ${error.message}`, recovery: "Pass --carry-forward-plan-file <keyed carry-forward-plan.json path> with the resolver's complete plan, or rebuild the context and dispatch every angle." }, false);
+      // Name the flag the caller passed, not the inline one the shape check words its errors with.
+      const message = resolveFlagValue(argv, "--carry-forward-plan-file") !== null ? error.message.replace(/^--carry-forward-plan(?=\s)/, "--carry-forward-plan-file") : error.message;
+      return finish({ ok: false, error: `zero-unit carry proof refused: ${message}`, recovery: "Pass --carry-forward-plan-file <keyed carry-forward-plan.json path> with the resolver's complete plan, or rebuild the context and dispatch every angle." }, false);
     }
   }
   // An angle-less resolved unit is a malformed plan: refuse rather than silently
