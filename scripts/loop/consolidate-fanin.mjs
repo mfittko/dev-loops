@@ -142,7 +142,7 @@ Optional:
                                  this round — Phase 2 dispatches no artifact for them, so without this flag
                                  they are invisible to findingsJson/checkFanoutAngleCoverage and the posted
                                  verdict comment reads as a truncated fan-out instead of a full one. REQUIRES
-                                 --gate and --carry-forward-plan (below) — this CLI never mints a carried
+                                 --gate and the carry-forward plan (below) — this CLI never mints a carried
                                  entry from a bare name alone. For any named angle with no real per-angle
                                  artifact, upserts { angle, verdict, findings, carriedFromHead } (a real
                                  artifact for that angle, if present — matched by base name and
@@ -337,8 +337,8 @@ Exit codes:
      (with --gate) an unloadable/invalid worktree config, a --carried-angles entry whose
      angleReviewSurface(...).kind !== "kinds" (a configured mandatory angle, a hardcoded
      ALWAYS_INCLUDE angle, or an unmapped/unknown angle) or is absent from
-     --carry-forward-plan's "carried" list, --carried-angles given without
-     --carry-forward-plan/--gate (or vice versa), a --carry-forward-plan entry with a
+     the carry-forward plan's "carried" list, --carried-angles given without
+     the carry-forward plan flag or --gate (or vice versa), a --carry-forward-plan entry with a
      malformed "carriedFromHead" (not a 7-64 char hex SHA), a malformed "prevVerdict"
      (not "clean"/"findings_present"), a "findings_present" entry with no non-empty
      well-formed "findings" array, or a "clean" entry carrying non-empty "findings"
@@ -1457,7 +1457,7 @@ export async function consolidateGateFanin(options) {
       }
       const planEntry = planByName.get(trimmedAngle);
       if (!planEntry) {
-        throw new Error(`--carried-angles names "${angle}", which is not present in --carry-forward-plan's "carried" list — refusing to mint a carried entry with no proof it was ever carried (fail-closed)`);
+        throw new Error(`--carried-angles names "${angle}", which is not present in the carry-forward plan's (--carry-forward-plan-file or --carry-forward-plan) "carried" list — refusing to mint a carried entry with no proof it was ever carried (fail-closed)`);
       }
       if (realAngleKeys.has(key) || seenCarriedNames.has(trimmedAngle)) {
         // A declared carried angle that already has a prior-head artifact keeps that artifact's

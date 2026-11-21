@@ -2492,7 +2492,7 @@ test("consolidateGateFanin refuses a carried angle whose only plan sibling share
             carriedAngles: ["coverage"],
             carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage-delta-at-abc1234"])).carried,
           }),
-          /coverage.*not present in --carry-forward-plan/s,
+          /coverage.*not present in the carry-forward plan/s,
         );
       },
     );
@@ -2539,7 +2539,7 @@ test("consolidateGateFanin refuses a --carried-angles entry absent from --carry-
             carriedAngles: ["correctness"],
             carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage"])).carried, // plan proves "coverage", not "correctness"
           }),
-          /not present in --carry-forward-plan/,
+          /not present in the carry-forward plan/,
         );
       },
     );

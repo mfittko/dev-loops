@@ -153,6 +153,7 @@ test("fan-in refuses an unreadable carry-forward plan file", async () => {
   const root = await makeRoot();
   const run = spawnSync("node", [CONSOLIDATE, "--findings-dir", "tmp", "--carry-forward-plan-file", path.join(root, "tmp", "plan.json")], { cwd: root, encoding: "utf8", env: env(root) });
   const out = run.stdout + run.stderr;
+  assert.notEqual(run.status, 0, out);
   assert.doesNotMatch(out, /Unknown argument/, "the flag is accepted");
   assert.match(out, /--carry-forward-plan-file could not be read/, out.trim().slice(0, 300));
 });
