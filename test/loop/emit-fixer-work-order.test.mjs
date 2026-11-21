@@ -4464,6 +4464,21 @@ test("issue 2447: a needs_fix record at the candidate that is HEAD lists its fin
   });
 });
 
+test("issue 3364: the commit_only task names the siteless-residue route only when a residue has no site", async () => {
+  await withFixture(async (fx) => {
+    await refusedDeltaFixture(fx, "needs_fix");
+    await openRecord(fx, [{ ...RESIDUE, site: undefined }]);
+    const siteless = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.match(await readFile(siteless.promptPath, "utf8"), /residue with no site is a PR-body item[^.]*sitelessSkipReason/);
+  });
+  await withFixture(async (fx) => {
+    await refusedDeltaFixture(fx, "needs_fix");
+    await openRecord(fx, [RESIDUE]);
+    const sited = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.doesNotMatch(await readFile(sited.promptPath, "utf8"), /PR-body item/);
+  });
+});
+
 test("issue 2447: a locally_clear reviewer result with a lifecycle finding in the record is a committing order, not the append-only plan", async () => {
   await withFixture(async (fx) => {
     const { prior, markerPath } = await refusedDeltaFixture(fx, "locally_clear");
