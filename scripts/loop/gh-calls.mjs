@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { summarizeGhCallLog } from "@dev-loops/core/github/gh-call-log";
+import { GH_CALL_LOG_ENV, resolveGhCallLogPath, summarizeGhCallLog } from "@dev-loops/core/github/gh-call-log";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
@@ -31,7 +31,10 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     stdout.write(`${USAGE}\n`);
     return;
   }
-  process.exitCode = emitResult({ ok: true, ...summarizeGhCallLog(values.log) }, { jq: values.jq, silent: values.silent, stdout, stderr });
+  if (values.log !== undefined && values.log.trim() === "") throw parseError("--log requires a non-empty path");
+  // A relative --log resolves against the main checkout, like DEVLOOPS_GH_CALL_LOG.
+  const logPath = values.log === undefined ? undefined : resolveGhCallLogPath(process.cwd(), { [GH_CALL_LOG_ENV]: values.log });
+  process.exitCode = emitResult({ ok: true, ...summarizeGhCallLog(logPath) }, { jq: values.jq, silent: values.silent, stdout, stderr });
 }
 
 if (isDirectCliRun(import.meta.url)) {

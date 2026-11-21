@@ -613,7 +613,16 @@ export function createCliRuntime({
     surface: "cli",
     cwd: effectiveCwd,
     async commandExists(command) { return commandExists(command, { searchPath: effectiveSearchPath, platform: effectivePlatform, pathExt: effectivePathExt }); },
-    async ghAuthOk() { return spawnResult("gh", ["auth", "status"], { cwd: effectiveCwd }).ok; },
+    async ghAuthOk() {
+      const started = Date.now();
+      const result = spawnResult("gh", ["auth", "status"], { cwd: effectiveCwd });
+      // Core is a dynamic import here (see the top-of-file note); a deps-less checkout skips the record.
+      try {
+        const { recordGhCall } = await import("@dev-loops/core/github/gh-call-log");
+        recordGhCall(["auth", "status"], { durationMs: Date.now() - started, status: result.ok ? 0 : 1, stderr: result.stderr });
+      } catch { /* logging never affects the call */ }
+      return result.ok;
+    },
     async insideGitRepo() { return spawnResult("git", ["rev-parse", "--is-inside-work-tree"], { cwd: effectiveCwd }).ok; },
     // The managed viewer record is repo-root-relative, so `inspect` needs the
     // toplevel — not cwd — to address the same viewer Pi's extension manages.

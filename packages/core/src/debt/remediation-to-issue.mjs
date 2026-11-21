@@ -100,7 +100,6 @@ export function createRemediationIssue(remediationItem, repo) {
     }
 
     const result = ghSync(args, {
-      timeout: 60_000,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
     }).trim();

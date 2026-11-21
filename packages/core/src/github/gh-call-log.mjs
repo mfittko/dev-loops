@@ -16,20 +16,22 @@ const RATE_LIMIT_PATTERN = /rate limit|was submitted too quickly/i;
 // `gh` implements these command groups on GraphQL; `pr diff` is a REST call.
 const GRAPHQL_GROUPS = new Set(["pr", "issue", "project", "repo", "release"]);
 
-let cachedMainCheckout;
+const mainCheckoutByCwd = new Map();
 
 /** Log path: env override (relative paths resolve against the main checkout), else `<main checkout>/tmp/gh-calls.jsonl`. */
 export function resolveGhCallLogPath(cwd = process.cwd(), env = process.env) {
   if (env[GH_CALL_LOG_ENV] && path.isAbsolute(env[GH_CALL_LOG_ENV])) return env[GH_CALL_LOG_ENV];
-  if (cachedMainCheckout === undefined) {
+  let mainCheckout = mainCheckoutByCwd.get(cwd);
+  if (mainCheckout === undefined) {
     let main = cwd;
     try {
       const listing = execFileSync("git", ["worktree", "list"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: GIT_TIMEOUT_MS });
       main = parseMainWorktreePath(listing) ?? cwd;
     } catch { /* not a git checkout: log under cwd */ }
-    cachedMainCheckout = main;
+    mainCheckout = main;
+    mainCheckoutByCwd.set(cwd, main);
   }
-  return env[GH_CALL_LOG_ENV] ? path.resolve(cachedMainCheckout, env[GH_CALL_LOG_ENV]) : path.join(cachedMainCheckout, "tmp", "gh-calls.jsonl");
+  return env[GH_CALL_LOG_ENV] ? path.resolve(mainCheckout, env[GH_CALL_LOG_ENV]) : path.join(mainCheckout, "tmp", "gh-calls.jsonl");
 }
 
 /** Classify a `gh` argv as `graphql` or `rest`. */
@@ -41,6 +43,8 @@ export function classifyGhCall(args) {
 
 const PR_PATH = /\/(?:pulls|issues)\/(\d+)(?:\/|$)/u;
 const FIELD_FLAGS = new Set(["-F", "-f", "--field", "--raw-field"]);
+// `gh api` flags that take a separate value token; that value is never the endpoint.
+const API_VALUE_FLAGS = new Set([...FIELD_FLAGS, "-H", "--header", "--jq", "-q", "-X", "--method", "--input", "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
 
 /** PR number from the argv shape of each command kind; only the number is kept, never other values. */
 function extractPr(args) {
@@ -51,7 +55,9 @@ function extractPr(args) {
       if (m) found = m[1];
     });
   } else if (args[0] === "api") {
-    found = args.slice(1).filter((a) => !a.startsWith("-")).map((a) => PR_PATH.exec(a)?.[1]).find(Boolean) ?? null;
+    // Match only the endpoint positional: flag values (bodies, jq filters) can contain `/issues/<n>/`.
+    const endpoint = args.slice(1).find((a, i, rest) => !a.startsWith("-") && !API_VALUE_FLAGS.has(rest[i - 1]));
+    found = endpoint === undefined ? null : PR_PATH.exec(endpoint)?.[1] ?? null;
   } else if (args[0] === "pr") {
     found = args.slice(2).find((a, i, rest) => /^\d+$/u.test(a) && !(rest[i - 1] ?? "").startsWith("-")) ?? null;
   }
@@ -81,7 +87,7 @@ export function recordGhCall(args, { durationMs, status, stderr = "", script = p
       subcommand,
       durationMs,
       status,
-      rateLimited: status !== 0 && RATE_LIMIT_PATTERN.test(String(stderr)),
+      rateLimited: stderr === null ? (status === 0 ? false : null) : status !== 0 && RATE_LIMIT_PATTERN.test(String(stderr)),
     };
     const file = logPath ?? resolveGhCallLogPath();
     mkdirSync(path.dirname(file), { recursive: true });
@@ -123,11 +129,19 @@ export async function ghAsync(args, options = {}) {
   }
 }
 
-/** `spawn(command, args, options)` that records the call when `command` is `gh`; returns the child. */
+const STDERR_TAIL_CHARS = 4096;
+
+/**
+ * `spawn(command, args, options)` that records the call when `command` is `gh`; returns the child.
+ * A piped stderr is tailed for rate-limit detection; an inherited stderr records `rateLimited: null` (unknown).
+ */
 export function spawnRecorded(command, args, options) {
   const started = Date.now();
   const child = spawn(command, args, options);
-  if (command === "gh") child.on("close", (code) => recordGhCall(args, { durationMs: Date.now() - started, status: code ?? 1 }));
+  if (command !== "gh") return child;
+  let tail = "";
+  child.stderr?.on("data", (chunk) => { tail = `${tail}${chunk}`.slice(-STDERR_TAIL_CHARS); });
+  child.on("close", (code) => recordGhCall(args, { durationMs: Date.now() - started, status: code ?? 1, stderr: child.stderr ? tail : null }));
   return child;
 }
 

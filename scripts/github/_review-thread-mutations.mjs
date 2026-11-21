@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnRecorded } from "@dev-loops/core/github/gh-call-log";
 import { isCopilotLogin, parseReviewThreads, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { gateDeltaRecordPath, listGateDeltaRecords } from "../loop/_gate-delta-record.mjs";
@@ -147,7 +147,7 @@ export async function assertFixedRepliesNotDeltaBlocked(replies, target, deps) {
 
 export function runChildWithInput(command, args, env, stdinText) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnRecorded(command, args, {
       env,
       stdio: ["pipe", "pipe", "pipe"],
     });

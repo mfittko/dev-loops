@@ -136,7 +136,7 @@ function normalizeAllowedPath(raw) {
 }
 
 async function defaultFetchPr({ repo, pr }) {
-  const out = ghSync(["pr", "view", String(pr), "--repo", repo, "--json", "headRefName,headRefOid,baseRefName"], { timeout: 60_000, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const out = ghSync(["pr", "view", String(pr), "--repo", repo, "--json", "headRefName,headRefOid,baseRefName"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   return JSON.parse(out);
 }
 
