@@ -17,7 +17,7 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 const USAGE = `Usage: match-copilot-threads-to-gate-findings.mjs --threads <jsonl> --repo <owner/name> [--findings-root <dir>] [--repo-root <dir>]
 
 Required:
-  --threads <jsonl>       JSONL export; one thread per line with pr, path, isResolved, body, mergedAt
+  --threads <jsonl>       JSONL export; one thread per line; uses pr (integer), path (string) and body; other fields (isResolved, mergedAt) are ignored
   --repo <owner/name>     Selects the default findings dir tmp/gate-findings/<owner-repo>/ (not needed with --findings-root)
 
 Optional:
@@ -43,11 +43,11 @@ export const CLASS_ANGLES = {
   other: ["correctness", "holistic"],
 };
 
-// shortcut: first matching class wins on plain keywords, upgrade when the classes need weighting.
+// shortcut: first matching class wins on plain keywords (docs and tests before edge cases), upgrade when the classes need weighting.
 const CLASS_PATTERNS = [
-  ["input-validation-edge-case", /\b(null|empty|missing|undefined|malformed|wrapped|split|resume[sd]?|stale|blank|whitespace|invalid)\b/i],
   ["docs-help-description", /\b(docs?|documentation|help|usage|description|readme|comment|wording|typo)\b/i],
   ["tests", /\b(tests?|assert\w*|fixtures?|coverage|spec)\b/i],
+  ["input-validation-edge-case", /(?:\b(?:null|empty|undefined|malformed|wrapped|split|resume[sd]?|blank|whitespace|invalid)\b|\bmissing (?:value|input|argument|field)s?\b)/i],
 ];
 
 export function classifyThreadBody(body) {
@@ -113,6 +113,11 @@ export async function readThreads(file) {
   });
 }
 
+function findingFiles(finding) {
+  const files = Array.isArray(finding?.files) ? finding.files : typeof finding?.file === "string" ? [finding.file] : [];
+  return files.filter((entry) => typeof entry === "string");
+}
+
 /** Map of pr -> Map(path -> Set(angle)) from every object-shaped round file under <root>/pr-<N>/. */
 export async function readFindingIndex(root) {
   let dirs;
@@ -137,7 +142,8 @@ export async function readFindingIndex(root) {
       }
       if (!round || typeof round !== "object" || Array.isArray(round)) continue;
       for (const finding of Array.isArray(round.findings) ? round.findings : []) {
-        for (const filePath of Array.isArray(finding?.files) ? finding.files : []) {
+        for (const rawPath of findingFiles(finding)) {
+          const filePath = rawPath.trim();
           if (!byPath.has(filePath)) byPath.set(filePath, new Set());
           if (typeof finding.angle === "string") byPath.get(filePath).add(finding.angle);
         }
@@ -150,7 +156,7 @@ export async function readFindingIndex(root) {
 
 export function matchThreads(threads, index) {
   const results = threads.map((thread) => {
-    const angles = index.get(thread.pr)?.get(thread.path);
+    const angles = index.get(thread.pr)?.get(thread.path.trim());
     const matched = angles !== undefined;
     const klass = classifyThreadBody(thread.body);
     return {

@@ -769,6 +769,28 @@ Failure behavior:
 
 Use `--force` only after the user explicitly authorizes ignoring the current-head CI failure for this one gate-comment upsert. Prefer the normal paths first: green current-head CI, or the draft-gate policy knob `gates.draft.requireCi` (issue #351) for a durable draft-gate policy.
 
+### `scripts/loop/match-copilot-threads-to-gate-findings.mjs`
+
+Marks each exported Copilot review thread as matched or Copilot-only against the local gate-finding round files, classifies the Copilot-only ones by keyword, and names the `draft_gate` angles that should have caught each class. Reads local files only; makes no GitHub call.
+
+Required:
+- `--threads <jsonl>` — one JSON thread per line; uses `pr` (integer), `path` (string) and `body`; other fields such as `isResolved` and `mergedAt` are ignored
+- `--repo <owner/name>` — selects the default findings dir `tmp/gate-findings/<owner-name>/` (not needed with `--findings-root`)
+
+Optional:
+- `--findings-root <dir>` — directory holding `pr-<N>/*.json` round files
+- `--repo-root <dir>` — base for the default findings dir (default: cwd)
+
+Matching rule:
+- a thread is matched when a finding of the same PR lists the thread path in `files[]` (or the singular `file`); the export has no line, so line is never compared and the Copilot-only count is a lower bound
+
+Success output shape (stdout):
+- `{ "threads": [{ "pr", "path", "matched", "matchedAngles", "class", "shouldHaveCaughtAngles" }], "summary": { "total", "copilotOnly", "byClass", "byAngle" } }`
+- `class` is one of `docs-help-description`, `tests`, `input-validation-edge-case`, `other` (first keyword match wins in that order)
+
+Failure behavior:
+- unknown flags, a missing required flag, an unreadable input, malformed JSONL, a thread without an integer `pr` and string `path`, or a malformed round file emit `{ "ok": false, "error": "...", ... }` on stderr and exit `2`
+
 ### `scripts/loop/run-refinement-audit.mjs`
 
 Runs one deterministic bounded refinement audit over explicit repo paths and emits one machine-readable planning artifact.
