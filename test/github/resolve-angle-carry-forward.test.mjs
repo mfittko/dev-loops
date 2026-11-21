@@ -1541,3 +1541,23 @@ test("CLI plans a resolution_delta window where a PR-own edit and the conflict s
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+// Issue 3284 round 4: one table over every file class the resolver can put in rerunPaths, so none goes unreviewed.
+for (const [fileClass, opts, want] of [
+  ["resolution only", { conflict: true }, { rerun: ["src/foo.mjs"], resolution: ["src/foo.mjs"], full: [] }],
+  ["PR-own only (beside a resolution file)", { conflict: true, ownEdit: true }, { rerun: ["src/foo.mjs", "src/z.mjs"], resolution: ["src/foo.mjs"], full: ["src/z.mjs"] }],
+  ["resolution and PR-own in one file", { conflict: true, ownFooEdit: true }, { rerun: ["src/foo.mjs"], resolution: [], full: ["src/foo.mjs"] }],
+  ["shifted (clean same-file merge)", { conflict: false }, { rerun: ["src/foo.mjs"], resolution: undefined, full: undefined }],
+]) {
+  test(`CLI rerunPaths scope by file class: ${fileClass}`, async () => {
+    const { repoRoot, prevHead, headSha } = await sameFileBaseMergeRepo(opts);
+    try {
+      const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot });
+      assert.deepEqual(result.rerunPaths, want.rerun);
+      assert.deepEqual(result.resolutionDeltaPaths, want.resolution);
+      assert.deepEqual(result.resolutionDeltaFullPaths, want.full);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+}
