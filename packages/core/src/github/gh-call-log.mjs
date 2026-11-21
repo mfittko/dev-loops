@@ -1,5 +1,5 @@
 /**
- * Append-only JSONL log of every `gh` call (issue #3338). One line per call,
+ * Append-only JSONL log of every `gh` call. One line per call,
  * shared by all dev-loops instances through the main checkout's `tmp/`.
  * Records the subcommand and its `--json` field list, never bodies or
  * responses. A logging failure never fails or alters the `gh` call.
