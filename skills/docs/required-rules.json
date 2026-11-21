@@ -984,6 +984,11 @@
       "enforcement": "runtime"
     },
     {
+      "id": "REFINE-STATE-RECOVERY-ROWS",
+      "enforcement": "agent",
+      "enforcementNote": "Spec-lint flags the keyword-detectable omissions as state_recovery_rows_missing; reading intent beyond those keywords is refiner and grill judgment, and the contract test pins the prose."
+    },
+    {
       "id": "REFINER-DOD-PROPOSED-SUBSECTION"
     },
     {
