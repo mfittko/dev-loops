@@ -2526,7 +2526,7 @@ test("consolidateGateFanin refuses an unmapped/unknown --carried-angles entry", 
 // must-fix (gate-evidence, consolidate-fanin.mjs:641): a carried name absent
 // from the proven carry-forward plan is refused — the plan is the evidence
 // that an angle was actually resolved as carried, not just typed in.
-test("consolidateGateFanin refuses a --carried-angles entry absent from --carry-forward-plan's carried list", async () => {
+test("consolidateGateFanin refuses a --carried-angles entry absent from the carry-forward plan's carried list", async () => {
   await withMinimalConfigRepoRoot(async (repoRoot) => {
     await withFindingsDir(
       { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },

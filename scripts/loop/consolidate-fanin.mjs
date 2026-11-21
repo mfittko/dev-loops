@@ -160,7 +160,7 @@ Optional:
                                  refuses a configured MANDATORY angle, a hardcoded ALWAYS_INCLUDE angle
                                  (gate-evidence/renderer-security/pr-description, unconditionally, regardless
                                  of config), and an unmapped/unknown angle in one seam — or is absent from
-                                 --carry-forward-plan's own "carried" list — refusing to manufacture
+                                 the carry-forward plan's own "carried" list — refusing to manufacture
                                  GitHub-visible "reviewed at this head" evidence for an angle nothing
                                  actually proved was carried.
   --carry-forward-plan-file <absolute path>  the same plan read from a file (the keyed <gate>-<headSha>.carry-forward-plan.json),
@@ -185,7 +185,7 @@ Optional:
                                  subset. When given AND the round's computed overall verdict is "clean",
                                  every named angle must have EITHER a real per-angle artifact in
                                  --findings-dir OR a proven carry (a name also present in --carried-angles,
-                                 which is only ever populated after its own --carry-forward-plan proof
+                                 which is only ever populated after its own carry-forward plan proof
                                  check above) — otherwise this FAILS CLOSED (exit 1), naming the missing
                                  angle(s) and the artifact/proof expected for each. This is the mechanical
                                  fan-in-side catch for a resolved angle left with no evidence at all — see
@@ -266,7 +266,7 @@ Optional:
                                  budget needs --ledger-out only without --emit-plan (the keyed ledger is durable). A stale keyed file is removed once the emit-plan key is verified and the path is the canonical emit-plan path, before any later refusal or write; a run refused by either guard leaves a prior keyed file in place.
                                  The ledger gains a "provenance" object ({ distinctReviewers, perAngle })
                                  derived from the head-stamped artifacts, the plan units
-                                 and --carry-forward-plan, and the same ledger is also written to the
+                                 and the carry-forward plan, and the same ledger is also written to the
                                  keyed <gate>-<headSha>.fanin-ledger.json (buildGateFaninLedgerPath)
                                  under --tmp-root, with or without --ledger-out.
   --tmp-root <path>              The tmp/ directory holding the reviewer sentinels and per-gate briefing-prefix
@@ -294,7 +294,7 @@ Output (stdout, JSON):
   verdict/severityCounts/where-they-landed on stdout, with no second invocation ever needed to
   re-extract a different shape or rediscover a path the caller itself just passed in.
   A "carriedFromHead" field appears ONLY on an angle --carried-angles declares (an upserted entry, or an existing
-  artifact whose own headSha is not the current head; the prior head SHA it was carried from, taken from --carry-forward-plan) — every freshly reviewed angle's entry omits it,
+  artifact whose own headSha is not the current head; the prior head SHA it was carried from, taken from the carry-forward plan) — every freshly reviewed angle's entry omits it,
   so a consumer can distinguish a carried verdict from a fresh review without reading the ledger's
   provenance. upsert-checkpoint-verdict.mjs's renderer ignores unrecognized per-angle fields, so this
   never affects the rendered gate comment.
@@ -338,7 +338,7 @@ Exit codes:
      angleReviewSurface(...).kind !== "kinds" (a configured mandatory angle, a hardcoded
      ALWAYS_INCLUDE angle, or an unmapped/unknown angle) or is absent from
      the carry-forward plan's "carried" list, --carried-angles given without
-     the carry-forward plan flag or --gate (or vice versa), a --carry-forward-plan entry with a
+     the carry-forward plan flag or --gate (or vice versa), a carry-forward plan entry (either flag) with a
      malformed "carriedFromHead" (not a 7-64 char hex SHA), a malformed "prevVerdict"
      (not "clean"/"findings_present"), a "findings_present" entry with no non-empty
      well-formed "findings" array, or a "clean" entry carrying non-empty "findings"
@@ -961,7 +961,7 @@ function validateArtifactShape(raw, sourceLabel) {
     throw new Error(`${sourceLabel}: missing "verdict"`);
   }
   if (raw.carriedFromHead !== undefined) {
-    throw new Error(`${sourceLabel}: must not declare "carriedFromHead" — that field is stamped only by this CLI's own --carried-angles/--carry-forward-plan proof check, never self-reported by a per-angle findings artifact (fail-closed)`);
+    throw new Error(`${sourceLabel}: must not declare "carriedFromHead" — that field is stamped only by this CLI's own --carried-angles carry-forward plan proof check, never self-reported by a per-angle findings artifact (fail-closed)`);
   }
   if (Array.isArray(raw.findings)) {
     raw.findings.forEach((f, i) => {
@@ -1410,7 +1410,7 @@ export async function consolidateGateFanin(options) {
   //      ALWAYS_INCLUDE angle (gate-evidence/renderer-security/pr-description),
   //      and an unmapped/unknown angle in one seam, so this check and the
   //      producer's own rule can never drift apart.
-  //   2. --carry-forward-plan's own "carried" list — the proof that this
+  //   2. the carry-forward plan's own "carried" list — the proof that this
   //      angle really was resolved as carried, not just typed in.
   if (options.carriedAngles !== undefined) {
     if (!mandatoryAngles) {
