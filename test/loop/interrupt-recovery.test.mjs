@@ -19,6 +19,7 @@ import { addLocalOrigin, runGitFixture, runIdFreeEnv } from "../_helpers.mjs";
 const CHILD = path.resolve("test/loop/_interrupt-child.mjs");
 const COORDINATION = path.resolve("scripts/loop/detect-pr-gate-coordination-state.mjs");
 const CONSOLIDATE = path.resolve("scripts/loop/consolidate-fanin.mjs");
+const GATE_HEAD = "abcdef0123456789abcdef0123456789abcdef01"; // the head _interrupt-child.mjs writes its gate artifacts under
 const EMITTER_STEPS = { round: ["context", "sentinel", "artifact-tmp", "artifact", "fanin"], fixer: ["lock", "plan-tmp", "plan", "release"] };
 
 // `${unit}:${killedAfter}` -> [open issue, the refusal that keeps this recovery failing]. Remove an entry when its issue closes.
@@ -61,13 +62,15 @@ const env = (root, extra = {}) => runIdFreeEnv({
   DEV_LOOPS_GH_STUB: "1", DEVLOOPS_WORKTREE_BYPASS: "1", DEVLOOPS_OWNERSHIP_BYPASS: "1", DEVLOOPS_RUN_ID: "", ...extra,
 });
 const runChild = (unit, root, extra) => spawnSync("node", [CHILD, unit, root], { cwd: root, encoding: "utf8", env: env(root, extra) });
-const coordinate = (root) => spawnSync("node", [COORDINATION, "--repo", "owner/repo", "--pr", "266", "--fields", "lifecycleState,gateBoundary,nextAction"], { cwd: root, encoding: "utf8", env: env(root) });
+const coordinate = (root) => spawnSync("node", [COORDINATION, "--repo", "owner/repo", "--pr", "266"], { cwd: root, encoding: "utf8", env: env(root) });
 
 // File names only: sentinels, plans and temporary files carry pids and times.
 async function snapshot(root) {
   const walk = async (dir) => (await readdir(dir, { withFileTypes: true })).flatMap((e) => e.name === "bin" || e.name === ".git" ? [] : e.isDirectory() ? [] : [e.name]).sort();
   const out = [];
-  for (const dir of ["tmp", "tmp/gate-context", "tmp/findings", `tmp/gate-fixer/${repoSlugFor("owner/repo")}/pr-266`]) if (existsSync(path.join(root, dir))) out.push(...(await walk(path.join(root, dir))).map((n) => `${dir}/${n.replace(/[0-9a-f]{40}/, "<head>").replace(/\.tmp-f[0-9]+-[0-9a-f]{8}$/, ".tmp-<id>")}`));
+  const slug = repoSlugFor("owner/repo");
+  const dirs = ["tmp", `tmp/gate-context/${slug}/pr-266`, `tmp/gate-reviews/${slug}/pr-266/draft_gate-${GATE_HEAD}`, `tmp/gate-fixer/${slug}/pr-266`];
+  for (const dir of dirs) if (existsSync(path.join(root, dir))) out.push(...(await walk(path.join(root, dir))).map((n) => `${dir}/${n.replace(/\.tmp-f[0-9]+-[0-9a-f]{8}$/, ".tmp-<id>")}`.replace(/[0-9a-f]{40}/g, "<head>")));
   return out;
 }
 
@@ -97,6 +100,9 @@ describe("interrupt a stubbed draft_gate round and fix pass after each step", as
     assert.equal(done.status, 0, done.stderr);
     baselines[unit] = { coordination: coordinate(root).stdout, state: await snapshot(root) };
   }
+  test("the coordination comparison is sensitive: the finished fixer plan changes the coordinator output", async () => {
+    assert.notEqual(baselines.fixer.coordination, coordinate(await makeRoot()).stdout);
+  });
   for (const [unit, steps] of Object.entries(EMITTER_STEPS)) {
     for (const step of steps) {
       const [known, refusal] = KNOWN_FAILURES.get(`${unit}:${step}`) ?? [];
@@ -131,8 +137,8 @@ test("known failure (issue 3416): a reviewer re-fanned after a context rebuild a
 test("known failure (issue 3415): fan-in reads the carry-forward plan from a file", async () => {
   const root = await makeRoot();
   const run = spawnSync("node", [CONSOLIDATE, "--findings-dir", "tmp", "--carry-forward-plan-file", "tmp/plan.json"], { cwd: root, encoding: "utf8", env: env(root) });
-  const recovers = !/Unknown argument/.test(run.stdout + run.stderr);
-  assert.equal(recovers, false, "recovery now works: remove the 3415 known failure so the suite turns strict");
+  assert.notEqual(run.status, 0, "recovery now works: remove the 3415 known failure so the suite turns strict");
+  assert.match(run.stdout + run.stderr, /Unknown argument.*--carry-forward-plan-file/s, `fails for a different reason; re-check issue 3415: ${(run.stdout + run.stderr).trim().slice(0, 300)}`);
 });
 
 // A fix pass whose CI turns red after the push is interrupted at the verifier step: the CI-fix emission that follows
