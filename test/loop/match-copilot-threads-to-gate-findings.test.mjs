@@ -40,12 +40,14 @@ test("matches by file within the same PR, skipping seal and array files", async 
       { pr: 7, path: "a.md", body: "fix the help text" },
       { pr: 7, path: "b.mjs", body: "value is null here" },
       { pr: 8, path: "a.md", body: "add a test" },
+      { pr: 7, path: "r2.md", body: "" },
     ], index);
+    assert.deepEqual(threads[3].matchedAngles, ["docs"]);
     assert.deepEqual(threads[0].matchedAngles, ["docs"]);
     assert.equal(threads[0].matched, true);
     assert.equal(threads[1].matched, false);
     assert.equal(threads[2].matched, false);
-    assert.equal(summary.total, 3);
+    assert.equal(summary.total, 4);
     assert.equal(summary.copilotOnly, 2);
     assert.deepEqual(summary.byClass, { "edge-case-input-validation": 1, tests: 1 });
     assert.equal(summary.byAngle.coverage, 1);
@@ -149,6 +151,24 @@ test("drops a non-Copilot thread line and keeps the Copilot reviewer login", asy
       { pr: 7, path: "c" },
     ].map((t) => JSON.stringify(t)).join("\n"));
     assert.deepEqual((await readThreads(file)).map((t) => t.path), ["b"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("--jq and --silent exit codes: invalid filter 2, falsy predicate 1, value-less --jq refused", async () => {
+  const { dir, root } = await fixture();
+  try {
+    const threads = path.join(dir, "t.jsonl");
+    await writeFile(threads, '{"pr":7,"path":"zzz.md","author":"copilot","body":"x"}\n');
+    const run = (...extra) => Bun.spawnSync(["node", "scripts/loop/match-copilot-threads-to-gate-findings.mjs", "--threads", threads, "--findings-root", root, ...extra], {
+      cwd: path.join(import.meta.dir, "../.."),
+    });
+    assert.equal(run("--jq", ".bogus[[").exitCode, 2);
+    assert.equal(run("--silent", "--jq", ".summary.copilotOnly == 0").exitCode, 1);
+    assert.equal(run("--jq").exitCode, 2);
+    assert.equal(run("--fields").exitCode, 2);
+    assert.equal(run("--jq", ".summary.total").exitCode, 0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

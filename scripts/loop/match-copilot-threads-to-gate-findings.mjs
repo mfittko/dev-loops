@@ -13,7 +13,7 @@ import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { COPILOT_AUTHOR, COPILOT_BUCKETS } from "./gate-finding-classes.mjs";
 import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
@@ -85,7 +85,7 @@ export function parseArgsList(argv) {
     if (token.name === "repo") { options.repo = requireTokenValue(token, parseError); continue; }
     if (token.name === "findings-root") { options.findingsRoot = requireTokenValue(token, parseError); continue; }
     if (token.name === "repo-root") { options.repoRoot = requireTokenValue(token, parseError); continue; }
-    if (token.name in JQ_OUTPUT_PARSE_OPTIONS) { options.jqOutput[token.name] = token.value ?? true; continue; }
+    if (matchJqOutputToken(token, options.jqOutput, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (!options.threads) throw parseError("--threads <jsonl> is required");
@@ -201,7 +201,7 @@ export async function runCli(argv = process.argv.slice(2)) {
   const threads = await readThreads(options.threads);
   const result = matchThreads(threads, await readFindingIndex(options.findingsRoot));
   const { jq, silent, fields } = options.jqOutput;
-  emitResult(result, { jq, silent, fields });
+  process.exitCode = emitResult(result, { jq, silent, fields });
   return result;
 }
 
