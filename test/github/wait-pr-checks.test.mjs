@@ -585,7 +585,7 @@ test("wait-pr-checks clamps a poll interval above the cap so a check-less head s
       let t = 1_000_000;
       const stdout = makeStream();
       const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "200", "--timeout", "600"], {
-        stdout, stderr: makeStream(), env, ghCommand: "gh", now: () => t, delayImpl: async (ms) => { t += ms; },
+        stdout, stderr: makeStream(), env, ghCommand: "gh", ensureOwnershipImpl: async () => ({ ok: true }), now: () => t, delayImpl: async (ms) => { t += ms; },
       });
       const result = JSON.parse(stdout.text());
       assert.equal(code, 0);
