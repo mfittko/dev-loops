@@ -3815,6 +3815,18 @@ test("issue 3414: --ci-file with a malformed act list refuses with a retry recov
   });
 });
 
+test("issue 3414: a plain --ci-file refusal recovery names no act list, and a stale act list carries a judge-pass recovery", async () => {
+  await withFixture(async (fx) => {
+    // Rejected input forms: a CI file for another head and a green CI file.
+    await assert.rejects(emitCi(fx, {}, ciFailureFor("a".repeat(40))), (error) => /wait-pr-checks/.test(error.recovery) && !/--act-list-file/.test(error.recovery));
+    await assert.rejects(emitCi(fx, {}, ciFailureFor(fx.head, { status: "success", ciStatus: "success" })), (error) => /gate coordination/.test(error.recovery) && !/--act-list-file/.test(error.recovery));
+    // The combined path keeps the act-list retry.
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }, ciFailureFor("a".repeat(40))), (error) => /--act-list-file/.test(error.recovery));
+    // A list with no ledger for this head refuses stale_act_list with a recovery.
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), (error) => error.refusal === "stale_act_list" && /judge-pass/.test(error.recovery));
+  });
+});
+
 test("issue 2787 C17: a ci-failure plan emits the claude, pi and codex adapter payloads", async () => {
   await withFixture(async (fx) => {
     const unit = await emitCi(fx);

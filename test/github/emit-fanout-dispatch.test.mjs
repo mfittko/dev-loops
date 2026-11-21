@@ -2732,6 +2732,7 @@ test("the unit prompt describes the optional bundle files and their fields, unde
 for (const [label, ci, nextAction] of [
   ["pending", { ok: true, status: "pending", settled: false, ciStatus: "pending", headSha: HEAD_SHA }, "wait_for_ci"],
   ["red", { ok: true, status: "failure", settled: true, ciStatus: "failure", headSha: HEAD_SHA, failedChecks: [{ name: "build" }] }, "fix_ci_failure"],
+  ["red CI at another head", { ok: true, status: "failure", settled: true, ciStatus: "failure", headSha: "d".repeat(40), failedChecks: [{ name: "build" }] }, "wait_for_ci"],
   ["another head", { ok: true, status: "success", settled: true, ciStatus: "success", headSha: "d".repeat(40) }, "wait_for_ci"],
 ]) {
   test(`emit-fanout-dispatch.mjs --ci-file with ${label} CI refuses with ci_not_green and ${nextAction} (issue 3414)`, async () => {
@@ -2802,7 +2803,9 @@ test("emit-fanout-dispatch.mjs draft_gate without --ci-file refuses with ci_file
     await writeFile(ciFile, JSON.stringify({ ok: true, status: "failure", settled: true, ciStatus: "failure", headSha: HEAD_SHA, failedChecks: [{ name: "build" }] }));
     for (const extra of [[], ["--ci-file", ciFile]]) {
       const optedOut = runEmitCli([...args, ...extra], { cwd: tmp, noGreenCi: true });
-      assert.doesNotMatch(optedOut.stdout, /ci_file_required|ci_not_green/);
+      // The run gets past the CI step and fails on the unseeded gate-context artifact.
+      assert.equal(optedOut.status, 1);
+      assert.match(JSON.parse(optedOut.stdout).error, /no gate-context artifact/);
     }
   });
 });

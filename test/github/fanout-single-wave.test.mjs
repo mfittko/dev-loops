@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { copyFile, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,10 +35,14 @@ const REPO = "o/r";
 const PR = "7";
 const HEAD_SHA = "c".repeat(40);
 
+// The CI fixture lives in a per-process temp dir, so concurrent runs never share the file.
+const CI_DIR = mkdtempSync(path.join(os.tmpdir(), "dev-loops-single-wave-ci-"));
+process.on("exit", () => rmSync(CI_DIR, { recursive: true, force: true }));
+
 // A draft_gate fan-out needs the settled-green wait-pr-checks result (issue 3414).
 function withGreenCi(argv) {
   if (argv[argv.indexOf("--gate") + 1] !== "draft_gate") return argv;
-  const file = path.join(os.tmpdir(), `dev-loops-single-wave-ci-${HEAD_SHA}.json`);
+  const file = path.join(CI_DIR, `ci-${HEAD_SHA}.json`);
   writeFileSync(file, JSON.stringify({ ok: true, status: "success", settled: true, ciStatus: "success", headSha: HEAD_SHA }));
   return [...argv, "--ci-file", file];
 }

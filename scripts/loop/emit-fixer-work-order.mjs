@@ -72,7 +72,7 @@ A commit_only or full emission writes its sequence marker under the head's seque
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
 (default: the main checkout's tmp/; an explicit --tmp-root inside a linked worktree is refused) and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef }.
-A refusal prints { ok: false, refusal?, error, recovery? } with a typed refusal code (including ambiguous_source and invalid_act_list on the --ci-file plus --act-list-file path; recovery names the next command there); ledger_appeared means a gate round ledger appeared at the current head during a carried emit, so re-run the emit.
+A refusal prints { ok: false, refusal?, error, recovery? } with a typed refusal code (including ambiguous_source, invalid_act_list and stale_act_list on the --ci-file plus --act-list-file path; recovery names the next command there); ledger_appeared means a gate round ledger appeared at the current head during a carried emit, so re-run the emit.
 joinRef is the path for gate wait-for-units --artifact (with --after <planPath>): a full-phase fixer's final-on-write report (<outputRef>.report), else the outputRef.
 Each run supersedes the previous emission for this PR, except a same-head no-commit commit_only re-emission with a locally_clear --delta-result sealed for the canonical plan's execution: it writes fixer-emit-plan.<executionIdentity>.json beside the canonical plan, writes no sequence marker and prints that keyed path as planPath (a join target, never a delta --fixer-plan). Dispatch the printed
 dispatchPayload (the --harness adapter call carrying dispatchPrompt, plus the config-resolved model on the Claude payload when non-null) unchanged; an
@@ -629,9 +629,11 @@ async function emitPlan({
   }
   if (ciFile) {
     const ci = source.parsed, next = "run scripts/github/wait-pr-checks.mjs on the PR head and pass its JSON";
-    if (ci?.ok !== true || ci.status !== "failure" || ci.ciStatus !== "failure") throw new Refusal(`ci file ${ciFile} is not a red wait-pr-checks result (status ${JSON.stringify(ci?.status)}, ciStatus ${JSON.stringify(ci?.ciStatus)}); a green, pending or failed read has nothing to fix; ${next}`, undefined, `${next}, then ${CI_ACT_RETRY}`);
-    if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`, undefined, `${next}, then ${CI_ACT_RETRY}`);
-    if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`, undefined, `${next}, then ${CI_ACT_RETRY}`);
+    // The act-list retry names inputs only the combined --ci-file plus --act-list-file path has.
+    const recover = (lead = next) => ciActFile ? `${next}, then ${CI_ACT_RETRY}` : `${lead}, then re-run emit-fixer-work-order.mjs --phase full --ci-file <that JSON>`;
+    if (ci?.ok !== true || ci.status !== "failure" || ci.ciStatus !== "failure") throw new Refusal(`ci file ${ciFile} is not a red wait-pr-checks result (status ${JSON.stringify(ci?.status)}, ciStatus ${JSON.stringify(ci?.ciStatus)}); a green, pending or failed read has nothing to fix; ${next}`, undefined, ciActFile || ci?.ciStatus !== "success" ? recover() : "CI is green at this head: re-run gate coordination (detect-pr-gate-coordination-state.mjs); there is nothing to fix.");
+    if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`, undefined, recover());
+    if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`, undefined, recover());
   }
   const isActItem = (f) => f?.judgeDisposition === "act" && (gate === "draft_gate" ? hasSeverityText(f) : typeof f.severity === "string" && VALID_SEVERITIES.has(f.severity)) && typeof f.summary === "string" && f.summary.trim() !== "";
   let ciActRead, ciActParsed;
@@ -753,15 +755,15 @@ async function emitPlan({
   }
   // A carried act list is bound to this head's round: its findings ledger must exist here (or at the carry origin), so an older-head or foreign list refuses.
   if (ciActFile) {
-    const staleRecovery = "re-run judge-pass at the PR head";
+    const staleRecovery = "re-run judge-pass at the PR head, then re-run scripts/loop/emit-fixer-work-order.mjs --phase full --ci-file <wait-pr-checks JSON> --act-list-file <judge-pass --out> --gate <gate>";
     let ledgerFile = ledgerPath(capRoundHead);
     if (!existsSync(ledgerFile)) { const origin = await carryOriginHead(); if (origin) ledgerFile = ledgerPath(origin); }
-    if (!existsSync(ledgerFile)) throw new WorkOrderRefusal("stale_act_list", `stale_act_list: no ${gate} findings ledger exists for this head (${ledgerPath(capRoundHead)}); act list ${ciActFile} is not this head's round; ${staleRecovery}`);
+    if (!existsSync(ledgerFile)) throw new Refusal(`stale_act_list: no ${gate} findings ledger exists for this head (${ledgerPath(capRoundHead)}); act list ${ciActFile} is not this head's round; ${staleRecovery}`, "stale_act_list", staleRecovery);
     // Existence alone does not bind the list to the round: every carried act item must be an act finding of that ledger.
-    const { findings: roundFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("stale_act_list", `stale_act_list: ${m}; ${staleRecovery}`) });
+    const { findings: roundFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new Refusal(`stale_act_list: ${m}; ${staleRecovery}`, "stale_act_list", staleRecovery) });
     const roundRefs = new Set(roundFindings.filter((f) => f.judgeDisposition === "act").map(fingerprintFinding));
     const foreign = ciActParsed.find((f) => !roundRefs.has(fingerprintFinding(f)));
-    if (foreign) throw new WorkOrderRefusal("stale_act_list", `stale_act_list: act item ${JSON.stringify(foreign.summary)} is not an act finding of the ${gate} findings ledger ${ledgerFile}; act list ${ciActFile} is not this head's round; ${staleRecovery}`);
+    if (foreign) throw new Refusal(`stale_act_list: act item ${JSON.stringify(foreign.summary)} is not an act finding of the ${gate} findings ledger ${ledgerFile}; act list ${ciActFile} is not this head's round; ${staleRecovery}`, "stale_act_list", staleRecovery);
   }
   // The verify-time act-thread guard matches open gate threads by fingerprint, so a missing or wrong one would let a matching thread pass as threadless.
   const badFingerprint = guardFile ? guardParsed.find((f) => f.fingerprint !== fingerprintFinding(f)) : undefined;
