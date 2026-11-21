@@ -980,6 +980,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "RECOVERY-COMMAND-REQUIRED",
+      "enforcement": "doc"
+    },
+    {
       "id": "REFINER-DOD-PROPOSED-SUBSECTION"
     },
     {
