@@ -4580,13 +4580,13 @@ export function ledgerTmpRoot(ledgerPath) {
   return parts.length > 4 && parts.at(-4) === "gate-findings" && /^pr-\d+$/.test(parts.at(-2)) ? parts.slice(0, -4).join(path.sep) || path.sep : undefined;
 }
 
-// The pr-body digest the cap round's context recorded. write-gate-context.mjs writes the context under the reviewed worktree's tmp/,
+// The pr-body digest the context at the given head recorded. write-gate-context.mjs writes the context under the reviewed worktree's tmp/,
 // while the ledger sits under the main checkout's tmp/, so every checkout's tmp/ and --context-tmp-root come first and the ledger root is the fallback.
 export async function readReviewedBodySha256(options, headSha, repoRoot) {
   const id = { repo: options.repo, pr: options.pr, gate: options.gate, headSha };
   // Every root is read: a same-head earlier round under another root can hold an older digest, so disagreeing digests refuse.
   const found = new Map();
-  // The cap round's own context sits in the reviewed worktree (the first checkout); a digest found only elsewhere is an earlier round's and never stands alone.
+  // The round's own context sits in the reviewed worktree (the first checkout); a digest found only elsewhere is an earlier round's and never stands alone.
   let reviewedWorktreeHasContext = false;
   for (const [t, tmpRoot] of [options.contextTmpRoot, undefined, ledgerTmpRoot(options.findingsLedger)].entries()) {
     for (const [i, root] of resolveLedgerCheckouts(repoRoot).entries()) {
@@ -4602,8 +4602,8 @@ export async function readReviewedBodySha256(options, headSha, repoRoot) {
       }
     }
   }
-  if (found.size && !reviewedWorktreeHasContext) throw new Error(`body_read_unrecorded: the reviewed worktree holds no context at ${headSha}, so the cap round's reviewed body is unknown; the only digests found belong to other checkouts (${[...found.keys()].join(", ")}). Rebuild the cap round's context or fix the items with a commit`);
-  if (new Set(found.values()).size > 1) throw new Error(`body_read_unrecorded: the contexts at ${headSha} record different pr-body digests, so the cap round's reviewed body is ambiguous; remove the stale context of the earlier same-head round or fix the items with a commit. Contexts: ${[...found].map(([file, sha]) => `${file} (${sha})`).join(", ")}`);
+  if (found.size && !reviewedWorktreeHasContext) throw new Error(`body_read_unrecorded: the reviewed worktree holds no context at ${headSha}, so the reviewed body is unknown; the only digests found belong to other checkouts (${[...found.keys()].join(", ")}). Rerun from the reviewed worktree or fix the items with a commit`);
+  if (new Set(found.values()).size > 1) throw new Error(`body_read_unrecorded: the contexts at ${headSha} record different pr-body digests, so the reviewed body is ambiguous; remove the stale context of the earlier same-head round or fix the items with a commit. Contexts: ${[...found].map(([file, sha]) => `${file} (${sha})`).join(", ")}`);
   return [...found.values()][0] ?? null;
 }
 

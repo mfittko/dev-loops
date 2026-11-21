@@ -44,7 +44,7 @@ that disagree, also skips) is never
 selected, at any severity and round (ADR 0089): it gets no
 stamp, no reply, no resolve, and no deferral entry, and stays open until the fixer
 replies with the fixing commit or a decline reason and resolves it. Three exceptions: (1) a thread whose markers are all judge \`act\`
-with remedyKind evidence_only is closed with an evidence-only reply (evidenceOnlyClosed); (2) a thread whose markers are all judge \`act\` with remedyKind pr_body is closed with a reply citing the PR-body change by its two digest prefixes (no commit) once the live PR body digest differs from the digest the gate context recorded at each marker's verdict head (prBodyActClosed; an unchanged digest leaves it open, an unrecorded or ambiguous digest records body_read_unrecorded in dispositionFailures); (3) a nit member
+with remedyKind evidence_only is closed with an evidence-only reply (evidenceOnlyClosed); (2) a thread whose markers are all judge \`act\` with remedyKind pr_body is closed with a reply citing the PR-body change by its two digest prefixes (no commit) once the live PR body digest differs from the digest the gate context recorded at each marker's verdict head (prBodyActClosed; an unchanged digest leaves it open, an unrecorded or ambiguous digest records body_read_unrecorded and a failed live body read records body_read_failed in dispositionFailures); (3) a nit member
 of a judge-deferred mixed cluster closes with the cluster rationale ("Closed at gate close"),
 with no stamp and no filing. Otherwise only a thread whose every marker the judge
 disposed \`defer\` is replied-to + resolved ("deferred at gate close"), whatever its
@@ -692,23 +692,16 @@ async function runEvidenceOnlyClosePass({ repo, pr, gate, headSha, round, thread
   return { evidenceOnlyClosed, dispositionFailures };
 }
 
-// The gate context sits in the reviewed worktree while the ledger sits in the main checkout, so each resolved checkout is tried as the
-// reviewed worktree. A checkout holding no context is skipped; any other read error, conflicting digests or a malformed digest fail closed.
+// The gate context sits in the reviewed worktree while the ledger sits in the main checkout. repoRoot is the reviewed worktree, so
+// readReviewedBodySha256 keeps its guard: a digest found only in another checkout belongs to an earlier same-head round and fails closed.
 async function readRecordedBodyDigest(options, verdictHead, repoRoot) {
-  const hint = "rerun close-gate-findings from the reviewed worktree or rebuild the gate context at the verdict head";
-  const digests = new Set();
-  for (const root of resolveLedgerCheckouts(repoRoot)) {
-    try {
-      digests.add(await readReviewedBodySha256(options, verdictHead, root));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes("holds no context")) throw new Error(`${message.replace(/,? or fix the items with a commit/, "")}; ${hint}`);
-    }
+  try {
+    const digest = await readReviewedBodySha256(options, verdictHead, repoRoot);
+    return typeof digest === "string" && /^[0-9a-f]{64}$/.test(digest) ? digest : null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`${message.replace(/,? or fix the items with a commit/, "")}; rerun close-gate-findings from the reviewed worktree or escalate`);
   }
-  digests.delete(null);
-  if (digests.size > 1) throw new Error(`body_read_unrecorded: the checkouts record different pr-body digests at ${verdictHead}; ${hint}`);
-  const [digest] = digests;
-  return typeof digest === "string" && /^[0-9a-f]{64}$/.test(digest) ? digest : null;
 }
 
 // PR-body act close (GATE-EXEC-THREAD-DISPOSITION): a gate-authored thread whose every marker the judge disposed `act`

@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { makeGhMock, runIdFreeEnv, runNode, trustCommentFixtures, writeGhStub } from "../_helpers.mjs";
+import { initGitFixture, makeGhMock, runGitFixture, runIdFreeEnv, runNode, trustCommentFixtures, writeGhStub } from "../_helpers.mjs";
 
 import {
   buildMeritRationale,
@@ -2868,7 +2867,82 @@ test("a pr_body act thread stays open with a body_read_unrecorded failure when n
   ));
 });
 
-test("an act thread without a pr_body remedy stays open even when the live body digest changed", async () => {
+test("a pr_body act thread stays open with a body_read_unrecorded failure when the only digest sits in a non-reviewed checkout, and the hint names no rebuild", async () => {
+  const findings = [prBodyFinding("first body edit")];
+  const worktreeRoot = await mkdtemp(path.join(os.tmpdir(), "close-gate-findings-wt-"));
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: findings.map(prBodyThread) }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      initGitFixture(repoRoot);
+      const worktree = path.join(worktreeRoot, "wt");
+      runGitFixture(repoRoot, ["worktree", "add", "-q", "-b", "wt", worktree]);
+      await writePrBodyActFixture(repoRoot, findings); // A lone same-head context in the main checkout; the reviewed worktree holds none.
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot: worktree });
+      assert.equal(result.prBodyActClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.match(result.dispositionFailures[0].error, /^body_read_unrecorded: the reviewed worktree holds no context/);
+      assert.match(result.dispositionFailures[0].error, /rerun close-gate-findings from the reviewed worktree or escalate$/);
+      assert.doesNotMatch(result.dispositionFailures[0].error, /[Rr]ebuild/);
+    },
+  )).finally(() => rm(worktreeRoot, { recursive: true, force: true }));
+});
+
+test("a merged thread with a pr_body act marker and a code act marker stays open", async () => {
+  const bodyFinding = prBodyFinding("first body edit");
+  const codeFinding = prBodyFinding("a code fix", { remedyKind: undefined });
+  const thread = mergedThread({ fp: fingerprintFinding(bodyFinding) }, { fp: fingerprintFinding(codeFinding) }, { id: "THREAD_MERGED_BODY_CODE", commentId: 6400 });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }), livePrBodyEntry(BODY_NEW)],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      await writePrBodyActFixture(repoRoot, [bodyFinding, codeFinding]);
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.prBodyActClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
+test("a merged thread whose pr_body markers sit at two verdict heads stays open when one recorded digest equals the live body", async () => {
+  const first = prBodyFinding("first body edit");
+  const second = prBodyFinding("second body edit");
+  const thread = mergedThread({ fp: fingerprintFinding(first) }, { fp: fingerprintFinding(second) }, { id: "THREAD_MERGED_TWO_HEADS", commentId: 6401 });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }), livePrBodyEntry(BODY_NEW)],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      await writePrBodyActFixture(repoRoot, [first]); // Round 1: recorded BODY_OLD.
+      const head2 = nthHeadSha(2);
+      const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
+      await writeFile(path.join(findingsDir, `draft_gate-${head2}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: head2, verdict: "findings_present", loggedAt: "2026-09-11T00:00:00.000Z", findings: [second] }), "utf8");
+      const contextFile = path.join(repoRoot, buildGateContextPath({ repo: REPO, pr: PR, gate: "draft_gate", headSha: head2, tmpRoot: "tmp" }));
+      await mkdir(path.dirname(contextFile), { recursive: true });
+      await writeFile(contextFile, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(BODY_NEW) }] }), "utf8"); // Round 2: body unchanged since.
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.prBodyActClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.equal(result.dispositionFailures, undefined);
+    },
+  ));
+});
+
+test("a pr_body act finding in the current ledger closes once the live body digest changed", async () => {
+  const finding = prBodyFinding("first body edit");
+  await withLedgerFile(makeLedger({ gate: "draft_gate", headSha: nthHeadSha(1), findings: [finding] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [prBodyThread(finding, 0)] }),
+      livePrBodyEntry(BODY_NEW),
+      postReplyEntry(6100, { id: 7100 }),
+      resolveThreadEntry("THREAD_B0"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      await writePrBodyActFixture(repoRoot, []); // Only the round-1 context; the finding itself sits in the current ledger.
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.prBodyActClosed, 1);
+      assert.equal(result.dispositionFailures, undefined);
+    },
+  ));
+});
+
+test("an act thread without a pr_body remedy is never selected by the PR-body act pass", async () => {
   const findings = [prBodyFinding("first body edit", { remedyKind: undefined })];
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: findings.map(prBodyThread) }),
@@ -2939,7 +3013,7 @@ test("a failed live body read is cached once and recorded as body_read_failed fo
   ));
 });
 
-test("a pr_body act thread closes when the context sits in another checkout's tmp and the ledger under a separate tmp root", async () => {
+test("a pr_body act thread closes when run from the reviewed worktree that holds the context while the ledger sits under the main checkout", async () => {
   const findings = [prBodyFinding("first body edit")];
   const worktreeRoot = await mkdtemp(path.join(os.tmpdir(), "close-gate-findings-wt-"));
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
@@ -2950,16 +3024,14 @@ test("a pr_body act thread closes when the context sits in another checkout's tm
       resolveThreadEntry("THREAD_B0"),
     ],
     async ({ env, ghCommand, runChild, repoRoot }) => {
-      const git = (cwd, ...args) => execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, stdio: "ignore" });
-      git(repoRoot, "init", "-q");
-      git(repoRoot, "commit", "-q", "--allow-empty", "-m", "init");
+      initGitFixture(repoRoot);
       const worktree = path.join(worktreeRoot, "wt");
-      git(repoRoot, "worktree", "add", "-q", "-b", "wt", worktree);
+      runGitFixture(repoRoot, ["worktree", "add", "-q", "-b", "wt", worktree]);
       await writePrBodyActFixture(repoRoot, findings, { recordedBody: null });
       const contextFile = path.join(worktree, buildGateContextPath({ repo: REPO, pr: PR, gate: "draft_gate", headSha: nthHeadSha(1), tmpRoot: "tmp" }));
       await mkdir(path.dirname(contextFile), { recursive: true });
       await writeFile(contextFile, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(BODY_OLD) }] }), "utf8");
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot: worktree });
       assert.equal(result.prBodyActClosed, 1);
       assert.equal(result.dispositionFailures, undefined);
     },

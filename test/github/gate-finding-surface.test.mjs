@@ -948,8 +948,9 @@ async function withLocalLedgerFiles(ledgers, fn) {
   }
 }
 
-function jdfLedger({ repo = JDF_REPO, pr = JDF_PR, gate = JDF_GATE, verdict = "findings_present", loggedAt, disposition, rationale }) {
+function jdfLedger({ repo = JDF_REPO, pr = JDF_PR, gate = JDF_GATE, verdict = "findings_present", loggedAt, disposition, rationale, headSha }) {
   return {
+    ...(headSha ? { headSha } : {}),
     repo,
     pr,
     gate,
@@ -979,6 +980,19 @@ test("#2381: findJudgeDispositionForFingerprint picks the disposition from the l
 // wins". Together the two pin down newest-loggedAt selection regardless of
 // directory order, since only the real (loggedAt-based) implementation
 // passes both.
+test("findJudgeDispositionForFingerprint returns the verdict headSha for one head and omits it when the matched ledgers name different heads", async () => {
+  const lookup = (tmpRoot) => findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headC", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+  const ledger = (headSha) => jdfLedger({ loggedAt: "2026-09-01T00:00:00.000Z", disposition: "act", rationale: "same", headSha });
+  await withLocalLedgerFiles({ [`${JDF_GATE}-headA.json`]: ledger("headA") }, async (tmpRoot) => {
+    assert.equal((await lookup(tmpRoot)).headSha, "headA");
+  });
+  await withLocalLedgerFiles({ [`${JDF_GATE}-headA.json`]: ledger("headA"), [`${JDF_GATE}-headB.json`]: ledger("headB") }, async (tmpRoot) => {
+    const result = await lookup(tmpRoot);
+    assert.equal(result.disposition, "act");
+    assert.equal("headSha" in result, false);
+  });
+});
+
 test("#2381: findJudgeDispositionForFingerprint picks the GREATEST loggedAt regardless of directory order (mirrored fixture)", async () => {
   await withLocalLedgerFiles(
     {
