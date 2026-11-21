@@ -452,8 +452,10 @@ Optional:
                                             was never posted: head, verdict,
                                             findings ledger and mode all derive
                                             from the sealed ledger, so --head-sha,
-                                            --verdict, --findings-* and
-                                            --next-action are not passed. Refuses
+                                            --verdict, --findings-*,
+                                            --next-action, --execution-mode,
+                                            --inline-reason and --converged-json
+                                            are not passed. Refuses
                                             when no sealed clean cap round exists.
   --auto                                   Headless/non-interactive run (mirrors
                                             scripts/projects/add-queue-item.mjs's
@@ -1020,8 +1022,8 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   if (options.postSealedCapRound) {
     if (options.gate !== "draft_gate") throw parseError("--post-sealed-cap-round requires --gate draft_gate");
     // The sealed ledger supplies these; a caller-supplied value would be silently replaced or passed through.
-    const supplied = ["headSha", "verdict", "findingsJson", "findingsFile", "findingsLedger", "findingsSummary", "findingsSeverityCounts", "nextAction"].filter((key) => options[key] !== undefined);
-    if (supplied.length > 0) throw parseError(`--post-sealed-cap-round derives head, verdict, findings and next action from the sealed ledger; do not pass ${supplied.join(", ")}`);
+    const supplied = ["headSha", "verdict", "findingsJson", "findingsFile", "findingsLedger", "findingsSummary", "findingsSeverityCounts", "nextAction", "executionMode", "inlineReason", "convergedJson"].filter((key) => options[key] !== undefined);
+    if (supplied.length > 0) throw parseError(`--post-sealed-cap-round derives head, verdict, findings, next action and execution mode from the sealed ledger; do not pass ${supplied.join(", ")}`);
     options.executionMode = "fanout_fanin";
   }
   options.executionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
@@ -3028,7 +3030,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // Proceed with the default (external Copilot review) mode.
     }
     // ADR 0208: the same cap-round-fixed proof the detector resolves, so a ready cap-fixed PR can enter pre_approval_gate; fail closed on error.
-    const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact({ ...coordinationContext, repo: options.repo, pr: options.pr }, { repoRoot, requirePostedCleanCap: !(options.postSealedCapRound || capRoundHead) });
+    const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact({ ...coordinationContext, repo: options.repo, pr: options.pr }, { repoRoot, requirePostedCleanCap: !(options.postSealedCapRound || capRoundHead), trustRuntime: { env, ghCommand, runChild } });
     coordination = evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
       draftCapRoundFixed,
       draftCapRoundFailure,

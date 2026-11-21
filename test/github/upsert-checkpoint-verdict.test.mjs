@@ -13122,7 +13122,7 @@ test("--post-sealed-cap-round refuses when no sealed clean cap round exists", as
 
 test("--post-sealed-cap-round refuses every flag the sealed ledger supplies at parse time", () => {
   const base = ["--repo", "o/r", "--pr", "7", "--gate", "draft_gate", "--post-sealed-cap-round"];
-  for (const extra of [["--head-sha", "ab".repeat(20)], ["--verdict", "clean"], ["--findings-summary", "x"], ["--next-action", "y"], ["--findings-severity-counts", "{}"], ["--findings-ledger", "l.json"], ["--findings-json", "[]"], ["--findings-file", "f.json"]]) {
-    assert.throws(() => parseUpsertCheckpointVerdictCliArgs([...base, ...extra]), /derives head, verdict, findings and next action from the sealed ledger/, extra[0]);
+  for (const extra of [["--head-sha", "ab".repeat(20)], ["--verdict", "clean"], ["--findings-summary", "x"], ["--next-action", "y"], ["--findings-severity-counts", "{}"], ["--findings-ledger", "l.json"], ["--findings-json", "[]"], ["--findings-file", "f.json"], ["--execution-mode", "inline_single_agent"], ["--inline-reason", "r"], ["--converged-json", "c.json"]]) {
+    assert.throws(() => parseUpsertCheckpointVerdictCliArgs([...base, ...extra]), /derives head, verdict, findings, next action and execution mode from the sealed ledger/, extra[0]);
   }
 });

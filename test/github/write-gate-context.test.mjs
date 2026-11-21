@@ -10792,6 +10792,10 @@ test("resolveDraftCapRoundFact: a clean cap round with no posted draft_gate revi
   assert.deepEqual(await fact([review(header(capHead.slice(0, 7), 3))]), unposted, "a header at the cap head but another round does not prove it");
   assert.deepEqual(await fact([review(header("6ef58a1", 3))], { requirePostedCleanCap: false }), { capRoundFixed: true, failure: null }, "the post itself is not gated on the post");
   assert.deepEqual(await fact([review(header(capHead.slice(0, 7), 4), "NONE")]), unposted, "a forged header from an untrusted author proves nothing");
+  assert.deepEqual(await fact([review(`<!-- dev-loops:gate-findings-review pre_approval_gate ${capHead.slice(0, 7)} round=4 -->`)]), unposted, "a pre_approval_gate header at the cap head and round is no draft_gate post");
+  // The injected runChild, not the ambient gh, answers the viewer lookup for an association-untrusted author.
+  const viewerRunChild = async () => ({ code: 0, stdout: '{"login":"maint"}\n', stderr: "" });
+  assert.deepEqual(await fact([review(header(capHead.slice(0, 7), 4), "NONE")], { trustRuntime: { runChild: viewerRunChild } }), { capRoundFixed: true, failure: null }, "the viewer-authored post counts through the stubbed runChild");
   assert.deepEqual(await fact(undefined), unposted, "absent reviews fail closed");
   assert.deepEqual(await fact([review(header("deadbee", 4))]), unposted, "a header whose head prefix does not match the cap head does not prove it");
   assert.deepEqual(await fact([], { resolve: async () => { throw new Error("unreadable"); } }), { capRoundFixed: false, failure: "cap_round_unresolved" }, "a thrown resolver is the typed failure, never a posted-check result");

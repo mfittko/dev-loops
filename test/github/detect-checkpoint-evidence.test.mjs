@@ -5068,8 +5068,10 @@ test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate f
         { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: `${JSON.stringify([
           ...rounds.map((r, i) => ({ id: 900 + i, body: `Gate findings\n<!-- dev-loops:gate-findings-review draft_gate bcd5678 round=${r} -->`, submitted_at: `2026-05-29T20:0${i}:00Z` })),
           // The posted cap-round review of a clean cap round, by an author of the given association.
-          ...(postedAs ? [{ id: 950, body: "Gate findings\n<!-- dev-loops:gate-findings-review draft_gate aaaaaaa round=4 -->", submitted_at: "2026-05-29T20:09:00Z", user: { login: "maint", type: "User" }, author_association: postedAs }] : []),
+          ...(postedAs ? [{ id: 950, body: "Gate findings\n<!-- dev-loops:gate-findings-review draft_gate aaaaaaa round=4 -->", state: "COMMENTED", submitted_at: "2026-05-29T20:09:00Z", user: { login: "maint", type: "User" }, author_association: postedAs === "VIEWER" ? "NONE" : postedAs }] : []),
         ])}\n` },
+        // The authenticated viewer answers the trust lookup for an association-untrusted poster.
+        ...(postedAs === "VIEWER" ? [{ assertArgs: ["api", "user"], stdout: '{"login":"maint"}\n' }] : []),
         { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: threads } } } } }) + "\n" },
       ]);
       const result = await runNode(["--repo", "owner/repo", "--pr", "17", ...(baseRefName ? ["--base-ref-name", baseRefName] : [])], { env, cwd: tempDir });
@@ -5094,8 +5096,10 @@ test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate f
   // A clean cap round proven only by its local ledger (no posted draft_gate review) is no pre-merge proof.
   assert.equal(await run({ rounds: [], threads: [], preHead: headSha, seedProof: true, cleanCap: true, baseRefName: "main" }), "violation", "unposted clean cap ledger with --base-ref-name");
   // Paired controls on the same fixture: a trusted posted round-4 header at the cap head is the only difference that satisfies it.
-  assert.equal(await run({ rounds: [], threads: [], preHead: headSha, seedProof: true, cleanCap: true, postedAs: "OWNER", baseRefName: "main" }), "satisfied", "trusted posted cap-round header");
-  assert.equal(await run({ rounds: [], threads: [], preHead: headSha, seedProof: true, cleanCap: true, postedAs: "NONE", baseRefName: "main" }), "violation", "untrusted posted cap-round header");
+  // An unresolved round-4 thread keeps githubCapFixed false, so the local-ledger posted check decides.
+  assert.equal(await run({ rounds: [], threads: [finding(4, false)], preHead: headSha, seedProof: true, cleanCap: true, postedAs: "OWNER", baseRefName: "main" }), "satisfied", "trusted posted cap-round header");
+  assert.equal(await run({ rounds: [], threads: [finding(4, false)], preHead: headSha, seedProof: true, cleanCap: true, postedAs: "NONE", baseRefName: "main" }), "violation", "untrusted posted cap-round header");
+  assert.equal(await run({ rounds: [], threads: [finding(4, false)], preHead: headSha, seedProof: true, cleanCap: true, postedAs: "VIEWER", baseRefName: "main" }), "satisfied", "viewer-authored association-NONE cap-round header");
 }, 60000);
 
 test("parseDetectCheckpointEvidenceCliArgs honors --read-only (skips the runner-ownership heartbeat)", () => {

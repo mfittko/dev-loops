@@ -666,3 +666,12 @@ for (const [name, findings, summary] of [["zero-finding", [], "0 findings"], ["a
     }, { prefix: "dev-loops-round-cap-post-sealed-" });
   });
 }
+
+test("--post-sealed-cap-round refuses a sealed findings_present cap round and posts nothing", async () => {
+  await withTempDir(async (tempDir) => {
+    const calls = [];
+    const out = await postCleanCapRound(tempDir, { bare: true, sealedVerdict: "findings_present", calls, sealedExtra: { provenance: SEALED_PROVENANCE, findings: [finding("low", "act")] } });
+    assert.match(out.error ?? "", /no sealed clean draft_gate cap round/);
+    assert.equal(out.posted, undefined);
+  }, { prefix: "dev-loops-round-cap-post-sealed-act-" });
+});

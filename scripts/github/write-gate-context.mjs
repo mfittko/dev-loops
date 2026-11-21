@@ -4330,7 +4330,7 @@ export async function main(
         // A ready PR whose cap round is fixed holds no clean draft verdict: the sealed proof stands in for it, so pre_approval_gate can build its context.
         const evidenceSatisfied = isCleanDraftVerdict(draftVerdict);
         const { capRoundFixed, failure: capRoundFailure } = coordination.prData?.isDraft === false && !evidenceSatisfied
-          ? await resolveDraftCapRoundFact({ ...coordination, repo: options.repo, pr: options.pr }, { repoRoot, resolve: resolveCapRoundFixedSeam })
+          ? await resolveDraftCapRoundFact({ ...coordination, repo: options.repo, pr: options.pr }, { repoRoot, resolve: resolveCapRoundFixedSeam, trustRuntime: { env, runChild: run } })
           : { capRoundFixed: false, failure: null };
         const refusal = prematureGateOrderingRefusal({
           gate: options.gate,
