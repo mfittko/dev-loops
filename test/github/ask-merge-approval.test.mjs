@@ -11,7 +11,8 @@ import {
   filterAskApprovalComments, parseMarkedComment, parseApprovalQuestion, approvalKeyPresent, isApprovalPath, commandNamesApprovalDir,
   ASK_APPROVAL_RECOVERY, ASK_APPROVAL_KEY_RECOVERY, ASK_APPROVAL_NO_DIALOG_RECOVERY,
 } from "@dev-loops/core/github/ask-merge-approval";
-import { verifyPolicyChangeApproval } from "../../scripts/github/_policy-change-approval.mjs";
+import { verifyPolicyChangeApproval, policyChangeApprovalRefusal } from "../../scripts/github/_policy-change-approval.mjs";
+import { NO_APPROVAL_KEY_ENV } from "../_helpers.mjs";
 import { buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
 
@@ -578,6 +579,15 @@ test("the guard denies a Bash command naming the record signing functions and al
     "grep -n createKey packages",
     "grep -n loadKey packages",
   ]) assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Bash", tool_input: { command }, cwd: f.root }, f.env)), "deny", command);
+  // Whole identifiers only: unrelated names that contain a signing name stay allowed (accepted and rejected forms).
+  for (const command of ["rg -n uploadKey src", "rg -n downloadKey src", "rg -n preloadKeys src", "rg -n createKeyPair src", "echo"]) {
+    assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Bash", tool_input: { command }, cwd: f.root }, f.env)), "allow", command);
+  }
+  assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Grep", tool_input: { pattern: "downloadKey" }, cwd: f.root }, f.env)), "allow");
+  const named = JSON.parse(runHook(GUARD_HOOK, { tool_name: "Bash", tool_input: { command: "grep -n createKey packages" }, cwd: f.root }, f.env).stdout).hookSpecificOutput.permissionDecisionReason;
+  assert.match(named, /names `createKey`/, "the deny names the matched token");
+  assert.equal(commandNamesApprovalDir("m.writeApprovalRecord({})", {}), true);
+  assert.equal(commandNamesApprovalDir("m.writeApprovalRecordX({})", {}), false);
   assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Bash", tool_input: { command: "bun test test/github/ask-merge-approval.test.mjs" }, cwd: f.root }, f.env)), "allow");
   assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Edit", tool_input: { file_path: path.join(f.root, "x.mjs"), new_string: "writeApprovalRecord()" }, cwd: f.root }, f.env)), "allow", "a file body is not an address");
 });
@@ -592,10 +602,11 @@ test("the standing-authorization ready gate refuses a marked approve-merge comme
   };
   const adrTripwire = { triggers: [{ type: "standing-authorizations-change" }] };
   const verify = (body) => verifyPolicyChangeApproval({ repo: REPO, pr: 7, headSha: HEAD, adrTripwire }, { env: f.env, runChild: read([{ user: { login: "owner", type: "User" }, body }]) });
+  // One record makes the hook key exist; a keyless reader passes a marked comment through as a plain line.
+  const { id } = ask(f.env);
   const forged = await verify(buildApprovalComment({ id: "f".repeat(64), headSha: HEAD, patchId: PATCH }));
   assert.equal(forged.satisfied, false);
   assert.match(forged.reason, /forged or missing/);
-  const { id } = ask(f.env);
   assert.equal((await verify(buildApprovalComment({ id, headSha: HEAD, patchId: PATCH }))).satisfied, true, "the same comment with its record counts");
 });
 
@@ -607,10 +618,87 @@ test("the pre-merge gate check refuses a marked approve-merge comment with no re
     preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: HEAD, sizeOutcome: "escalate", sizeTouchesT1: false },
     comments: [{ login: "owner", body, type: "User", trusted: true }],
   });
+  const { id } = ask(f.env);
   const forged = buildPreMergeGateCheck(evidence(buildApprovalComment({ id: "f".repeat(64), headSha: HEAD, patchId: PATCH })), 0, null, null, { patchId: PATCH, env: f.env });
   assert.equal(forged.ok, false);
   assert.ok(forged.failures.some((m) => m.includes("size-budget requires a human APPROVED review")), JSON.stringify(forged.failures));
-  const { id } = ask(f.env);
   const real = buildPreMergeGateCheck(evidence(buildApprovalComment({ id, headSha: HEAD, patchId: PATCH })), 0, null, null, { patchId: PATCH, env: f.env });
   assert.equal(real.ok, true, JSON.stringify(real.failures));
+});
+
+// Cluster 8, 5: a reader without the hook key (the CI gate-evidence runner) treats a marked comment as a plain line
+test("a reader without the key keeps a marked approve-merge comment and the size-budget check passes", () => {
+  const evidence = (body) => ({
+    repo: REPO, pr: 7, currentHeadSha: HEAD,
+    draftGate: { visible: true, verdict: "clean" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: HEAD, sizeOutcome: "escalate", sizeTouchesT1: false },
+    comments: [{ login: "owner", body, type: "User", trusted: true }],
+  });
+  const marked = comment("f".repeat(64));
+  const kept = filter(NO_APPROVAL_KEY_ENV, [marked]);
+  assert.deepEqual(kept, { comments: [marked], refusals: [] });
+  const result = buildPreMergeGateCheck(evidence(marked.body), 0, null, null, { patchId: PATCH, env: NO_APPROVAL_KEY_ENV });
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+// Cluster 2, 3: the size-budget failure names the ask-approval recovery and carries the refusals
+test("the pre-merge gate size-budget failure names MERGE-ASK-APPROVAL and carries the refusal on a keyed machine", () => {
+  const f = fixture();
+  ask(f.env);
+  const evidence = (comments) => ({
+    repo: REPO, pr: 7, currentHeadSha: HEAD,
+    draftGate: { visible: true, verdict: "clean" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: HEAD, sizeOutcome: "escalate", sizeTouchesT1: false },
+    comments,
+  });
+  const typed = buildPreMergeGateCheck(evidence([{ login: "owner", body: `approve merge ${HEAD}`, type: "User", trusted: true }]), 0, null, null, { patchId: PATCH, env: f.env });
+  const text = typed.failures.find((m) => m.includes("size-budget requires a human APPROVED review"));
+  assert.ok(text?.includes("MERGE-ASK-APPROVAL"), JSON.stringify(typed.failures));
+  assert.ok(text.includes("has no hook marker"), "the refusal is appended");
+  const none = buildPreMergeGateCheck(evidence([]), 0, null, null, { patchId: PATCH, env: f.env });
+  assert.ok(none.failures.some((m) => m.includes("answers the approval question (MERGE-ASK-APPROVAL)")));
+});
+
+// Cluster 4: the ready-gate refusal text names the approval question
+test("the standing-authorization refusal names the approval question next to the APPROVED review", () => {
+  const text = policyChangeApprovalRefusal({ pr: 7, headSha: HEAD, approval: { reason: "no fresh approval", approvedBy: "owner" } });
+  assert.ok(text.includes("MERGE-ASK-APPROVAL"));
+  assert.ok(text.includes(ASK_APPROVAL_RECOVERY));
+  assert.match(text, /APPROVED review/);
+});
+
+// Cluster 7: the docs state the exact question template the parser accepts
+test("the contracts cite MERGE-ASK-APPROVAL and the question template buildApprovalQuestion produces", () => {
+  const template = buildApprovalQuestion({ repo: "<owner/name>", pr: "<n>", headSha: "<40-hex>", patchId: "<40-hex>" });
+  for (const doc of ["skills/docs/main-agent-contract.md", "skills/docs/merge-preconditions.md"]) {
+    const text = fs.readFileSync(path.resolve(doc), "utf8");
+    assert.ok(text.includes("MERGE-ASK-APPROVAL"), doc);
+    assert.ok(text.includes(template), `${doc} states the question template`);
+  }
+});
+
+// Cluster 11: the guard fails closed at its recursion bound
+test("the guard denies an argument nested deeper than six levels and allows a shallow one", () => {
+  const f = fixture();
+  const nest = (leaf, levels) => { let v = leaf; for (let i = 0; i < levels; i += 1) v = { a: v }; return v; };
+  const key = { path: "~/.config/dev-loops/merge-approvals/.key" };
+  const deep = runHook(GUARD_HOOK, { tool_name: "mcp__files__read", tool_input: nest(key, 7), cwd: f.root }, f.env);
+  assert.equal(deep.status, 2);
+  assert.match(deep.stderr, /nested deeper than 6 levels/);
+  assert.equal(runHook(GUARD_HOOK, { tool_name: "mcp__files__read", tool_input: nest({ path: "x" }, 3), cwd: f.root }, f.env).status, 0);
+  assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "mcp__files__read", tool_input: nest(key, 3), cwd: f.root }, f.env)), "deny");
+});
+
+// Cluster 16: the gh stub applies only under the test flag
+test("the post hook ignores DEVLOOPS_GH_COMMAND without the test flag", () => {
+  const f = fixture();
+  const { DEVLOOPS_APPROVAL_TEST_MODE: _flag, ...noFlag } = f.env;
+  // A `gh` earlier on PATH is the one the hook runs; the DEVLOOPS_GH_COMMAND stub is not.
+  const bin = path.join(f.root, "bin");
+  const viaPath = path.join(f.root, "gh-path-args.txt");
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' "$@" > "${viaPath}"\n`, { mode: 0o755 });
+  runHook(POST_HOOK, askPayload(question()), { ...noFlag, PATH: `${bin}${path.delimiter}${process.env.PATH}` });
+  assert.equal(fs.existsSync(f.out), false, "the stub did not run");
+  assert.equal(fs.existsSync(viaPath), true, "gh from PATH ran");
 });

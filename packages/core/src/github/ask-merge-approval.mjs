@@ -74,14 +74,20 @@ export function isApprovalPath(target, env = process.env) {
 }
 
 // The record signing and key functions. The module file name stays out of the scan: agents run this module's own tests.
+// They match as whole identifiers (case-sensitive), so `uploadKey`, `preloadKeys` and `createKeyPair` stay allowed.
 const SIGNING_NAMES = ["writeApprovalRecord", "createKey", "loadKey"];
+const SIGNING_RES = SIGNING_NAMES.map((n) => ({ name: n, re: new RegExp(`(?<![\\w$])${n}(?![\\w$])`, "u") }));
 
-/** True when a command or argument string names the approval directory, its parent, its override variables or the record signing functions (case-folded). */
-export function commandNamesApprovalDir(command, env = process.env) {
-  if (typeof command !== "string") return false;
+/** The first approval name a command or argument string mentions (directory, parent, override variable, case-folded; signing function, whole identifier), else null. */
+export function approvalNameHit(command, env = process.env) {
+  if (typeof command !== "string") return null;
   const text = fold(command);
-  return [APPROVAL_DIR_NAME, APPROVAL_PARENT_NAME, APPROVAL_DIR_ENV, APPROVAL_TEST_FLAG_ENV, ...SIGNING_NAMES, approvalDir(env), approvalDir({})].some((n) => n && text.includes(fold(n)));
+  const named = [APPROVAL_DIR_NAME, APPROVAL_PARENT_NAME, APPROVAL_DIR_ENV, APPROVAL_TEST_FLAG_ENV, approvalDir(env), approvalDir({})].find((n) => n && text.includes(fold(n)));
+  return named ?? SIGNING_RES.find(({ re }) => re.test(command))?.name ?? null;
 }
+
+/** True when a command or argument string names the approval directory, its parent, its override variables or a record signing function. */
+export const commandNamesApprovalDir = (command, env = process.env) => approvalNameHit(command, env) !== null;
 
 export function approveMergeLine({ headSha, patchId = null }) {
   return patchId ? `approve merge ${headSha} patch-id ${patchId}` : `approve merge ${headSha}`;
@@ -255,7 +261,8 @@ function verifyRecord(id, { repo, pr }, env, key) {
  * its record. When this machine holds the hook key, an unmarked approve-merge comment (typed by hand)
  * is dropped too. A marked body with more than one approve-merge line, a record that binds another
  * head or patch-id than the comment line, and a record that matches neither the current head nor the
- * current patch-id are dropped. Without the key, unmarked comments pass through (Pi path).
+ * current patch-id are dropped. A reader without the key (Pi, the CI gate-evidence runner) has no
+ * record to check: every comment passes through, a marked one like a plain line.
  * Each refusal names its recovery.
  * @returns {{ comments: object[], refusals: string[] }}
  */
@@ -283,8 +290,9 @@ export function filterAskApprovalComments({ comments, repo, pr, currentHeadSha, 
       refuse(`ask-approval comment ${marked.id.slice(0, 12)} cannot be checked: ${keyError.message}.`, `${KEY_RECOVERY} ${NO_DIALOG_RECOVERY}`);
       continue;
     }
-    // A marker with no key on this machine has no record to verify: refused as missing.
-    const record = key ? verifyRecord(marked.id, { repo, pr }, env, key) : null;
+    // A reader without the key (the CI gate-evidence runner, Pi) has no record to verify: a marked comment is a plain line there, as an unmarked one is.
+    if (!keyed) { kept.push(comment); continue; }
+    const record = verifyRecord(marked.id, { repo, pr }, env, key);
     if (countApproveLines(comment.body) > 1) {
       refuse(`ask-approval comment ${marked.id.slice(0, 12)} carries more than one approve-merge line.`);
     } else if (!record) {

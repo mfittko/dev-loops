@@ -507,7 +507,7 @@ export function evaluateMergePreconditions({
   const freshApproval = verifyFreshHumanApproval({ approvedBy: humanApprovedBy, currentHeadSha, currentPatchId, reviews, comments });
 
   if (resolveSizeBudgetHumanApprovalRequired({ sizeOutcome, touchesT1, humanApprovalSatisfied: freshApproval.satisfied, unresolvedChangesRequestedCount }) === true) {
-    failures.push({ precondition: "size_budget_human_approval", reason: "size-budget requires a human APPROVED review OR a head-pinned \"approve merge <headSha>\" operator comment (or an \"approve merge <sha> patch-id <patch-id>\" comment matching the current diff), with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR" });
+    failures.push({ precondition: "size_budget_human_approval", reason: "size-budget requires a human APPROVED review OR a head-pinned \"approve merge <headSha>\" operator comment (or an \"approve merge <sha> patch-id <patch-id>\" comment matching the current diff), with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR; under Claude Code the operator answers the approval question (MERGE-ASK-APPROVAL)" });
   }
 
   // Copilot-convergence precondition: refuse a current-head Copilot non-approval

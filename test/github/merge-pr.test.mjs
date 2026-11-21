@@ -1725,8 +1725,9 @@ async function askApprovalRuntime({ mode }) {
   const text = buildApprovalQuestion({ repo: "mfittko/dev-loops", pr: 5, headSha: OLD_HEAD, patchId: PATCH_ID });
   const q = { question: text, options: [{ label: "Yes" }, { label: "No" }], multiSelect: false };
   const approval = extractYesApproval({ tool_input: { questions: [q] }, tool_response: { answers: { [text]: "Yes" } } });
-  const written = mode === "forge" ? null : writeApprovalRecord({ approval }, env);
-  const body = mode === "typed" ? `approve merge ${OLD_HEAD} patch-id ${PATCH_ID}` : buildApprovalComment({ id: written?.id ?? "f".repeat(64), headSha: OLD_HEAD, patchId: PATCH_ID });
+  // Every mode writes one record, so the hook key exists: a made-up id or a typed line is then refused. Without a key a reader passes the comment through.
+  const written = writeApprovalRecord({ approval }, env);
+  const body = mode === "typed" ? `approve merge ${OLD_HEAD} patch-id ${PATCH_ID}` : buildApprovalComment({ id: mode === "forge" ? "f".repeat(64) : written.id, headSha: OLD_HEAD, patchId: PATCH_ID });
   const { runtime } = makeRuntime({
     evidence: ESCALATED_EVIDENCE,
     comments: [{ user: { login: "mfittko" }, body }],
@@ -1745,7 +1746,9 @@ test("a hook-marked approval comment with its harness record approves an escalat
 for (const mode of ["forge", "typed"]) {
   test(`an approve-merge comment without a harness record fails closed with a recovery (${mode})`, async () => {
     const threw = await mergePr(baseOptions({ standingAuthorization: false }), await askApprovalRuntime({ mode })).catch((e) => e);
-    assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "merge_approval" && /Recovery: ask the operator the approval question again/.test(f.reason)));
+    for (const precondition of ["merge_approval", "size_budget_human_approval"]) {
+      assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === precondition && /Recovery: ask the operator the approval question again/.test(f.reason)), precondition);
+    }
   });
 }
 

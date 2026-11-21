@@ -398,7 +398,7 @@ function anyFreshHumanApproval({ repo, pr, currentHeadSha, currentPatchId = null
   // "approve merge <head>" comment or APPROVED review never satisfies the gate.
   const reviews = allReviews.filter((e) => e?.trusted === true);
   // The record check of MERGE-ASK-APPROVAL runs here too, so this gate and the merge wrapper read one approval rule.
-  const comments = filterAskApprovalComments({ comments: allComments.filter((e) => e?.trusted === true), repo, pr: Number(pr), currentHeadSha, currentPatchId, env }).comments;
+  const { comments, refusals } = filterAskApprovalComments({ comments: allComments.filter((e) => e?.trusted === true), repo, pr: Number(pr), currentHeadSha, currentPatchId, env });
   const candidateLogins = new Set();
   for (const entry of reviews) {
     if (typeof entry?.login === "string" && entry.login.length > 0) candidateLogins.add(entry.login);
@@ -407,9 +407,9 @@ function anyFreshHumanApproval({ repo, pr, currentHeadSha, currentPatchId = null
     if (typeof entry?.login === "string" && entry.login.length > 0) candidateLogins.add(entry.login);
   }
   for (const login of candidateLogins) {
-    if (verifyFreshHumanApproval({ approvedBy: login, currentHeadSha, currentPatchId, reviews, comments }).satisfied) return true;
+    if (verifyFreshHumanApproval({ approvedBy: login, currentHeadSha, currentPatchId, reviews, comments }).satisfied) return { satisfied: true, refusals: [] };
   }
-  return false;
+  return { satisfied: false, refusals };
 }
 
 /**
@@ -496,16 +496,17 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
     const unresolvedChangesRequestedCount = evidence.reviewsReadFailed === true
       ? Number.POSITIVE_INFINITY
       : countUnresolvedHumanChangesRequested(reviews);
+    const humanApproval = anyFreshHumanApproval({ repo: evidence.repo, pr: evidence.pr, currentHeadSha: evidence.currentHeadSha, currentPatchId: patchId, reviews, comments, env });
     if (resolveSizeBudgetHumanApprovalRequired({
       sizeOutcome: preApproval.sizeOutcome,
       touchesT1: preApproval.sizeTouchesT1,
-      humanApprovalSatisfied: anyFreshHumanApproval({ repo: evidence.repo, pr: evidence.pr, currentHeadSha: evidence.currentHeadSha, currentPatchId: patchId, reviews, comments, env }),
+      humanApprovalSatisfied: humanApproval.satisfied,
       unresolvedChangesRequestedCount,
     })) {
       failures.push(
         evidence.reviewsReadFailed === true
           ? "size-budget merge gate cannot verify human approval/unresolved CHANGES_REQUESTED state for this escalated/T1 PR: PR reviews could not be read (fail closed)"
-          : "size-budget requires a human APPROVED review OR a head-pinned \"approve merge <headSha>\" operator comment (or an \"approve merge <sha> patch-id <patch-id>\" comment matching the current diff), with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR",
+          : `size-budget requires a human APPROVED review OR a head-pinned "approve merge <headSha>" operator comment (or an "approve merge <sha> patch-id <patch-id>" comment matching the current diff), with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR; under Claude Code the operator answers the approval question (MERGE-ASK-APPROVAL)${humanApproval.refusals.length > 0 ? `. ${humanApproval.refusals.join(" ")}` : ""}`,
       );
     }
   }
