@@ -20,7 +20,7 @@ import { CHECKBOX_ROW_RE, checklistLineScopes, checklistSectionLineIndices, dete
 import { applyTick } from "./tick-verified-checkboxes.mjs";
 import { editPr } from "./edit-pr.mjs";
 import { editIssue } from "./edit-issue.mjs";
-import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "./detect-checkpoint-evidence.mjs";
+import { buildFanoutEnforcement, detectCheckpointEvidence, evaluateInlineFanoutMode } from "./detect-checkpoint-evidence.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
@@ -2043,7 +2043,7 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
     `[draft_gate] ${options.repo}#${options.pr} is ready but needs clean draft_gate evidence; ` +
     `temporarily converting to draft to post the verdict, then restoring ready.\n`,
   );
-  const conversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
+  const conversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild, repoRoot, coordinationSnapshotRoot });
   // The conversion changed the draft state the snapshot recorded; the re-entry must read it live.
   await deletePrGateCoordinationSnapshot({ repo: options.repo, pr: options.pr }, { repoRoot, runChild, coordinationSnapshotRoot });
   let result;
@@ -2061,7 +2061,7 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
   } catch (error) {
     if (conversion.alreadyDraft !== true) {
       try {
-        await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
+        await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild, repoRoot, coordinationSnapshotRoot });
         process.stderr.write(`[draft_gate] restored ${options.repo}#${options.pr} to ready after a failed verdict post.\n`);
       } catch (restoreError) {
         // Best-effort restore; surface the original error but log the restore failure
@@ -2076,7 +2076,7 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
   }
   if (conversion.alreadyDraft !== true) {
     try {
-      await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
+      await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild, repoRoot, coordinationSnapshotRoot });
     } catch (restoreError) {
       // The verdict WAS posted successfully; only the ready-restore failed. Make that
       // explicit so the caller does not re-post the gate (the comment already exists)
@@ -2745,10 +2745,12 @@ export async function assertGateValidationArtifact({ repo, pr, gate, headSha, re
 }
 
 export async function upsertCheckpointVerdict(options, runtime = {}) {
-  const result = await postCheckpointVerdict(options, runtime);
-  // A later step must not read pre-post gate evidence from the pre-flight snapshot.
-  if (result?.ok) await deletePrGateCoordinationSnapshot({ repo: options.repo, pr: options.pr }, { repoRoot: runtime.repoRoot ?? process.cwd(), runChild: runtime.runChild, coordinationSnapshotRoot: runtime.coordinationSnapshotRoot });
-  return result;
+  try {
+    return await postCheckpointVerdict(options, runtime);
+  } finally {
+    // A refused or failed post leaves no snapshot either, so a retry loads fresh instead of re-reading frozen values.
+    await deletePrGateCoordinationSnapshot({ repo: options.repo, pr: options.pr }, { repoRoot: runtime.repoRoot ?? process.cwd(), runChild: runtime.runChild, coordinationSnapshotRoot: runtime.coordinationSnapshotRoot });
+  }
 }
 
 async function postCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner, countPrOwnCommits = realCountPrOwnCommits, checkBaseFreshness, coordinationSnapshotRoot } = {}) {
@@ -2934,10 +2936,12 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     const loaded = await loadPrGateCoordinationContextReusingSnapshot(coordinationOptions, gh, { expectedHeadSha: options.headSha });
     coordinationContext = loaded.context;
     if (loaded.reused) {
-      // A reused snapshot is only as current as its head: one cheap live read, and a moved head loads fresh.
+      // A reused snapshot is only as current as its head and verdict comments: re-read both live; CI, threads and Copilot state stay snapshot-fresh.
       const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], { env, ghCommand, runChild });
       if (String(live?.headRefOid ?? "").toLowerCase() !== String(coordinationContext.currentHeadSha ?? "").toLowerCase()) {
         coordinationContext = await loadPrGateCoordinationContext(coordinationOptions, gh);
+      } else {
+        coordinationContext = { ...coordinationContext, gateEvidence: await detectCheckpointEvidence(coordinationOptions, { ...gh, cwd: gh.repoRoot, unresolvedGateThreadCount: coordinationContext.unresolvedGateThreadCount, recordCarry: true }) };
       }
     }
     evidence = coordinationContext.gateEvidence;

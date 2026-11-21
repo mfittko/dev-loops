@@ -1305,13 +1305,13 @@ export async function deletePrGateCoordinationSnapshot(options, runtime = {}) {
 }
 
 /**
- * Returns `{ context, reused }`: the persisted context when it matches repo, PR, lightweight, the exact full expected head and the age bound; otherwise a fresh load that is persisted.
+ * Returns `{ context, reused }`: the persisted context when it matches repo, PR, lightweight (unless `matchLightweight` is false), the exact full expected head and the age bound; otherwise a fresh load. Only the pre-flight writes snapshots.
  */
-export async function loadPrGateCoordinationContextReusingSnapshot(options, runtime = {}, { expectedHeadSha, maxAgeMs = PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS, nowMs = Date.now() } = {}) {
+export async function loadPrGateCoordinationContextReusingSnapshot(options, runtime = {}, { expectedHeadSha, matchLightweight = true, maxAgeMs = PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS, nowMs = Date.now() } = {}) {
   if (typeof expectedHeadSha === "string" && /^([0-9a-f]{40}|[0-9a-f]{64})$/i.test(expectedHeadSha)) {
     try {
       const snap = JSON.parse(await readFile(coordinationSnapshotPath(options, runtime) ?? "", "utf8"));
-      if (snap.repo === options.repo && snap.pr === options.pr && snap.lightweight === (options.lightweight === true)
+      if (snap.repo === options.repo && snap.pr === options.pr && (!matchLightweight || snap.lightweight === (options.lightweight === true))
         && typeof snap.headSha === "string" && snap.headSha.toLowerCase() === expectedHeadSha.toLowerCase()
         && Number.isFinite(snap.fetchedAtMs) && nowMs >= snap.fetchedAtMs && nowMs - snap.fetchedAtMs < maxAgeMs && snap.context) {
         return { context: snap.context, reused: true };
@@ -1319,7 +1319,6 @@ export async function loadPrGateCoordinationContextReusingSnapshot(options, runt
     } catch { /* missing or unparsable: fetch fresh */ }
   }
   const context = await loadPrGateCoordinationContext(options, runtime);
-  await writePrGateCoordinationSnapshot(options, runtime, context, nowMs);
   return { context, reused: false };
 }
 

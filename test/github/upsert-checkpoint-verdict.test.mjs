@@ -30,7 +30,7 @@ import { buildFanoutEnforcement, buildPreMergeGateCheck, deriveEvidenceState, de
 import { buildLogPath, writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
-import { loadPrGateCoordinationContextReusingSnapshot } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { loadPrGateCoordinationContext, writePrGateCoordinationSnapshot } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
@@ -1001,22 +1001,35 @@ const snapshotPostEntries = () => [
 const snapshotVerdictArgs = ["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", SNAPSHOT_HEAD, "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}', "--findings-summary", "no issues found", "--next-action", "mark ready for review"];
 const seedCoordinationSnapshot = async (root) => {
   const { runChild } = makeGhMockRaw(snapshotCoordinationEntries());
-  await loadPrGateCoordinationContextReusingSnapshot({ repo: "owner/repo", pr: 17, lightweight: false }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: fanoutDisabledRepoRoot, runChild, coordinationSnapshotRoot: root }, { expectedHeadSha: SNAPSHOT_HEAD });
+  const seedOptions = { repo: "owner/repo", pr: 17, lightweight: false };
+  const seedRuntime = { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: fanoutDisabledRepoRoot, runChild, coordinationSnapshotRoot: root };
+  await writePrGateCoordinationSnapshot(seedOptions, seedRuntime, await loadPrGateCoordinationContext(seedOptions, seedRuntime));
   return path.join(root, "gate-coordination", "owner-repo", "pr-17", "context-snapshot.json");
 };
 
-test("upsert-checkpoint-verdict reuses the coordination snapshot, re-reads the live head and comments, and deletes the snapshot after posting", async () => {
+test("upsert-checkpoint-verdict reuses the coordination snapshot, re-reads the live head and verdict comments, and deletes the snapshot after posting", async () => {
   await withTempDir(async (tempDir) => {
     const snapshotFile = await seedCoordinationSnapshot(tempDir);
-    const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(), ...snapshotPostEntries()]);
+    const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(), ...snapshotCoordinationEntries().slice(3), ...snapshotPostEntries()]);
     const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
     assert.equal(result.code, 0, result.stderr);
     const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
     assert.match(ghArgs[0], /pr view 17 --repo owner\/repo --json headRefOid$/);
     assert.equal(ghArgs.some((a) => a.includes("--json number,state,isDraft")), false, "the coordination context is not refetched");
+    assert.equal(ghArgs.some((a) => a.includes("issues/17/comments")), true, "the verdict comments are re-read live");
     assert.match(ghArgs.at(-1), /pulls\/17\/reviews/);
     assert.equal(await readFile(snapshotFile, "utf8").catch(() => null), null);
   }, { prefix: "dev-loops-upsert-snapshot-reuse-" });
+});
+
+test("upsert-checkpoint-verdict deletes the snapshot when the post fails", async () => {
+  await withTempDir(async (tempDir) => {
+    const snapshotFile = await seedCoordinationSnapshot(tempDir);
+    const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(), ...snapshotCoordinationEntries().slice(3)]);
+    const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+    assert.notEqual(result.code, 0);
+    assert.equal(await readFile(snapshotFile, "utf8").catch(() => null), null);
+  }, { prefix: "dev-loops-upsert-snapshot-failed-post-" });
 });
 
 test("upsert-checkpoint-verdict discards a reused snapshot whose head moved and loads fresh", async () => {

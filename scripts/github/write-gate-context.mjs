@@ -4305,7 +4305,7 @@ export async function main(
     if ((options.gate === "pre_approval_gate" || options.gate === "draft_gate") && !options.prefixFile) {
       let coordination = null;
       try {
-        coordination = await loadCoordination({ repo: options.repo, pr: options.pr }, { expectedHeadSha: options.headSha });
+        coordination = await loadCoordination({ repo: options.repo, pr: options.pr }, { expectedHeadSha: options.headSha, matchLightweight: false });
       } catch {
         coordination = null;
       }

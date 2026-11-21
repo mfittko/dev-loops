@@ -5203,6 +5203,26 @@ describe("pull-request coordination snapshot", () => {
     });
   });
 
+  it("does not write a snapshot on a miss", async () => {
+    await withRoot(async (root) => {
+      const env = { [GH_MOCK_ENTRIES]: pathAGhEntries({ reviewBody: "ok", atCap: false }) };
+      const runtime = buildMockRuntime(env, { repoRoot: capFixtureRepoRoot, coordinationSnapshotRoot: root });
+      const { reused } = await loadPrGateCoordinationContextReusingSnapshot({ repo: "owner/repo", pr: 266 }, runtime, { expectedHeadSha: "a".repeat(40) });
+      assert.equal(reused, false);
+      assert.equal(await readFile(snapshotFile(root).replace("pr-10", "pr-266"), "utf8").catch(() => null), null);
+    });
+  });
+
+  it("reuses a snapshot of either lightweight value when matchLightweight is false", async () => {
+    await withRoot(async (root) => {
+      await writePrGateCoordinationSnapshot({ ...options, lightweight: true }, { coordinationSnapshotRoot: root }, context, 1000);
+      const { runtime, calls } = failingRuntime(root);
+      const loaded = await loadPrGateCoordinationContextReusingSnapshot(options, runtime, { expectedHeadSha: HEAD, matchLightweight: false, nowMs: 1001 });
+      assert.deepEqual(loaded, { context, reused: true });
+      assert.equal(calls.length, 0);
+    });
+  });
+
   it("a real loaded context survives the JSON round trip through the snapshot", async () => {
     await withRoot(async (root) => {
       const env = { [GH_MOCK_ENTRIES]: pathAGhEntries({ reviewBody: "ok", atCap: false }) };
