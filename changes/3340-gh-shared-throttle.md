@@ -1,3 +1,3 @@
 ### Changed
 
-- `gh` calls are paced per main checkout (`queue.ghMinIntervalMs`, default 500, max 10000). A secondary rate limit backs off once, then fails with `RATE_LIMITED` (#3340)
+- `gh` calls are paced per main checkout (`queue.ghMinIntervalMs`, max 10000). A secondary limit backs off once, then fails `RATE_LIMITED`, except paced-only sites (ADR 0305) (#3340)
