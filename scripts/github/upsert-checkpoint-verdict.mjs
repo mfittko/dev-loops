@@ -11,6 +11,7 @@ import { composeBodyOnlyConvergedDraftGate, composeConvergedDraftGate, converged
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
 import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
+import { readPrViewOnce } from "./_pr-view-memo.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { minimizeSupersededGateReviews } from "./_minimize-superseded-verdicts.mjs";
@@ -2176,7 +2177,7 @@ export function buildCoordinationEvaluatorInput({
 // acceptance predicate (buildFanoutEnforcement + evaluateInlineFanoutMode) so
 // the two boundaries can never drift apart. Throws when the candidate does
 // not qualify; resolves silently otherwise.
-async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inlineReason, headSha, convergedFixerCommit = null, ledgerPath = null, config }, { env, ghCommand, repoRoot, runChild }) {
+async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inlineReason, headSha, convergedFixerCommit = null, ledgerPath = null, config }, { env, ghCommand, repoRoot, runChild, prViewMemo }) {
   let hasFullLabel = false;
   let baseRef = null;
   // Light-mode facts only matter for an inline candidate under active
@@ -2185,10 +2186,10 @@ async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inline
   // off (no facts could ever change the outcome).
   if (executionMode === "inline_single_agent" && resolveRequireFanoutEvidence(config) && resolveLightMode(config) != null) {
     try {
-      const prFacts = await runGhJson(
+      const prFacts = await readPrViewOnce({ repo, pr, fields: "baseRefOid,labels" }, prViewMemo, () => runGhJson(
         ["pr", "view", String(pr), "--repo", repo, "--json", "baseRefOid,labels"],
         { env, ghCommand, runChild },
-      );
+      ));
       baseRef = typeof prFacts?.baseRefOid === "string" && prFacts.baseRefOid.trim().length > 0
         ? prFacts.baseRefOid.trim()
         : null;
@@ -2764,7 +2765,9 @@ export async function upsertCheckpointVerdict(options, runtime = {}) {
 }
 
 async function postCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner, countPrOwnCommits = realCountPrOwnCommits, checkBaseFreshness, coordinationSnapshotRoot } = {}) {
-  const gh = { env, ghCommand, repoRoot, runChild, coordinationSnapshotRoot };
+  // One memo per invocation: the three baseRefOid,labels reads share one gh read; the write-guard re-reads stay live.
+  const prViewMemo = new Map();
+  const gh = { env, ghCommand, repoRoot, runChild, coordinationSnapshotRoot, prViewMemo };
   // Optional --spec-authority stamps the RETURNED result (this script's
   // durable verdict record — it posts no file of its own) with the pinned
   // revision identity, via the ONE shared stamp helper (ADR 0061). Read up
@@ -3205,7 +3208,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
         ledgerPath: capRoundLedgerPath,
         config,
       },
-      { env, ghCommand, repoRoot, runChild },
+      { env, ghCommand, repoRoot, runChild, prViewMemo },
     );
   }
   // review carries no gate obligations, so no configured blocking severities
@@ -3732,10 +3735,10 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   } else if (options.gate === "pre_approval_gate") {
     let baseRef = null;
     try {
-      const prFacts = await runGhJson(
+      const prFacts = await readPrViewOnce({ repo: options.repo, pr: options.pr, fields: "baseRefOid,labels" }, prViewMemo, () => runGhJson(
         ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "baseRefOid,labels"],
         { env, ghCommand, runChild },
-      );
+      ));
       baseRef = typeof prFacts?.baseRefOid === "string" && prFacts.baseRefOid.trim().length > 0
         ? prFacts.baseRefOid.trim()
         : null;
