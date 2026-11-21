@@ -3733,6 +3733,20 @@ test("issue 2787 C11: --ci-file emits a ci-failure order that names the failing 
   });
 });
 
+test("issue 3414: --ci-file with --act-list-file feeds the unposted act list and the CI failure to one fixer order", async () => {
+  await withFixture(async (fx) => {
+    const unit = await emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" });
+    assert.equal(unit.workOrder.source, "ci-failure");
+    assert.deepEqual(unit.workOrder.requiredReads.map((read) => read.kind), ["ci-failure", "act-list"]);
+    const text = await readFile(unit.promptPath, "utf8");
+    assert.match(text, /Also fix every act item in the `act-list` read/);
+    assert.equal(pull(unit, fx.root).status, 0);
+    await writeFile(fx.files.actList, "[]");
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), /not a non-empty judge-pass --out array/);
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: undefined }), /--act-list-file needs --gate/);
+  });
+});
+
 test("issue 2787 C17: a ci-failure plan emits the claude, pi and codex adapter payloads", async () => {
   await withFixture(async (fx) => {
     const unit = await emitCi(fx);
@@ -3763,7 +3777,6 @@ test("issue 2787 C11: --ci-file takes only --phase full and no other source, --g
   await withFixture(async (fx) => {
     await assert.rejects(emitCi(fx, { phase: "commit_only" }), /--ci-file takes only --phase full.*re-run with --phase full/);
     await assert.rejects(emitCi(fx, { threadsFile: fx.files.threads }), /exactly one of --act-list-file, --threads-file, --review-id and --ci-file/);
-    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), /exactly one of/);
     await assert.rejects(emitCi(fx, { gate: "draft_gate" }), /--gate applies only to an --act-list-file source/);
     await assert.rejects(emitCi(fx, { deltaResult: fx.files.delta }), /--delta-result applies only to an --act-list-file source/);
   });

@@ -1,0 +1,2 @@
+### Changed
+- A draft_gate round fans out only on settled green current-head CI: gate coordination routes red CI to the CI-fix route (`agentRemedy` and `recovery`), the gate coordinator re-checks CI before fan-out, and a verdict post refused for red CI hands back `fix_ci_failure` with the act list, which `emit-fixer-work-order.mjs --ci-file ... --act-list-file ...` fixes together with the CI failure (#3414)

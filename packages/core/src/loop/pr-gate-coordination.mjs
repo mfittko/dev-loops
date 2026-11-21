@@ -128,8 +128,14 @@ const shellQuote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
 
 // Issue 3105: the command an agent can run to clear a report_blocked CI result.
 function ciAgentRemedy(input, ciStatus) {
-  // Failing CI has no runnable repair command yet (startup routes back to the same block), so the operator fallback applies.
-  if (ciStatus === "failure") return { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
+  // Failing CI routes to a ci-failure fixer order (emit-fixer-work-order.mjs --ci-file), fed by the wait-pr-checks result of the red head.
+  if (ciStatus === "failure") {
+    const remedy = remedyOrOperator(input, (repo, pr) => ({
+      command: `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${repo} --pr ${pr} --timeout 0`,
+      summary: "Read the red head's checks, save that JSON with the Write tool, then emit the CI fixer order: dev-loops-run scripts/loop/emit-fixer-work-order.mjs --phase full --ci-file <that file> (add --act-list-file <act list> --gate draft_gate when a round's act list is unposted). Re-run gate coordination once CI is green.",
+    }));
+    return remedy.agentRemedy ? { ...remedy, recovery: remedy.agentRemedy.command } : remedy;
+  }
   return remedyOrOperator(input, (repo, pr) => ({
     command: `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${repo} --pr ${pr} --timeout 600`,
     summary: "Wait for the head checks to confirm CI, then re-run gate coordination.",
@@ -564,6 +570,7 @@ function buildResult({
   copilotReviewRoundCount = null,
   blockedOn = null,
   agentRemedy = null,
+  recovery = null,
 }) {
   const effectiveRefinementArtifact = refinementArtifact ?? inputRefinementArtifact ?? null;
   return {
@@ -589,6 +596,7 @@ function buildResult({
     ...(effectiveRefinementArtifact ? { refinementArtifact: effectiveRefinementArtifact } : {}),
     ...(blockedOn ? { blockedOn } : {}),
     ...(agentRemedy ? { agentRemedy } : {}),
+    ...(recovery ? { recovery } : {}),
   };
 }
 

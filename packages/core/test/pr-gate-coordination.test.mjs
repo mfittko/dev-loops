@@ -4753,7 +4753,7 @@ test("blocked lifecycle state carries blockedOn operator_decision", () => {
   assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
 });
 
-test("failing-CI block names the operator until a runnable repair path exists", () => {
+test("failing-CI block names the CI-fix route (issue 3414)", () => {
   const result = evaluatePrGateCoordination({
     repo: "o/r",
     pr: 266,
@@ -4769,8 +4769,8 @@ test("failing-CI block names the operator until a runnable repair path exists", 
     preApprovalGateMarker: gate({ visible: false }),
   });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
-  assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
-  assert.equal(result.agentRemedy, undefined);
+  assert.equal(result.blockedOn, undefined);
+  assert.match(result.agentRemedy.command, /wait-pr-checks\.mjs --repo o\/r --pr 266 --timeout 0/);
 });
 
 test("draft round-cap refusal without a failure condition names the operator (ADR 0255)", () => {
@@ -5090,4 +5090,43 @@ test("#3373: the reply_resolve_review_threads reason names the close-gate-findin
     assert.match(result.reason, /judge-disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied — closed by a close-gate-findings rerun/);
   }
   assert.match(capFixed.reason, /cap round's fixer pass landed/);
+});
+
+// Issue 3414 ac:1: a draft round fans out only on settled green current-head CI.
+for (const [ciStatus, nextAction] of [["pending", PR_CHECKPOINT_ACTION.WAIT_FOR_CI], ["failure", PR_CHECKPOINT_ACTION.REPORT_BLOCKED], ["success", PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE]]) {
+  test(`draft PR with ${ciStatus} current-head CI routes to ${nextAction} (issue 3414 ac:1)`, () => {
+    const result = evaluatePrGateCoordination({
+      repo: "owner/repo",
+      pr: 3414,
+      currentHeadSha: "abc123456789",
+      prDraft: true,
+      lifecycleState: STATE.PR_DRAFT,
+      loopDisposition: DISPOSITION.ACTION_REQUIRED,
+      ciStatus,
+      draftGate: gate({ visible: false }),
+      draftGateMarker: gate({ visible: false }),
+    });
+    assert.equal(result.nextAction, nextAction);
+    assert.equal(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE), ciStatus === "success");
+    if (ciStatus === "failure") {
+      assert.match(result.agentRemedy.command, /wait-pr-checks\.mjs --repo owner\/repo --pr 3414/);
+      assert.match(result.agentRemedy.summary, /--ci-file/);
+      assert.equal(result.recovery, result.agentRemedy.command);
+    }
+  });
+}
+
+test("draft PR with red CI and no repo names the operator and no recovery (issue 3414 guard)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 3414,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "failure",
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+  });
+  assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+  assert.equal(result.recovery, undefined);
 });

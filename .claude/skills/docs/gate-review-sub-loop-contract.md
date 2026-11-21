@@ -113,7 +113,7 @@ surface for the dispatch tool (`Agent` on Claude Code, `subagent` on Pi), before
 `gate resolve-validation`, `write-gate-context.mjs`, the carry-forward resolver and
 `emit-fanout-dispatch.mjs`. When the dispatch tool is absent, the gate coordinator returns the
 `FANOUT_UNAVAILABLE_MESSAGE` result at once: no validation, no context, no carry-forward, no
-emitter call, no round id. On Claude Code the gate coordinator MUST run at a depth that keeps the
+emitter call, no round id. Immediately before the Phase 2 fan-out the gate coordinator MUST re-read current-head CI with `wait-pr-checks.mjs --timeout 0` (the rate-limit-aware wait), and it MUST stop with a typed observation that names the CI route when CI is no longer settled green. Pending CI routes to `wait_for_ci` and red CI routes to `fix_ci_failure`. A round that fans out on unsettled CI loses its verdict, because `gate upsert-verdict` refuses to post on red current-head CI. On Claude Code the gate coordinator MUST run at a depth that keeps the
 `Agent` tool, so the agent that acts as the dev-loop coordinator dispatches the gate coordinator
 as its direct child and never routes the round through a further nested driver.
 

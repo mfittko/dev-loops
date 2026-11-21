@@ -153,3 +153,14 @@ test("AC1 the soft-cap bullet points at the run-ending cases and the fix-pass en
   assert.doesNotMatch(content, /Fresh dispatch stays for reviewer and judge isolation, genuine recovery/);
   assert.match(content, /eligible under `GATE-EXEC-LOW-NIT-CONVERGENCE`, the fix pass ends only after the `--converged-json` post/);
 });
+
+test("issue 3414 ac:3 a verdict post refused for red CI is recorded with the CI route as nextAction", async () => {
+  const good = { pr: 7, head: HEAD, nextAction: "fix_ci_failure", workerRunning: false, verdictRefusal: { reason: "ci_red", actListPath: "tmp/act-list.json" } };
+  assert.deepEqual(validateCoordinatorHandback(good), { ok: true });
+  for (const bad of [{ nextAction: "run_draft_gate" }, { verdictRefusal: { reason: "ci_red" } }, { verdictRefusal: { reason: "other", actListPath: "x" } }, { verdictRefusal: null }]) {
+    const result = validateCoordinatorHandback({ ...good, ...bad });
+    assert.equal(result.refusal, "verdict_refusal_route", JSON.stringify(bad));
+    assert.match(result.recovery, /--ci-file <wait-pr-checks JSON> --act-list-file/);
+  }
+  assert.match(await rule(), /verdictRefusal/);
+});

@@ -56,7 +56,7 @@ and takes no --gate or --delta-result. A review-body source has no delta-review 
 takes only --phase full, needs no delta decision, ignores any delta record for the head, and
 refuses --phase commit_only. --ci-file <path> takes the wait-pr-checks.mjs JSON of a red head (status and ciStatus
 "failure", headSha equal to --head-sha, non-blank failedChecks[].name; the order carries the first 50 names cut at 200 characters and the omitted count) as a ci-failure source with the same shape:
---phase full only, no delta record, no --gate or --delta-result; its handoff is { headSha } and joinRef is the outputRef.
+--phase full only, no delta record, no --delta-result; its handoff is { headSha } and joinRef is the outputRef. --gate applies only with --act-list-file, which may accompany --ci-file: the round's unposted act list (its verdict post was refused for red CI) then rides as a second act-list read and the fixer fixes both.
 --completion-only (--phase full, one --act-list-file or --threads-file source; no --delta-result, --allowed-path or --operator-focus-file, the plan pins them) re-enters the incomplete full plan on disk for delivery only: it applies when the plan was pulled and its report is missing or predates the pull, and the plan candidate is the live head or (act-list source only) an ancestor of it, and it emits an operation: complete order with empty allowedPaths and no push marker. Drift of the plan, its receipt, the source bytes, the branch or the tree refuses and writes nothing. A --phase commit_only emission refuses while such a pulled plan, or an unpulled completion order for it, is active at its candidate with no new commit. A plan that is unpulled, whose pinned required read drifted, whose gate sequence is closed or whose review round is retired is superseded without a refusal. --completion-only over an unpulled completion order refuses and names pulling its workOrderRef.
 On the threads source a commit_only emission carries the delta record's findings[] as deltaFindings act items.
 For the other sources --phase full needs a clearing
@@ -110,7 +110,7 @@ export function buildFixerDir({ repo, pr, tmpRoot }) {
 
 // emitFixerWorkOrder renders the message for the target harness before it rethrows.
 class Refusal extends Error {
-  constructor(message, refusal) { super(message); if (refusal) this.refusal = refusal; }
+  constructor(message, refusal, recovery) { super(message); if (refusal) this.refusal = refusal; if (recovery) this.recovery = recovery; }
 }
 
 async function readSource(kind, filePath, capture) {
@@ -230,7 +230,8 @@ const CI_UNSETTLED_HANDBACK = "hand back `ci_pending` (`ci_unknown` when the che
 function ciFailureFullTask(workOrder, dispositionPath) {
   const { branch, wait } = branchAndWait(workOrder);
   const checks = workOrder.requiredReads.find((read) => read.kind === "ci-failure");
-  return `Fix only what the failing checks report (${workOrder.failedChecks.map((name) => JSON.stringify(name)).join(", ")}${workOrder.failedChecksOmitted ? `, and ${workOrder.failedChecksOmitted} more failing checks not listed; the \`ci-failure\` read lists all of them` : ""}), per agents/fixer.agent.md; the \`ci-failure\` read (${JSON.stringify(checks.path)}) holds the wait-pr-checks result. No thread exists: post no reply and resolve no thread.
+  const actRead = workOrder.requiredReads.find((read) => read.kind === "act-list");
+  return `Fix only what the failing checks report (${workOrder.failedChecks.map((name) => JSON.stringify(name)).join(", ")}${workOrder.failedChecksOmitted ? `, and ${workOrder.failedChecksOmitted} more failing checks not listed; the \`ci-failure\` read lists all of them` : ""}), per agents/fixer.agent.md; the \`ci-failure\` read (${JSON.stringify(checks.path)}) holds the wait-pr-checks result. No thread exists: post no reply and resolve no thread.${actRead ? ` Also fix every act item in the \`act-list\` read (${JSON.stringify(actRead.path)}): its round's verdict could not post while CI was red, so these items ride with the CI fix.` : ""}
 Do these steps in this order; none may be skipped or reordered:
 1. Commit the fixes and push them to branch ${JSON.stringify(branch)}.
 2. Confirm the remote head equals the pushed commit: run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}; it must print the pushed commit SHA. If it does not, stop and report.
@@ -583,11 +584,14 @@ async function emitPlan({
   if (reviewId !== undefined && !REVIEW_NODE_ID_PATTERN.test(reviewId)) throw new Refusal(`--review-id ${reviewId} is not a review node id (PRR_...); pass the id that scripts/github/view-pr.mjs --json reviews reports`);
   if (reviewId && phase === "commit_only") throw new Refusal("--review-id takes only --phase full: a review body has no delta-review route, so there is no commit_only continuation; re-run with --phase full");
   if (ciFile && phase === "commit_only") throw new Refusal("--ci-file takes only --phase full: a CI failure has no delta-review route, so there is no commit_only continuation; re-run with --phase full");
-  if ([actListFile, threadsFile, reviewId, ciFile].filter(Boolean).length !== 1) throw new Refusal("pass exactly one of --act-list-file, --threads-file, --review-id and --ci-file");
+  // A --ci-file source may carry the act list of a round whose verdict post was refused for red CI (the act list then rides as a second read).
+  if ([ciFile ? undefined : actListFile, threadsFile, reviewId, ciFile].filter(Boolean).length !== 1) throw new Refusal("pass exactly one of --act-list-file, --threads-file, --review-id and --ci-file (--act-list-file may accompany --ci-file)", "ambiguous_source", "Pass one source flag; to fix an unposted act list together with red CI, pass --ci-file <wait-pr-checks JSON> --act-list-file <judge-pass --out> --gate <gate>.");
   if (completionOnly && (phase !== "full" || reviewId || ciFile || deltaResult || allowedPaths.length || operatorFocusFile)) throw new Refusal("--completion-only takes --phase full and one --act-list-file or --threads-file source, with no --review-id, --ci-file, --delta-result, --allowed-path or --operator-focus-file: the incomplete plan pins them");
   if (actListFile && !GATE_NAMES.includes(gate)) throw new Refusal(`--act-list-file needs --gate ${GATE_NAMES.join("|")}, got ${gate}`);
   if (!actListFile && gate) throw new Refusal("--gate applies only to an --act-list-file source");
   if ((reviewId || ciFile) && deltaResult) throw new Refusal("--delta-result applies only to an --act-list-file source");
+  const ciActFile = ciFile ? actListFile : undefined;
+  if (ciActFile) actListFile = undefined;
   tmpRoot ??= resolveGateArtifactTmpRoot(cwd);
   const dir = path.resolve(buildFixerDir({ repo, pr, tmpRoot }));
   const paths = [...new Set((allowedPaths.length > 0 ? allowedPaths : ["."]).map(normalizeAllowedPath))].sort();
@@ -628,6 +632,15 @@ async function emitPlan({
     if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`);
   }
   const isActItem = (f) => f?.judgeDisposition === "act" && (gate === "draft_gate" ? hasSeverityText(f) : typeof f.severity === "string" && VALID_SEVERITIES.has(f.severity)) && typeof f.summary === "string" && f.summary.trim() !== "";
+  let ciActRead;
+  if (ciActFile) {
+    const act = await readSource("act-list", abs(ciActFile), capture);
+    if (!GATE_NAMES.includes(gate) || !(Array.isArray(act.parsed) && act.parsed.length > 0 && act.parsed.every(isActItem))) throw new Refusal(`act list ${ciActFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings for --gate ${GATE_NAMES.join("|")}`, "invalid_act_list", "Pass the round's judge-pass --out file and its --gate.");
+    // Pin the emitter's own copy, as the plain act-list source does.
+    const copyPath = path.join(dir, executionIdentity, "act-list.json");
+    await capture.write(copyPath, await capture.read(act.read.path));
+    ciActRead = { ...act.read, path: copyPath };
+  }
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   }
@@ -842,7 +855,7 @@ async function emitPlan({
     try { markers = await fetchVerdictMarkers({ repo, pr, headSha: capRoundHead, gate, runtime: { env, ghCommand, runChild } }); } catch (error) {
       throw new Refusal(`verdict_not_posted: could not read the PR's posted verdicts (${error?.message ?? error}); post the ${gate} verdict review at ${capRoundHead} before fixing: ${upsert}`, "verdict_not_posted");
     }
-    if (!verdictPosted(markers) && !(await carryOriginHead())) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${capRoundHead}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`, "verdict_not_posted");
+    if (!verdictPosted(markers) && !(await carryOriginHead())) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${capRoundHead}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`, "verdict_not_posted", `${upsert}; when the post is refused for red current-head CI, run wait-pr-checks.mjs for the head, save its JSON, and emit with --ci-file <that file> --act-list-file ${actListFile} --gate ${gate} so the act items and the CI failure share one fixer order`);
   }
 
   let completion, completionRead, candidateHead = headSha, recheckCandidate = () => {}, rejectOriginalRetirement = () => {};
@@ -942,7 +955,7 @@ async function emitPlan({
       ...(completion ? { reviewBaselineHead: headSha, completionInputDigest: jsonContentDigest(completion), completionInputBytesDigest: completionRead.sha256 } : {}) },
     mutationAuthority: { repo, pr: Number(pr), branch: prState.headRefName, allowedPaths: paths },
     contracts,
-    requiredReads: [source.read, ...(delta ? [delta.read] : []), ...(completionRead ? [completionRead] : [])],
+    requiredReads: [source.read, ...(ciActRead ? [ciActRead] : []), ...(delta ? [delta.read] : []), ...(completionRead ? [completionRead] : [])],
     outputRefs: [outputRef],
     siteCoverage: actListFile && !completion ? buildSiteCoverageSkeleton(source.parsed) : undefined,
     handbackCheck: phase === "commit_only" && actListFile
@@ -1295,7 +1308,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef });
   } catch (err) {
     if (!(err instanceof Refusal || err instanceof WorkOrderRefusal || err instanceof OperatorFocusRefusal)) throw err;
-    return emit({ ok: false, ...(err.refusal ? { refusal: err.refusal } : {}), error: err.message });
+    return emit({ ok: false, ...(err.refusal ? { refusal: err.refusal } : {}), error: err.message, ...(err.recovery ? { recovery: err.recovery } : {}) });
   }
 }
 

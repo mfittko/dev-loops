@@ -315,3 +315,12 @@ test("the gate-coordinator agent definition states the step 0 check", async () =
     assert.match(dispatch, /no round id/, file);
   }
 });
+
+test("issue 3414 ac:2 the rule re-checks settled green CI immediately before fan-out and stops with the CI route", async () => {
+  const content = await readRepo(CONTRACT_DOC);
+  assertClaims(ruleSection(content), [
+    ["Immediately before", "Phase 2 fan-out", "MUST", "re-read current-head CI", "`wait-pr-checks.mjs --timeout 0`"],
+    ["MUST", "stop", "typed observation", "CI route"],
+    ["Pending CI", "`wait_for_ci`", "red CI", "`fix_ci_failure`"],
+  ], "pre-fan-out CI re-check");
+});
