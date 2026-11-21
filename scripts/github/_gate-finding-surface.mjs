@@ -1205,6 +1205,7 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
     draftGateMarker,
     unresolvedGateThreadCount,
     unresolvedGateThreadBreakdown,
+    draftGatePostedHeads: draftGatePostedHeads(comments.map((c) => c?.body)),
     currentHeadClean,
     preApprovalCurrentHeadClean,
     cleanEvidenceExists,
@@ -1437,6 +1438,14 @@ export function collectVerdictHeadShas(comments, gate, headShas) {
     const headSha = extractReviewedHeadSha(comment.body);
     if (headSha) headShas.add(headSha);
   }
+}
+
+// The head SHAs (as recorded in the header, possibly abbreviated) of every posted draft_gate review body.
+export function draftGatePostedHeads(bodies) {
+  return (bodies ?? []).flatMap((body) => {
+    const header = typeof body === "string" ? body.match(REVIEW_HEADER_RE) : null;
+    return header && header[1] === "draft_gate" ? [header[2].toLowerCase()] : [];
+  });
 }
 
 // Scoped strictly to review bodies carrying THIS gate's own header marker —

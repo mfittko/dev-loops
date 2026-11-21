@@ -99,7 +99,7 @@ and the optional `escalationsSkipped` reason (`GATE-EXEC-RECURRENCE-ESCALATION`)
 to the dev-loop coordinator. The gate coordinator materializes and binds the round's evidence
 through the context builder's `requiredReads` and emits compact work orders; it never relays bulk
 evidence into a reviewer's task. The gate coordinator never posts the verdict comment, flips ready, pushes, or
-merges; these reserved lifecycle writes stay with the dev-loop coordinator. On a head change, a
+merges; these reserved lifecycle writes stay with the dev-loop coordinator. A clean cap-round result is not complete until the dev-loop coordinator has posted its `draft_gate` verdict: while the verdict is unposted, the cap-round proof is a local ledger only, the coordination check fails closed with the cap-round condition `clean_cap_verdict_unposted`, and `ready-for-review.mjs` refuses. The one recovery is `dev-loops-run cli/index.mjs gate upsert-verdict --repo <owner/name> --pr <n> --gate draft_gate --post-sealed-cap-round`, which derives the head, verdict and findings from the sealed ledger. On a head change, a
 dispatch failure that `GATE-EXEC-DISPATCH-RETRY-BACKOFF` does not recover, or a fan-in failure,
 the gate coordinator stops and returns a typed observation instead of choosing the next step. If
 the Phase 3.5 judge rerun at the current head also fails, the gate coordinator stops and returns

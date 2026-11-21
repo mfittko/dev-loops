@@ -1058,3 +1058,15 @@ test("refuses a PR carrying the spike no-merge marker (ADR 0293)", async () => {
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+// PR 3281 shape: the cap round is clean in a local ledger and no draft_gate review of it is posted.
+test("ready-for-review refuses a clean cap round whose verdict is not posted, and never flips the PR", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-cap-unposted-"));
+  try {
+    const stub = await capRoundGhStub(tempDir, { bucket: "pass" });
+    const runtime = { ...capRoundRuntime(stub.env, tempDir, true), resolveCapRoundFixed: async () => ({ log: { verdict: "clean", headSha: "abc123def456".padEnd(40, "0"), findings: [] }, residue: [] }) };
+    await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, runtime), /clean but its draft_gate verdict is not posted.*--post-sealed-cap-round/);
+    const ghCalls = await readGhCalls(stub.ghLogPath);
+    assert.equal(ghCalls.filter((c) => c[0] === "pr" && c[1] === "ready").length, 0);
+  } finally { await rm(tempDir, { recursive: true, force: true }); }
+});

@@ -59,7 +59,7 @@ import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loo
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
-import { fingerprintFinding } from "./_gate-finding-surface.mjs";
+import { draftGatePostedHeads, fingerprintFinding } from "./_gate-finding-surface.mjs";
 import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -119,16 +119,27 @@ export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied
  * A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
  * @param {{ repo: string, pr: number, currentHeadSha: string, prData?: { isDraft?: boolean, baseRefName?: string } }} context
  */
-export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = resolveCapRoundFixed }) {
+export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = resolveCapRoundFixed, requirePostedCleanCap = true }) {
   let failure = null;
   const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
-  const capRoundFixed = await resolve(
+  const capRound = await resolve(
     { repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName, anyHead: context.prData?.isDraft !== true },
     // `resolveCapRoundFixed` reports no_cap_round below the round cap, the normal state: that is no failure. A cap reached with an unresolvable ledger (cap_round_unresolved) or a thrown resolver error is.
     { repoRoot, onFailure: (condition) => { if (condition !== "no_cap_round") failure = condition; } },
-  ).then(Boolean, () => { failure = "cap_round_unresolved"; return false; });
-  return { capRoundFixed, failure };
+  ).catch(() => { failure = "cap_round_unresolved"; return null; });
+  // A clean cap round has no fixer pass: only its posted review is visible to CI, so a ledger-only proof is no clean draft_gate evidence.
+  // shortcut: reviews absent from the context (a caller that read none) skip this check; every routed caller reads them.
+  if (capRound && requirePostedCleanCap && Array.isArray(context.prData?.reviews) && cleanCapVerdictUnposted(capRound, draftGatePostedHeads(context.prData.reviews.map((r) => r?.body)))) {
+    return { capRoundFixed: false, failure: "clean_cap_verdict_unposted" };
+  }
+  return { capRoundFixed: Boolean(capRound), failure };
 }
+
+/** True when `capRound` is a clean cap round (ADR 0250) whose draft_gate verdict is not among the posted heads: the proof then lives in a local ledger only. */
+export const cleanCapVerdictUnposted = (capRound, postedHeads) => {
+  const head = String(capRound?.log?.headSha ?? "").toLowerCase();
+  return isCleanCapRound(capRound) && !postedHeads.some((posted) => head.startsWith(posted));
+};
 
 // Map the artifact gate name (draft_gate | pre_approval_gate) to the config
 // gate key understood by resolveGateAnglesDynamic (draft | preApproval).

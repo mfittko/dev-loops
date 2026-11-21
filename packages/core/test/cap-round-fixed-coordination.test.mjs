@@ -92,3 +92,16 @@ test("a cap-round refusal with no reported condition names cap_round_unresolved,
   assert.ok(reason.includes("Condition cap_round_unresolved:"));
   assert.ok(!reason.includes("no_clearing_record"));
 });
+
+// The unposted clean cap round (a local ledger only): a ready PR is never final_approval_ready on it, and the one exit is the ledger-derived post.
+test("a ready PR whose clean cap-round verdict is unposted reports blocked with the sealed-ledger post as its remedy", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 10, repo: "o/r", currentHeadSha: "fedcba987654", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true, ciStatus: "success", draftGate: marker("findings_present"), draftGateMarker: marker("findings_present"),
+    preApprovalGate: { visible: true, headSha: "fedcba987654", verdict: "clean", contractComplete: true }, preApprovalGateMarker: { visible: true, headSha: "fedcba987654", verdict: "clean", contractComplete: true },
+    draftCapRoundFixed: false, draftCapRoundFailure: "clean_cap_verdict_unposted",
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.equal(result.draftGateAlreadySatisfied, false);
+  assert.equal(result.agentRemedy.command, "dev-loops gate upsert-verdict --repo o/r --pr 10 --gate draft_gate --post-sealed-cap-round");
+});

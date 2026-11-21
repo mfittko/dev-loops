@@ -833,3 +833,11 @@ test("merge-pr stays open to the top-level session and an unrelated command stay
   }
   assert.equal(decideBashGateDeny({ ...BASE, role: "fixer", command: "dev-loops-run scripts/github/wait-pr-checks.mjs --repo mfittko/dev-loops --pr 5" }), null);
 });
+
+// The cap-round exit (`clean_cap_verdict_unposted`) names one command; the Bash gate allows it for every actor that runs it.
+test("the sealed cap-round post command shape passes the Bash gate for the top-level session and every subagent role", () => {
+  const command = "dev-loops-run --repo-root /work/tmp/worktrees/dev-loops/issue-1 cli/index.mjs gate upsert-verdict --repo mfittko/dev-loops --pr 7 --gate draft_gate --post-sealed-cap-round";
+  for (const role of [null, "dev-loop", "gate-coordinator", "developer", "fixer"]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role, enforceCoordinator: true, command }), null, String(role));
+  }
+});

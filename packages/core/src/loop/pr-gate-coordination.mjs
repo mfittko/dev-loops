@@ -976,6 +976,7 @@ const REVIEWER_ONLY_FLAGS = " The reviewer-only command takes `--repo <owner/nam
 
 /** The one failed cap-round-fixed condition (`resolveCapRoundFixed` `onFailure`, ADR 0218) and its remedy. `onFailure` also receives `no_cap_round` below the cap, the one non-failure condition, which has no entry. */
 export const CAP_ROUND_REFUSAL = Object.freeze({
+  clean_cap_verdict_unposted: "Condition clean_cap_verdict_unposted: the cap round is clean and its sealed ledger proves it, but its draft_gate verdict was never posted, so CI sees no clean draft_gate evidence. Remedy: run `dev-loops gate upsert-verdict --repo <owner/name> --pr <n> --gate draft_gate --post-sealed-cap-round`; it posts the verdict derived from the sealed ledger.",
   baseline_orphaned: "Condition baseline_orphaned: the cap-round baseline is not an ancestor of the current head (a rebase rewrote it), so no clearing record can bind to this head. Remedy: push the head to a new branch that keeps the issue slug (`git push origin HEAD:<new-branch>`), record a pre-PR review on the new branch head (`node <dev-loops-package-root>/cli/index.mjs loop pre-pr-review ...`) before `pr create`, run `node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number>` while this PR is still open, then close this PR (gate history restarts at round 1); do not rebase a PR that reached the cap round, merge the base instead.",
   no_clearing_record: "Condition no_clearing_record: no sealed clearing delta record exists for the cap-round baseline. Remedy: run `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` for that baseline. A clean cap round has no fixer pass: when every commit since the cap-round head is docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>` directly with no fixer pass. Otherwise, after the cap-round clearing record exists, when the later commits are docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>` to extend the chain. When the later commits touch code, run the pre-push delta for them (`node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` with the start of the logic range as baseline: the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end) until it is `locally_clear` for exactly that start..head, then run the same `gate extend-cap-round-chain` command; it seals the `delta_covered` extension (ADR 0254)." + REVIEWER_ONLY_FLAGS,
   unsealed_record: "Condition unsealed_record: the delta record for the cap-round baseline carries no valid seal. Remedy: rerun `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` for that baseline. It takes over an unsealed non-clearing record over the same act refs and seals the new record; any other unsealed record refuses `unsealed_record` with an `rm -f <record> <record>.seal` remedy to run before the rerun; never edit the record." + REVIEWER_ONLY_FLAGS,
@@ -984,7 +985,7 @@ export const CAP_ROUND_REFUSAL = Object.freeze({
   chain_does_not_reach_head: "Condition chain_does_not_reach_head: the sealed clearing chain ends before the current head and the head is not a base-only merge of its last candidate. Remedy: run `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` for the current head, or fetch origin/<base> so a base-only merge is verifiable. When the later commits are docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>`. When the later commits touch code, run the pre-push delta for them (`node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` with the start of the logic range as baseline: the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end) until it is `locally_clear` for exactly that start..head, then run the same `gate extend-cap-round-chain` command; it seals the `delta_covered` extension (ADR 0254)." + REVIEWER_ONLY_FLAGS,
 });
 
-const CAP_ROUND_COMMAND_CONDITIONS = Object.freeze(["no_clearing_record", "items_do_not_cover", "chain_does_not_reach_head", "unsealed_record"]);
+const CAP_ROUND_COMMAND_CONDITIONS = Object.freeze(["clean_cap_verdict_unposted", "no_clearing_record", "items_do_not_cover", "chain_does_not_reach_head", "unsealed_record"]);
 
 /**
  * The one exit of a failed cap-round-fixed condition (issue 3139). ADR 0254: these conditions end at the chain-extension command, which seals docs and tests commits or code commits a locally_clear delta covers.
@@ -993,6 +994,12 @@ const CAP_ROUND_COMMAND_CONDITIONS = Object.freeze(["no_clearing_record", "items
  */
 export function capRoundExit(condition, { repo, pr }) {
   if (!CAP_ROUND_COMMAND_CONDITIONS.includes(condition)) return { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
+  if (condition === "clean_cap_verdict_unposted") {
+    return remedyOrOperator({ repo, pr }, (r, n) => ({
+      command: `dev-loops gate upsert-verdict --repo ${r} --pr ${n} --gate draft_gate --post-sealed-cap-round`,
+      summary: "Post the sealed clean cap-round verdict from its ledger; the verdict, head and findings derive from the ledger.",
+    }));
+  }
   return remedyOrOperator({ repo, pr }, (r, n) => ({
     command: `dev-loops gate extend-cap-round-chain --repo ${r} --pr ${n}`,
     summary: "Extend the sealed cap-round clearing chain over the later commits; the command refuses with a typed reason that names the next step.",
