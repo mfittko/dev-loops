@@ -5,8 +5,10 @@
  * every string argument is compared case-folded and realpath-resolved, and scanned for the
  * directory name (this covers Bash commands, Glob patterns, Grep globs and MCP tool arguments).
  * It also denies arguments naming the parent `.config/dev-loops`. It cannot see through a wrapper
- * script, shell globbing or other shell indirection; the shipped permission denies (and the sandbox
- * read deny when the sandbox is enabled) are the second layer. A bare mention in a commit message
+ * script, shell globbing or other shell indirection; in this repository the project settings
+ * permission denies (and the sandbox read deny when the sandbox is enabled) are the second layer.
+ * A plugin consumer gets this hook alone. It also denies arguments naming the record signing
+ * functions (writeApprovalRecord, createKey, loadKey). A bare mention in a commit message
  * or body flag is denied too. An error in this hook denies (exit 2). Only the PostToolUse hook touches the directory. Agent posts of
  * the `approve merge` line stay denied by the raw comment write deny and the comment writers
  * (OPERATOR-OWNED-LINE).

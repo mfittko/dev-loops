@@ -877,7 +877,7 @@ export async function mergePr(options, runtime = {}) {
     { env, ghCommand, runChild, ghJson },
   ).catch((error) => `could not check ADR numbers: ${error instanceof Error ? error.message : String(error)}`);
 
-  // A hook-marked approval comment counts only with a matching harness record (MERGE-ASK-APPROVAL, ADR 0315); an unmarked operator line (Pi path) passes through.
+  // A hook-marked approval comment counts only with a matching harness record (MERGE-ASK-APPROVAL, ADR 0315). An unmarked operator line passes through only when this machine holds no hook key (Pi path); once the key exists every approve-merge line needs its record (H1).
   const askApproval = filterAskApprovalComments({ comments, repo: options.repo, pr: Number(options.pr), currentHeadSha, currentPatchId, env });
   const approverAssumed = options.check === true && options.humanApprovedBy === undefined;
   const verdict = evaluateMergePreconditions({

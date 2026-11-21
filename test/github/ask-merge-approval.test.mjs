@@ -8,9 +8,11 @@ import { spawnSync } from "node:child_process";
 import { test } from "bun:test";
 import {
   approvalDir, buildApprovalQuestion, extractYesApproval, writeApprovalRecord, buildApprovalComment,
-  filterAskApprovalComments, parseMarkedComment, parseApprovalQuestion, approvalKeyPresent,
+  filterAskApprovalComments, parseMarkedComment, parseApprovalQuestion, approvalKeyPresent, isApprovalPath, commandNamesApprovalDir,
   ASK_APPROVAL_RECOVERY, ASK_APPROVAL_KEY_RECOVERY, ASK_APPROVAL_NO_DIALOG_RECOVERY,
 } from "@dev-loops/core/github/ask-merge-approval";
+import { verifyPolicyChangeApproval } from "../../scripts/github/_policy-change-approval.mjs";
+import { buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
 
 const REPO = "example/fixture";
@@ -21,14 +23,19 @@ const OTHER_PATCH = "d".repeat(40);
 const POST_HOOK = path.resolve(".claude/hooks/post-tool-use-ask-approval.mjs");
 const GUARD_HOOK = path.resolve(".claude/hooks/pre-tool-use-approval-guard.mjs");
 const BASH_HOOK = path.resolve(".claude/hooks/pre-tool-use-bash-gate.mjs");
+const PRELOAD = path.resolve("test/github/ask-approval-userinfo-preload.mjs");
+const SKIP_UNDER_ROOT = process.getuid?.() === 0;
 
+// The in-process functions take f.env (override). The hook subprocesses ignore the override, like the merge
+// verifier, and reach the same directory through the preload's account home (DEVLOOPS_TEST_HOME = root).
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pr-ask-approval-"));
-  const dir = path.join(root, "approvals");
+  const dir = path.join(root, ".config", "dev-loops", "merge-approvals");
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
   const stub = path.join(root, "gh-stub.sh");
   const out = path.join(root, "gh-args.txt");
   fs.writeFileSync(stub, `#!/bin/sh\nprintf '%s\\n' "$@" > "${out}"\n`, { mode: 0o755 });
-  return { root, dir, stub, out, env: { ...process.env, DEVLOOPS_APPROVAL_DIR: dir, DEVLOOPS_APPROVAL_TEST_MODE: "1", DEVLOOPS_GH_COMMAND: stub } };
+  return { root, dir, stub, out, env: { ...process.env, DEVLOOPS_APPROVAL_DIR: dir, DEVLOOPS_APPROVAL_TEST_MODE: "1", DEVLOOPS_GH_COMMAND: stub, DEVLOOPS_TEST_HOME: root } };
 }
 
 const question = (over = {}) => buildApprovalQuestion({ repo: REPO, pr: 7, headSha: HEAD, patchId: PATCH, ...over });
@@ -43,7 +50,7 @@ const askPayload = (text, answer = "Yes", over = {}) => {
     tool_response: { questions: [q], answers: { [text]: answer } },
   };
 };
-const runHook = (script, input, env, extra = {}) => spawnSync("node", [script], { input: JSON.stringify(input), encoding: "utf8", env, ...extra });
+const runHook = (script, input, env, extra = {}) => spawnSync("node", ["--import", PRELOAD, script], { input: JSON.stringify(input), encoding: "utf8", env, ...extra });
 const decision = (r) => (r.stdout.trim() ? JSON.parse(r.stdout).hookSpecificOutput.permissionDecision : "allow");
 const ask = (env, over) => {
   const approval = extractYesApproval(askPayload(question(over)));
@@ -254,7 +261,7 @@ test("a key that is not 32 bytes, a loose directory mode or a symlinked key is r
 });
 
 // M-1, M-4: only ENOENT is absent; key and directory problems name the concrete fix
-test("a 0-byte key, a wrong-size key and an unreadable key directory each refuse with the key recovery", () => {
+test("a 0-byte key and a wrong-size key each refuse with the key recovery", () => {
   const f = fixture();
   const { id } = ask(f.env);
   const keyPath = path.join(f.dir, ".key");
@@ -267,7 +274,14 @@ test("a 0-byte key, a wrong-size key and an unreadable key directory each refuse
     for (const r of refusals) assert.ok(r.includes(ASK_APPROVAL_KEY_RECOVERY) && !r.includes(ASK_APPROVAL_RECOVERY), r);
     assert.match(refusals[0], /exactly 32/);
   }
-  fs.writeFileSync(keyPath, key, { mode: 0o600 });
+  fs.rmSync(keyPath);
+  assert.equal(approvalKeyPresent(f.env), false, "ENOENT is absent");
+});
+
+// Root reads a 0o000 directory, so these two permission cases cannot hold under uid 0.
+test.skipIf(SKIP_UNDER_ROOT)("an unreadable key directory refuses with the key recovery", () => {
+  const f = fixture();
+  const { id } = ask(f.env);
   fs.chmodSync(f.dir, 0o000);
   try {
     assert.equal(approvalKeyPresent(f.env), true, "EACCES is not absent");
@@ -276,19 +290,20 @@ test("a 0-byte key, a wrong-size key and an unreadable key directory each refuse
     assert.equal(refusals.length, 2);
     for (const r of refusals) assert.ok(r.includes(ASK_APPROVAL_KEY_RECOVERY) && r.includes("where the verifier can read the approval directory"), r);
   } finally { fs.chmodSync(f.dir, 0o700); }
-  fs.rmSync(keyPath);
-  assert.equal(approvalKeyPresent(f.env), false, "ENOENT is absent");
 });
 
-test("creating the key leaves no temp file, and an unwritable directory is a key problem", () => {
+test("creating the key leaves no temp file", () => {
   const f = fixture();
   ask(f.env);
   assert.deepEqual(fs.readdirSync(f.dir).filter((n) => n.startsWith(".key")), [".key"]);
+});
+
+test.skipIf(SKIP_UNDER_ROOT)("an unwritable directory is a key problem", () => {
   const g = fixture();
-  fs.chmodSync(g.root, 0o500);
+  fs.chmodSync(path.dirname(g.dir), 0o500);
   try {
     assert.throws(() => ask(g.env), (error) => error.keyProblem === true && /not usable/.test(error.message));
-  } finally { fs.chmodSync(g.root, 0o700); }
+  } finally { fs.chmodSync(path.dirname(g.dir), 0o700); }
 });
 
 // M-5: Pi on a machine that holds the key
@@ -438,4 +453,164 @@ test("the post hook reports success, a failed post and an unrecorded answer thro
   const badOptions = context(runHook(POST_HOOK, askPayload(question(), "Yes", { multiSelect: true }), f.env));
   assert.match(badOptions.additionalContext, /no approval recorded/);
   assert.equal(runHook(POST_HOOK, askPayload("Which color?"), f.env).stdout.trim(), "", "an unrelated question stays silent");
+});
+
+// Cluster 4: the guard's catch is its only protection when path resolution throws. readHookInput swallows
+// non-JSON stdin, so the preload makes the account home a non-string to reach the catch.
+test("the guard hook fails closed with exit 2 when its path resolution throws", () => {
+  const f = fixture();
+  const r = runHook(GUARD_HOOK, { tool_name: "Read", tool_input: { file_path: path.join(f.root, "other.txt") }, cwd: f.root }, { ...f.env, DEVLOOPS_TEST_USERINFO: "bad-home" });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /approval guard failed/);
+  assert.equal(r.stdout.trim(), "", "no allow decision is emitted");
+});
+
+// Cluster 5: the post hook names the key recovery for a key problem and the ask-again recovery for a failed post
+test("the post hook names the key recovery when the record write fails on a key problem", () => {
+  const f = fixture();
+  const real = path.join(f.root, "real");
+  fs.mkdirSync(real, { mode: 0o700 });
+  fs.symlinkSync(real, f.dir);
+  const context = JSON.parse(runHook(POST_HOOK, askPayload(question()), f.env).stdout).hookSpecificOutput.additionalContext;
+  assert.match(context, /could not record or post/);
+  assert.ok(context.includes(ASK_APPROVAL_KEY_RECOVERY));
+  assert.equal(context.includes(ASK_APPROVAL_RECOVERY), false);
+  assert.equal(fs.existsSync(f.out), false, "no comment is posted without a record");
+});
+
+// Cluster 7: the writer and the verifier resolve one directory even when both test variables are set in the harness environment
+test("the post hook ignores the test override in its real environment and writes where the verifier reads", () => {
+  const f = fixture();
+  const elsewhere = path.join(f.root, "override-dir");
+  const r = runHook(POST_HOOK, askPayload(question()), { ...f.env, DEVLOOPS_APPROVAL_DIR: elsewhere, DEVLOOPS_APPROVAL_TEST_MODE: "1" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.existsSync(elsewhere), false, "the override directory is never written");
+  const files = fs.readdirSync(f.dir).filter((n) => n.endsWith(".json"));
+  assert.equal(files.length, 1);
+  const body = fs.readFileSync(f.out, "utf8").split("\n").slice(6).join("\n");
+  assert.equal(`${parseMarkedComment(body).id}.json`, files[0]);
+  // The verifier on the same account home finds the record through the real-env rule.
+  assert.equal(path.join(os.userInfo().homedir, ".config", "dev-loops", "merge-approvals"), approvalDir());
+  assert.equal(filter(f.env, [{ login: "operator", body }]).comments.length, 1);
+});
+
+// Cluster 9: an account with no passwd entry
+test("a UID with no account home has no key, the guard keeps its name scan and the hook recovers", () => {
+  const real = os.userInfo;
+  os.userInfo = () => { throw new Error("ENOENT: no passwd entry"); };
+  try {
+    assert.equal(approvalDir({}), null);
+    assert.equal(approvalKeyPresent({}), false, "a host with no account home has no key");
+    const plain = { login: "operator", body: `approve merge ${HEAD}` };
+    assert.deepEqual(filterAskApprovalComments({ comments: [plain], repo: REPO, pr: 7, currentHeadSha: HEAD, env: {} }), { comments: [plain], refusals: [] });
+    assert.equal(isApprovalPath("/some/file", {}), false);
+    assert.equal(commandNamesApprovalDir("cat merge-approvals/.key", {}), true, "the name scan stays");
+    assert.equal(commandNamesApprovalDir("ls /tmp", {}), false);
+    assert.throws(() => ask({}), (error) => error.keyProblem === true && /no home directory/.test(error.message));
+  } finally { os.userInfo = real; }
+  const f = fixture();
+  const env = { ...f.env, DEVLOOPS_TEST_USERINFO: "throw" };
+  const allow = runHook(GUARD_HOOK, { tool_name: "Read", tool_input: { file_path: path.join(f.root, "other.txt") }, cwd: f.root }, env);
+  assert.equal(allow.status, 0, allow.stderr);
+  assert.equal(decision(allow), "allow", "an unrelated Read is allowed");
+  assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Bash", tool_input: { command: "cat ~/.config/dev-loops/merge-approvals/.key" }, cwd: f.root }, env)), "deny");
+  const context = JSON.parse(runHook(POST_HOOK, askPayload(question()), env).stdout).hookSpecificOutput.additionalContext;
+  assert.ok(context.includes(ASK_APPROVAL_KEY_RECOVERY));
+});
+
+// Cluster 10, 11: the question matcher accepts only the template
+test("parseApprovalQuestion accepts the template forms and rejects every other text", () => {
+  const withPatch = `Approve merge of a/b PR #5 at head ${HEAD} with patch-id ${PATCH}?`;
+  const headOnly = `Approve merge of a/b PR #5 at head ${HEAD}?`;
+  assert.deepEqual(parseApprovalQuestion(withPatch), { repo: "a/b", pr: 5, headSha: HEAD, patchId: PATCH });
+  assert.deepEqual(parseApprovalQuestion(headOnly), { repo: "a/b", pr: 5, headSha: HEAD, patchId: null });
+  for (const text of [
+    `Hold the merge of a/b PR #5 at head ${HEAD} until CI reruns?`,
+    `Do not approve merge of a/b PR #5 at head ${HEAD}?`,
+    `Approve merge of a/b PR 5 at head ${HEAD}?`,
+    `Approve merge of a/b PR #5 at head ${HEAD}? Also delete the branch.`,
+    `Approve merge of a/b PR #0 at head ${HEAD}?`,
+    `Approve merge of a/b PR #9007199254740993 at head ${HEAD}?`,
+    `Approve merge of ../b PR #5 at head ${HEAD}?`,
+    `Approve merge of a/.. PR #5 at head ${HEAD}?`,
+    "",
+  ]) {
+    assert.equal(parseApprovalQuestion(text), null, text);
+    assert.equal(extractYesApproval(askPayload(text)), null, text);
+  }
+});
+
+// ac:6: an unknown AskUserQuestion payload shape fails closed
+test("an unknown AskUserQuestion payload shape records nothing and the hook exits 0", () => {
+  const q = question();
+  const good = askPayload(q);
+  assert.notEqual(extractYesApproval(good), null);
+  const shapes = [
+    undefined, null, "yes", [],
+    { ...good, tool_input: undefined },
+    { ...good, tool_input: { questions: { 0: good.tool_input.questions[0] } } },
+    { ...good, tool_input: { questions: "x" } },
+    { ...good, tool_response: undefined },
+    { ...good, tool_response: "Yes" },
+    { ...good, tool_response: { answers: null } },
+    { ...good, tool_response: { answers: [q, "Yes"] } },
+    { ...good, tool_response: { answers: [{ question: q, answer: "Yes" }] } },
+    { ...good, tool_response: { answer: "Yes" } },
+    { ...good, tool_response: { answers: { [q]: ["Yes"] } } },
+    { ...good, tool_response: { answers: { [q]: { label: "Yes" } } } },
+    { ...good, tool_response: { answers: { [`${q} `]: "Yes" } } },
+  ];
+  for (const payload of shapes) assert.equal(extractYesApproval(payload), null, JSON.stringify(payload)?.slice(0, 80));
+  const f = fixture();
+  for (const payload of shapes) {
+    const r = runHook(POST_HOOK, payload ?? {}, f.env);
+    assert.equal(r.status, 0, r.stderr);
+  }
+  assert.equal(fs.existsSync(f.dir), false, "no record or key is written");
+  assert.equal(fs.existsSync(f.out), false, "no comment is posted");
+});
+
+// Cluster 13: the record signing functions are named in the guard scan, the module file name is not
+test("the guard denies a Bash command naming the record signing functions and allows this module's tests", () => {
+  const f = fixture();
+  for (const command of [
+    "node script.mjs --call writeApprovalRecord",
+    "grep -n createKey packages",
+    "grep -n loadKey packages",
+  ]) assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Bash", tool_input: { command }, cwd: f.root }, f.env)), "deny", command);
+  assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Bash", tool_input: { command: "bun test test/github/ask-merge-approval.test.mjs" }, cwd: f.root }, f.env)), "allow");
+  assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Edit", tool_input: { file_path: path.join(f.root, "x.mjs"), new_string: "writeApprovalRecord()" }, cwd: f.root }, f.env)), "allow", "a file body is not an address");
+});
+
+// Cluster 3: every reader of the approval line applies the record check
+test("the standing-authorization ready gate refuses a marked approve-merge comment with no record", async () => {
+  const f = fixture();
+  const read = (comments) => async (_cmd, args) => {
+    const apiPath = args.find((a) => typeof a === "string" && a.startsWith("repos/")) ?? "";
+    if (/^repos\/[^/]+\/[^/]+$/.test(apiPath)) return { code: 0, stdout: JSON.stringify({ owner: { login: "owner" } }), stderr: "" };
+    return { code: 0, stdout: JSON.stringify([apiPath.includes("/reviews") ? [] : comments]), stderr: "" };
+  };
+  const adrTripwire = { triggers: [{ type: "standing-authorizations-change" }] };
+  const verify = (body) => verifyPolicyChangeApproval({ repo: REPO, pr: 7, headSha: HEAD, adrTripwire }, { env: f.env, runChild: read([{ user: { login: "owner", type: "User" }, body }]) });
+  const forged = await verify(buildApprovalComment({ id: "f".repeat(64), headSha: HEAD, patchId: PATCH }));
+  assert.equal(forged.satisfied, false);
+  assert.match(forged.reason, /forged or missing/);
+  const { id } = ask(f.env);
+  assert.equal((await verify(buildApprovalComment({ id, headSha: HEAD, patchId: PATCH }))).satisfied, true, "the same comment with its record counts");
+});
+
+test("the pre-merge gate check refuses a marked approve-merge comment with no record", () => {
+  const f = fixture();
+  const evidence = (body) => ({
+    repo: REPO, pr: 7, currentHeadSha: HEAD,
+    draftGate: { visible: true, verdict: "clean" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: HEAD, sizeOutcome: "escalate", sizeTouchesT1: false },
+    comments: [{ login: "owner", body, type: "User", trusted: true }],
+  });
+  const forged = buildPreMergeGateCheck(evidence(buildApprovalComment({ id: "f".repeat(64), headSha: HEAD, patchId: PATCH })), 0, null, null, { patchId: PATCH, env: f.env });
+  assert.equal(forged.ok, false);
+  assert.ok(forged.failures.some((m) => m.includes("size-budget requires a human APPROVED review")), JSON.stringify(forged.failures));
+  const { id } = ask(f.env);
+  const real = buildPreMergeGateCheck(evidence(buildApprovalComment({ id, headSha: HEAD, patchId: PATCH })), 0, null, null, { patchId: PATCH, env: f.env });
+  assert.equal(real.ok, true, JSON.stringify(real.failures));
 });

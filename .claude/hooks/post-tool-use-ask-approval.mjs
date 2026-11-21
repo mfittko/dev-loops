@@ -18,8 +18,8 @@ const input = readHookInput();
 const approval = extractYesApproval(input);
 if (approval) {
   try {
-    // A copy of the harness env: this hook, not an agent, owns it, so the test override applies here only.
-    const { id } = writeApprovalRecord({ approval, session: input?.session_id ?? null }, { ...process.env });
+    // The real process env, so the hook resolves the same directory as the merge verifier (the test override never applies here).
+    const { id } = writeApprovalRecord({ approval, session: input?.session_id ?? null }, process.env);
     const body = buildApprovalComment({ id, headSha: approval.headSha, patchId: approval.patchId });
     execFileSync(process.env.DEVLOOPS_GH_COMMAND || "gh", ["pr", "comment", String(approval.pr), "--repo", approval.repo, "--body", body], { stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 });
     tell(`MERGE-ASK-APPROVAL: recorded the yes answer and posted the approve-merge line for ${approval.repo}#${approval.pr} at head ${approval.headSha}.`);

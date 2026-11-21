@@ -9,7 +9,8 @@
  * approval directory (key mode 0600, directory mode 0700, both owned by this user, no symlinks).
  * The directory sits outside every checkout (resolved from the account database, not $HOME). The
  * PreToolUse guard hook denies the tool calls it can judge (named paths, case-folded and
- * realpath-resolved) and the shipped settings add permission and sandbox read denies. A process
+ * realpath-resolved) and this repository's project settings add permission and sandbox read denies
+ * (a plugin consumer gets the guard hook alone). A process
  * that bypasses the hooks can still read the key. The patch-id is optional end to end.
  * Only node: imports, so the hook bundle vendors this file unchanged.
  */
@@ -38,8 +39,13 @@ export const APPROVAL_PARENT_NAME = ".config/dev-loops";
  */
 export function approvalDir(env = process.env) {
   if (env !== process.env && env[APPROVAL_TEST_FLAG_ENV] === "1" && env[APPROVAL_DIR_ENV]) return env[APPROVAL_DIR_ENV];
-  // os.userInfo() reads the account database, so an agent-set $HOME cannot move the directory.
-  return path.join(os.userInfo().homedir, ".config", "dev-loops", APPROVAL_DIR_NAME);
+  const home = accountHome();
+  return home ? path.join(home, ".config", "dev-loops", APPROVAL_DIR_NAME) : null;
+}
+
+/** The account home from the account database, so an agent-set $HOME cannot move the directory. Null when the UID has no passwd entry (a host with no account home has no key). */
+function accountHome() {
+  try { return os.userInfo().homedir || null; } catch { return null; }
 }
 
 /** Resolve symlinks of the nearest existing ancestor, then append the missing tail. */
@@ -62,16 +68,19 @@ const fold = (p) => p.toLowerCase();
 export function isApprovalPath(target, env = process.env) {
   if (typeof target !== "string" || target === "") return false;
   // The default directory and its parent are always guarded, next to the injected override.
-  const home = path.join(os.userInfo().homedir, ".config", "dev-loops");
-  const dirs = [approvalDir(env), approvalDir({}), home].flatMap((d) => [path.resolve(d), realResolve(d)]).map(fold);
+  const home = accountHome();
+  const dirs = [approvalDir(env), approvalDir({}), home && path.join(home, ".config", "dev-loops")].filter(Boolean).flatMap((d) => [path.resolve(d), realResolve(d)]).map(fold);
   return [path.resolve(target), realResolve(target)].map(fold).some((abs) => dirs.some((dir) => abs === dir || abs.startsWith(`${dir}${path.sep}`)));
 }
 
-/** True when a command or argument string names the approval directory, its parent or its override variables (case-folded). */
+// The record signing and key functions. The module file name stays out of the scan: agents run this module's own tests.
+const SIGNING_NAMES = ["writeApprovalRecord", "createKey", "loadKey"];
+
+/** True when a command or argument string names the approval directory, its parent, its override variables or the record signing functions (case-folded). */
 export function commandNamesApprovalDir(command, env = process.env) {
   if (typeof command !== "string") return false;
   const text = fold(command);
-  return [APPROVAL_DIR_NAME, APPROVAL_PARENT_NAME, APPROVAL_DIR_ENV, APPROVAL_TEST_FLAG_ENV, approvalDir(env), approvalDir({})].some((n) => text.includes(fold(n)));
+  return [APPROVAL_DIR_NAME, APPROVAL_PARENT_NAME, APPROVAL_DIR_ENV, APPROVAL_TEST_FLAG_ENV, ...SIGNING_NAMES, approvalDir(env), approvalDir({})].some((n) => n && text.includes(fold(n)));
 }
 
 export function approveMergeLine({ headSha, patchId = null }) {
@@ -83,14 +92,17 @@ export function buildApprovalQuestion({ repo, pr, headSha, patchId = null }) {
   return `Approve merge of ${repo} PR #${pr} at head ${headSha}${patchId ? ` with patch-id ${patchId}` : ""}?`;
 }
 
-/** Parse the bound facts out of a question. Null unless exactly one repo, PR and head appear, and at most one patch-id. */
+/** Parse the bound facts out of a question. Null unless the text is exactly the approval question: one repo, a positive safe-integer PR and a head, with at most one patch-id. */
 export function parseApprovalQuestion(text) {
   if (typeof text !== "string") return null;
   const repo = [...text.matchAll(/\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+) PR #(\d+)\b/gu)];
   const head = [...text.matchAll(/\bat head ([0-9a-f]{40})\b/gu)];
   const patch = [...text.matchAll(/\bpatch-id ([0-9a-f]{40})\b/gu)];
   if (repo.length !== 1 || head.length !== 1 || patch.length > 1) return null;
-  return { repo: repo[0][1], pr: Number(repo[0][2]), headSha: head[0][1], patchId: patch[0]?.[1] ?? null };
+  const facts = { repo: repo[0][1], pr: Number(repo[0][2]), headSha: head[0][1], patchId: patch[0]?.[1] ?? null };
+  if (!Number.isSafeInteger(facts.pr) || facts.pr <= 0 || facts.repo.split("/").some((s) => s === "." || s === "..")) return null;
+  // An agent-authored question with another meaning must not record an approval.
+  return text === buildApprovalQuestion(facts) ? facts : null;
 }
 
 /** True when the payload carries an approval question, whatever the answer. */
@@ -153,7 +165,10 @@ function readKey(keyPath) {
  * read, a sandbox, a loose parent) counts as present, so the verifier fails closed.
  */
 export function approvalKeyPresent(env = process.env) {
-  try { fs.lstatSync(path.join(approvalDir(env), ".key")); return true; } catch (error) { return error?.code !== "ENOENT"; }
+  const dir = approvalDir(env);
+  // A host with no account home has no hook key.
+  if (!dir) return false;
+  try { fs.lstatSync(path.join(dir, ".key")); return true; } catch (error) { return error?.code !== "ENOENT"; }
 }
 
 function createKey(dir, keyPath) {
@@ -187,6 +202,7 @@ const idOf = (key, mac) => createHmac("sha256", key).update(`id:${mac}`).digest(
 /** Write a signed record. The file name is the record id, so the comment marker names its record. */
 export function writeApprovalRecord({ approval, session = null, now = new Date() }, env = process.env) {
   const dir = approvalDir(env);
+  if (!dir) throw keyProblem("this account has no home directory for the approval directory");
   const key = loadKey(dir, { create: true });
   const record = { repo: approval.repo, pr: approval.pr, headSha: approval.headSha, patchId: approval.patchId ?? null, question: approval.question, answer: approval.answer, time: now.toISOString(), session };
   const mac = sign(key, record);
