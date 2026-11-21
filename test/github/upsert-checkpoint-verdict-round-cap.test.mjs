@@ -649,3 +649,15 @@ test("a cap-round ledger headSha that is not the filename SHA never becomes the 
     }, { prefix: "dev-loops-round-cap-badhead-" });
   }
 });
+
+test("--post-sealed-cap-round on a ready PR posts the clean cap round at its head with a ledger-derived summary", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postCleanCapRound(tempDir, { prState: { isDraft: false }, proven: true, sealedExtra: { provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "reviewer-a" }, { angle: "holistic", reviewer: "reviewer-b" }] } }, extraArgs: ["--post-sealed-cap-round"] });
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "clean");
+    assert.match(out.body, /round[=: ]+4\b/i);
+    assert.ok(out.body.includes(CAP_HEAD.slice(0, 7)));
+    assert.match(out.body, /\*\*Findings summary:\*\* 0 findings from the findings ledger\./);
+    assert.doesNotMatch(out.body, /undefined/);
+  }, { prefix: "dev-loops-round-cap-post-sealed-" });
+});

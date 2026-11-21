@@ -10781,11 +10781,12 @@ test("capRoundCovers filters body items on the kept representative, so a cluster
 // PR 3281 shape: the cap round is clean in a sealed local ledger, but only rounds 1 to 3 are posted.
 test("resolveDraftCapRoundFact: a clean cap round with no posted draft_gate review at its head is not proven fixed", async () => {
   const capHead = "98".repeat(20);
-  const cleanCapRound = { log: { verdict: "clean", headSha: capHead, findings: [] }, residue: [] };
+  const cleanCapRound = { log: { verdict: "clean", headSha: capHead, findings: [] }, residue: [], round: 4 };
   const header = (head, round) => `<!-- dev-loops:gate-findings-review draft_gate ${head} round=${round} -->`;
   const fact = (reviews, extra = {}, capRound = cleanCapRound) => resolveDraftCapRoundFact({ repo: "o/r", pr: 9, currentHeadSha: "ab".repeat(20), prData: { isDraft: false, baseRefName: "main", reviews } }, { repoRoot: ".", resolve: async () => capRound, ...extra });
   assert.deepEqual(await fact([{ body: header("6ef58a1", 3) }]), { capRoundFixed: false, failure: "clean_cap_verdict_unposted" });
   assert.deepEqual(await fact([{ body: header(capHead.slice(0, 7), 4) }]), { capRoundFixed: true, failure: null }, "the posted cap-round review proves it");
+  assert.deepEqual(await fact([{ body: header(capHead.slice(0, 7), 3) }]), { capRoundFixed: false, failure: "clean_cap_verdict_unposted" }, "a header at the cap head but another round does not prove it");
   assert.deepEqual(await fact([{ body: header("6ef58a1", 3) }], { requirePostedCleanCap: false }), { capRoundFixed: true, failure: null }, "the post itself is not gated on the post");
   const withAct = { log: { verdict: "findings_present", headSha: capHead, findings: [{ judgeDisposition: "act", severity: "low", summary: "x" }] }, residue: [] };
   assert.deepEqual(await fact([], {}, withAct), { capRoundFixed: true, failure: null }, "a cap round with act items posts through the normal flow");

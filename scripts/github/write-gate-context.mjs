@@ -135,10 +135,11 @@ export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = re
   return { capRoundFixed: Boolean(capRound), failure };
 }
 
-/** True when `capRound` is a clean cap round (ADR 0250) whose draft_gate verdict is not among the posted heads: the proof then lives in a local ledger only. */
+/** True when `capRound` is a clean cap round (ADR 0250) with no posted draft_gate header (`{ head, round }`) at its head and cap round: the proof then lives in a local ledger only. */
+// shortcut: the header is matched by text from any author, so a forged header passes; upgrade by filtering to trusted authors where the caller has them.
 export const cleanCapVerdictUnposted = (capRound, postedHeads) => {
   const head = String(capRound?.log?.headSha ?? "").toLowerCase();
-  return isCleanCapRound(capRound) && !postedHeads.some((posted) => head.startsWith(posted));
+  return isCleanCapRound(capRound) && !postedHeads.some((posted) => head.startsWith(posted.head) && posted.round === capRound.round);
 };
 
 // Map the artifact gate name (draft_gate | pre_approval_gate) to the config
@@ -2238,7 +2239,7 @@ export async function resolveCapRound(options, { repoRoot, onFailClosed = () => 
   const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => (isOpenActItem(f) && !isFixed(f)) || f?.capClosed).map((f) => ({
     fingerprint: fingerprintFinding(f), file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary, disposition: isOpenActItem(f) ? "act" : "cap_closed",
   }));
-  return { log, residue, ledgerPath: picked.ledgerPath };
+  return { log, residue, ledgerPath: picked.ledgerPath, round: cap };
 }
 
 // A head is a path segment of the record lookup: only a 40 or 64 character hex SHA (after trim and lowercase) is looked up or compared.
