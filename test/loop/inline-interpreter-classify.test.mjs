@@ -28,6 +28,7 @@ test("every verdict-table row origin/main denied and the head allows is a fixtur
 test("a deeply nested eval substitution returns within a fixed bound", () => {
   const depth = 30;
   const command = `gh pr merge 5 --admin; ${'eval "$('.repeat(depth)}echo x${')"'.repeat(depth)}`;
+  commandContainsInlineInterpreter("true"); // warm the parser: a solo run compiles main.wasm on the first parse, outside the timed span
   const start = Date.now();
   commandContainsInlineInterpreter(command);
   inlineInterpreterVerdict(command);

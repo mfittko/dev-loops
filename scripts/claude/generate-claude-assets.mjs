@@ -264,6 +264,8 @@ function listExistingAssetFiles(repoRoot) {
       // unreadable — skip
     }
   }
+  // the vendored parser files carry no banner: every file under `_vendor/` is generated, so a file the generator no longer emits (a renamed bundle module after an upgrade) is orphaned
+  files.push(...listFilesRecursive(repoRoot, ".claude/hooks/_vendor"));
   return files;
 }
 

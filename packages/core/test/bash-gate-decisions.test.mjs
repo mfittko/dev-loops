@@ -58,7 +58,7 @@ const RULE_FIXTURES = [
   {
     id: "OPS-NO-INLINE-INTERPRETER",
     facts: { ...BASE, command: "node -e 'console.log(1)'" },
-    reason: "OPS-NO-INLINE-INTERPRETER: the dev-loop flow bars four forms: inline code or a stdin heredoc to node, bun, python, perl or ruby; an in-place sed, perl, ruby or awk edit; a cat/tee heredoc write outside a temp path; and running a file written by a heredoc in the same command. Write and edit files with the editor tools (Write/Edit under Claude Code, write/edit under Pi), and parse tool output via --jq/--silent.",
+    reason: "OPS-NO-INLINE-INTERPRETER: the dev-loop flow bars four forms: inline code or a stdin heredoc to node, bun, python, perl or ruby; an in-place sed, perl, ruby or awk edit; a cat/tee heredoc write outside a temp path; and running a file written by a heredoc in the same command. Write and edit files with the editor tools (Write/Edit under Claude Code, write/edit under Pi), and parse tool output via --jq/--silent. An env -S split-string command and a command head that bash expands (ANSI-C quoting, brace or pathname expansion) also deny, because the gate cannot read them.",
   },
   {
     id: "COPILOT-FOLLOWUP-WAIT-TOOLS",

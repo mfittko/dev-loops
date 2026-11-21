@@ -334,8 +334,11 @@ export function decideBashGateDeny(facts = {}) {
         "OPS-NO-INLINE-INTERPRETER: the dev-loop flow bars four forms: inline code or a stdin heredoc to node, bun, python, " +
         "perl or ruby; an in-place sed, perl, ruby or awk edit; a cat/tee heredoc write outside a temp path; and running a " +
         "file written by a heredoc in the same command. Write and edit files with the editor tools (Write/Edit under Claude " +
-        "Code, write/edit under Pi), and parse tool output via --jq/--silent." +
-        (parseError ? ` The command does not parse (${parseError}) and names one of these tools, so the gate cannot tell data from code. Fix the syntax or use the editor tools.` : ""),
+        "Code, write/edit under Pi), and parse tool output via --jq/--silent. An env -S split-string command and a command " +
+        "head that bash expands (ANSI-C quoting, brace or pathname expansion) also deny, because the gate cannot read them." +
+        (!parseError ? "" : /^the inline-interpreter parser failed/.test(parseError)
+          ? ` The gate cannot parse any command (${parseError}). Regenerate or reinstall .claude/hooks/_vendor/sh-syntax.`
+          : ` The command does not parse (${parseError}), so the gate cannot tell data from code. Fix the syntax or use the editor tools.`),
     };
   }
 

@@ -222,6 +222,26 @@ test("checkAssets flags an orphaned committed asset with no generating source", 
   }
 });
 
+test("checkAssets flags a stray file under the vendored sh-syntax tree (#2442)", () => {
+  // a vendored file has no generator banner: after an upgrade renames the internal module, the old copy must still be reported
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-assets-vendor-orphan-"));
+  try {
+    for (const dir of ["agents", "skills"]) {
+      fs.cpSync(path.join(repoRoot, dir), path.join(tmpRoot, dir), { recursive: true });
+    }
+    const assets = collectGeneratedAssets({ repoRoot: tmpRoot });
+    writeAssets(assets, { repoRoot: tmpRoot });
+    assert.deepEqual(checkAssets(assets, { repoRoot: tmpRoot }), [], "freshly written tree must be clean");
+
+    const stray = path.join(tmpRoot, ".claude", "hooks", "_vendor", "sh-syntax", "lib", "internal-stale.cjs");
+    fs.mkdirSync(path.dirname(stray), { recursive: true });
+    fs.writeFileSync(stray, "stale\n", "utf8");
+    assert.deepEqual(checkAssets(assets, { repoRoot: tmpRoot }), [{ target: ".claude/hooks/_vendor/sh-syntax/lib/internal-stale.cjs", reason: "orphaned" }]);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 test("checkAssets flags a stale generated hook-bundle module but not hand-authored hooks (#843)", () => {
   // The hooks dir mixes generated bundle modules (banner-stamped) with hand-authored scripts.
   // Orphan detection must catch a generated module no longer produced (e.g. a dropped HOOK_BUNDLE

@@ -54,6 +54,9 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("bun -c lib -c - <<EOF"),
   // a stdin heredoc to an interpreter head after any flags
   deny("python3 -I - <<'E'\nprint(1)\nE"),
+  // each interpreter head crossed with plain flags before a bare `-` stdin script
+  ...Object.entries({ node: ["--no-warnings", "--enable-source-maps", "--watch", "--expose-gc"], bun: ["--silent", "--bun", "--smol"], python3: ["-I", "-B", "-u", "-E"], perl: ["-w", "-l", "-T", "-W"], ruby: ["-w", "-W0", "-d"] })
+    .flatMap(([head, flags]) => flags.map((flag) => deny(`${head} ${flag} - <<'E'\nx\nE`))),
   deny("node - <<EOF\nx\nEOF"),
   deny("node <<EOF\nx\nEOF"),
   deny("node --input-type=module - <<EOF\nx\nEOF"),
@@ -109,6 +112,19 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("cat > tmp/r.sh <<'EOF'\nnode -e x\nEOF\nsource tmp/r.sh"),
   deny("cat > tmp/r.sh <<'EOF'\nnode -e x\nEOF\n./tmp/r.sh"),
   deny("cat > tmp/l.sh <<EOF\nnode -e 1\nEOF\nchmod +x tmp/l.sh && tmp/l.sh"),
+  // write-then-run runner spellings (issue 2442 Mechanism): shells and path spellings the walk resolves deny; `cd` and `$PWD` spellings are reported ceiling rows
+  allow("bash tmp/r.sh"),
+  allow("cat > tmp/r.sh <<'EOF'\nx\nEOF\ncd tmp && bash r.sh"),
+  ...["bash tmp//r.sh", "bash ./tmp/./r.sh", "dash tmp/r.sh", "ksh tmp/r.sh", "sh < tmp/r.sh", "bash ././tmp///r.sh"]
+    .map((run) => deny(`cat > tmp/r.sh <<'EOF'\nnode -e x\nEOF\n${run}`)),
+  ceiling("cat > tmp/r.sh <<'EOF'\nnode -e x\nEOF\ncd tmp && bash r.sh"),
+  ceiling("cat > tmp/r.sh <<'EOF'\nnode -e x\nEOF\nbash \"$PWD/tmp/r.sh\""),
+  // a write inside the runner's own substitution happens before the run
+  allow("node tmp/r.mjs \"$(echo x)\""),
+  deny("bash tmp/r.sh \"$(cat > tmp/r.sh <<'EOF'\nrm -rf x\nEOF\n)\""),
+  deny("node tmp/r.mjs \"$(cat > tmp/r.mjs <<'EOF'\nx\nEOF\n)\""),
+  // a run before the write is no write-then-run
+  allow("bash tmp/r.sh; cat > tmp/r.sh <<'EOF'\nx\nEOF"),
   // after wrappers and reserved words
   deny("for p in a b; do node -e \"x\"; done"),
   deny("if true; then python3 -c x; fi"),
@@ -140,6 +156,9 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("env -C /w -S 'node -e x'"),
   deny("env --unset FOO -S 'node -e x'"),
   deny("env --chdir /w -S 'node -e x'"),
+  deny("env -P /bin -S 'node -e x'"),
+  deny("env -a x -S 'node -e x'"),
+  deny("env --argv0 x -S 'node -e x'"),
   // any env split-string form denies: env runs its operand as a command line the gate cannot read
   deny("env -iS 'node -e x'"),
   deny("env -vS 'node -e x'"),
@@ -302,6 +321,11 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("perl -C -e x"),
   // a backslash-newline continuation is removed by bash: it hides no head, flag or run path
   allow("node \\\n scripts/x.mjs"),
+  allow("ls \\\n-la"),
+  // an escaped backslash before the newline is no continuation: bash prints `a\` and a newline
+  allow("echo \"a\\\\\n\" x"),
+  deny("echo $\\\n(node -e x)"),
+  deny("echo \"unterminated"),
   allow("X=1 \\\n node scripts/x.mjs"),
   deny("X=1 \\\n node -e x"),
   deny("sudo \\\n node -e x"),

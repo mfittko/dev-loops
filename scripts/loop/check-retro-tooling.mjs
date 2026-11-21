@@ -39,9 +39,10 @@
  *   - `gh ...` at the start of a command segment (start of line, or after
  *     `&&`, `||`, `|`, `;`) that is not in the write-op allowlist.
  *   - `python` / `python3` at the start of a command segment.
- *   - `inline-interpreter`: a command the Bash gate denies under OPS-NO-INLINE-INTERPRETER, or a ceiling case
- *     it allows (a form inside quotes, a substitution, a payload or a heredoc body, a pipe into an interpreter,
- *     or input the tokenizer marks incomplete), from the shared `inlineInterpreterVerdict`. One entry per command.
+ *   - `inline-interpreter`: a command the Bash gate denies under OPS-NO-INLINE-INTERPRETER (input that does not
+ *     parse and a closed-list form inside a substitution included), or a ceiling case it allows (a form inside
+ *     quotes, a payload or a heredoc body, a pipe into an interpreter), from the shared `inlineInterpreterVerdict`.
+ *     One entry per command.
  *
  * Head normalization (before classifying a segment, fail-closed):
  *   - strips leading `NAME=value ` env-assignment prefixes (`GH_TOKEN=x gh api`)

@@ -1625,7 +1625,7 @@ export function stripLeadingWrappers(segment, flagTargets = WRAPPER_FLAG_TARGETS
  */
 function inertQuoteSegment(tok, s) {
   const [h = "", arg = ""] = s.words.filter((w) => !w.op).map((w) => w.value);
-  return tok.segments.length === 1 && !s.pipedOut && writeTargets(s).length === 0 && !h.includes("/") && !s.words.some((w) => /\$\(|`|[<>]\(|\$\{[\s|]/.test(w.raw.replaceAll("\\\n", ""))) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
+  return tok.segments.length === 1 && !s.pipedOut && writeTargets(s).length === 0 && !h.includes("/") && !s.words.some((w) => /\$\(|`|[<>]\(|\$\{[\s|]/.test(joinContinuations(w.raw))) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
 }
 
 // A redirection token (`2>&1`, `2>/dev/null`, `>out`, `&>x`) is not a command word. Returns how many tokens to skip: 0 (not a redirection), 1, or 2 (operator alone, its target is the next token). Read by the sleep-loop predicates, not by the inline-interpreter gate.
@@ -1636,7 +1636,11 @@ const redirectionSkip = (t) => (!t.includes("<<") && REDIRECTION_RE.test(t) ? (R
 /** Interpreter heads covered by OPS-NO-INLINE-INTERPRETER (issue 2442 item 10). `deno` stays uncovered. */
 const INTERPRETER_HEAD_RE = /^(?:node|bun|python3?|perl|ruby)$/;
 /** Heads that run a file: a heredoc-written file run by one of them in the same command is denied. */
-const FILE_RUNNER_HEAD_RE = /^(?:node|bun|python3?|perl|ruby|sh|bash|zsh|\.|source)$/;
+const FILE_RUNNER_HEAD_RE = /^(?:node|bun|python3?|perl|ruby|sh|bash|dash|ksh|zsh|\.|source)$/;
+/** A path in its comparison form: lowercased (a case-insensitive file system), `//` and `/./` collapsed, no leading `./`. */
+const normPath = (p) => p.toLowerCase().replace(/\/+/g, "/").replace(/(^|\/)(?:\.\/)+/g, "$1");
+/** TEXT without its line continuations: a backslash-newline joins lines unless its backslash is itself escaped (an even run before it). */
+const joinContinuations = (text) => text.replace(/(?<!\\)((?:\\\\)*)\\\n/g, "$1");
 /** node and bun flags whose next word is the flag's value, never the script (the origin/main 99bb8b3ce lists). */
 const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type", "--title", "--disable-warning", "--watch-path", "--redirect-warnings", "--env-file-if-exists", "--test-reporter", "--report-dir", "--diagnostic-dir", "--cpu-prof-dir", "--heap-prof-dir", "--snapshot-blob", "--test-reporter-destination", "--localstorage-file", "--openssl-config", "--icu-data-dir", "--tls-keylog", "--experimental-config-file", "--experimental-sea-config", "--trace-event-file-pattern"]);
 const BUN_VALUE_FLAGS = new Set(["--cwd", "--env-file", "-r", "--preload", "--require", "--import", "-c", "--config", "--tsconfig-override", "--define", "-d", "--loader", "-l", "--port", "--conditions", "--console-depth"]);
@@ -1841,6 +1845,7 @@ function inspectShell(command, report = false, skipFirst = false) {
   const isStdinText = (r) => isHeredoc(r) || r.op === R.WordHdoc; // a heredoc or here-string: the text a cat/tee writes
   const formIn = (text, skip) => inspectShell(text, false, skip).deny;
   const alone = parsed.file.stmts.length === 1 && parsed.file.stmts[0].cmd?.type === "CallExpr"; // the whole command is one simple command
+  const later = new Map(); // simple command -> its write-then-run checks, run at its exit
   let depth = 0; // open substitutions
   let skipping = skipFirst;
   const visit = (node, stmt) => {
@@ -1850,6 +1855,8 @@ function inspectShell(command, report = false, skipFirst = false) {
     for (const r of redirs) { if (isHeredoc(r)) stdin.heredoc ??= r.start; else if (r.op === R.WordHdoc) stdin.herestring ??= r.start; }
     const tails = [stripWordWrappers(words), stripExecPrefix(words)].filter((t) => t.length);
     if (skipping) { skipping = false; return; }
+    const runChecks = [];
+    later.set(node, runChecks);
     if (tails.some(envSplitString)) out.deny = true;
     for (const tail of tails) {
       // a head that bash expands first (ANSI-C quote, brace/glob) can name any binary: deny. A parameter expansion or substitution in the head is a reported ceiling.
@@ -1868,10 +1875,13 @@ function inspectShell(command, report = false, skipFirst = false) {
           if (/^[-+][A-Za-z]*[oO]$/.test(args[k].value)) { k++; continue; } // a cluster ending in o (`-euo pipefail`) takes the next word as its value
           if (!/^[-+]/.test(args[k].value)) { script.script = args[k]; break; }
         }
+        // `sh < tmp/r.sh`: with no script word, a stdin redirect is the script
+        const stdinFile = redirs.find((r) => r.op === R.RdrIn && (!r.n || r.n.value === "0"));
+        if (!script.script && stdinFile) script.script = wordOf(stdinFile.word);
       }
-      // lowercased like the head: a case-insensitive file system runs `TMP/L.SH` as the written `tmp/l.sh`
-      const isWritten = (w) => !!w && written.includes(w.value.replace(/^\.\//, "").toLowerCase());
-      if (isWritten(tail[0]) || isWritten(script.script) || script.loaded.some(isWritten)) out.deny = true;
+      // compared when the command ends: bash expands the substitutions in its words first, so a heredoc write in one of them comes before the run
+      const isWritten = (w) => !!w && written.includes(normPath(w.value));
+      runChecks.push(() => { if (isWritten(tail[0]) || isWritten(script.script) || script.loaded.some(isWritten)) out.deny = true; });
       // a tee that receives a pipe from a cat heredoc segment is the heredoc write (other heads write their own output, not the heredoc)
       const feeder = pipeSource.get(stmt);
       const fed = head === "tee" && feeder?.cmd?.type === "CallExpr" && feeder.redirs.some(isStdinText) && feeder.cmd.args.some((a) => wordOf(a).value.split("/").pop().toLowerCase() === "cat");
@@ -1879,7 +1889,7 @@ function inspectShell(command, report = false, skipFirst = false) {
         // a redirect of another fd than 1 (`2>err.log`) is no heredoc write; `>&2` duplicates a descriptor; only an exact device name is no file write
         const targets = [...redirs.filter((r) => WRITE_REDIRECTS.some((n) => r.op === R[n]) && (!r.n || r.n.value === "1")).map((r) => wordOf(r.word).value), ...(head === "tee" ? args.filter((a) => !a.value.startsWith("-")).map((a) => a.value) : [])]
           .filter((t) => t && !/^\d+$|^-$/.test(t)).map((t) => t.replace(/^\.\//, "")).filter((t) => !DEVICE_TARGETS.has(t));
-        written.push(...targets.map((t) => t.toLowerCase()));
+        written.push(...targets.map(normPath));
         if (targets.some((t) => !isTempPath(t))) out.deny = true;
       }
     }
@@ -1914,7 +1924,10 @@ function inspectShell(command, report = false, skipFirst = false) {
       if (node.type === "CallExpr" && parent?.type === "Stmt") visit(node, parent);
       return true;
     },
-    exit(node) { if (node.type === "CmdSubst" || node.type === "ProcSubst") depth--; },
+    exit(node) {
+      if (node.type === "CmdSubst" || node.type === "ProcSubst") depth--;
+      for (const check of later.get(node) ?? []) check();
+    },
   });
   return out;
 }
@@ -1923,7 +1936,7 @@ function inspectShell(command, report = false, skipFirst = false) {
 function inspect(command, report = false) {
   const first = inspectShell(command, report);
   if (first.deny || !command.includes("\\\n")) return first;
-  const joined = inspectShell(command.replaceAll("\\\n", ""), report);
+  const joined = inspectShell(joinContinuations(command), report);
   return joined.deny ? joined : first;
 }
 

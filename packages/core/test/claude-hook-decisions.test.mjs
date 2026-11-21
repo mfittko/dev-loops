@@ -940,6 +940,9 @@ test("decideSubagentStopGuard adds a one-more truncation summary at 51 dirty pat
 // decideBashGate — the six guard rules enforced at one seam (#1622)
 // ---------------------------------------------------------------------------
 
+// Cross-harness (#1086): the parse-based gate is Claude PreToolUse only. Pi never invokes this hook, and the Pi
+// extension that imports the shared classifier loads no wasm (packages/core/test/shell-ast.test.mjs, "importing
+// bash-command-classify ... loads no sh-syntax module"), so the swap is a no-op on Pi.
 test("decideBashGate denies inline interpreters actor-independently on the target repo (OPS-NO-INLINE-INTERPRETER)", () => {
   const d = decideBashGate({ command: 'node -e "console.log(1)"', repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET });
   assert.equal(d.decision, "deny");
@@ -972,6 +975,16 @@ test("the OPS-NO-INLINE-INTERPRETER deny reason names the four classes and the e
     const d = decideBashGate({ command, ...ctx });
     assert.equal(d.decision, "deny", command);
     assert.match(d.reason, /does not parse/);
+  }
+  // the parse-failure sentence states its cause in full and claims no closed-list name; the reason covers the env -S and expanded-head denies
+  const unterminated = decideBashGate({ command: 'echo "unterminated', ...ctx }).reason;
+  assert.match(unterminated, /The command does not parse \(.+\), so the gate cannot tell data from code\. Fix the syntax or use the editor tools\.$/);
+  assert.doesNotMatch(unterminated, /names one of these tools/);
+  for (const command of ["env -S 'ls'", "{gh,x}"]) {
+    const d = decideBashGate({ command, ...ctx });
+    assert.equal(d.decision, "deny", command);
+    assert.match(d.reason, /An env -S split-string command and a command head that bash expands \(ANSI-C quoting, brace or pathname expansion\) also deny, because the gate cannot read them\./);
+    assert.doesNotMatch(d.reason, /does not parse/);
   }
 });
 

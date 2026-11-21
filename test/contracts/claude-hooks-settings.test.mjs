@@ -196,7 +196,10 @@ test("the bash-gate hook fails closed in a managed repo when the parser fails to
     };
     // a broken vendored entry stands in for a missing or broken wasm: the parse failure denies every command
     fs.writeFileSync(path.join(hooks, "_vendor/sh-syntax/lib/sync/index.cjs"), "throw new Error('wasm gone');\n");
-    assert.match(reason(run("ls")), /OPS-NO-INLINE-INTERPRETER[\s\S]*parser failed to load: wasm gone/);
+    const loadFailure = reason(run("ls"));
+    assert.match(loadFailure, /OPS-NO-INLINE-INTERPRETER[\s\S]*parser failed to load: wasm gone/);
+    assert.match(loadFailure, /Regenerate or reinstall \.claude\/hooks\/_vendor\/sh-syntax\./);
+    assert.doesNotMatch(loadFailure, /Fix the syntax|does not parse/);
     // a classifier that throws: the hook denies instead of exiting nonzero
     fs.renameSync(path.join(hooks, "_bash-command-classify.mjs"), path.join(hooks, "_classify-orig.mjs"));
     fs.writeFileSync(

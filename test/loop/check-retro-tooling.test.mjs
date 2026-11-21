@@ -291,7 +291,7 @@ test("the retro label names a python script call, and the inline form as inline-
 });
 
 test("retro classification of an unterminated quote and an escaped backtick before a separator (#2442)", () => {
-  // incomplete input is a ceiling case, so the retro reports it (decision 4)
+  // input that does not parse is a gate deny (ADR 0276), so the retro reports it
   assert.deepEqual(analyzeTranscript("don't merge yet").violations, ["inline-interpreter: don't merge yet"]);
   assert.match(analyzeTranscript("echo \\` ; python3 x.py").violations[0], /^python3\b/);
 });
