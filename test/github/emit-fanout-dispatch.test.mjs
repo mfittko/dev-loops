@@ -136,6 +136,25 @@ test("re-gate emit refuses without a carry-forward plan artifact, proceeds once 
     assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
     const payload = JSON.parse(await readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.emit-plan.json`), "utf8"));
     assert.ok(payload.count > 0);
+
+    // main() reads plan.resolutionDeltaPaths and writes the Resolution scope into each angle suffix (#3284).
+    await writeFile(planPath, JSON.stringify({ ok: true, repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: priorHead, carried: [], mustRerun: [], resolutionDeltaPaths: ["src/resolved.mjs"], resolutionDeltaFullPaths: ["src/z.mjs"], resolutionDeltaMerges: ["c".repeat(40)] }), "utf8");
+    const scoped = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(scoped.status, 0, scoped.stderr || scoped.stdout);
+    const scopedUnit = JSON.parse(scoped.stdout).units[0];
+    const suffix = await readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.angle-suffix-${scopedUnit.scope}.txt`), "utf8");
+    assert.match(suffix, /Resolution scope: .*\("src\/resolved\.mjs"\)/);
+    assert.ok(suffix.includes(`git diff-tree --cc --no-ext-diff -p ${"c".repeat(40)}`));
+    assert.match(suffix, /Findings outside those hunks are out of scope for the resolution files\./);
+    assert.match(suffix, /review the PR hunks of these re-run files in full \("src\/z\.mjs"\)/);
+
+    // A resolution file with a PR-own edit is listed only for full review: no resolution-hunk limit applies to it.
+    await writeFile(planPath, JSON.stringify({ ok: true, repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: priorHead, carried: [], mustRerun: [], resolutionDeltaPaths: [], resolutionDeltaFullPaths: ["src/foo.mjs"], resolutionDeltaMerges: ["c".repeat(40)] }), "utf8");
+    const ownEdit = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(ownEdit.status, 0, ownEdit.stderr || ownEdit.stdout);
+    const ownUnit = JSON.parse(ownEdit.stdout).units[0];
+    const ownSuffix = await readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.angle-suffix-${ownUnit.scope}.txt`), "utf8");
+    assert.doesNotMatch(ownSuffix, /out of scope for the resolution files/);
   });
 });
 
@@ -1860,6 +1879,17 @@ test("buildAngleNamingSuffix names the Secret leaks check as an exception to the
   const suffix = buildAngleNamingSuffix({ name: "coverage", angles: ["coverage"] }, "draft-gate-coverage");
   assert.match(suffix, /reviewing an unassigned angle is prohibited\. The one exception: also apply the Secret leaks check/);
   assert.match(suffix, /it is never an unassigned angle/);
+});
+
+test("buildAngleNamingSuffix delivers the resolution_delta resolution paths to the re-run reviewer and adds nothing otherwise (#3284)", () => {
+  const unit = { name: "coverage", angles: ["coverage"] };
+  const none = buildAngleNamingSuffix(unit, "draft-gate-coverage");
+  assert.doesNotMatch(none, /Resolution scope/);
+  const scoped = buildAngleNamingSuffix(unit, "draft-gate-coverage", [], [], undefined, null, undefined, ["src/foo.mjs"]);
+  assert.match(scoped, /Resolution scope: .*\("src\/foo\.mjs"\)/);
+  assert.doesNotMatch(scoped, /in full/);
+  const withFull = buildAngleNamingSuffix(unit, "draft-gate-coverage", [], [], undefined, null, undefined, ["src/foo.mjs"], ["a".repeat(40)], ["src/z.mjs"]);
+  assert.match(withFull, /review the PR hunks of these re-run files in full \("src\/z\.mjs"\)/);
 });
 
 test("buildAngleNamingSuffix requires the file-write tool for single-angle and grouped units and keeps the blocked invocation (#2510)", () => {

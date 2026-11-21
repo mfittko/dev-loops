@@ -6,6 +6,7 @@
  * its inputs with git. Any git failure yields a durable `fallback_full` record.
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -54,6 +55,24 @@ async function rawEntries(runGit, repoRoot, from, to) {
   return entries.sort();
 }
 const entryPath = (e) => e.split("\t").slice(0, -2).join("\t");
+// Paths whose tree entry (mode or oid) differs between the two PR-own lists.
+const prBlobPaths = (before, after) => {
+  const a = new Set(before);
+  const b = new Set(after);
+  return [...new Set([...a, ...b].filter((e) => !(a.has(e) && b.has(e))).map(entryPath))].sort();
+};
+// sha256 of the mode lines and the +/- hunk bodies of `git diff -U0 base..head -- path`; header, index and @@ lines
+// (the line numbers) are dropped. Binary output has no sound digest and yields null (fail closed).
+async function hunkDigest(bareGit, base, head, filePath) {
+  const out = (await bareGit(["diff", "-U0", "--no-ext-diff", "--no-textconv", "--no-renames", "--binary", "--ignore-submodules=none", "--diff-algorithm=myers", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", base, head, "--", `:(literal)${filePath}`])).toString("latin1").split("\n");
+  // An empty diff means the pathspec matched nothing (a non-ASCII path is latin1-decoded but sent UTF-8 encoded): no sound digest, fail closed.
+  if (!out.some((l) => l.startsWith("diff --git "))) return null;
+  const start = out.findIndex((l) => l.startsWith("@@ "));
+  const header = start === -1 ? out : out.slice(0, start);
+  if (header.some((l) => l.startsWith("Binary files ") || l === "GIT binary patch")) return null;
+  const kept = [...header.filter((l) => /^(old|new|deleted file|new file) mode /.test(l)), ...(start === -1 ? [] : out.slice(start).filter((l) => /^[-+\\]/.test(l)))];
+  return createHash("sha256").update(kept.join("\n")).digest("hex");
+}
 // Path bytes are decoded as latin1 (one-to-one), so distinct non-UTF-8 paths stay distinct; the gate-tooling matcher only matches ASCII directory names and file-name tokens.
 // A criss-cross history has several merge bases; any ambiguity fails closed.
 async function singleMergeBase(runGit, repoRoot, baseRef, head) {
@@ -75,23 +94,44 @@ export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRo
     // A merge commit's combined diff (--cc) is non-empty only when the merge hand-resolved something.
     // Check every merge commit on the PR branch line (--first-parent) in prevHead..headSha; merges that arrived from the base side are not the PR's own.
     let conflictResolutionHunks = false;
+    const resolutionPaths = new Set();
+    const resolutionMerges = [];
+    // Object.fromEntries below: a plain {} would turn a file named __proto__ into a prototype, not an own key.
+    const digestEntries = [];
     const merges = lines(await git(runGit, repoRoot, ["rev-list", "--merges", "--first-parent", `${prevHead}..${headSha}`]));
-    if (merges.length > 0) {
-      // --cc honors -diff/binary attributes, and .git/info/attributes cannot be switched off in the repo.
+    const changedPaths = prBlobPaths(prBlobsBefore, prBlobsAfter);
+    if (merges.length > 0 || changedPaths.length > 0) {
+      // --cc and diff honor -diff/binary attributes, and .git/info/attributes cannot be switched off in the repo.
       // Read the objects through a throwaway bare git dir (alternates) that has no attribute files.
       const objects = (await git(runGit, repoRoot, ["rev-parse", "--path-format=absolute", "--git-path", "objects"])).toString("utf8").trim();
       const bare = await mkdtemp(path.join(os.tmpdir(), "bmc-cc-"));
       try {
         await git(runGit, repoRoot, ["init", "-q", "--bare", bare]);
         await writeFile(path.join(bare, "objects", "info", "alternates"), `${objects}\n`);
+        const bareGit = (args) => git(runGit, repoRoot, ["--git-dir", bare, "-c", "core.attributesFile=/dev/null", ...args]);
         for (const merge of merges) {
-          if ((await git(runGit, repoRoot, ["--git-dir", bare, "-c", "core.attributesFile=/dev/null", "diff-tree", "--cc", "--no-ext-diff", "--no-color", "--format=", merge])).toString("utf8").trim() !== "") conflictResolutionHunks = true;
+          // --name-only would list every file both parents changed; only files with combined hunks were hand-resolved.
+          const patch = (await bareGit(["-c", "core.quotePath=false", "diff-tree", "--cc", "--no-ext-diff", "--no-color", "--format=", merge])).toString("latin1");
+          if (patch.trim() === "") continue;
+          conflictResolutionHunks = true;
+          resolutionMerges.push(merge);
+          for (const line of patch.split("\n")) {
+            if (!line.startsWith("diff --cc ")) continue;
+            // A quoted path (control character or quote in the name) has no sound plain form: fail closed.
+            if (line.startsWith('diff --cc "')) throw new Error("quoted path in combined diff");
+            resolutionPaths.add(line.slice("diff --cc ".length));
+          }
+        }
+        // Config-independent same-file method (issue 3284): a sha256 of the PR's own -U0 hunk bodies per changed file,
+        // so a base edit that only shifts line numbers leaves the digest equal. No patch-id, no context lines.
+        for (const p of changedPaths) {
+          digestEntries.push([p, { before: await hunkDigest(bareGit, mbA, prevHead, p), after: await hunkDigest(bareGit, mbB, headSha, p) }]);
         }
       } finally { await rm(bare, { recursive: true, force: true }); }
     }
     return classifyBaseMergeCarry({
       sourceHead: prevHead, newHead: headSha, prBlobsBefore, prBlobsAfter,
-      baseDeltaPaths, conflictResolutionHunks,
+      baseDeltaPaths, conflictResolutionHunks, resolutionPaths: [...resolutionPaths].sort(), resolutionMerges, prHunkDigests: Object.fromEntries(digestEntries),
     }, { ignoreGateTooling });
   } catch (error) {
     return classifyBaseMergeCarry({ sourceHead: prevHead, newHead: headSha, detectionError: error instanceof Error ? error.message : String(error) });
