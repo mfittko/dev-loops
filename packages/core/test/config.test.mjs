@@ -924,6 +924,17 @@ describe("BUILT_IN_DEFAULTS", () => {
   // P5 (#953) AC2: the tracker-first/built-in posture is unchanged by the
   // local-first extension-defaults opinion. These constants are the built-in
   // surface and must stay tracker-first / high-noise-tolerant.
+  test("queue.ghMinIntervalMs defaults to 500 in the built-in defaults and the schema", () => {
+    assert.equal(BUILT_IN_DEFAULTS.queue.ghMinIntervalMs, 500);
+    assert.equal(FileConfigSchema.parse({ version: 1, queue: {} }).queue.ghMinIntervalMs, 500);
+  });
+
+  test("queue.ghMinIntervalMs accepts 0 and rejects values outside 0..60000", () => {
+    assert.ok(FileConfigSchema.safeParse({ version: 1, queue: { ghMinIntervalMs: 0 } }).success);
+    assert.ok(!FileConfigSchema.safeParse({ version: 1, queue: { ghMinIntervalMs: 60001 } }).success);
+    assert.ok(!FileConfigSchema.safeParse({ version: 1, queue: { ghMinIntervalMs: -1 } }).success);
+  });
+
   test("queue.maxAutoFiledIssues built-in default stays 10 (#953 AC2)", () => {
     assert.equal(BUILT_IN_DEFAULTS.queue.maxAutoFiledIssues, 10);
   });

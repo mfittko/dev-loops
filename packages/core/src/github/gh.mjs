@@ -28,7 +28,34 @@
  */
 
 import { runChild as defaultRunChild } from "../cli/primitives.mjs";
+import { takeGhSlot } from "./gh-throttle.mjs";
 import { parseJsonText } from "./review-threads.mjs";
+
+const SECONDARY_RATE_LIMIT_BACKOFF_MS = 30_000;
+
+/**
+ * Run one gh child through the shared throttle. Pacing applies only to the real
+ * default runChild or an injected `throttle`, so a stubbed runChild never touches
+ * git or the lock. A secondary rate limit backs off once and retries through a
+ * fresh slot; a second one throws RATE_LIMITED with the original gh message.
+ */
+async function runPaced(runChild, command, args, env, { throttle, backoffMs = SECONDARY_RATE_LIMIT_BACKOFF_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
+  const pace = throttle ?? (runChild === defaultRunChild ? takeGhSlot : null);
+  if (!pace) return runChild(command, args, env);
+  const attempt = async () => {
+    await pace();
+    return runChild(command, args, env);
+  };
+  const isSecondaryLimit = (result) => result.code !== 0 && /secondary rate limit/i.test(result.stderr);
+  let result = await attempt();
+  if (!isSecondaryLimit(result)) return result;
+  await sleep(backoffMs);
+  result = await attempt();
+  if (isSecondaryLimit(result)) {
+    throw Object.assign(new Error(`gh command failed: ${result.stderr.trim()}`), { code: "RATE_LIMITED", resetAt: null });
+  }
+  return result;
+}
 
 /**
  * Run a `gh` subcommand and parse its stdout as JSON. Fails loudly on a
@@ -44,8 +71,8 @@ import { parseJsonText } from "./review-threads.mjs";
  *   when omitted it reads `gh command failed: <detail>` (the probe-ci-status
  *   shape). Either way the non-zero-exit error carries `code: "GH_API_ERROR"`.
  */
-export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRunChild, label } = {}) {
-  const result = await runChild(ghCommand, args, env);
+export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRunChild, label, throttle, backoffMs, sleep } = {}) {
+  const result = await runPaced(runChild, ghCommand, args, env, { throttle, backoffMs, sleep });
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
     const prefix = label ? `${label} failed` : "gh command failed";
@@ -70,15 +97,17 @@ export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRu
  *   in the response is returned instead of thrown. This includes a non-zero
  *   `gh` exit whose stdout is JSON with an `errors` array.
  */
-export async function ghGraphql(query, vars, env, runChild = defaultRunChild, { allowErrors = false } = {}) {
+export async function ghGraphql(query, vars, env, runChild = defaultRunChild, { allowErrors = false, throttle, backoffMs, sleep } = {}) {
   const fieldArgs = [];
   for (const [key, value] of Object.entries(vars)) {
     fieldArgs.push("--field", `${key}=${value}`);
   }
-  const result = await runChild(
+  const result = await runPaced(
+    runChild,
     "gh",
     ["api", "graphql", "--field", `query=${query}`, ...fieldArgs],
     env,
+    { throttle, backoffMs, sleep },
   );
   if (result.code !== 0) {
     // `gh api graphql` exits non-zero when the response carries GraphQL

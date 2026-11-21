@@ -399,3 +399,64 @@ describe("withGraphqlRateLimitWait", () => {
     });
   }
 });
+
+describe("gh pacing and secondary rate limit backoff", () => {
+  const limited = { code: 1, stdout: "", stderr: "You have exceeded a secondary rate limit\n" };
+  const ok = { code: 0, stdout: '{"ok":true}', stderr: "" };
+  function harness(results) {
+    const log = { slots: 0, runs: 0, sleeps: [] };
+    return {
+      log,
+      opts: {
+        throttle: async () => { log.slots += 1; },
+        sleep: async (ms) => { log.sleeps.push(ms); },
+        backoffMs: 7,
+        runChild: async () => { log.runs += 1; return results.shift(); },
+      },
+    };
+  }
+
+  test("a stubbed runChild without a throttle never takes a slot", async () => {
+    const log = { runs: 0 };
+    const runChild = async () => { log.runs += 1; return limited; };
+    await assert.rejects(() => ghJson(["api", "x"], { runChild }), { code: "GH_API_ERROR" });
+    assert.equal(log.runs, 1);
+  });
+
+  test("ghJson takes one slot per call", async () => {
+    const { log, opts } = harness([ok]);
+    assert.deepEqual(await ghJson(["api", "x"], opts), { ok: true });
+    assert.equal(log.slots, 1);
+  });
+
+  test("a secondary rate limit backs off then succeeds through a fresh slot", async () => {
+    const { log, opts } = harness([limited, ok]);
+    assert.deepEqual(await ghJson(["api", "x"], opts), { ok: true });
+    assert.deepEqual(log.sleeps, [7]);
+    assert.equal(log.slots, 2);
+  });
+
+  test("a second secondary rate limit throws RATE_LIMITED that isRateLimitError still matches", async () => {
+    const { log, opts } = harness([limited, limited]);
+    await assert.rejects(() => ghJson(["api", "x"], opts), (error) => {
+      assert.equal(error.code, "RATE_LIMITED");
+      assert.ok(isRateLimitError(error));
+      return true;
+    });
+    assert.equal(log.runs, 2);
+  });
+
+  test("a non-rate-limit failure is untouched and not retried", async () => {
+    const { log, opts } = harness([{ code: 1, stdout: "", stderr: "not found" }]);
+    await assert.rejects(() => ghJson(["api", "x"], opts), { code: "GH_API_ERROR", message: "gh command failed: not found" });
+    assert.equal(log.runs, 1);
+    assert.deepEqual(log.sleeps, []);
+  });
+
+  test("ghGraphql backs off on a secondary rate limit then succeeds", async () => {
+    const { log, opts } = harness([limited, { code: 0, stdout: '{"data":{}}', stderr: "" }]);
+    const { runChild, ...rest } = opts;
+    assert.deepEqual(await ghGraphql("query{}", {}, {}, runChild, rest), { data: {} });
+    assert.equal(log.slots, 2);
+  });
+});

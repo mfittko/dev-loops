@@ -1480,6 +1480,13 @@
           "minimum": 0,
           "maximum": 10
         },
+        "ghMinIntervalMs": {
+          "default": 500,
+          "description": "Minimum milliseconds between gh calls across all local dev-loops processes; 0 disables.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60000
+        },
         "archiveOlderThanDays": {
           "type": "integer",
           "exclusiveMinimum": 0,
