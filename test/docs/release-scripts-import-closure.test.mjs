@@ -33,6 +33,8 @@ const RELEASE_ENTRIES = [
   "extract-changelog-section.mjs",
   "resolve-npm-dist-tag.mjs",
 ].map((f) => path.join(RELEASE_DIR, f));
+// verify-release-approval spawns this child by path before every gh call, so its static closure must stay node:-pure too.
+RELEASE_ENTRIES.push(path.join(REPO_ROOT, "packages", "core", "src", "github", "gh-throttle-slot.mjs"));
 
 // Static `import ... from`, side-effect `import "x"`, and `export ... from`
 // specifiers — the imports that execute at module load. The match is anchored

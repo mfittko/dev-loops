@@ -39,7 +39,7 @@ async function withPendingGhStub(fn) {
     ].join("\n");
     await writeFile(ghPath, script, "utf8");
     await chmod(ghPath, 0o755);
-    const env = { ...process.env, PATH: [tempDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
+    const env = { ...process.env, DEV_LOOPS_GH_STUB: "1", PATH: [tempDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
     return await fn(env);
   } finally {
     await rm(tempDir, { recursive: true, force: true });

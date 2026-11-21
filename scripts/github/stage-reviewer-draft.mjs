@@ -2,6 +2,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { takeGhSlot } from "@dev-loops/core/github/gh-throttle";
+import { withSecondaryLimitBackoff } from "@dev-loops/core/github/gh";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
@@ -86,6 +88,13 @@ export function parseStageDraftCliArgs(argv) {
   return options;
 }
 function runChild(command, args, env, stdinText) {
+  const attempt = async () => {
+    if (command === "gh") await takeGhSlot({ env });
+    return spawnChild(command, args, env, stdinText);
+  };
+  return command === "gh" ? withSecondaryLimitBackoff(attempt) : attempt();
+}
+function spawnChild(command, args, env, stdinText) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       env,
