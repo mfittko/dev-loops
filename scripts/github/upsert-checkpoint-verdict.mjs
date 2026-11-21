@@ -2936,12 +2936,19 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     const loaded = await loadPrGateCoordinationContextReusingSnapshot(coordinationOptions, gh, { expectedHeadSha: options.headSha });
     coordinationContext = loaded.context;
     if (loaded.reused) {
-      // A reused snapshot is only as current as its head and verdict comments: re-read both live; CI, threads and Copilot state stay snapshot-fresh.
-      const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], { env, ghCommand, runChild });
-      if (String(live?.headRefOid ?? "").toLowerCase() !== String(coordinationContext.currentHeadSha ?? "").toLowerCase()) {
+      // A reused snapshot is only as current as its head, draft state, draft_gate evidence and verdict comments: re-read them live; CI, threads and Copilot state stay snapshot-fresh.
+      const snapshotHead = String(coordinationContext.currentHeadSha ?? "").toLowerCase();
+      const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,isDraft"], { env, ghCommand, runChild });
+      let freshEvidence = null;
+      if (String(live?.headRefOid ?? "").toLowerCase() === snapshotHead && Boolean(live?.isDraft) === Boolean(coordinationContext.prData?.isDraft)) {
+        freshEvidence = await detectCheckpointEvidence(coordinationOptions, { ...gh, cwd: gh.repoRoot, unresolvedGateThreadCount: coordinationContext.unresolvedGateThreadCount, recordCarry: true });
+      }
+      // A push between the reads, or a changed draft_gate verdict, invalidates the snapshot's Copilot round reset, reviewSummary and interpretation.
+      if (!freshEvidence || String(freshEvidence.currentHeadSha ?? "").toLowerCase() !== snapshotHead
+        || JSON.stringify(freshEvidence.draftGate ?? null) !== JSON.stringify(coordinationContext.gateEvidence?.draftGate ?? null)) {
         coordinationContext = await loadPrGateCoordinationContext(coordinationOptions, gh);
       } else {
-        coordinationContext = { ...coordinationContext, gateEvidence: await detectCheckpointEvidence(coordinationOptions, { ...gh, cwd: gh.repoRoot, unresolvedGateThreadCount: coordinationContext.unresolvedGateThreadCount, recordCarry: true }) };
+        coordinationContext = { ...coordinationContext, gateEvidence: freshEvidence };
       }
     }
     evidence = coordinationContext.gateEvidence;
