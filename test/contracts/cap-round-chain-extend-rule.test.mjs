@@ -24,3 +24,12 @@ test("ADR 0255 amends the remedy of ADR 0254 and the pre-push delta contract nam
     assert.match(line, /reviewer-only/, `${rule} names the reviewer-only route`);
   }
 });
+
+// Issue 3437 DoD dod:2: the contract describes the CI-failed cap-round path.
+test("GATE-EXEC-ROUND-CAP-CHAIN-EXTEND describes the CI-failed cap-round path with distinct recoveries", () => {
+  const rule = read("skills/docs/gate-review-sub-loop-contract.md").split("\n").find((line) => line.startsWith("`GATE-EXEC-ROUND-CAP-CHAIN-EXTEND`"));
+  assert.match(rule, /CI-failed cap-round path \(issue 3437\)/);
+  assert.match(rule, /`ci_failed`/);
+  assert.match(rule, /MUST start at that candidate, never at the cap-round head/);
+  assert.match(rule, /`no_cap_round_chain`, `logic_commit_in_range`, `delta_range_mismatch`\) return `recovery`/);
+});

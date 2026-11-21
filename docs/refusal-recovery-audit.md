@@ -169,7 +169,7 @@ One row per refusal site (line numbers drift; the baseline counts per file). The
 | `scripts/loop/emit-judge-work-order.mjs:437` | MISSING |
 | `scripts/loop/ensure-worktree.mjs:555` | MISSING |
 | `scripts/loop/ensure-worktree.mjs:614` | MISSING |
-| `scripts/loop/extend-cap-round-chain.mjs:70` | MISSING |
+| `scripts/loop/extend-cap-round-chain.mjs:71` | present |
 | `scripts/loop/inspect-run-viewer/server.mjs:89` | MISSING |
 | `scripts/loop/inspect-run-viewer/server.mjs:732` | MISSING |
 | `scripts/loop/inspect-run-viewer/server.mjs:737` | MISSING |
