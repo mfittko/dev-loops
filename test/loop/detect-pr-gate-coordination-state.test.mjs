@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5259,6 +5260,15 @@ describe("pull-request coordination snapshot", () => {
       assert.equal(await readFile(snapshotFile(root), "utf8").catch(() => null), null);
       await writePrGateCoordinationSnapshot(options, runtime, context, Date.now() + 10);
       assert.notEqual(await readFile(snapshotFile(root), "utf8").catch(() => null), null);
+    });
+  });
+
+  it("a delete between the stamp check and the write leaves no snapshot", async () => {
+    await withRoot(async (root) => {
+      // JSON.stringify runs after the stamp check and before the write, so the delete lands exactly between them.
+      const racing = { toJSON: () => { writeFileSync(`${snapshotFile(root)}.deleted`, String(Date.now())); return context; } };
+      await writePrGateCoordinationSnapshot(options, { coordinationSnapshotRoot: root }, racing, Date.now() - 5);
+      assert.equal(await readFile(snapshotFile(root), "utf8").catch(() => null), null);
     });
   });
 

@@ -1304,6 +1304,8 @@ export async function writePrGateCoordinationSnapshot(options, runtime, context,
     if (Number(await readFile(deletionStampPath(file), "utf8").catch(() => 0)) >= nowMs) return;
     const snapshot = { repo: options.repo, pr: options.pr, headSha: context.currentHeadSha, lightweight: options.lightweight === true, fetchedAtMs: nowMs, context };
     await writeSealed(file, JSON.stringify(snapshot));
+    // A delete that landed after the check above stamped before it removed, so the stamp now shows it: take the snapshot back.
+    if (Number(await readFile(deletionStampPath(file), "utf8").catch(() => 0)) >= nowMs) await rm(file, { force: true });
   } catch { /* best effort */ }
 }
 
@@ -1311,9 +1313,10 @@ export async function deletePrGateCoordinationSnapshot(options, runtime = {}) {
   try {
     const file = coordinationSnapshotPath(options, runtime);
     if (!file) return;
-    await rm(file, { force: true });
     await mkdir(path.dirname(file), { recursive: true });
+    // Stamp first: a writer that checks the stamp after this point skips, and one that wrote earlier sees the stamp on its re-read.
     await writeFile(deletionStampPath(file), String(Date.now()));
+    await rm(file, { force: true });
   } catch { /* best effort */ }
 }
 

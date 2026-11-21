@@ -2936,7 +2936,8 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     const loaded = await loadPrGateCoordinationContextReusingSnapshot(coordinationOptions, gh, { expectedHeadSha: options.headSha });
     coordinationContext = loaded.context;
     if (loaded.reused) {
-      // Every input that can change a verdict is read live: head, draft and PR state, PR body, both thread counts, draft_gate evidence, verdict comments and the refinement artifact. Only CI and Copilot request state stay snapshot-fresh.
+      // Read live: head, draft and PR state, PR body, both thread counts, draft_gate evidence, verdict comments and the refinement artifact.
+      // Taken from the snapshot: CI status, the Copilot request and convergence fields, the loop interpretation and disposition, the post-convergence suppression flag, the base ref and the closing issue references. A same-head CI re-run or a body-only Copilot review after the pre-flight is not seen until the 10-minute bound or a head change.
       // Any live difference from the snapshot loads the whole context fresh.
       const snapshotHead = String(coordinationContext.currentHeadSha ?? "").toLowerCase();
       const prev = coordinationContext.prData ?? {};
