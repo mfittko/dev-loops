@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { computeSpecDigest, requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
-import { parseWaiveAdrTripwireCliArgs, runCli, waiveAdrTripwire } from "../../scripts/github/waive-adr-tripwire.mjs";
+import { isMatrixPathOnlySpecChange, parseWaiveAdrTripwireCliArgs, runCli, waiveAdrTripwire } from "../../scripts/github/waive-adr-tripwire.mjs";
 import { hasSpikePrMarker } from "../../scripts/github/_spike-pr-marker.mjs";
 import { captureStream } from "../_helpers.mjs";
 import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
@@ -53,6 +53,7 @@ function harness(over = {}) {
     fetchBaseBranch: () => {},
     fetchPr: async () => ({ body: PR_BODY, headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 7 }] } }),
     fetchIssueBody: async () => ISSUE_BODY,
+    fetchIssueBodyHistory: async () => [],
     evaluateAdrTripwire: blockUntilWaived,
     fetchDraftGateEvidence: async () => ({ currentHeadClean: true }),
     readRecordedSpecDigest: async () => DIGEST,
@@ -284,9 +285,91 @@ test("refuses without a clean draft_gate verdict on the current head", async () 
 });
 
 test("refuses when the recorded specDigest differs from the issue's current digest, or is missing", async () => {
-  await assertRefusal({ readRecordedSpecDigest: async () => "sha256:stale" }, "spec_digest_mismatch");
+  let historyCalls = 0;
+  await assertRefusal({ readRecordedSpecDigest: async () => "sha256:stale", fetchIssueBodyHistory: async () => { historyCalls++; return []; } }, "spec_digest_mismatch");
+  assert.equal(historyCalls, 1, "a stale digest looks up the edit history once");
   await assertRefusal({ readRecordedSpecDigest: async () => null }, "spec_digest_unrecorded");
   await assertRefusal({ fetchIssueBody: async () => "no spec here" }, "issue_matrix_invalid");
+});
+
+// ADR 0301: the prior body lacks the backticked contract path that ISSUE_BODY adds to a matrix row.
+const PRIOR_BODY = ISSUE_BODY.replace(`\`${CONTRACT}\` carries`, "carries");
+const PRIOR_DIGEST = computeSpecDigest(requireSpecFromBody(PRIOR_BODY));
+const historyOf = (...bodies) => ({ readRecordedSpecDigest: async () => PRIOR_DIGEST, fetchIssueBodyHistory: async () => bodies });
+
+test("a matrix-path-only edit found in the issue edit history keeps the proof valid", async () => {
+  assert.notEqual(PRIOR_DIGEST, DIGEST);
+  const { edits, run } = harness(historyOf(ISSUE_BODY, PRIOR_BODY));
+  const result = await run();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(edits.length, 1);
+});
+
+test("a connector word plus a path (the issue 3366 edit) keeps the proof valid; a non-connector word refuses", async () => {
+  const withWords = (words) => PRIOR_BODY.replace("carries", `${words} \`${CONTRACT}\` carries`);
+  const inPrior = withWords("in");
+  const inBody = ISSUE_BODY.replace(`\`${CONTRACT}\` carries`, `in \`${CONTRACT}\` carries`);
+  const digest = computeSpecDigest(requireSpecFromBody(inPrior));
+  const accepted = await harness({ readRecordedSpecDigest: async () => digest, fetchIssueBody: async () => inBody, fetchIssueBodyHistory: async () => [inPrior] }).run();
+  assert.equal(accepted.ok, true, JSON.stringify(accepted));
+  const notBody = ISSUE_BODY.replace(`\`${CONTRACT}\` carries`, `not \`${CONTRACT}\` carries`);
+  await assertRefusal({ readRecordedSpecDigest: async () => PRIOR_DIGEST, fetchIssueBody: async () => notBody, fetchIssueBodyHistory: async () => [PRIOR_BODY] }, "spec_digest_mismatch");
+});
+
+test("a connector without an adjacent added path, or a hidden word in an HTML comment, refuses", async () => {
+  const refuseBody = (body) => assertRefusal({ readRecordedSpecDigest: async () => PRIOR_DIGEST, fetchIssueBody: async () => body, fetchIssueBodyHistory: async () => [PRIOR_BODY] }, "spec_digest_mismatch");
+  await assertRefusal({ readRecordedSpecDigest: async () => DIGEST, fetchIssueBody: async () => ISSUE_BODY.replaceAll("states the rule.", "and states the rule."), fetchIssueBodyHistory: async () => [ISSUE_BODY] }, "spec_digest_mismatch");
+  await refuseBody(ISSUE_BODY.replace(`\`${CONTRACT}\` carries`, `<!-- not --> \`${CONTRACT}\` carries`));
+});
+
+test("any other issue edit since the recorded digest still refuses spec_digest_mismatch", async () => {
+  const changed = (from, to) => PRIOR_BODY.replaceAll(from, to);
+  const addedRow = ISSUE_BODY.replace("\n\n## Non-goals", "\n| A second criterion states another rule. | `skills/docs/y-contract.md` carries the second rule text. |\n\n## Non-goals");
+  assert.notEqual(addedRow, ISSUE_BODY);
+  const cases = {
+    "changed criterion text": { prior: changed("states the rule.", "states the new rule.") },
+    "added row": { prior: PRIOR_BODY, current: addedRow },
+    "changed non-goal": { prior: changed("Nothing else changes.", "Something else changes.") },
+  };
+  for (const { prior, current } of Object.values(cases)) {
+    const digest = computeSpecDigest(requireSpecFromBody(prior));
+    await assertRefusal({ readRecordedSpecDigest: async () => digest, ...(current ? { fetchIssueBody: async () => current } : {}), fetchIssueBodyHistory: async () => [prior] }, "spec_digest_mismatch");
+  }
+  await assertRefusal(historyOf(), "spec_digest_mismatch");
+  const failed = await assertRefusal({ ...historyOf(PRIOR_BODY), fetchIssueBodyHistory: async () => { throw new Error("graphql failed"); } }, "spec_digest_mismatch");
+  assert.match(failed.detail, /could not be fetched: graphql failed/u);
+});
+
+test("punctuation regrouping, a stray semicolon, a mid-sentence insertion and a non-trigger path refuse", () => {
+  const specBody = (text) => `## Acceptance criteria\n\n- [ ] ${text}\n\n## Definition of done\n\n- [ ] Done.\n\n## AC / DoD matrix\n\n| Acceptance criterion | Completion evidence |\n| --- | --- |\n| ${text} | Done. |\n\n## Non-goals\n\n- Nothing.\n`;
+  const X = "skills/docs/x-contract.md";
+  const check = (prior, cur, paths = [X]) => isMatrixPathOnlySpecChange(specBody(prior), specBody(cur), paths);
+  assert.equal(check("Refuse when A or B and C.", "Refuse when ( A or B ) and C."), false);
+  assert.equal(check("The rule is stated", `The rule is stated ; in \`${X}\``), false);
+  assert.equal(check("Any other change still refuses.", `Any other change in \`${X}\` still refuses.`), false);
+  assert.equal(check("The rule is stated", "The rule is stated `skills/docs/y-contract.md`"), false);
+  assert.equal(check("Return `false` when stale.", `Return \`false\` in \`${X}\` when stale.`), false);
+  assert.equal(check("The rule is stated", `The rule is stated in \`${X}\`, \`skills/docs/y-contract.md\`.`, [X, "skills/docs/y-contract.md"]), true);
+  assert.equal(check("The contract doc states the rule.", `The contract doc states the rule (see \`${X}\`).`), true);
+  assert.equal(check("The contract doc states the rule.", `The contract doc states (see the rule \`${X}\`).`), false);
+  assert.equal(check("The rule.", "The rule ."), false);
+  assert.equal(check("The rule.", "The rule ( see )."), false);
+  const A = "skills/docs/a-contract.md";
+  assert.equal(check(`\`${A}\` and the tests`, `\`${A}\` and \`${X}\` and the tests`), true);
+  assert.equal(check(`Stated in \`${A}\`.`, `Stated in \`${A}\` and \`${X}\`.`), true);
+  assert.equal(check(`Stated in \`${A}\`.`, `Stated in \`${A}\` and only \`${X}\`.`), false);
+});
+
+test("the default history fetch parses userContentEdits and passes the issue number", async () => {
+  const calls = [];
+  const payload = { data: { repository: { issue: { userContentEdits: { nodes: [{ diff: PRIOR_BODY }, { diff: null }] } } } } };
+  const runChild = async (_cmd, args) => { calls.push(args); return { code: 0, stdout: JSON.stringify(payload), stderr: "" }; };
+  const { edits, deps } = harness({ readRecordedSpecDigest: async () => PRIOR_DIGEST, runChild });
+  delete deps.fetchIssueBodyHistory;
+  const result = await waiveAdrTripwire(OPTIONS, deps);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(edits.length, 1);
+  assert.ok(calls[0].includes("i=7") && calls[0].includes("-F"));
 });
 
 test("post-ready path: a clean pre_approval_gate at head with a matching digest writes the line", async () => {
