@@ -228,7 +228,7 @@ const GateAngleEntry = z.preprocess(
     readsPrBody: z.boolean().optional().describe("Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it."),
     categories: z.array(z.enum(CHANGE_CATEGORY_NAMES)).min(1).optional().describe("Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed."),
     kinds: z.array(z.enum(FILE_KIND_NAMES)).min(1).optional().describe("File kinds (code/config/test/ci/docs/asset/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed."),
-    "developer-checklist": z.array(z.string().regex(/^[A-Z]+\d+: \S/u)).min(1).optional().describe("Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID (PRE-PR-DEVELOPER-SELF-CHECK)."),
+    "developer-checklist": z.array(z.string().regex(/^[A-Z]+\d+: \S/u)).min(1).optional().describe("Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID Only `gates.draft.angles` entries are read; on any other gate the key validates and is ignored (PRE-PR-DEVELOPER-SELF-CHECK)."),
   }),
 );
 
@@ -379,7 +379,7 @@ function formatConfigValue(value) {
 const GATE_KEYS_WITH_BLOCKING_SEVERITIES = /** @type {const} */ (["draft", "preApproval", "spike"]);
 
 const GateConfig = z.strictObject({
-  angles: z.array(GateAngleEntry).optional().describe("Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds."),
+  angles: z.array(GateAngleEntry).optional().describe("Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds/developer-checklist."),
   dynamic: GateDynamicConfig.optional().describe("Diff-driven dynamic angle selection policy for this gate."),
   required: z.boolean().default(true).describe("Whether this gate must run."),
   requireCi: z.boolean().default(true).describe("Per-gate CI prerequisite (default true): the gate requires green CI on the current head; false opts this gate out of the CI precondition entirely, including a real failure."),

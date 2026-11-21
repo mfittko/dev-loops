@@ -63,10 +63,11 @@ export function readSelfCheckFile(file, requiredIds) {
 }
 
 /** Write the record for the current git HEAD of `cwd`. Returns the record and its path. */
-export function writePrePrReviewRecord({ cwd = process.cwd(), verdict, disposition, selfCheck }) {
+export function writePrePrReviewRecord({ cwd = process.cwd(), verdict, disposition, selfCheck, expectedHead }) {
   if (!PRE_PR_REVIEW_VERDICTS.includes(verdict)) throw new Error(`--verdict must be one of ${PRE_PR_REVIEW_VERDICTS.join(", ")}`);
   if (!PRE_PR_REVIEW_DISPOSITIONS.includes(disposition)) throw new Error(`--disposition must be one of ${PRE_PR_REVIEW_DISPOSITIONS.join(", ")}`);
   const head = git(cwd, ["rev-parse", "HEAD"]);
+  if (expectedHead && head !== expectedHead) throw Object.assign(new Error(`${PRE_PR_SELF_CHECK_MISSING}: HEAD moved from ${expectedHead} to ${head} while the self-check ids were derived (PRE-PR-DEVELOPER-SELF-CHECK)`), { code: PRE_PR_SELF_CHECK_MISSING });
   const record = { head, verdict, disposition, ...(selfCheck ? { selfCheck } : {}), integrity: integrityOf({ head, verdict, disposition }) };
   const file = path.join(recordDir(cwd), `${head}.json`);
   mkdirSync(path.dirname(file), { recursive: true });

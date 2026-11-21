@@ -1205,7 +1205,7 @@ test("the selfCheck digest stays bounded with a large Copilot export, and the ex
   const root = await fixtureRepo();
   const file = path.join(root, "threads.jsonl");
   const bodies = ["Handle an empty input. ", "Fix the help text. ", "Add a test. ", "Other remark. "];
-  await writeFile(file, Array.from({ length: 200 }, (_, i) => JSON.stringify({ pr: i, body: bodies[i % 4] + "z".repeat(500) })).join("\n"));
+  await writeFile(file, Array.from({ length: 200 }, (_, i) => JSON.stringify({ pr: i, author: "copilot-pull-request-reviewer", body: bodies[i % 4] + "z".repeat(500) })).join("\n"));
   const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, copilotFile: file });
   assert.equal(brief.selfCheck.copilotClasses.length, 3);
   assert.ok(brief.selfCheck.copilotClasses.every((c) => c.examples.length === 1 && c.examples[0].length <= 160));
@@ -1224,4 +1224,11 @@ test("selfCheck.classes caps at 3 gate classes with one example each when the tm
   const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root });
   assert.deepEqual(brief.selfCheck.classes.map((c) => c.angle), ["a1", "a2", "a3"]);
   assert.ok(brief.selfCheck.classes.every((c) => c.examples.length === 1));
+});
+
+test("a relative --copilot-file resolves against --repo-root, not the process cwd", async () => {
+  const root = await fixtureRepo();
+  await writeFile(path.join(root, "threads.jsonl"), `${JSON.stringify({ author: "Copilot", body: "Add a test." })}\n`);
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, copilotFile: "threads.jsonl" });
+  assert.equal(brief.selfCheck.copilotClasses[0]?.class, "tests");
 });

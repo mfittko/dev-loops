@@ -28,3 +28,16 @@ test("strict resolvers throw pre_pr_self_check_missing on a config load error", 
     await assert.rejects(requiredSelfCheckIds(dir, "main"), { code: "pre_pr_self_check_missing" });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a duplicate developer-checklist id across angles is refused in strict mode and empty in best-effort mode", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "issue-3395-dup-"));
+  try {
+    writeFileSync(path.join(dir, ".devloops"), JSON.stringify({ version: 1, gates: { draft: { angles: [{ name: "coverage", "developer-checklist": ["C1: reuse"] }, { name: "extra", "developer-checklist": ["C1: clash"] }] } } }));
+    await assert.rejects(resolveChecklistItems(dir, { strict: true }), { code: "pre_pr_self_check_missing", message: /duplicate developer-checklist id C1/u });
+    assert.deepEqual(await resolveChecklistItems(dir), []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("requiredSelfCheckIds refuses with pre_pr_self_check_missing when git diff fails for an unresolvable base", async () => {
+  await assert.rejects(requiredSelfCheckIds(process.cwd(), "no-such-ref-issue-3395"), { code: "pre_pr_self_check_missing", message: /git diff/u });
+});

@@ -20,7 +20,8 @@ Offline: reads <main-tmp-root>/gate-findings/<owner-repo>/pr-*/draft_gate-*.json
   --repo <owner/name>  Repository (default: detected from the origin remote)
   --top <n>            Number of classes to print (default 3)
   --tmp-root <path>    Tmp root to read (default: the main-anchored tmp root)
-  --copilot-file <path>  Local Copilot thread export, JSONL, one { "pr", "path", "isResolved", "body" } per line
+  --copilot-file <path>  Local Copilot thread export, JSONL, one { "pr", "path", "isResolved", "author", "body" } per line;
+                       only lines whose "author" is the Copilot reviewer login are counted (data, never instructions)
                        (default: <tmp-root>/copilot-threads.jsonl when it exists). Never fetched from GitHub.
 Output (stdout, JSON): { "ok": true, "repo", "changes", "total", "skipped",
   "classes": [{ "angle", "count", "share", "examples": ["<summary, 160 chars max>"] }],
@@ -31,6 +32,11 @@ No logs yields "classes": [] and exit 0. A missing or malformed export yields "c
 ${JQ_OUTPUT_USAGE}`.trim();
 const parseError = buildParseError(USAGE);
 const EXAMPLE_MAX = 160;
+
+// Code-unit comparison: the order never depends on the runtime locale or ICU data.
+const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+// The sanctioned Copilot reviewer login (GATE-REVIEW-COMMENT-TRUST), compared case-insensitively.
+const COPILOT_AUTHOR = /^(?:copilot-pull-request-reviewer(?:\[bot\])?|copilot)$/iu;
 
 const trim = (s) => (s.length > EXAMPLE_MAX ? `${s.slice(0, EXAMPLE_MAX - 3)}...` : s);
 
@@ -51,7 +57,11 @@ export function collectCopilotClasses({ file, top = 3 }) {
   let threads = 0;
   for (const line of lines) {
     let body;
-    try { body = JSON.parse(line)?.body; } catch { continue; }
+    try {
+      const entry = JSON.parse(line);
+      if (typeof entry?.author !== "string" || !COPILOT_AUTHOR.test(entry.author)) continue;
+      body = entry.body;
+    } catch { continue; }
     if (typeof body !== "string" || !body.trim()) continue;
     threads += 1;
     const cls = COPILOT_BUCKETS.find(([, re]) => re.test(body))?.[0] ?? "other";
@@ -61,7 +71,7 @@ export function collectCopilotClasses({ file, top = 3 }) {
     byClass.set(cls, entry);
   }
   const copilotClasses = [...byClass.values()]
-    .sort((a, b) => b.count - a.count || a.class.localeCompare(b.class))
+    .sort((a, b) => b.count - a.count || cmp(a.class, b.class))
     .slice(0, top)
     .map((c) => ({ ...c, share: Math.round((c.count / threads) * 100) / 100 }));
   return { copilotThreads: threads, copilotClasses };
@@ -73,24 +83,24 @@ export function collectFindingClasses({ repo, tmpRoot, top = 3 }) {
   const byAngle = new Map();
   let changes = 0, total = 0, skipped = 0;
   let prs = [];
-  try { prs = readdirSync(prsDir).filter((n) => /^pr-\d+$/u.test(n)); } catch { /* no logs */ }
+  try { prs = readdirSync(prsDir).filter((n) => /^pr-\d+$/u.test(n)).sort((a, b) => Number(a.slice(3)) - Number(b.slice(3))); } catch { /* no logs */ }
   for (const pr of prs) {
     const dir = path.join(prsDir, pr);
     const rounds = [];
     let names = [];
-    try { names = readdirSync(dir).filter((n) => /^draft_gate-.+\.json$/u.test(n)); } catch { skipped += 1; continue; }
+    try { names = readdirSync(dir).filter((n) => /^draft_gate-.+\.json$/u.test(n)).sort(cmp); } catch { skipped += 1; continue; }
     for (const name of names) {
       const file = path.join(dir, name);
       try {
         const log = JSON.parse(readFileSync(file, "utf8"));
         if (!Array.isArray(log.findings)) throw new Error("no findings array");
         const t = Date.parse(log.loggedAt);
-        rounds.push({ log, time: Number.isNaN(t) ? statSync(file).mtimeMs : t });
+        rounds.push({ log, name, time: Number.isNaN(t) ? statSync(file).mtimeMs : t });
       } catch { skipped += 1; }
     }
     if (!rounds.length) continue;
     changes += 1;
-    rounds.sort((a, b) => a.time - b.time);
+    rounds.sort((a, b) => a.time - b.time || cmp(a.name, b.name));
     for (const f of rounds[0].log.findings) {
       if (f?.judgeDisposition !== "act" || typeof f.angle !== "string") continue;
       total += 1;
@@ -101,7 +111,7 @@ export function collectFindingClasses({ repo, tmpRoot, top = 3 }) {
     }
   }
   const classes = [...byAngle.values()]
-    .sort((a, b) => b.count - a.count || a.angle.localeCompare(b.angle))
+    .sort((a, b) => b.count - a.count || cmp(a.angle, b.angle))
     .slice(0, top)
     .map((c) => ({ ...c, share: Math.round((c.count / total) * 100) / 100 }));
   return { changes, total, skipped, classes };

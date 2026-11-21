@@ -405,3 +405,22 @@ test("record mode derives the required ids from the repo-root config when run fr
     assert.equal(broken.err.code, "pre_pr_self_check_missing");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("record mode refuses when HEAD moves between the id derivation and the write,", async () => {
+  const dir = fixtureRepo();
+  try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    commit(dir, "src/b.mjs", "export const b = 1;\n");
+    const base = ["--verdict", "clean", "--disposition", "none", "--no-linked-issue"];
+    const attempt = async (extra, io = {}) => {
+      let err = "";
+      const ids = await requiredSelfCheckIds(dir, "main");
+      const code = await runCli([...base, ...extra, "--self-check-file", selfCheckFile(dir, ids.map((id) => ({ id, status: "done", evidence: "e" })))], { cwd: dir, stdout: { write() {} }, stderr: { write: (s) => { err += s; } }, ...io });
+      return { code, err: err ? JSON.parse(err) : null };
+    };
+    const moved = await attempt(["--base", "main"], { resolveHead: (cwd) => { const head = git(cwd, "rev-parse", "HEAD").trim(); commit(dir, "src/c.mjs", "export const c = 1;\n"); return head; } });
+    assert.equal(moved.code, 1);
+    assert.equal(moved.err.code, "pre_pr_self_check_missing");
+    assert.match(JSON.stringify(moved.err), /HEAD moved/u);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

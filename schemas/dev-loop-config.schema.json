@@ -313,7 +313,7 @@
           "type": "object",
           "properties": {
             "angles": {
-              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds.",
+              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds/developer-checklist.",
               "type": "array",
               "items": {
                 "oneOf": [
@@ -406,7 +406,7 @@
                         }
                       },
                       "developer-checklist": {
-                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID (PRE-PR-DEVELOPER-SELF-CHECK).",
+                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID Only `gates.draft.angles` entries are read; on any other gate the key validates and is ignored (PRE-PR-DEVELOPER-SELF-CHECK).",
                         "minItems": 1,
                         "type": "array",
                         "items": {
@@ -566,7 +566,7 @@
           "type": "object",
           "properties": {
             "angles": {
-              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds.",
+              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds/developer-checklist.",
               "type": "array",
               "items": {
                 "oneOf": [
@@ -659,7 +659,7 @@
                         }
                       },
                       "developer-checklist": {
-                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID (PRE-PR-DEVELOPER-SELF-CHECK).",
+                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID Only `gates.draft.angles` entries are read; on any other gate the key validates and is ignored (PRE-PR-DEVELOPER-SELF-CHECK).",
                         "minItems": 1,
                         "type": "array",
                         "items": {
@@ -814,7 +814,7 @@
           "type": "object",
           "properties": {
             "angles": {
-              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds.",
+              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds/developer-checklist.",
               "type": "array",
               "items": {
                 "oneOf": [
@@ -907,7 +907,7 @@
                         }
                       },
                       "developer-checklist": {
-                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID (PRE-PR-DEVELOPER-SELF-CHECK).",
+                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID Only `gates.draft.angles` entries are read; on any other gate the key validates and is ignored (PRE-PR-DEVELOPER-SELF-CHECK).",
                         "minItems": 1,
                         "type": "array",
                         "items": {
