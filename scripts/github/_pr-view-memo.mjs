@@ -6,7 +6,7 @@ export function readPrViewOnce({ repo, pr, fields }, memo, load) {
   const key = `${repo}#${pr}#${fields}`;
   if (!memo.has(key)) {
     // A rejected read is evicted so a retry fetches again.
-    memo.set(key, load().catch((error) => { memo.delete(key); throw error; }));
+    memo.set(key, Promise.resolve().then(load).catch((error) => { memo.delete(key); throw error; }));
   }
   return memo.get(key);
 }

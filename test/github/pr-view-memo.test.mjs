@@ -28,3 +28,12 @@ test("readPrViewOnce loads on every call without a memo", async () => {
   await readPrViewOnce(target, undefined, load);
   assert.equal(loads, 2);
 });
+
+test("readPrViewOnce memoizes a synchronous loader", async () => {
+  const memo = new Map();
+  let loads = 0;
+  const load = () => ({ n: ++loads });
+  assert.deepEqual(await readPrViewOnce(target, memo, load), { n: 1 });
+  assert.deepEqual(await readPrViewOnce(target, memo, load), { n: 1 });
+  assert.equal(loads, 1);
+});

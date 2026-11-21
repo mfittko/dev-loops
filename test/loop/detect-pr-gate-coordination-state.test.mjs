@@ -233,10 +233,12 @@ test("fetchPrFactsWithSettledMergeable returns the new head, headMoved and stale
 });
 
 test("loadPrGateCoordinationContext fails closed on the cap-edge stale result before the toolchain guard", async () => {
-  const { runChild } = stubPrViewGh([{ headRefOid: "bbb", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" }]);
-  const fetch = async () => ({ headRefOid: "aaa", state: "OPEN", mergeable: "UNKNOWN" });
+  const { runChild } = stubPrViewGh([
+    { headRefOid: "aaa", state: "OPEN", mergeable: "UNKNOWN" },
+    { headRefOid: "bbb", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" },
+  ]);
   await assert.rejects(
-    loadPrGateCoordinationContext({ repo: "owner/repo", pr: 1 }, { runChild, fetch, sleep: async () => {}, maxPolls: 1, guardToolchain: true }),
+    loadPrGateCoordinationContext({ repo: "owner/repo", pr: 1 }, { runChild, sleep: async () => {}, maxPolls: 1, guardToolchain: true }),
     /head moved while mergeable was still UNKNOWN \(new head bbb\)/,
   );
 });

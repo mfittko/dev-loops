@@ -303,10 +303,9 @@ export async function fetchPrFactsWithSettledMergeable(
     maxPolls = 3,
     pollDelayMs = 1500,
     sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-    fetch = fetchPrFacts,
   } = {},
 ) {
-  let prData = await fetch(options, { env, ghCommand, runChild });
+  let prData = await fetchPrFacts(options, { env, ghCommand, runChild });
   let polls = 0;
   while (String(prData?.mergeable || "").toUpperCase() === "UNKNOWN" && polls < maxPolls) {
     polls += 1;
@@ -317,7 +316,7 @@ export async function fetchPrFactsWithSettledMergeable(
     } else if (polls < maxPolls) {
       // The head-change full fetch counts against the cap too.
       polls += 1;
-      prData = await fetch(options, { env, ghCommand, runChild });
+      prData = await fetchPrFacts(options, { env, ghCommand, runChild });
     } else {
       // Cap edge: the last narrow re-poll saw a new head and no further gh call is allowed.
       // Return only the new head with `stale: true`, so no superseded-head field reads as current.
