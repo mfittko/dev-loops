@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ANGLE_LINE_MAX, condenseAnglePrompt, requiredSelfCheckIds, resolveChecklistItems, resolveSelfCheckAngles } from "../../scripts/loop/_self-check-items.mjs";
@@ -11,6 +12,26 @@ test("condenseAnglePrompt keeps the first sentence, caps it, and falls back for 
   assert.equal(condenseAnglePrompt("x".repeat(500), "a").length, ANGLE_LINE_MAX);
   assert.equal(condenseAnglePrompt("", "coverage"), "Apply the coverage review angle while writing.");
   assert.equal(condenseAnglePrompt(undefined, "coverage"), "Apply the coverage review angle while writing.");
+});
+
+test("condenseAnglePrompt does not end the sentence at e.g., i.e. or etc.", () => {
+  assert.equal(condenseAnglePrompt("Flag modules that mix concerns (e.g. I/O + logic). More.", "a"), "Flag modules that mix concerns (e.g. I/O + logic).");
+  assert.equal(condenseAnglePrompt("Use tools, i.e. the linter. More.", "a"), "Use tools, i.e. the linter.");
+});
+
+test("requiredSelfCheckIds reads a non-ASCII path raw, matching the brief's angle ids for the same path", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "issue-3395-nonascii-"));
+  const git = (...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: dir, stdio: "ignore" });
+  try {
+    git("init", "-q", "-b", "main");
+    writeFileSync(path.join(dir, "a.txt"), "x");
+    git("add", "."); git("commit", "-q", "-m", "base");
+    mkdirSync(path.join(dir, "docs"));
+    writeFileSync(path.join(dir, "docs", "ä.md"), "x");
+    git("add", "."); git("commit", "-q", "-m", "change");
+    const expected = [...(await resolveSelfCheckAngles(dir, ["docs/ä.md"])).map((a) => a.id), ...(await resolveChecklistItems(dir, ["docs/ä.md"])).map((i) => i.id)];
+    assert.deepEqual(await requiredSelfCheckIds(dir, "HEAD~1"), expected);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("resolveSelfCheckAngles falls back to the shipped defaults, capped at 8 lines, for a root without config", async () => {
@@ -34,7 +55,7 @@ test("a duplicate developer-checklist id across angles is refused in strict mode
   try {
     writeFileSync(path.join(dir, ".devloops"), JSON.stringify({ version: 1, gates: { draft: { angles: [{ name: "coverage", "developer-checklist": ["C1: reuse"] }, { name: "correctness", "developer-checklist": ["C1: clash"] }] } } }));
     await assert.rejects(resolveChecklistItems(dir, ["a.mjs"], { strict: true }), { code: "pre_pr_self_check_missing", message: /duplicate developer-checklist id C1/u });
-    assert.deepEqual(await resolveChecklistItems(dir), []);
+    assert.deepEqual(await resolveChecklistItems(dir, ["a.mjs"]), []);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

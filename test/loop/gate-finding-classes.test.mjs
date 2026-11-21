@@ -92,6 +92,12 @@ test("the CLI adds copilotClasses from --copilot-file or the default export, and
   assert.equal(await main(["--repo", "o/r", "--tmp-root", root, "--copilot-file"], io), 1);
 });
 
+test("--repo with a dot segment is a usage error", async () => {
+  let err = "";
+  assert.equal(await main(["--repo", "o/..", "--tmp-root", tmpRoot()], { stdout: { write() {} }, stderr: { write: (s) => { err += s; } }, cwd: process.cwd() }), 1);
+  assert.match(err, /--repo must be owner\/name/u);
+});
+
 test("a non-directory pr-N entry is counted as skipped and does not fail the run", () => {
   const root = tmpRoot();
   writeLog(root, 1, "aaaaaaa", "2026-01-01T00:00:00Z", [f("tests")]);
@@ -144,5 +150,10 @@ test("the CLI makes no gh invocation, with or without a Copilot export", () => {
   const result = run();
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).classes[0].angle, "tests");
+  assert.equal(existsSync(marker), false);
+  writeFileSync(path.join(root, "copilot-threads.jsonl"), `${JSON.stringify({ author: "copilot-pull-request-reviewer", body: "Add a test." })}\n`);
+  const withExport = run();
+  assert.equal(withExport.status, 0, withExport.stderr);
+  assert.ok(JSON.parse(withExport.stdout).copilotClasses.length > 0);
   assert.equal(existsSync(marker), false);
 });

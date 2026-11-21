@@ -8,7 +8,7 @@
 import { parseArgs } from "node:util";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
@@ -122,8 +122,11 @@ export async function main(argv = process.argv.slice(2), { stdout = process.stdo
     const { values } = parseArgs({ args: argv, options: { help: { type: "boolean", short: "h" }, repo: { type: "string" }, top: { type: "string" }, "tmp-root": { type: "string" }, "copilot-file": { type: "string" }, ...JQ_OUTPUT_PARSE_OPTIONS }, strict: true });
     if (values.help) { stdout.write(`${USAGE}\n`); return 0; }
     if (values.top !== undefined && !/^[1-9]\d*$/u.test(values.top)) throw parseError("--top must be a positive integer");
-    const repo = values.repo ?? detectRepoSlug(cwd);
-    if (!repo || !/^[^/\s]+\/[^/\s]+$/u.test(repo)) throw parseError("--repo must be owner/name (or run inside a GitHub checkout)");
+    const repoInput = values.repo ?? detectRepoSlug(cwd);
+    const repoError = "--repo must be owner/name (or run inside a GitHub checkout)";
+    if (!repoInput) throw parseError(repoError);
+    let repo;
+    try { const { owner, name } = parseRepoSlug(repoInput, { errorMessage: repoError }); repo = `${owner}/${name}`; } catch (error) { throw parseError(error.message); }
     const tmpRoot = path.resolve(cwd, values["tmp-root"] ?? resolveGateArtifactTmpRoot(cwd));
     const top = values.top === undefined ? 3 : Number(values.top);
     const result = collectFindingClasses({ repo, tmpRoot, top });
