@@ -5,16 +5,16 @@ import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
-import { ANGLE_LINE_MAX } from "../../scripts/loop/_self-check-items.mjs";
+import { ANGLE_LINE_MAX, resolveChecklistItems } from "../../scripts/loop/_self-check-items.mjs";
 
+// A1, A2, A5 and A7 merged into K2, I2, CS1 and PK1 (same-angle duplicates).
 const A_LINES = {
-  A1: ["holistic", "For every state, artifact or route the diff produces, open its downstream validator"],
-  A2: ["input-validation", "List the syntactic forms the real consumer accepts"],
+  K2: ["holistic", "confirm it accepts exactly what the producer now emits"],
+  I2: ["input-validation", "(quoting, continuations, substitutions, abbreviations, nesting, case)"],
   A3: ["state-concurrency", "retained versus live copies, interrupted writes, symlinks and stale remote refs"],
   A4: ["contract-surface", "Trace each refusal remedy and documented command through the target CLI parser"],
-  A5: ["contract-surface", "Grep untouched skills/docs, docs/decisions, exit-code tables and JSDoc"],
+  CS1: ["contract-surface", "skills/docs, docs/decisions, exit-code tables and JSDoc"],
   A6: ["determinism", "caller cwd, a checkout subdirectory, relative path arguments, inherited GIT_* env vars"],
-  A7: ["packaging-runtime", "Claude-only tokens in shared skills/ or agents/ text"],
   A8: ["contradiction-lens", "Check each new instruction against agents/*.agent.md"],
 };
 const MAX_CHECKLIST_LINES_PER_ANGLE = 4;
@@ -36,11 +36,10 @@ test("the developer brief and the gate prompt render the same config entry", asy
     const prompt = resolveReviewerRole(config, entry.name).prompt;
     for (const line of entry["developer-checklist"]) assert.ok(prompt.includes(`- ${line}`), `${entry.name} ${line.slice(0, 3)}`);
   }
-  // The pre-approval copy aliases the draft entry (YAML anchor), not a second text.
-  for (const name of ["holistic", "contradiction-lens"]) {
-    const pick = (gate) => config.gates[gate].angles.find((a) => a.name === name)["developer-checklist"];
-    assert.deepEqual(pick("preApproval"), pick("draft"));
-  }
+  // The developer-brief renderer reads the same entries and its lines appear in the gate prompts.
+  const items = await resolveChecklistItems(mkdtempSync(path.join(os.tmpdir(), "issue-3396-")), ["scripts/a.mjs", "src/b.mjs", "skills/x.md", "package.json", "test/a.test.mjs"], { config });
+  assert.ok(items.length > 0);
+  for (const item of items) assert.ok(resolveReviewerRole(config, item.angle).prompt.includes(`- ${item.id}: ${item.check}`), item.id);
 });
 
 test("each angle's checklist stays within the line count and length bounds", async () => {
