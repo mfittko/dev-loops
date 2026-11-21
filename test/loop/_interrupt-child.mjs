@@ -1,10 +1,11 @@
 // Child process of interrupt-recovery.test.mjs (#3421): runs one unit of work step by step and SIGKILLs itself after
 // the step named by INTERRUPT_AFTER, so the parent sees the on-disk state a killed harness leaves behind.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { beginFixerEmission } from "../../scripts/github/_fixer-emission-evidence.mjs";
 import { workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { retireStaleRound } from "../../scripts/github/_stale-round-retirement.mjs";
 import { buildGateContextPath, buildGateFaninLedgerPath, buildGateReviewsDir, repoSlugFor } from "../../scripts/github/_gate-artifact-paths.mjs";
 
 const [unit, root] = process.argv.slice(2);
@@ -32,7 +33,14 @@ let emission;
 // A reviewer unit and a fixer emission unit; each step is one durable state change.
 const UNITS = {
   round: {
-    context: () => atomicWrite(contextFile, "{}\n"),
+    // Rebuilding the context retires the undispatched or partial round at this head first (issue 3416), as write-gate-context.mjs does.
+    context: async () => {
+      // The sentinel is keyed by the checkout's real head (verify-fresh-review-context.mjs), not by the stubbed gate head.
+      const realHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+      const stale = await retireStaleRound({ ...gateKey, headSha: realHead });
+      if (stale.refusal) { process.stderr.write(JSON.stringify(stale.refusal)); process.exit(5); }
+      atomicWrite(contextFile, "{}\n");
+    },
     sentinel: () => {
       const args = [sentinelScript, "--scope", "draft-gate-coverage", "--prefix-hash", prefixHash, ...(process.env.SAME_HEAD_RETRY ? ["--same-head-retry"] : [])];
       const run = spawnSync("node", args, { cwd: root, encoding: "utf8" });

@@ -9,7 +9,7 @@
  * any "blocked" per-angle artifact — this is the only sanctioned producer of
  * one.
  */
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
@@ -179,6 +179,21 @@ export async function main(argv = process.argv.slice(2), { mkdirFn = mkdir, writ
   } catch (err) {
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
+  }
+
+  // Issue 3416: a reviewer refused by the sentinel never overwrites a finished artifact (any verdict but blocked).
+  const finished = [];
+  for (const angle of anglesToBlock) {
+    const existingPath = path.join(findingsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`);
+    const existing = await readFile(existingPath, "utf8").then((text) => JSON.parse(text), () => null);
+    if (existing && typeof existing === "object" && existing.verdict !== "blocked") finished.push(existingPath);
+  }
+  if (finished.length > 0) {
+    return finish({
+      ok: false,
+      error: `refusing to overwrite finished findings artifact(s): ${finished.join(", ")} — no blocked artifact was written`,
+      recovery: "the finished artifact stands; make no further write for these angles, and if the round must restart run retire-gate-round.mjs for this gate and head first",
+    }, false);
   }
 
   const written = [];

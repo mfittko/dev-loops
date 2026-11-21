@@ -38,6 +38,7 @@ import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-wri
 import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { retireGateRound } from "./retire-gate-round.mjs";
+import { retireStaleRound } from "./_stale-round-retirement.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities, splitDiffIntoParts, DIFF_PART_MAX_BYTES, DIFF_PART_MAX_LINES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
@@ -3369,6 +3370,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     return { names, scanError };
   };
   let rebuildWarning = null;
+  let retiredRound = null;
   if (readError !== null) {
     rebuildWarning = `Could not read the existing briefing prefix (${readError.code ?? readError.message}) before overwriting it — if the new bytes differ and reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed. Retire the round explicitly before re-fanning: ${retireCommand}`;
     process.stderr.write(`WARNING: ${rebuildWarning}\n`);
@@ -3384,9 +3386,17 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     if (scanError !== null) {
       throw new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes at head ${options.headSha} (${options.gate}): the live-sentinel scan failed (${scanError.code ?? scanError.message}) — cannot rule out an in-flight fan-out for this head, and a rebuild that splits a live round must not be allowed through a broken scan. The existing (recorded) prefix hash is ${priorPrefixHash}; the attempted rebuild would write hash ${newPrefixHash}. Fix the scan first (make tmp/ listable again — restore read permission on the tmp/ directory or remove a file/blocker masquerading as it), then either retire the round explicitly before rebuilding (retire-gate-round moves sentinels out of the live namespace, so a rebuild then sees no live sentinels) or confirm no fan-out is in flight: ${retireCommand}`);
     } else if (liveSentinelNames.length > 0) {
-      // AC2: name the in-flight head and point at the reviewers already briefed
-      // on the prior bytes (their sentinel files + the recorded hash they carry).
-      throw new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes while a fan-out for head ${options.headSha} is in flight (${options.gate}): ${liveSentinelNames.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one was briefed on the prior prefix hash ${priorPrefixHash} and would fail closed on the new hash ${newPrefixHash}, splitting the round. Reviewers already briefed on the prior bytes: ${liveSentinelNames.map((n) => `tmp/${n}`).sort().join(", ")}. Retire the round explicitly before rebuilding: ${retireCommand}`);
+      // Issue 3416: retire the undispatched or partial round at this head automatically, so the fresh round starts clean.
+      // A round with a posted verdict is never retired: the refusal below stands, with its recovery.
+      const stale = await retireStaleRound({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: path.resolve(repoRoot, options.tmpRoot || "tmp"), verdictRoots: [path.resolve(repoRoot, options.tmpRoot || "tmp"), resolveGateArtifactTmpRoot(repoRoot)] });
+      if (stale.refusal) throw Object.assign(new Error(`${stale.refusal.error} recovery: ${stale.refusal.recovery}`), { recovery: stale.refusal.recovery });
+      retiredRound = stale.retiredRound;
+      const { names: stillLive } = await scanLiveSentinels();
+      if (stillLive.length > 0) {
+        // AC2: name the in-flight head and point at the reviewers already briefed on the prior bytes (their sentinel files + the recorded hash they carry).
+        const recovery = retireCommand;
+        throw Object.assign(new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes while a fan-out for head ${options.headSha} is in flight (${options.gate}): ${liveSentinelNames.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one was briefed on the prior prefix hash ${priorPrefixHash} and would fail closed on the new hash ${newPrefixHash}, splitting the round. Reviewers already briefed on the prior bytes: ${liveSentinelNames.map((n) => `tmp/${n}`).sort().join(", ")}. Retire the round explicitly before rebuilding: ${retireCommand}`), { recovery });
+      }
     }
     // liveSentinelNames.length === 0: the round is not in flight (already
     // retired or never fanned out). AC3: a rebuild after the round has
@@ -3781,6 +3791,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     requestPlan,
     ...(rebuildWarning ? { warning: rebuildWarning } : {}),
     ...(bodyOnlyRerun ? { bodyOnlyRerun } : {}),
+    ...(retiredRound ? { retiredRound } : {}),
   };
 }
 

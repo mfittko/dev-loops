@@ -24,8 +24,7 @@ const GATE_KEY = { repo: "owner/repo", pr: 266, gate: "draft_gate", headSha: GAT
 const EMITTER_STEPS = { round: ["context", "sentinel", "artifact-tmp", "artifact", "fanin"], fixer: ["lock", "plan-tmp", "plan", "release"] };
 
 // `${unit}:${killedAfter}` -> [open issue, the refusal that keeps this recovery failing]. Remove an entry when its issue closes.
-// A reviewer killed after its sentinel recovers today through the documented `--same-head-retry`; issue 3416 tracks the
-// rebuilt-context case (see the 3416 test below), so no round step is listed here.
+// Every round step recovers: a rebuilt context retires the stale round at the same head (issue 3416).
 const EEXIST = /EEXIST/;
 const KNOWN_FAILURES = new Map([
   ["fixer:lock", [3417, EEXIST]], ["fixer:plan-tmp", [3417, EEXIST]], ["fixer:plan", [3417, EEXIST]], // a dead emitter's lock stays
@@ -136,15 +135,14 @@ describe("interrupt a stubbed draft_gate round and fix pass after each step", as
   }
 });
 
-// A coordinator that rebuilds the gate context at the same head changes the briefing prefix hash, so the killed
-// reviewer's sentinel refuses the fresh reviewer even with the sanctioned retry. Issue 3416 retires the stale round.
-test("known failure (issue 3416): a reviewer re-fanned after a context rebuild at the same head is refused", async () => {
+// A coordinator that rebuilds the gate context at the same head changes the briefing prefix hash. The rebuild retires the
+// killed reviewer's stale round, so the fresh reviewer passes the sentinel without the same-head retry (issue 3416).
+test("a reviewer re-fanned after a context rebuild at the same head passes the sentinel", async () => {
   const root = await makeRoot();
   const killed = runChild("round", root, { INTERRUPT_AFTER: "sentinel" });
   assert.equal(killed.signal, "SIGKILL", killed.stderr);
-  const redo = runChild("round", root, { PREFIX_HASH: "b".repeat(64), SAME_HEAD_RETRY: "1" });
-  assert.notEqual(redo.status, 0, "recovery now works: remove the 3416 known failure so the suite turns strict");
-  assert.match(redo.stdout + redo.stderr, /DIFFERENT prefix hash/, "the refusal changed; re-check issue 3416");
+  const redo = runChild("round", root, { PREFIX_HASH: "b".repeat(64) });
+  assert.equal(redo.status, 0, redo.stdout + redo.stderr);
 });
 
 // A fix pass killed after the plan is on disk leaves the carry-forward plan file for the next fan-in: the coordinator

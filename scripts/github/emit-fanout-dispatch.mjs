@@ -15,6 +15,7 @@ import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath,
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
+import { retireStaleRound } from "./_stale-round-retirement.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
@@ -751,6 +752,20 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       return 2;
     }
   }
+  // Issue 3416: a full emission mints a new round, so the undispatched or partial round at this head is retired first
+  // (GATE-EXEC-ROUND-RETIREMENT). A --pending emission resumes the round and keeps it. A posted verdict is never retired.
+  let retiredRound = null;
+  if (!pendingOnly) {
+    let stale;
+    try {
+      stale = await retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdictRoots: [tmpRoot, ledgerTmpRoot] });
+    } catch (err) {
+      process.stderr.write(`${formatCliError(err)}\n`);
+      return 2;
+    }
+    if (stale.refusal) return finish({ ok: false, error: stale.refusal.error, recovery: stale.refusal.recovery }, false);
+    retiredRound = stale.retiredRound;
+  }
   let prefixSha256 = null;
   const emitted = [];
   const seenScopes = new Set();
@@ -878,6 +893,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // each earlier finish call, all of which run before the persist) is the one
   // complete seam.
   const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, roundId, count: emitted.length, maxConcurrent, ...(unitBound !== REVIEWER_UNIT_MAX_ANGLES ? { unitBound } : {}), units: emitted };
+  if (retiredRound) payload.retiredRound = retiredRound;
   if (carryProof !== undefined) payload.carried = carryProof;
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
   // Units of the prior plan whose angles all completed in this round and are not re-emitted keep their fan-in

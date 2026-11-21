@@ -2716,3 +2716,31 @@ test("the unit prompt describes the optional bundle files and their fields, unde
     assert.ok(unit.promptBytes < REVIEWER_WORK_ORDER_MAX_BYTES);
   });
 });
+
+test("issue 3416: re-emission at the same head retires the prior partial round and reports retiredRound; a posted verdict refuses", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const args = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+    const first = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(JSON.parse(first.stdout).retiredRound, undefined);
+    // A reviewer started on the first round: its sentinel stays at this head.
+    const sentinel = path.join(tmpDir, "tmp", `${CHECKPOINT_SENTINEL_PREFIX}pre-approval-gate-contradiction-lens-${HEAD_SHA}.json`);
+    await writeFile(sentinel, "{}", "utf8");
+    const second = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(second.status, 0, second.stderr);
+    const retired = JSON.parse(second.stdout).retiredRound;
+    assert.equal(retired.retired, 1);
+    assert.equal(retired.dispatchPromptRecords.length, 3);
+    assert.equal(existsSync(sentinel), false);
+    // A recorded verdict at the head is never retired.
+    const ledger = path.join(tmpDir, buildGateFaninLedgerPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(ledger), { recursive: true });
+    await writeFile(ledger, "{}", "utf8");
+    await writeFile(sentinel, "{}", "utf8");
+    const third = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(third.status, 1);
+    assert.match(JSON.parse(third.stdout).recovery, /retire-gate-round\.mjs/);
+    assert.equal(existsSync(sentinel), true);
+  });
+});

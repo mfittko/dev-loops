@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -296,5 +296,26 @@ test("--unit-bound accepts a packed unit above 5 angles; a partial completion bl
     assert.deepEqual(artifacts.map((a) => a.angle).sort(), ["f", "g"]);
     assert.ok(artifacts.every((a) => a.verdict === "blocked" && a.reason === "reviewer_coverage_incomplete"));
     assert.equal(consolidateFanin({ angleResults: artifacts }).verdict, "blocked");
+  });
+});
+
+test("issue 3416: a blocked result never overwrites a finished artifact and carries a recovery", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const findingsDir = path.join(tmpDir, "findings");
+    await mkdir(findingsDir, { recursive: true });
+    const finished = { angle: "b", verdict: "clean", headSha: HEAD_SHA, findings: [] };
+    await writeFile(path.join(findingsDir, "b.json"), JSON.stringify(finished));
+    const out = [];
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (chunk) => { out.push(String(chunk)); return true; };
+    let code;
+    try {
+      code = await main(["--run", RUN, "--head-sha", HEAD_SHA, "--angles", "a,b", "--completed-angles", "a", "--model-turns", "10", "--tool-calls", "51", "--findings-dir", findingsDir]);
+    } finally {
+      process.stdout.write = write;
+    }
+    assert.equal(code, 1);
+    assert.match(out.join(""), /"recovery"/);
+    assert.deepEqual(await readArtifacts(findingsDir), [finished]);
   });
 });
