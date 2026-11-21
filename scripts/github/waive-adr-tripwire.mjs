@@ -54,8 +54,9 @@ create-pr.mjs refuse a hand-written one. It applies the waiver only when:
     ready-for-review.mjs uses), whose recorded specDigest equals the specDigest of
     the linked issue's current body. A differing digest is also accepted when the
     issue's edit history holds the body that digest was computed from and the two
-    bodies differ only by added backticked skills/docs/*-contract.md paths, the words in, and, see
-    directly next to an added path, and the punctuation ( ) , ; . : in existing matrix rows (ADR 0301); any other difference refuses spec_digest_mismatch.
+    bodies differ only by added backticked trigger skills/docs/*-contract.md paths as one contiguous run
+    (at the start or end of a spec string, or directly after an existing backticked path), with the words in, and, see and the punctuation ( ) , ; . :
+    only next to an added path (ADR 0301); any other difference refuses spec_digest_mismatch.
 Otherwise it refuses with a typed reason and leaves the body unchanged. It never
 waives an extension-defaults.yaml trigger, a rule-modality reversal or removal,
 an unresolvable scan, a standingAuthorizations change, or any other approval.
@@ -143,7 +144,7 @@ const CONNECTOR_RE = /^(?:in|and|see)$/u;
 
 /**
  * True when `cur` is `prior` plus one contiguous run of extra words that adds at least one backticked trigger path.
- * The run sits at the start or end of the string or directly after an existing backticked path.
+ * The run sits at the start or end of the string or directly after an existing backticked repo path (one containing "/").
  * Inside the run, the connectors `in`, `and`, `see` and the `( ) , ; . :` words must touch an added trigger path.
  */
 function onlyAddsPathWords(prior, cur, triggerPaths) {
@@ -160,7 +161,7 @@ function onlyAddsPathWords(prior, cur, triggerPaths) {
   if (extra.length === 0) return true;
   const start = extra[0];
   if (extra.some((k, n) => k !== start + n)) return false;
-  if (start !== 0 && start + extra.length !== have.length && !PATH_WORD_RE.test(have[start - 1])) return false;
+  if (start !== 0 && start + extra.length !== have.length && !PATH_WORD_RE.exec(have[start - 1])?.[1]?.includes("/")) return false;
   const isAddedPath = (k) => extra.includes(k) && triggerPaths.has(PATH_WORD_RE.exec(have[k])?.[1]);
   if (!extra.some(isAddedPath)) return false;
   return extra.every((k) => isAddedPath(k) || ((CONNECTOR_RE.test(have[k]) || PUNCT_WORD_RE.test(have[k])) && (isAddedPath(k - 1) || isAddedPath(k + 1))));

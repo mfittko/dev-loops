@@ -345,9 +345,10 @@ test("punctuation regrouping, a stray semicolon, a mid-sentence insertion and a 
   const X = "skills/docs/x-contract.md";
   const check = (prior, cur, paths = [X]) => isMatrixPathOnlySpecChange(specBody(prior), specBody(cur), paths);
   assert.equal(check("Refuse when A or B and C.", "Refuse when ( A or B ) and C."), false);
-  assert.equal(check("The rule is stated.", `The rule is stated ; in \`${X}\``), false);
+  assert.equal(check("The rule is stated", `The rule is stated ; in \`${X}\``), false);
   assert.equal(check("Any other change still refuses.", `Any other change in \`${X}\` still refuses.`), false);
-  assert.equal(check("The rule is stated.", "The rule is stated `skills/docs/y-contract.md`."), false);
+  assert.equal(check("The rule is stated", "The rule is stated `skills/docs/y-contract.md`"), false);
+  assert.equal(check("Return `false` when stale.", `Return \`false\` in \`${X}\` when stale.`), false);
   assert.equal(check("The rule is stated", `The rule is stated in \`${X}\`, \`skills/docs/y-contract.md\`.`, [X, "skills/docs/y-contract.md"]), true);
 });
 
