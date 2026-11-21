@@ -948,9 +948,10 @@ async function withLocalLedgerFiles(ledgers, fn) {
   }
 }
 
-function jdfLedger({ repo = JDF_REPO, pr = JDF_PR, gate = JDF_GATE, verdict = "findings_present", loggedAt, disposition, rationale, headSha }) {
+function jdfLedger({ repo = JDF_REPO, pr = JDF_PR, gate = JDF_GATE, verdict = "findings_present", loggedAt, disposition, rationale, headSha, prBodySha256 }) {
   return {
     ...(headSha ? { headSha } : {}),
+    ...(prBodySha256 ? { prBodySha256 } : {}),
     repo,
     pr,
     gate,
@@ -990,6 +991,20 @@ test("findJudgeDispositionForFingerprint returns the verdict headSha for one hea
     const result = await lookup(tmpRoot);
     assert.equal(result.disposition, "act");
     assert.equal("headSha" in result, false);
+  });
+});
+
+test("findJudgeDispositionForFingerprint returns the recorded bodySha256 for one ledger and omits it when same-head ledgers record different digests", async () => {
+  const lookup = (tmpRoot) => findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headC", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+  const ledger = (prBodySha256) => jdfLedger({ loggedAt: "2026-09-01T00:00:00.000Z", disposition: "act", rationale: "same", headSha: "headA", prBodySha256 });
+  const [digestA, digestB] = ["a".repeat(64), "b".repeat(64)];
+  await withLocalLedgerFiles({ [`${JDF_GATE}-headA.json`]: ledger(digestA) }, async (tmpRoot) => {
+    assert.equal((await lookup(tmpRoot)).bodySha256, digestA);
+  });
+  await withLocalLedgerFiles({ [`${JDF_GATE}-headA.json`]: ledger(digestA), [`${JDF_GATE}-headA2.json`]: ledger(digestB) }, async (tmpRoot) => {
+    const result = await lookup(tmpRoot);
+    assert.equal(result.headSha, "headA");
+    assert.equal("bodySha256" in result, false);
   });
 });
 
