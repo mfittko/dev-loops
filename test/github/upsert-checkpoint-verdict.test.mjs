@@ -13251,3 +13251,27 @@ test("normalizeStructuredFindings refuses a remedyKind outside evidence_only and
   assert.equal(normalizeStructuredFindings([finding("pr_body")])[0].findings[0].remedyKind, "pr_body");
   assert.throws(() => normalizeStructuredFindings([finding("bogus")]), /remedyKind must be "evidence_only" or "pr_body"/);
 });
+
+// Recovery for a clean cap round whose verdict was never posted: the one command shape the cap-round exit names.
+test("--post-sealed-cap-round parses with only --repo, --pr and --gate draft_gate, and requires the draft gate", () => {
+  const options = parseUpsertCheckpointVerdictCliArgs(["--repo", "o/r", "--pr", "7", "--gate", "draft_gate", "--post-sealed-cap-round"]);
+  assert.equal(options.postSealedCapRound, true);
+  assert.equal(options.executionMode, "fanout_fanin");
+  assert.throws(() => parseUpsertCheckpointVerdictCliArgs(["--repo", "o/r", "--pr", "7", "--post-sealed-cap-round"]), /requires --gate draft_gate/);
+  assert.throws(() => parseUpsertCheckpointVerdictCliArgs(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--post-sealed-cap-round"]), /requires --gate draft_gate/);
+});
+
+test("--post-sealed-cap-round refuses when no sealed clean cap round exists", async () => {
+  await withTempDir(async (dir) => {
+    const options = parseUpsertCheckpointVerdictCliArgs(["--repo", "o/r", "--pr", "7", "--gate", "draft_gate", "--post-sealed-cap-round"]);
+    const runChild = async () => ({ code: 0, stdout: JSON.stringify({ headRefOid: "ab".repeat(20) }), stderr: "" });
+    await assert.rejects(() => upsertCheckpointVerdict(options, { repoRoot: dir, runChild }), /no sealed clean draft_gate cap round/);
+  });
+});
+
+test("--post-sealed-cap-round refuses every flag the sealed ledger supplies at parse time", () => {
+  const base = ["--repo", "o/r", "--pr", "7", "--gate", "draft_gate", "--post-sealed-cap-round"];
+  for (const extra of [["--head-sha", "ab".repeat(20)], ["--verdict", "clean"], ["--findings-summary", "x"], ["--next-action", "y"], ["--findings-severity-counts", "{}"], ["--findings-ledger", "l.json"], ["--findings-json", "[]"], ["--findings-file", "f.json"], ["--execution-mode", "inline_single_agent"], ["--inline-reason", "r"], ["--converged-json", "c.json"]]) {
+    assert.throws(() => parseUpsertCheckpointVerdictCliArgs([...base, ...extra]), /derives head, verdict, findings, next action and execution mode from the sealed ledger/, extra[0]);
+  }
+});

@@ -751,6 +751,8 @@ Required:
 - `--findings-summary <text>`
 - `--next-action <text>`
 
+Alternate form: `--repo <owner/name> --pr <number> --gate draft_gate --post-sealed-cap-round` posts the sealed clean cap-round verdict that was never posted (`clean_cap_verdict_unposted`). It derives head, verdict, findings, next action and execution mode from the sealed ledger and refuses `--head-sha`, `--verdict`, `--findings-*`, `--next-action` and `--execution-mode` at parse time, so the Required list above does not apply to it.
+
 Optional:
 - `--force --force-reason <text>` — narrow operator-authorized CI override for the helper-local gate-entry refusal only; `--force-reason` is required with `--force`, `--force-reason` without `--force` is rejected, and the reason text is whitespace-normalized for machine-readable output
 
@@ -807,7 +809,7 @@ Required:
 Success output shape:
 - `{ "ok": true, "repo": "owner/repo", "pr": 266, "currentHeadSha": "...", "mergeStateStatus": string|null, "conflictFiles": ["path"]|[], "lifecycleState": string, "loopDisposition": string, "gateBoundary": string, "draftGate": { ... }, "preApprovalGate": { ... }, "draftGateAlreadySatisfied": true, "allowedNextActions": [ ... ], "forbiddenActions": [ ... ], "nextAction": string, "reason": "...", "toolchain": { "root": "...", "headSha": string|null, "selfHosting": boolean }, "capRoundFailure"?: string, "runnerRelease"?: { "status": "skipped_no_async_run_id", "remedy": "..." } }`
 - `toolchain` (`root`, `headSha`, `selfHosting`) is always emitted (issue 3139): the toolchain checkout that answered, its `HEAD`, and whether the PR changes the gate toolchain of this repository; `headSha` is `null` when `selfHosting` is `false`
-- `capRoundFailure` is the failed cap-round-fixed condition (`resolveCapRoundFixed`, ADR 0218). It is present only on a ready PR that lacks clean `draft_gate` evidence and whose cap round exists but is not proven fixed, and then the result is `report_blocked` with that condition's one exit (`agentRemedy` or `blockedOn`). A PR with no cap round (below the round cap) carries no `capRoundFailure` and gets `reconcile_draft_gate` alone
+- `capRoundFailure` is the failed cap-round-fixed condition (`resolveCapRoundFixed`, ADR 0218), or `clean_cap_verdict_unposted` (a clean cap round whose `draft_gate` verdict is not posted; its remedy is `gate upsert-verdict --repo <owner/name> --pr <n> --gate draft_gate --post-sealed-cap-round`). It is present only on a ready PR that lacks clean `draft_gate` evidence and whose cap round exists but is not proven fixed, and then the result is `report_blocked` with that condition's one exit (`agentRemedy` or `blockedOn`). A PR with no cap round (below the round cap) carries no `capRoundFailure` and gets `reconcile_draft_gate` alone
 - `fixerDispositionWarning` (`{ "warning": "...", "incomplete": [...] }`) is present only when the fixer disposition is incomplete; it is advisory (ADR 0155) and blocks nothing
 - `blockedOn` and `agentRemedy` (`{ "command": "...", "summary": "..." }`) are present only on `report_blocked` results, at most one per result (a `reconcile_draft_gate` result carries neither); results listed in `KNOWN_GAPS` in `packages/core/src/loop/gate-no-dead-end.mjs` carry neither until the issue 3105 slices that remove them land
 - `runnerRelease` (`{ "status": "skipped_no_async_run_id", "remedy": "..." }`) is present only on a terminal action when the automatic release status is `skipped_no_async_run_id`; `remedy` names the explicit `handoff --run-id` command

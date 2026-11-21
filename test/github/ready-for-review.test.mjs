@@ -998,11 +998,11 @@ test("a differently cased --repo owner resolves the canonical owner login for th
 });
 
 // ADR 0208: a draft PR whose last draft verdict is the cap round's findings_present and whose fix pass is complete goes ready.
-function capRoundGhStub(tempDir, { bucket, withCi = true, head = "abc123def456" }) {
+function capRoundGhStub(tempDir, { bucket, withCi = true, head = "abc123def456", comment = {} }) {
   return writeGhStub(tempDir, [
     { stdout: JSON.stringify({ data: { repository: { pullRequest: { id: "PR_abc123", isDraft: true, headRefOid: head, baseRefName: "main", state: "OPEN", mergeStateStatus: "CLEAN", title: "Add feature", body: "", closingIssuesReferences: { nodes: [] } } } } }) },
     ...(withCi ? [{ stdout: JSON.stringify([{ name: "test", state: bucket === "pass" ? "success" : "failure", bucket }]) }] : []),
-    { stdout: JSON.stringify([{ body: "Gate review: draft_gate\nReviewed head SHA: abc123def456\nVerdict: findings_present\nFindings summary: 3 act items\nNext action: fix", id: 101, html_url: "https://github.com/owner/repo/pull/17#issuecomment-101", created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" }]) },
+    { stdout: JSON.stringify([{ body: "Gate review: draft_gate\nReviewed head SHA: abc123def456\nVerdict: findings_present\nFindings summary: 3 act items\nNext action: fix", id: 101, html_url: "https://github.com/owner/repo/pull/17#issuecomment-101", created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z", ...comment }]) },
     ...gateCloseStubs(),
     { stdout: "" },
   ]);
@@ -1087,4 +1087,31 @@ test("refuses a PR carrying the spike no-merge marker (ADR 0293)", async () => {
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+// PR 3281 shape: the cap round is clean in a local ledger and no draft_gate review of it is posted.
+test("ready-for-review refuses a clean cap round whose verdict is not posted, and never flips the PR", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-cap-unposted-"));
+  try {
+    const stub = await capRoundGhStub(tempDir, { bucket: "pass" });
+    await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, cleanCapRuntime(stub, tempDir)), /clean but its draft_gate verdict is not posted.*--post-sealed-cap-round/);
+    const ghCalls = await readGhCalls(stub.ghLogPath);
+    assert.equal(ghCalls.filter((c) => c[0] === "pr" && c[1] === "ready").length, 0);
+  } finally { await rm(tempDir, { recursive: true, force: true }); }
+});
+
+// The stubbed cap round carries round 4, so only a posted header at that head and round proves it.
+const cleanCapRuntime = (stub, tempDir) => ({ ...capRoundRuntime(stub.env, tempDir, true), resolveCapRoundFixed: async () => ({ log: { verdict: "clean", headSha: "abc123def456".padEnd(40, "0"), findings: [] }, residue: [], round: 4 }) });
+const postedHeader = (round) => `<!-- dev-loops:gate-findings-review draft_gate abc123d round=${round} -->\nGate review: draft_gate`;
+
+test("ready-for-review flips the PR once a trusted posted draft_gate review carries the clean cap round, and not for another round", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-cap-posted-"));
+  try {
+    const trusted = { user: { login: "owner", type: "User" }, author_association: "OWNER" };
+    const posted = await capRoundGhStub(tempDir, { bucket: "pass", comment: { ...trusted, body: postedHeader(4) } });
+    const ready = await readyForReview({ repo: "owner/repo", pr: 17 }, cleanCapRuntime(posted, tempDir));
+    assert.equal(ready.action, "marked_ready");
+    const wrongRound = await capRoundGhStub(tempDir, { bucket: "pass", comment: { ...trusted, body: postedHeader(3) } });
+    await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, cleanCapRuntime(wrongRound, tempDir)), /clean but its draft_gate verdict is not posted/);
+  } finally { await rm(tempDir, { recursive: true, force: true }); }
 });

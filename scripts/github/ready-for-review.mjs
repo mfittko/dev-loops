@@ -5,6 +5,8 @@ import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.m
 import { deletePrGateCoordinationSnapshot } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchDraftGateEvidence } from "./_gate-finding-surface.mjs";
 import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
+import { cleanCapVerdictUnposted } from "./write-gate-context.mjs";
+import { CAP_ROUND_REFUSAL } from "@dev-loops/core/loop/pr-gate-coordination";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { loadDevLoopConfigStrict, resolveGateConfig } from "@dev-loops/core/config";
@@ -230,7 +232,10 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   // (skipCiPrecondition=false) keeps accepting either.
   const gateHeadClean = skipCiPrecondition === true ? gate.currentHeadClean : gate.effectiveHeadClean;
   // ADR 0208: the cap round's fixer pass landed and its delta cleared: no further draft_gate round runs, so this stands in for a clean current-head verdict. CI and every check below stay.
-  const capRoundFixed = !gateHeadClean && skipCiPrecondition !== true && Boolean(await resolveCapRoundFixedFn({ repo: options.repo, pr: options.pr, headSha, baseRefName: prState.baseRefName }, { repoRoot }));
+  const capRound = !gateHeadClean && skipCiPrecondition !== true ? await resolveCapRoundFixedFn({ repo: options.repo, pr: options.pr, headSha, baseRefName: prState.baseRefName }, { repoRoot }) : null;
+  // A clean cap round proven only by its local ledger is no evidence CI can read: refuse until its verdict is posted.
+  if (capRound && cleanCapVerdictUnposted(capRound, gate.draftGatePostedHeads ?? [])) throw new Error(`PR #${options.pr} cap round is clean but its draft_gate verdict is not posted on GitHub (${CAP_ROUND_REFUSAL.clean_cap_verdict_unposted})`);
+  const capRoundFixed = Boolean(capRound);
   // The restore path never accepts the cap-round proof (it was never CI-checked at this head): name the remedy.
   const capRestoreRemedy = skipCiPrecondition === true ? "; a cap-round-fixed PR (ADR 0208) leaves draft through ready-for-review.mjs once CI is green" : "";
   if (!capRoundFixed && !gate.cleanEvidenceExists && !gateHeadClean) throw new Error(`No visible clean draft_gate evidence on ${headSha.slice(0,7)}${capRestoreRemedy}`);
