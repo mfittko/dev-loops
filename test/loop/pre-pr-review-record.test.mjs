@@ -6,6 +6,7 @@ import { test } from "bun:test";
 
 import { validatePrePrReview, writePrePrReviewRecord } from "../../scripts/loop/_pre-pr-review-record.mjs";
 import { runCli } from "../../scripts/loop/record-pre-pr-review.mjs";
+import { requiredSelfCheckIds } from "../../scripts/loop/_self-check-items.mjs";
 import { main as createPr } from "../../scripts/github/create-pr.mjs";
 import { compileClassifyRules } from "@dev-loops/core/analysis/diff-analyzer";
 import { runGitFixture, runNode } from "../_helpers.mjs";
@@ -317,7 +318,14 @@ test("a docs/phases-only branch validates from a subdirectory with diff.relative
 }));
 
 // PRE-PR-DEVELOPER-SELF-CHECK
-const IDS = ["tests", "description", "surface-text", "edge-cases"];
+const IDS = await (async () => {
+  const dir = fixtureRepo();
+  try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    commit(dir, "src/b.mjs", "export const b = 1;\n");
+    return await requiredSelfCheckIds(dir, "main");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+})();
 function selfCheckFile(dir, entries = IDS.map((id) => ({ id, status: "done", evidence: `${id} evidence` }))) {
   const file = path.join(dir, "self-check.json");
   writeFileSync(file, typeof entries === "string" ? entries : JSON.stringify(entries));
@@ -345,5 +353,21 @@ test("record mode refuses with pre_pr_self_check_missing for a missing flag, fil
     let out = "";
     assert.equal(await runCli([...base, "--self-check-file", selfCheckFile(dir)], { cwd: dir, stdout: { write: (s) => { out += s; } }, stderr: { write() {} } }), 0);
     assert.deepEqual(JSON.parse(readFileSync(JSON.parse(out).file, "utf8")).selfCheck.map((e) => e.id), IDS);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the required self-check ids are the resolved draft_gate angle ids plus the generic ids, and a missing angle id refuses", async () => {
+  const angleIds = IDS.filter((id) => id.startsWith("angle:"));
+  assert.ok(angleIds.length > 0, "the default config resolves at least one draft_gate angle");
+  assert.deepEqual(IDS.filter((id) => !id.startsWith("angle:")), ["tests", "edge-cases", "surface-text", "description"]);
+  const dir = fixtureRepo();
+  try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    commit(dir, "src/b.mjs", "export const b = 1;\n");
+    let err = "";
+    const code = await runCli(["--verdict", "clean", "--disposition", "none", "--base", "main", "--no-linked-issue", "--self-check-file", selfCheckFile(dir, IDS.filter((id) => id !== angleIds[0]).map((id) => ({ id, status: "done", evidence: "e" })))], { cwd: dir, stdout: { write() {} }, stderr: { write: (s) => { err += s; } } });
+    assert.equal(code, 1);
+    assert.match(JSON.parse(err).message ?? err, new RegExp(angleIds[0]));
+    assert.equal(JSON.parse(err).code, "pre_pr_self_check_missing");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, test } from "bun:test";
 
-import { collectFindingClasses, main } from "../../scripts/loop/gate-finding-classes.mjs";
+import { collectCopilotClasses, collectFindingClasses, main } from "../../scripts/loop/gate-finding-classes.mjs";
 
 const dirs = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -58,4 +58,35 @@ test("the CLI prints the JSON result and refuses a malformed --top or --repo", a
   assert.equal(await main(["--repo", "o/r", "--tmp-root", root, "--top", "0"], io), 1);
   assert.equal(await main(["--repo", "bad", "--tmp-root", root], io), 1);
   assert.match(err, /--top must be a positive integer/u);
+});
+
+test("Copilot threads from a local export are bucketed by keyword; malformed lines and a missing file are skipped", () => {
+  const root = tmpRoot();
+  const file = path.join(root, "threads.jsonl");
+  const t = (body) => JSON.stringify({ pr: 1, path: "a.mjs", isResolved: true, body });
+  writeFileSync(file, [
+    t("Handle an empty or null input here."), t("The parser throws on missing fields."), t("Update the --help text."),
+    t("Add a test for this branch. " + "y".repeat(300)), t("Unrelated remark."), "{not json", JSON.stringify({ pr: 2 }),
+  ].join("\n"));
+  const r = collectCopilotClasses({ file });
+  assert.equal(r.copilotThreads, 5);
+  assert.deepEqual(r.copilotClasses.map((c) => [c.class, c.count, c.share]), [["edge-case-input-validation", 2, 0.4], ["docs-help-description", 1, 0.2], ["other", 1, 0.2]]);
+  assert.equal(collectCopilotClasses({ file, top: 4 }).copilotClasses.find((c) => c.class === "tests").examples[0].length, 160);
+  assert.deepEqual(collectCopilotClasses({ file: path.join(root, "nope.jsonl") }), { copilotThreads: 0, copilotClasses: [] });
+});
+
+test("the CLI adds copilotClasses from --copilot-file or the default export, and emits an empty list without one", async () => {
+  const root = tmpRoot();
+  let out = "";
+  const io = { stdout: { write: (s) => { out += s; } }, stderr: { write() {} } };
+  assert.equal(await main(["--repo", "o/r", "--tmp-root", root], io), 0);
+  assert.deepEqual(JSON.parse(out).copilotClasses, []);
+  writeFileSync(path.join(root, "copilot-threads.jsonl"), `${JSON.stringify({ body: "Add a test." })}\n`);
+  out = "";
+  assert.equal(await main(["--repo", "o/r", "--tmp-root", root], io), 0);
+  assert.equal(JSON.parse(out).copilotClasses[0].class, "tests");
+  out = "";
+  assert.equal(await main(["--repo", "o/r", "--tmp-root", root, "--copilot-file", path.join(root, "nope")], io), 0);
+  assert.deepEqual(JSON.parse(out).copilotClasses, []);
+  assert.equal(await main(["--repo", "o/r", "--tmp-root", root, "--copilot-file"], io), 1);
 });

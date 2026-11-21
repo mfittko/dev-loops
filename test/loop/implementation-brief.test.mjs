@@ -1186,11 +1186,29 @@ test("exactly 50 importers are listed without importersTruncated", async () => {
   assert.equal("importersTruncated" in entry, false);
 });
 
-test("the brief carries selfCheck with the four generic items and no classes when no logs exist", async () => {
+test("the brief carries selfCheck with the four generic constraint items, one condensed constraint line per applicable angle, and no classes without logs or an export", async () => {
   const root = await fixtureRepo();
   const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root });
-  assert.deepEqual(brief.selfCheck.items.map((i) => i.id), ["tests", "description", "surface-text", "edge-cases"]);
-  assert.ok(brief.selfCheck.items.every((i) => i.check.length > 0));
+  assert.deepEqual(brief.selfCheck.items.map((i) => i.id), ["tests", "edge-cases", "surface-text", "description"]);
+  assert.ok(brief.selfCheck.items.every((i) => i.check.startsWith("While writing")));
   assert.deepEqual(brief.selfCheck.classes, []);
-  assert.ok(Array.isArray(brief.selfCheck.angles));
+  assert.deepEqual(brief.selfCheck.copilotClasses, []);
+  assert.ok(brief.selfCheck.angles.length > 0 && brief.selfCheck.angles.length <= 8);
+  for (const a of brief.selfCheck.angles) {
+    assert.equal(a.id, `angle:${a.angle}`);
+    assert.ok(a.constraint.length > 0 && a.constraint.length <= 200);
+  }
+});
+
+test("the selfCheck digest stays bounded with a large Copilot export, and the export is optional", async () => {
+  const root = await fixtureRepo();
+  const file = path.join(root, "threads.jsonl");
+  const bodies = ["Handle an empty input. ", "Fix the help text. ", "Add a test. ", "Other remark. "];
+  await writeFile(file, Array.from({ length: 200 }, (_, i) => JSON.stringify({ pr: i, body: bodies[i % 4] + "z".repeat(500) })).join("\n"));
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, copilotFile: file });
+  assert.equal(brief.selfCheck.copilotClasses.length, 3);
+  assert.ok(brief.selfCheck.copilotClasses.every((c) => c.examples.length === 1 && c.examples[0].length <= 160));
+  assert.ok(JSON.stringify(brief.selfCheck).length < 4500);
+  const missing = await buildImplementationBrief({ body: MATRIX, repoRoot: root, copilotFile: path.join(root, "nope.jsonl") });
+  assert.deepEqual(missing.selfCheck.copilotClasses, []);
 });

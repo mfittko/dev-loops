@@ -7,6 +7,7 @@ import { test } from "bun:test";
 import { unaddressedStaleSurfaceHits } from "../../packages/core/src/loop/pre-push-delta-review.mjs";
 import { validatePrePrReview } from "../../scripts/loop/_pre-pr-review-record.mjs";
 import { runCli } from "../../scripts/loop/record-pre-pr-review.mjs";
+import { requiredSelfCheckIds } from "../../scripts/loop/_self-check-items.mjs";
 import { runGitFixture } from "../_helpers.mjs";
 
 const git = (cwd, ...args) => runGitFixture(cwd, args);
@@ -45,7 +46,8 @@ async function run(dir, argv, extra = {}) {
 }
 
 const selfCheckPath = path.join(os.tmpdir(), "issue-3395-self-check.json");
-writeFileSync(selfCheckPath, JSON.stringify(["tests", "description", "surface-text", "edge-cases"].map((id) => ({ id, status: "done", evidence: "e" }))));
+const IDS = await (async () => { const dir = staleRepo(); try { return await requiredSelfCheckIds(dir, "main"); } finally { rmSync(dir, { recursive: true, force: true }); } })();
+writeFileSync(selfCheckPath, JSON.stringify(IDS.map((id) => ({ id, status: "done", evidence: "e" }))));
 const record = ["--verdict", "clean", "--disposition", "none", "--base", "main", "--no-linked-issue", "--self-check-file", selfCheckPath];
 const withRepo = (fn) => async () => {
   const dir = staleRepo();

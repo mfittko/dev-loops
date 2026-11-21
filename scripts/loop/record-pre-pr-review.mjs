@@ -5,7 +5,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parseIssueNumber } from "../_cli-primitives.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { PRE_PR_REVIEW_DISPOSITIONS, PRE_PR_REVIEW_VERDICTS, PRE_PR_SELF_CHECK_MISSING, readSelfCheckFile, writePrePrReviewRecord } from "./_pre-pr-review-record.mjs";
-import { SELF_CHECK_ITEMS } from "./_self-check-items.mjs";
+import { requiredSelfCheckIds } from "./_self-check-items.mjs";
 import { PRE_PR_STALE_SURFACE_UNADDRESSED, readSkipsFile, requireStaleSurfaceAddressed, scanPrePrStaleSurface } from "./_pre-pr-stale-surface.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
@@ -30,8 +30,11 @@ Sweep flags:
   --skips-file <path>  JSON array of { "site": "<file>|<file>:<line>|<file>:<a>-<b>", "reason": "<non-empty>" }
 Self-check (record mode, PRE-PR-DEVELOPER-SELF-CHECK):
   --self-check-file <path>  Required. JSON array of { "id", "status": "done"|"na", "evidence": "<non-empty>" }
-                       covering every selfCheck.items id of the developer brief. A missing file,
-                       missing id or empty evidence refuses with pre_pr_self_check_missing; the entries are stored in the record.
+                       covering every constraint id of the developer brief selfCheck: one "angle:<name>" per
+                       draft_gate angle resolved for the base...HEAD changed paths, plus tests, edge-cases,
+                       surface-text and description. The evidence states what was done while writing (test names,
+                       synced files). A missing file, missing id or empty evidence refuses with
+                       pre_pr_self_check_missing; the entries are stored in the record.
 Output (stdout, JSON): { "ok": true, "head", "verdict", "disposition", "file" }
 Scan output (stdout, JSON): { "ok", "head", "base", "staleSurfaceHits", "staleSurfaceTruncated", "truncatedNeedles" }
 ${JQ_OUTPUT_USAGE}`.trim();
@@ -56,10 +59,11 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     if (values["no-linked-issue"] && values.issue) throw parseError("--no-linked-issue cannot be combined with --body-file or --issue");
     if (!values.scan && !values.issue && !values["no-linked-issue"]) throw parseError("record mode requires --body-file with --issue, or --no-linked-issue when the PR body is the spec");
     const output = { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr };
-    const scan = await scanPrePrStaleSurface({ cwd, base: values.base ?? await defaultBase(cwd), bodyFile: values["body-file"], issue, ...(readIssueBody ? { readIssueBody } : {}) });
+    const base = values.base ?? await defaultBase(cwd);
+    const scan = await scanPrePrStaleSurface({ cwd, base, bodyFile: values["body-file"], issue, ...(readIssueBody ? { readIssueBody } : {}) });
     if (values.scan) return emitResult(scan, output);
     requireStaleSurfaceAddressed(scan, readSkipsFile(values["skips-file"]));
-    const selfCheck = readSelfCheckFile(values["self-check-file"], SELF_CHECK_ITEMS.map((i) => i.id));
+    const selfCheck = readSelfCheckFile(values["self-check-file"], await requiredSelfCheckIds(cwd, base));
     const { record, file } = writePrePrReviewRecord({ cwd, verdict: values.verdict, disposition: values.disposition, selfCheck });
     return emitResult({ ok: true, head: record.head, verdict: record.verdict, disposition: record.disposition, file }, output);
   } catch (error) {

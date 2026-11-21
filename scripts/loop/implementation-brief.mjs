@@ -29,18 +29,17 @@ import {
   extractRuleDefinitions,
   ruleOwnerIndex,
 } from "../docs/validate-rule-ownership.mjs";
-import { loadDevLoopConfig, resolveGateAngles, resolveGateAnglesDynamic } from "@dev-loops/core/config";
 import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
-import { collectFindingClasses } from "./gate-finding-classes.mjs";
-import { SELF_CHECK_ITEMS } from "./_self-check-items.mjs";
+import { collectCopilotClasses, collectFindingClasses, defaultCopilotFile } from "./gate-finding-classes.mjs";
+import { SELF_CHECK_ITEMS, resolveSelfCheckAngles } from "./_self-check-items.mjs";
 import { CONTRACT_DOC_RE, DEVLOOPS_CONFIG_PATHS, GATE_CONFIG_PATH } from "./check-adr-tripwire.mjs";
 import { citedAdrNumbers, indexDecisionRecords, inForceAmenders, loadKnownRuleIds, stripFencedCode } from "./spec-lint.mjs";
 
 const INVENTORY_CHAR_LIMIT = 2000;
 const IMPORTERS_LIMIT = 50;
 
-const USAGE = `Usage: dev-loops loop implementation-brief --body-file <path> [--paths <p,...>] [--repo-root <path>]
+const USAGE = `Usage: dev-loops loop implementation-brief --body-file <path> [--paths <p,...>] [--repo-root <path>] [--copilot-file <path>]
 
 Print the canonical review expectations of a spec body before the first edit.
 Read-only and offline: the brief parses local files and makes no network call.
@@ -48,6 +47,7 @@ Read-only and offline: the brief parses local files and makes no network call.
   --body-file <path>   File that holds the spec body (required)
   --paths <p,...>      Comma-separated repo-relative paths the work will touch
   --repo-root <path>   Repository root to resolve paths against (default: cwd)
+  --copilot-file <path>  Local Copilot thread export (JSONL) for the selfCheck classes (default: <tmp-root>/copilot-threads.jsonl)
 
 Output (stdout, JSON):
   { "ok": true, "matrix": [{ "criterion", "evidence" }] | null, "nonGoals": ["..."],
@@ -57,8 +57,8 @@ Output (stdout, JSON):
     "adrNeed": "<section text>" | "unstated", "adrTripwirePaths": ["..."],
     "helperInventory": { "modules": [{ "path", "exports": ["<name>"] }], "overflowModules": ["<path>"] },
     "importers": null | { "<touched source module>": { "files": ["<path>"], "importersTruncated"?: true } },
-    "selfCheck": { "angles": ["<draft_gate angle>"], "classes": [{ "angle", "count", "share", "examples": ["<one summary>"] }],
-      "items": [{ "id", "check" }] },
+    "selfCheck": { "angles": [{ "id", "angle", "constraint" }], "classes": [{ "angle", "count", "share", "examples": ["<one summary>"] }],
+      "copilotClasses": [{ "class", "count", "share", "examples": ["<one body>"] }], "items": [{ "id", "check" }] },
     "requiredReads": ["skills/docs/structural-quality.md", "changes/README.md"],
     "findings": [{ "kind", "reason" }] }
 
@@ -101,12 +101,16 @@ tree), "helperInventory" is empty, "importers" is null and "findings" carries
 importers_unavailable with the reason. Check each listed importer before hand-back and search
 for string-path and package-name references yourself.
 
-"selfCheck" is the developer's pre-PR self-check (PRE-PR-DEVELOPER-SELF-CHECK). "angles" is the
-draft_gate angle set that applies to the touched paths (the configured gate resolution; empty when
-the config does not load). "classes" is the top 3 act-finding angles of past first draft_gate rounds
-(offline, from the findings logs; one example of at most 160 characters each; empty when no logs
-exist). "items" is the fixed generic list (tests, description, surface-text, edge-cases). Record one
-{ "id", "status": "done"|"na", "evidence" } per item id with record-pre-pr-review --self-check-file.
+"selfCheck" holds the constraints the developer applies while writing each change
+(PRE-PR-DEVELOPER-SELF-CHECK); it is not a review pass after the code. "angles" is one
+{ "id": "angle:<name>", "angle", "constraint" } per draft_gate angle that applies to the touched
+paths (at most 8; "constraint" is the first sentence of the angle prompt the gate reviewers get, at
+most 200 characters; empty when the config does not load). "classes" is the top 3 act-finding angles
+of past first draft_gate rounds and "copilotClasses" the top 3 keyword buckets of the local Copilot
+thread export (offline; one example of at most 160 characters each; empty without logs or export).
+"items" is the fixed generic list (tests, edge-cases, surface-text, description). Record one
+{ "id", "status": "done"|"na", "evidence" } per angle id and item id with record-pre-pr-review
+--self-check-file.
 
 ${JQ_OUTPUT_USAGE}
 
@@ -435,19 +439,19 @@ async function importersByModule(root, touchedPaths, resolved, tracked) {
 }
 
 // Offline and best effort: a config or log problem yields empty angles/classes, never a failure.
-async function selfCheck(root, touchedPaths) {
-  let angles = [];
-  try {
-    const { config } = await loadDevLoopConfig({ repoRoot: root });
-    const diff = { nameStatusOutput: touchedPaths.map((p) => `M\t${p}`).join("\n") };
-    angles = (await resolveGateAnglesDynamic(config, "draft", { diff })).recommendedAngles ?? resolveGateAngles(config, "draft") ?? [];
-  } catch { /* no usable config */ }
+// Bounded (dod:3): at most MAX_ANGLE_LINES angle lines, 3 gate and 3 Copilot classes, one example each.
+async function selfCheck(root, touchedPaths, copilotFile) {
+  const angles = await resolveSelfCheckAngles(root, touchedPaths);
+  const one = (list) => list.map((c) => ({ ...c, examples: c.examples.slice(0, 1) }));
   let classes = [];
+  let copilotClasses = [];
   try {
+    const tmpRoot = resolveGateArtifactTmpRoot(root);
     const repo = detectRepoSlug(root);
-    if (repo) classes = collectFindingClasses({ repo, tmpRoot: resolveGateArtifactTmpRoot(root), top: 3 }).classes.map((c) => ({ ...c, examples: c.examples.slice(0, 1) }));
+    if (repo) classes = one(collectFindingClasses({ repo, tmpRoot, top: 3 }).classes);
+    copilotClasses = one(collectCopilotClasses({ file: copilotFile ?? defaultCopilotFile(tmpRoot), top: 3 }).copilotClasses);
   } catch { /* no logs */ }
-  return { angles, classes, items: SELF_CHECK_ITEMS.map((i) => ({ ...i })) };
+  return { angles, classes, copilotClasses, items: SELF_CHECK_ITEMS.map((i) => ({ ...i })) };
 }
 
 /**
@@ -455,7 +459,7 @@ async function selfCheck(root, touchedPaths) {
  * declared touch set (`--paths`), `repoRoot` is the only checkout reference, so
  * two checkouts of the same tree produce byte-identical output.
  */
-export async function buildImplementationBrief({ body = "", repoRoot = process.cwd(), paths = [] } = {}) {
+export async function buildImplementationBrief({ body = "", repoRoot = process.cwd(), paths = [], copilotFile } = {}) {
   const root = path.resolve(repoRoot);
   const rootInfo = await stat(root).catch((error) => {
     if (isMissing(error)) return null;
@@ -604,7 +608,7 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
     adrTripwirePaths: touchedPaths.filter(matchesAdrTripwire),
     helperInventory: await helperInventory(root, touchedPaths, resolved, trackedSources.files),
     importers: await importersByModule(root, touchedPaths, resolved, trackedSources.files),
-    selfCheck: await selfCheck(root, touchedPaths),
+    selfCheck: await selfCheck(root, touchedPaths, copilotFile),
     requiredReads: [...REQUIRED_READS],
     findings,
   };
@@ -620,6 +624,7 @@ export function parseImplementationBriefArgs(argv) {
         "body-file": { type: "string" },
         paths: { type: "string" },
         "repo-root": { type: "string" },
+        "copilot-file": { type: "string" },
         ...JQ_OUTPUT_PARSE_OPTIONS,
       },
       strict: true,
@@ -635,6 +640,7 @@ export function parseImplementationBriefArgs(argv) {
     bodyFile: values["body-file"],
     paths: values.paths === undefined ? [] : values.paths.split(","),
     repoRoot: values["repo-root"] ?? process.cwd(),
+    copilotFile: values["copilot-file"],
     jq: values.jq,
     silent: values.silent,
     fields: values.fields,
@@ -649,7 +655,7 @@ export async function main(argv = process.argv.slice(2), { stdout = process.stdo
       return 0;
     }
     const body = await readFile(options.bodyFile, "utf8");
-    const brief = await buildImplementationBrief({ body, repoRoot: options.repoRoot, paths: options.paths });
+    const brief = await buildImplementationBrief({ body, repoRoot: options.repoRoot, paths: options.paths, copilotFile: options.copilotFile });
     return emitResult(brief, {
       jq: options.jq,
       silent: options.silent,
