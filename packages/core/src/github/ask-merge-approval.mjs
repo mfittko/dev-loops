@@ -98,7 +98,11 @@ export function writeApprovalRecord({ approval, session = null, now = new Date()
   const record = { repo: approval.repo, pr: approval.pr, headSha: approval.headSha, patchId: approval.patchId, question: approval.question, answer: approval.answer, time: now.toISOString(), session };
   const mac = sign(key, record);
   const id = createHmac("sha256", key).update(`id:${mac}`).digest("hex");
-  fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ ...record, mac }, null, 2), { mode: 0o600 });
+  // Temp file plus rename: a crash never leaves a half-written record the merge reader could parse.
+  const target = path.join(dir, `${id}.json`);
+  const tmp = `${target}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ ...record, mac }, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, target);
   return { id, record };
 }
 
