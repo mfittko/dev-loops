@@ -301,6 +301,22 @@ test("all-carried rounds consume the real emitter's keyed zero-unit plan through
     assert.notEqual(both.status, 0);
     assert.match(both.stdout + both.stderr, /mutually exclusive/);
     assert.match(both.stdout + both.stderr, /recovery/);
+    // Fail-closed plan file reads: unreadable, relative, and bound to another head.
+    const staleFile = path.join(repoRoot, "carry-plan-stale.json");
+    await writeFile(staleFile, JSON.stringify({ ...plan, headSha: "d".repeat(40) }), "utf8");
+    for (const [label, badPath, expected] of [
+      ["unreadable", path.join(repoRoot, "does-not-exist.json"), /zero-unit carry proof refused/],
+      ["relative", "carry-plan-input.json", /must be an absolute path/],
+      ["empty", "", /must be an absolute path/],
+      ["another head", staleFile, /does not match this round/],
+    ]) {
+      const refused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", badPath], { cwd: repoRoot });
+      assert.notEqual(refused.status, 0, label);
+      const out = refused.stdout + refused.stderr;
+      assert.match(out, /zero-unit carry proof refused/, label);
+      assert.match(out, expected, label);
+      assert.match(out, /recovery/, label);
+    }
     const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", planFile], { cwd: repoRoot });
     assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
     const emitPlan = path.join(contextDir, `${gate}-${HEAD_SHA}.emit-plan.json`);

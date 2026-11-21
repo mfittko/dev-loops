@@ -51,7 +51,7 @@ import { GATE_NAMES, gateScopePrefix } from "../github/_gate-names.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../github/write-gate-context.mjs";
 import { writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { lintFillerPhrases } from "../github/_gate-finding-text.mjs";
-import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, validateCarryForwardPlanEntries, validateCarryForwardPlanShape, validateZeroUnitCarryProof } from "../github/_carried-angles.mjs";
+import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, requireAbsolutePlanFilePath, validateCarryForwardPlanEntries, validateCarryForwardPlanShape, validateZeroUnitCarryProof, verifyCarryForwardPlanIdentity } from "../github/_carried-angles.mjs";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
@@ -637,6 +637,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     tokens: true,
   });
   let planFlagSeen = null;
+  let planFileObject = null;
   for (const token of tokens) {
     if (token.kind === "positional") {
       throw parseError(`Unknown argument: ${token.value}`);
@@ -711,6 +712,11 @@ export function parseConsolidateFaninCliArgs(argv) {
         : "";
       if (token.name === "carry-forward-plan-file") {
         try {
+          requireAbsolutePlanFilePath(raw);
+        } catch (err) {
+          throw parseError(err.message);
+        }
+        try {
           raw = readFileSync(raw, "utf8");
         } catch (err) {
           throw parseError(`--carry-forward-plan-file could not be read: ${err.message}. Recovery: pass the keyed <gate>-<headSha>.carry-forward-plan.json path written by resolve-angle-carry-forward.mjs`);
@@ -725,8 +731,11 @@ export function parseConsolidateFaninCliArgs(argv) {
       try {
         options.carryForwardPlan = validateCarryForwardPlanShape(parsed);
       } catch (err) {
-        throw parseError(`${err instanceof Error ? err.message : String(err)}${planFileRecovery}`);
+        const message = err instanceof Error ? err.message : String(err);
+        // Name the flag the caller passed, not the inline one the shape check words its errors with.
+        throw parseError(`${token.name === "carry-forward-plan-file" ? message.replace(/^--carry-forward-plan(?=\s)/, "--carry-forward-plan-file") : message}${planFileRecovery}`);
       }
+      if (token.name === "carry-forward-plan-file") planFileObject = parsed;
       continue;
     }
     if (token.name === "resolved-angles") {
@@ -812,6 +821,13 @@ export function parseConsolidateFaninCliArgs(argv) {
   // evidence it is checked against, below) and --gate (so the gate's
   // configured mandatory angles can be rejected) — fail closed here, at parse
   // time, rather than deep inside consolidateGateFanin.
+  if (planFileObject !== null) {
+    try {
+      verifyCarryForwardPlanIdentity(planFileObject, { headSha: options.headSha, gate: options.gate, repo: options.repo, pr: options.pr });
+    } catch (err) {
+      throw parseError(err.message);
+    }
+  }
   if (options.carriedAngles !== undefined && options.carryForwardPlan === undefined) {
     throw parseError("--carried-angles requires --carry-forward-plan-file (or --carry-forward-plan) (resolve-angle-carry-forward.mjs's own result) as proof — refusing to mint a carried entry from a bare name with no cross-check");
   }

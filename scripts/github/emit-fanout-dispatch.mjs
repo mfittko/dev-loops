@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { readSealed } from "./_gate-artifact-seal.mjs";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
-import { validateZeroUnitCarryProof } from "./_carried-angles.mjs";
+import { requireAbsolutePlanFilePath, validateZeroUnitCarryProof, verifyCarryForwardPlanIdentity } from "./_carried-angles.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { VERIFIED_ITEMS_ANGLES, baseAngleName } from "@dev-loops/core/loop/gate-fanin";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -84,15 +84,18 @@ Optional:
                                fanout.groups only when pendingGroups is ABSENT (an
                                older artifact); a PRESENT-but-empty pendingGroups
                                requires every resolved angle to be carried with
-                               --carry-forward-plan proof, or refuses zero units.
+                               --carry-forward-plan-file (or --carry-forward-plan)
+                               proof, or refuses zero units.
                                The persisted plan also keeps the completed prior
                                units marked "resumed": true, so its count can
                                exceed the stdout count. Only the stdout "units"
                                are dispatched, and --expected-dispatch-units
                                takes the stdout count.
-  --carry-forward-plan <json>  Resolver output (or its carried array). Required
-                               for a zero-unit pending round; persisted with the
-                               keyed plan for fan-in and provenance verification.
+  --carry-forward-plan <json>  Resolver output (or its carried array). The
+                               alternative to --carry-forward-plan-file, one of
+                               which is required for a zero-unit pending round;
+                               persisted with the keyed plan for fan-in and
+                               provenance verification.
   --carry-forward-plan-file <absolute path>  Same shape, read from a file (the keyed
                                <gate>-<headSha>.carry-forward-plan.json). Keeps
                                finding text off the command line. Passing both
@@ -632,7 +635,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
         throw new Error("zero-unit plan cannot carry mandatory, always-run, or unknown angles");
       }
       const planFile = resolveFlagValue(argv, "--carry-forward-plan-file");
+      if (planFile !== null) requireAbsolutePlanFilePath(planFile);
       const rawProof = JSON.parse(planFile !== null ? await readFile(planFile, "utf8") : resolveFlagValue(argv, "--carry-forward-plan") ?? "null");
+      if (planFile !== null) verifyCarryForwardPlanIdentity(rawProof, { headSha, gate, repo, pr });
       carryProof = validateZeroUnitCarryProof(rawProof, angles);
       // A proof resolved from a head whose log was quarantined no longer counts (GATE-EXEC-FINDINGS-LOG-QUARANTINE):
       // fail closed so the caller rebuilds the context and dispatches every angle.

@@ -1872,7 +1872,49 @@ test("parseConsolidateFaninCliArgs names a recovery for an empty or malformed --
     await writeFile(wrongShape, '{"nope":1}', "utf8");
     assert.throws(
       () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan-file", wrongShape]),
-      /"carried" array.*Recovery:.*resolve-angle-carry-forward\.mjs/,
+      /--carry-forward-plan-file must have a "carried" array.*Recovery:.*resolve-angle-carry-forward\.mjs/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseConsolidateFaninCliArgs refuses a relative --carry-forward-plan-file and accepts an absolute one", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "carry-plan-abs-"));
+  try {
+    const planFile = path.join(dir, "plan.json");
+    await writeFile(planFile, carryForwardPlanJson(["docs"]), "utf8");
+    const base = ["--findings-dir", "/tmp/x", "--gate", "draft_gate", "--carried-angles", '["docs"]'];
+    assert.deepEqual(parseConsolidateFaninCliArgs([...base, "--carry-forward-plan-file", planFile]).carriedAngles, ["docs"]);
+    for (const rejected of ["tmp/gate-context/o-r/pr-7/draft_gate-abc.carry-forward-plan.json", "./plan.json", ""]) {
+      assert.throws(
+        () => parseConsolidateFaninCliArgs([...base, "--carry-forward-plan-file", rejected]),
+        /(must be an absolute path.*Recovery:|Missing value for --carry-forward-plan-file)/,
+      );
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseConsolidateFaninCliArgs refuses a plan file whose identity differs from the round, in either flag order", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "carry-plan-id-"));
+  try {
+    const plan = JSON.parse(carryForwardPlanJson(["docs"]));
+    const planFile = path.join(dir, "plan.json");
+    await writeFile(planFile, JSON.stringify({ ...plan, headSha: "c".repeat(40), gate: "draft_gate" }), "utf8");
+    const round = ["--findings-dir", "/tmp/x", "--gate", "draft_gate", "--carried-angles", '["docs"]'];
+    assert.throws(
+      () => parseConsolidateFaninCliArgs([...round, "--head-sha", "d".repeat(40), "--carry-forward-plan-file", planFile]),
+      /headSha.*does not match this round.*Recovery:/,
+    );
+    assert.throws(
+      () => parseConsolidateFaninCliArgs(["--carry-forward-plan-file", planFile, ...round, "--head-sha", "d".repeat(40)]),
+      /does not match this round/,
+    );
+    assert.deepEqual(
+      parseConsolidateFaninCliArgs([...round, "--head-sha", "c".repeat(40), "--carry-forward-plan-file", planFile]).carriedAngles,
+      ["docs"],
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
