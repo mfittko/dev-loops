@@ -175,7 +175,7 @@ When you need a fact from a dev-loops JSON-emitting script, climb this ladder an
    - PR checks/status → `scripts/github/probe-ci-status.mjs --repo <o/r> --pr <n> --timeout 0` for a single live combined-CI check, **never raw `gh pr checks`**. (Provider-agnostic; drop the `--timeout 0` to block-wait.)
    - Post-drive gate-evidence audit (does the PR have its posted draft_gate + pre_approval_gate verdicts?) → `scripts/github/audit-gate-evidence.mjs --repo <o/r> --pr <n>` (**never raw issue-comment reads**); it scans BOTH verdict surfaces (PR reviews + issue comments, see GATE-EVIDENCE-AUDIT-TWO-SURFACES), so a verdict posted only as a PR review is never reported missing (#1729).
    - Reconcile a stuck `gate-evidence` required status at merge-readiness → `scripts/github/reconcile-gate-evidence-status.mjs --repo <o/r> --pr <n>`. Run it right after the post-drive audit and before the human-approval/merge checkpoint. When the current-head verdict evidence is satisfied but the `gate-evidence` commit status is stuck non-green (a `cancel-in-progress`-cancelled or read-after-write-raced verdict-post re-fire, issue #1935), it re-fires the run so the status flips to `success` without a manual `gh run rerun`. Fail-closed: when the evidence is genuinely missing it re-fires nothing (ADR 0057, see [Merge Preconditions](../docs/merge-preconditions.md)).
-   - Merge (the sanctioned merge path, orchestrator-owned) → `scripts/github/merge-pr.mjs --repo <o/r> --pr <n> --human-approved-by <login>` (`--method squash|merge|rebase`, `--stable-release`), **never raw `gh pr merge`**. It runs the full merge-precondition set fail-closed and refuses with a machine-readable reason naming the failing precondition; a verified `--human-approved-by <login>` is mandatory. See [Merge Preconditions](../docs/merge-preconditions.md#sanctioned-merge-wrapper-issue-1939).
+   - Merge (the sanctioned merge path, orchestrator-owned) → `scripts/github/merge-pr.mjs --repo <o/r> --pr <n> --human-approved-by <login>` (`--method squash|merge|rebase`, `--stable-release`), **never raw `gh pr merge`**. It runs the full merge-precondition set fail-closed and refuses with a machine-readable reason naming the failing precondition; a verified `--human-approved-by <login>` is mandatory. See [Merge Preconditions](../docs/merge-preconditions.md#sanctioned-merge-wrapper-issue-1939). The dev-loop coordinator never runs `merge-pr.mjs`, `--check` included, and no subagent Bash command may name `merge-pr` (the Bash gate denies it), except a merge-pr test-file path (`merge-pr<suffix>.test.mjs`), while every run of `scripts/github/merge-pr.mjs` stays denied (ADR 0297). The orchestrator is the only actor that runs it. At the merge-ready point the coordinator hands back the `await_final_human_approval` result of `loop gate-coordination` (the merge-ready evidence), and the orchestrator runs `merge-pr.mjs --check` and composes the exact `merge-pr.mjs` command line, with `--human-approved-by <login>` and, on a drain merge under standing authorization, `--standing-authorization`; on `approvalPath: comment_marker` the operator posts the exact `approveMergeLine` that `--check` reports.
 
    These accept the same `--jq`/`--silent` output flags as every other JSON-emitting script (base-CLI guarantee) — including `probe-ci-status.mjs`, watch-shaped as it is.
 5. **NEVER `| python3` or `node -e`** to parse tool JSON. If a field you need is missing from a script's output, add it to the script (or its concise mode), not an inline parser.
@@ -235,9 +235,7 @@ its work order, which pins the consolidated ledger, the spec-context output, the
 (PR declared scope and diff) and the prior-round judge verdicts. It then awaits its two verdict artifacts: the relevance verdict at
 `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/<roundId>/judge-verdict.json` and the spec-authority
 verdict at the sibling `spec-authority-verdict.json` (its only writes). The gate coordinator
-writes the durable ledger with `write-gate-findings-log --judge-verdict <verdict-path>
---spec-authority <identity-path>` using those completed verdicts; posting the visible gate
-verdict stays with the dev-loop coordinator. The gate coordinator then runs the deterministic
+runs the deterministic
 bridge to derive the fixer's act list for Phase 4, always with the spec-authority flags, plus the
 durable-approval flags across re-entry:
 
@@ -247,7 +245,8 @@ node <dev-loops-package-root>/cli/index.mjs gate judge-pass --repo <owner/name> 
   --out <act-list-path> --ledger-out <enriched-ledger-path> \
   --spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict <spec-authority-verdict-path> \
   [--prior-approvals <prior-approvals-path> --approvals-out <approvals-out-path>] \
-  [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>]
+  [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>] \
+  [--context-tmp-root <root>]
 ```
 
 `--judge-plan` is the emitter's printed `planPath`. `--prior-approvals`/`--approvals-out` thread across re-entry rounds (the first round on a fresh
@@ -258,6 +257,8 @@ all-stale fallback. The fix pass consumes ONLY `--out`'s act list (the judge's `
 `judge-pass` fail-closed (any case in the Gate Review Sub-Loop Contract Phase 3.5 list) means re-run the judge at the current head, never a
 silent severity-only fallback or a silent skip of spec authority. See Gate Review Sub-Loop Contract
 Phase 3.5 and `skills/docs/spec-authority-contract.md` for the enforcement rules these flags carry.
+
+The gate coordinator writes the durable findings log only after `judge-pass`: the full write command in the contract's [Phase 3.5](../docs/gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525), so the log carries the coerced dispositions and `upsert-checkpoint-verdict.mjs` accepts it without a rewrite. A `fanout_fanin` `draft_gate` or `pre_approval_gate` write without `--judge-verdict` refuses `judge_verdict_required` while the round has a judge plan with no verdict yet. Posting the visible gate verdict stays with the dev-loop coordinator.
 
 After the fixer commits the act-list fix and before it pushes, the dev-loop coordinator runs the
 delta-mode pre-push review (`PRE-PUSH-DELTA-TRIGGER` in the

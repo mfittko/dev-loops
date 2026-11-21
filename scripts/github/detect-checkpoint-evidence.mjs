@@ -45,6 +45,7 @@ import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-reso
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { verifyFreshHumanApproval, projectSubmittedReviewFacts } from "@dev-loops/core/loop/merge-approval";
 import { countUnresolvedHumanChangesRequested, resolveSizeBudgetHumanApprovalRequired } from "@dev-loops/core/loop/size-budget-merge-gate";
+import { computePatchIdWhenIntegrated } from "./_patch-id.mjs";
 import { parseHeadDeclaredKeys } from "./head-declared-keys-schema.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
@@ -60,6 +61,7 @@ Required:
   --pr <number>         Pull request number
 Optional:
   --base-ref-name <name>  PR base branch; lets a sealed cap-round-fixed proof stand in for the clean draft_gate comment
+  --patch-id <hex>        40-hex patch-id from the approveMergeLine of merge-pr --check (the only supported source: pinned git diff -U3 --binary --no-renames origin/<base>...<head> | git patch-id --verbatim); set only by merge-pr and advisory (merge-pr re-checks); lets an "approve merge <sha> patch-id <hex>" comment satisfy the size gate
   --head-declared-keys <json>  Dotted config key paths the PR head's own schema declares
                           ({"declaredKeys":[...]}); a head-only unknown key listed there is tolerated
   --head-declared-keys-sha <sha>  Head SHA the declared keys were reported for; the keys apply only when it
@@ -80,7 +82,9 @@ Optional:
                               should omit this flag to keep full enforcement.
 Optional marker field: carriedFrom (the origin head of a carried verdict). A carried
 marker's headSha is the current head and differs from the comment summary's
-headSha; carriedFrom names the origin head the verdict was posted at.
+headSha; carriedFrom names the carry origin head (the fixer commit for a converged
+draft_gate marker). Any converged draft_gate marker emits converged and convergedFromHeadSha
+(the reviewed head that holds the verdict and ledger); a carried one also emits carriedFrom.
 Output (stdout, JSON; always includes preMergeGateCheck):
   {
     "ok": true,
@@ -186,6 +190,7 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       "skip-fanout-ledger-check": { type: "boolean" },
       "read-only": { type: "boolean" },
       "base-ref-name": { type: "string" },
+      "patch-id": { type: "string" },
       "head-declared-keys": { type: "string" },
       "head-declared-keys-sha": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -241,6 +246,11 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
     }
     if (token.name === "base-ref-name") {
       options.baseRefName = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "patch-id") {
+      options.patchId = requireTokenValue(token, parseError).trim();
+      if (!/^[0-9a-f]{40}$/i.test(options.patchId)) throw parseError("--patch-id must be a 40-hex git patch-id");
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -353,6 +363,7 @@ function normalizeGateMarkerSummary(summary) {
     visible: true,
     surface: normalizeVerdictSurface(summary.surface),
     headSha: summary.headSha,
+    ...(summary.converged ? { converged: summary.converged } : {}),
     ...(summary.convergedFromHeadSha ? { convergedFromHeadSha: summary.convergedFromHeadSha } : {}),
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,
@@ -373,13 +384,14 @@ function normalizeGateMarkerSummary(summary) {
  * True when at least one non-bot human login present in `reviews`/`comments`
  * has a fresh, head-pinned approval per the sanctioned resolver
  * `verifyFreshHumanApproval` (merge-approval.mjs): a head-pinned APPROVED
- * review OR a head-pinned "approve merge <headSha>" comment authored by that
+ * review OR a head-pinned "approve merge <headSha>" comment (or an
+ * "approve merge <sha> patch-id <patchId>" comment) authored by that
  * SAME login. `buildPreMergeGateCheck` has no single named approver to check
  * (unlike merge-pr.mjs's `--human-approved-by`), so this tries every distinct
  * human login the two streams surface against the one existing resolver
  * rather than reimplementing its bot-exclusion/head-pinning/marker rules.
  */
-function anyFreshHumanApproval({ currentHeadSha, reviews: allReviews, comments: allComments }) {
+function anyFreshHumanApproval({ currentHeadSha, currentPatchId = null, reviews: allReviews, comments: allComments }) {
   // Only association-trusted entries can approve (ADR 0248); a stranger's
   // "approve merge <head>" comment or APPROVED review never satisfies the gate.
   const reviews = allReviews.filter((e) => e?.trusted === true);
@@ -392,7 +404,7 @@ function anyFreshHumanApproval({ currentHeadSha, reviews: allReviews, comments: 
     if (typeof entry?.login === "string" && entry.login.length > 0) candidateLogins.add(entry.login);
   }
   for (const login of candidateLogins) {
-    if (verifyFreshHumanApproval({ approvedBy: login, currentHeadSha, reviews, comments }).satisfied) return true;
+    if (verifyFreshHumanApproval({ approvedBy: login, currentHeadSha, currentPatchId, reviews, comments }).satisfied) return true;
   }
   return false;
 }
@@ -438,7 +450,7 @@ export function capRoundThreadsResolved(capRoundNumber, threadNodes) {
   if (!Number.isInteger(capRoundNumber) || !Array.isArray(threadNodes)) return false;
   return threadNodes.every((node) => parseFindingMarker(node?.comments?.nodes?.[0]?.body)?.round !== capRoundNumber || node?.isResolved === true);
 }
-export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false, capRoundFixed = false } = {}) {
+export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false, capRoundFixed = false, patchId = null } = {}) {
   const failures = [];
   const warnings = [];
   // A sealed "cap round fixed" proof stands in for the clean draft_gate comment; every other condition below stays fail-closed.
@@ -465,7 +477,8 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
   // size failure would add no signal. sizeTouchesT1 is remapped to touchesT1
   // (see size-budget-merge-gate.mjs's own naming note). The human approval
   // signal accepts EITHER a human APPROVED review OR a head-pinned
-  // "approve merge <headSha>" operator comment — see anyFreshHumanApproval
+  // "approve merge <headSha>" or patch-id "approve merge <sha> patch-id <id>"
+  // operator comment — see anyFreshHumanApproval
   // above — so a solo-owner PR (which GitHub forbids from self-APPROVED) is
   // never unsatisfiable.
   if (preApprovalEstablished) {
@@ -483,13 +496,13 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
     if (resolveSizeBudgetHumanApprovalRequired({
       sizeOutcome: preApproval.sizeOutcome,
       touchesT1: preApproval.sizeTouchesT1,
-      humanApprovalSatisfied: anyFreshHumanApproval({ currentHeadSha: evidence.currentHeadSha, reviews, comments }),
+      humanApprovalSatisfied: anyFreshHumanApproval({ currentHeadSha: evidence.currentHeadSha, currentPatchId: patchId, reviews, comments }),
       unresolvedChangesRequestedCount,
     })) {
       failures.push(
         evidence.reviewsReadFailed === true
           ? "size-budget merge gate cannot verify human approval/unresolved CHANGES_REQUESTED state for this escalated/T1 PR: PR reviews could not be read (fail closed)"
-          : "size-budget requires a human APPROVED review OR a head-pinned \"approve merge <headSha>\" operator comment, with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR",
+          : "size-budget requires a human APPROVED review OR a head-pinned \"approve merge <headSha>\" operator comment (or an \"approve merge <sha> patch-id <patch-id>\" comment matching the current diff), with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR",
       );
     }
   }
@@ -1092,7 +1105,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
     // the main-worktree entry, while the multi-checkout scan still defends
     // against a forged per-worktree shadow ledger. Anchoring this read at the
     // main worktree directly would collapse that shadow-defense scan.
-    const ledgerPath = buildLogPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" });
+    const ledgerPath = spec.marker.ledgerPath ?? buildLogPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" });
     // Re-derive scope FAIL-CLOSED for inline verdicts only (the fan-out default
     // path pays no git I/O). scopeUnderThreshold is true ONLY when lightMode is
     // on, the PR has no gate:full label, a base ref is known, and the merge-base
@@ -1168,6 +1181,11 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
 // wrapper below strips them so no OTHER caller (e.g.
 // detect-pr-gate-coordination-state.mjs, which durably stores the whole
 // returned object) can re-expose them.
+// Fan-out keeps the origin-head marker for a carried gate so the ledger path stays at the origin head.
+// A converged carry takes the non-carried converged shape: headSha F (the scope head), convergedFromHeadSha A (the ledger head).
+export const carriedFanoutMarker = (candidate, carried) => (carried.convergedFromHeadSha
+  ? { ...candidate, headSha: carried.carriedFrom, convergedFromHeadSha: candidate.headSha, carriedFrom: carried.carriedFrom }
+  : { ...candidate, carriedFrom: carried.carriedFrom });
 async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd(), recordCarry = false } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({
     repo: options.repo,
@@ -1276,8 +1294,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
       gate, repo: options.repo, pr: options.pr, currentHeadSha, repoRoot: resolveRepoRoot(cwd), env,
       runJson: (args) => runGhJson(args, { env, ghCommand, runChild }), comments: carryComments, record: recordCarry,
     });
-    // Fan-out keeps the origin-head marker for a carried gate so the ledger path stays at the origin head.
-    return carried.carriedFrom ? { marker: carried, fanoutMarker: { ...candidate, carriedFrom: carried.carriedFrom } } : { marker: filtered, fanoutMarker: filtered };
+    return carried.carriedFrom ? { marker: carried, fanoutMarker: carriedFanoutMarker(candidate, carried) } : { marker: filtered, fanoutMarker: filtered };
   };
   const { marker: draftGateMarker, fanoutMarker: rawDraftGateMarker } = await resolveGateMarker("draft_gate");
   const { marker: preApprovalGateMarker, fanoutMarker: rawPreApprovalGateMarker } = await resolveGateMarker("pre_approval_gate");
@@ -1474,7 +1491,11 @@ async function main() {
     const draftClean = result.draftGate.visible && result.draftGate.verdict === "clean";
     const capRoundFixed = !draftClean && (githubCapFixed || (Boolean(options.baseRefName)
       && Boolean(await resolveCapRoundFixed({ repo: result.repo, pr: result.pr, headSha: result.currentHeadSha, baseRefName: options.baseRefName, anyHead: true }, { repoRoot: resolveRepoRoot(process.cwd()) }).catch(() => null))));
-    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true, capRoundFixed });
+    // Without --patch-id (the CI path) the detector derives it itself when the head contains origin/<base> (ADR 0279); any git error leaves head-only matching.
+    const patchId = options.patchId ?? (options.baseRefName
+      ? computePatchIdWhenIntegrated({ base: `origin/${options.baseRefName}`, head: result.currentHeadSha, repoRoot: resolveRepoRoot(process.cwd()) })
+      : null);
+    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true, capRoundFixed, patchId });
     const evidenceState = deriveEvidenceState(result, preMergeGateCheck, capRoundFixed);
     // reviews/comments are raw size-budget-gate input facts (comments carry
     // FULL PR comment bodies) consumed internally by buildPreMergeGateCheck

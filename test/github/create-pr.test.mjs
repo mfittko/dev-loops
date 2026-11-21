@@ -826,6 +826,62 @@ test("create-pr --body-file with an unreadable file fails closed: nonzero exit, 
   }
 });
 
+test("create-pr refuses a literal null body (inline, padded and file) and --allow-empty-body overrides without reaching gh (#3305)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-null-body-"));
+  try {
+    const nullFile = path.join(tempDir, "null.md");
+    await writeFile(nullFile, "null\n");
+    const base = ["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "Add feature"];
+    for (const bodyArgs of [["--body", "null"], ["--body", "  null  "], ["--body-file", nullFile]]) {
+      const { env, ghLogPath } = await writeGhStub(tempDir, []);
+      const result = await runNode([...base, ...bodyArgs], { env, cwd: tempDir, noRecord: true });
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, /only `null`/);
+      assert.equal((await readGhCalls(ghLogPath)).length, 0);
+    }
+    // An empty inline --body is refused too, with no gh call.
+    const { env: emptyEnv, ghLogPath: emptyLog } = await writeGhStub(tempDir, []);
+    const empty = await runNode([...base, "--body", ""], { env: emptyEnv, cwd: tempDir, noRecord: true });
+    assert.notEqual(empty.code, 0);
+    assert.match(empty.stderr, /--body is empty/);
+    assert.equal((await readGhCalls(emptyLog)).length, 0);
+    // =false keeps the guard on.
+    const { env: fEnv, ghLogPath: fLog } = await writeGhStub(tempDir, []);
+    const off = await runNode([...base, "--body", "null", "--allow-empty-body=false"], { env: fEnv, cwd: tempDir, noRecord: true });
+    assert.notEqual(off.code, 0);
+    assert.match(off.stderr, /only `null`/);
+    assert.equal((await readGhCalls(fLog)).length, 0);
+    // --allow-empty-body is boolean: a space-form value is refused before gh.
+    for (const value of ["false", "true"]) {
+      const { env: spEnv, ghLogPath: spLog } = await writeGhStub(tempDir, []);
+      const sp = await runNode([...base, "--body", "null", "--allow-empty-body", value], { env: spEnv, cwd: tempDir, noRecord: true });
+      assert.notEqual(sp.code, 0);
+      assert.match(sp.stderr, /--allow-empty-body is a boolean flag/);
+      assert.equal((await readGhCalls(spLog)).length, 0);
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr --allow-empty-body lets a null body through and is not forwarded to gh (#3305)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-allow-empty-"));
+  try {
+    await initBareFixtureRepo(tempDir, { headFiles: [{ path: "src/code.mjs", content: "export const a = 1;\n" }] });
+    execFileSync("git", ["branch", "feature"], { cwd: tempDir });
+    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
+    for (const flag of ["--allow-empty-body", "--allow-empty-body=true"]) {
+      const result = await runNode(["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "Add feature", "--body", "null", flag], { env, cwd: tempDir });
+      assert.equal(result.code, 0, result.stderr);
+    }
+    const calls = await readGhCalls(ghLogPath);
+    assert.ok(calls.length > 0, "gh must be reached");
+    for (const args of calls) assert.ok(!args.some((a) => a.startsWith("--allow-empty-body")), "--allow-empty-body must not be forwarded to gh");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 // --- arg-building tests ---
 
 test("buildCreatePrArgs injects --draft when absent", () => {

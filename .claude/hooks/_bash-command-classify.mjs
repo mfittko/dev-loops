@@ -1576,6 +1576,8 @@ export function commandContainsTimeoutWrappedSanctionedTool(command) {
 const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command", "nohup", "exec", "stdbuf", "setsid", "ionice", "busybox"]);
 // A bare wrapper flag (`-n`, `--user`) takes the next word as its argument, unless that word is itself the command.
 const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS, "timeout", "gtimeout", "sleep"]);
+// The decision-recorder scan also keeps a launcher word after a bare wrapper flag (`sudo -n node ...`). The shared set leaves it out so `sudo -u node node -e` still shifts the user name.
+const LAUNCHER_FLAG_TARGETS = new Set([...WRAPPER_FLAG_TARGETS, "node", "bun", "dev-loops-run", "dev-loops"]);
 
 /**
  * Strip prefixes that hide the real command head, fail-closed (over-report is
@@ -1585,7 +1587,7 @@ const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS,
  *   - a path-prefixed binary (`./x/gh`, `/usr/bin/python3`) → reduce head to its basename
  * Returns the segment with a bare, classifiable command head.
  */
-export function stripLeadingWrappers(segment) {
+export function stripLeadingWrappers(segment, flagTargets = WRAPPER_FLAG_TARGETS) {
   let s = segment.trim();
   // (a) strip leading env-assignment tokens: NAME=value. The value may be
   //   unquoted (`X=1`) or a single/double-quoted string that itself contains
@@ -1600,7 +1602,7 @@ export function stripLeadingWrappers(segment) {
   // (d) strip `timeout [options] <duration>` (e.g. `timeout -k 5 60 gh ...`), then re-normalize
   const DURATION = String.raw`(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?`;
   const TIMEOUT_PREFIX = new RegExp(String.raw`^g?timeout\s+(?:-{1,2}[\w-]+(?:=\S+|\s+(?:${DURATION}|[A-Z]+))?\s+)*${DURATION}\s+(?=\S)`, "i");
-  if (TIMEOUT_PREFIX.test(s)) return stripLeadingWrappers(s.replace(TIMEOUT_PREFIX, ""));
+  if (TIMEOUT_PREFIX.test(s)) return stripLeadingWrappers(s.replace(TIMEOUT_PREFIX, ""), flagTargets);
   // (b) strip a leading wrapper binary, then re-normalize the remainder
   const head = s.split(/\s+/, 1)[0];
   if (WRAPPER_BINARIES.has(head)) {
@@ -1608,9 +1610,9 @@ export function stripLeadingWrappers(segment) {
     while (/^-/.test(words[0] ?? "")) {
       const bare = /^(?:-[A-Za-z]|--[\w-]+)$/.test(words[0]);
       words.shift();
-      if (bare && words.length > 1 && !WRAPPER_FLAG_TARGETS.has(words[0].replace(/^.*\//, ""))) words.shift();
+      if (bare && words.length > 1 && !flagTargets.has(words[0].replace(/^.*\//, ""))) words.shift();
     }
-    if (words.length > 0) return stripLeadingWrappers(words.join(" "));
+    if (words.length > 0) return stripLeadingWrappers(words.join(" "), flagTargets);
   }
   return s;
 }
@@ -1867,4 +1869,124 @@ const VITEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}(?:(?:npx|bunx)\\s+|bun\\s+x
  */
 export function commandContainsCodeVerificationEntrypoint(command) {
   return shellSegments(command).some((segment) => PACKAGE_MANAGER_VERIFY_RUN_RE.test(segment) || VITEST_RE.test(segment));
+}
+
+/**
+ * Decision-recorder classification (OPERATOR-DECISION-RECORDER). Fails closed. A segment names the recorder when,
+ * after quotes and backslashes are stripped and backslash-newline continuations are joined, it holds a word ending
+ * in `record-operator-decision.mjs`, or the words `decision record` next to a launcher word (`dev-loops`,
+ * `dev-loops-run`, or a `cli/index.mjs` entrypoint under any runner). `canonical` is true only for a raw segment
+ * that starts byte for byte with `dev-loops-run cli/index.mjs decision record ` (single spaces, no continuation).
+ * The `--repo-root` spelling is never canonical: its `permissions.ask` pattern is unverified in a live session.
+ * Returns null when no segment names the recorder.
+ * shortcut: a quoted `decision record` data word beside a launcher word counts as a mention, so a note that quotes
+ * the command is denied too, unless the segment is a plain file command (`grep`, `git commit -m`) with no nested run; judging quotes would need the full tokenizer.
+ * @param {string} command @returns {{canonical: boolean}|null}
+ */
+export function classifyDecisionRecorderCommand(command) {
+  const continued = /\\\r?\n/.test(command);
+  const segments = shellSegments(command.replace(/\\\r?\n/g, ""));
+  let found = null;
+  for (const segment of segments) {
+    const stripped = [stripLeadingWrappers(segment), stripLeadingWrappers(segment, LAUNCHER_FLAG_TARGETS)];
+    // Lowercase: a case-insensitive filesystem runs `Record-Operator-Decision.mjs` or `CLI/Index.mjs`. Only `canonical` below stays byte-exact.
+    const words = segment.replace(/['"\\]/g, "").toLowerCase().split(/\s+/);
+    // A file command (`git add`, `rg`) that only names the recorder source is no recorder spelling (ADR 0295: the path under a runner).
+    // shortcut: an allow-list of plain file commands, not of runners, so `bash -c 'node ...'` and `xargs` stay denied as before; widen it when another plain file command is blocked.
+    // A nested run keeps the segment a recorder spelling: command or process substitution, or a git exec option (`-x`, `--exec`, `bisect run`, `-c key=value`, `--pre`, `--extcmd`, `--ext-diff`, `submodule foreach`, `-O`, `--open-files-in-pager`, a `--*-filter` or `--*-cmd` option, `--upload-pack`, `--receive-pack`, `-u`, a `GIT_*=` or `*PAGER=` env prefix).
+    const nestedRun = /\$\(|`|[<>]\(|\s-x\b|--exec\b|\bbisect\s+run\b|alias\.[^\s=]*=["']?!|\s-c\s+\S+=|--pre\b|--extcmd\b|--ext-diff\b|\bsubmodule\s+foreach\b|\s-O|--open-files-in-pager\b|--[\w-]*-filter\b|--[\w-]*-cmd\b|--(?:upload|receive)-pack\b|\s-u\b|^\s*(?:\w+=\S*\s+)*(?:GIT_\w*|\w*PAGER)=/i.test(segment);
+    const fileCommand = !nestedRun && stripped.some((s) => /^(?:git|rg|grep|cat|ls|head|tail|wc|diff|stat)$/.test(s.split(/\s+/)[0].replace(/['"\\]/g, "").toLowerCase().replace(/^.*\//, "")));
+    const script = !fileCommand && words.some((w) => w.endsWith("record-operator-decision.mjs"));
+    const at = words.findIndex((w, i) => w === "decision" && words[i + 1] === "record");
+    const cli = !fileCommand && at >= 0 && words.slice(0, at).some((w) => /(?:^|\/)(?:dev-loops(?:-run)?|index\.mjs)$/.test(w));
+    if (!script && !cli && !stripped.some((s) => hasUnreadableLauncherWord(s.split(/\s+/)))) continue;
+    const canonical = !script && !continued && segments.length === 1 && segment.startsWith("dev-loops-run cli/index.mjs decision record ");
+    found = { canonical: found?.canonical !== false && canonical };
+  }
+  return found;
+}
+
+/**
+ * Whether a `*`/`?` glob matches `target` or a `/`-suffix of it, in linear time (no backtracking RegExp, so no ReDoS).
+ */
+function globMatchesSuffix(glob, target) {
+  const starts = [0, ...[...target].flatMap((c, i) => (c === "/" ? [i + 1] : []))];
+  return starts.some((start) => {
+    const gl = glob;
+    const t = target.slice(start);
+    let g = 0, i = 0, star = -1, mark = 0;
+    while (i < t.length) {
+      if (g < gl.length && (gl[g] === "?" || gl[g] === t[i])) { g++; i++; }
+      else if (g < gl.length && gl[g] === "*") { star = g++; mark = i; }
+      else if (star >= 0) { g = star + 1; i = ++mark; }
+      else return false;
+    }
+    while (gl[g] === "*") g++;
+    return g === gl.length;
+  });
+}
+
+/**
+ * Whether a `dev-loops-run`, `node`, `bun` or bare `dev-loops` segment has a script word, or namespace and action words after `cli/index.mjs`, that the
+ * shell could expand to the recorder: a word outside `^[A-Za-z0-9_./-]+$` (`decision$IFS record`, `$'decision' record`,
+ * `{decision,} record`) or a glob that matches the recorder script or the words `decision` and `record`
+ * (`record-operator-*.mjs`). A glob that cannot match them (`scripts/*\/validate-decision-records.mjs`) stays allowed.
+ */
+function hasUnreadableLauncherWord(rawWords) {
+  const raw = rawWords.map((w) => w.toLowerCase());
+  // Only a segment head counts (callers strip env assignments and launch wrappers with stripLeadingWrappers), so quoted prose that mentions a launcher stays allowed.
+  const at = 0;
+  const head = raw[at];
+  const isRunner = /(?:^|\/)(?:node|bun)$/.test(head);
+  const isRun = /(?:^|\/)dev-loops-run$/.test(head);
+  const isBare = /(?:^|\/)dev-loops$/.test(head);
+  if (!isRunner && !isRun && !isBare) return false;
+  let i = at + 1;
+  if (isRun && raw[i] === "--repo-root") {
+    // The value is one shell word: a quoted value spans to its closing quote, so a checkout path with a space stays one word.
+    let end = i + 1;
+    const quote = /^["']/.test(raw[end] ?? "") ? raw[end][0] : null;
+    if (quote && !raw[end].includes(quote, 1)) {
+      // The closing quote may sit inside a word (`"/a b"/r`); no closing word before the end is unreadable, so deny.
+      while (end < raw.length - 1 && !raw[++end].includes(quote));
+      if (!raw[end].includes(quote, end === i + 1 ? 1 : 0)) return true;
+    }
+    i = end + 1;
+  }
+  const hides = (w, target) => {
+    if (w === undefined || /^[A-Za-z0-9_./-]+$/.test(w)) return false;
+    if (!/^[A-Za-z0-9_./*?[\]-]+$/.test(w)) return true;
+    // A word with many wildcards is not a plausible program argument, so it fails closed.
+    if (w.replace(/[^*?]/g, "").length > 8) return true;
+    // A bare `*.ext` glob has no literal stem, so it is data for the program, not the recorder.
+    if (/^[*?]+\.[A-Za-z?*]+$/.test(w)) return false;
+    // A bracket class could match the recorder word, so it fails closed.
+    return w.includes("[") || globMatchesSuffix(w, target);
+  };
+  // Whether a word outside `^[A-Za-z0-9_./-]+$` could expand to `target`: a run of unreadable characters (`~`, `$E`) counts as `*`, and a `~`, `$HOME` or absolute prefix before a literal `cli/` or `scripts/` segment is dropped.
+  const couldBe = (w, target) => {
+    const s = w.replace(/^.*\/(?=(?:cli|scripts)\/)/, "").replace(/\$\{?[A-Za-z0-9_]+\}?/g, "*").replace(/[^A-Za-z0-9_./*?[\]-]+/g, "*");
+    return s.includes("[") || globMatchesSuffix(s, target);
+  };
+  // A word that could expand to `cli/index.mjs` is the entrypoint (fail closed). Only a following `decision record` denies it.
+  const isCli = (w) => !w.startsWith("-") && (w.endsWith("cli/index.mjs") || (!/^[A-Za-z0-9_./-]+$/.test(w) && couldBe(w, "cli/index.mjs")));
+  // A word with a literal part that could expand to the recorder script. A bare `*.ext` glob or an all-unreadable word has no literal stem, so it is data.
+  const hitsScript = (w) => !/^[A-Za-z0-9_./-]+$/.test(w) && /[A-Za-z0-9]/.test(w.replace(/\$\{?[A-Za-z0-9_]+\}?/g, "*")) && !/^[*?]+\.[A-Za-z?*]+$/.test(w) && couldBe(w, "scripts/github/record-operator-decision.mjs");
+  if (isRunner) {
+    // Scan to the first word that is a cli/index.mjs entrypoint or a glob or unreadable word, so runner flag values need no grammar. An inline-code flag, a `bun x` package binary or another script word ends the scan: what follows is data for that program.
+    // Every candidate is checked, so an empty-expanding `$X` before a glob entrypoint hides nothing.
+    for (let j = at + 1; j < raw.length; j++) {
+      const w = raw[j];
+      if (/^(?:-[ep]|--eval|--print)$/.test(w) || (w === "x" && raw[j - 1] === head)) break;
+      if (hitsScript(w)) return true;
+      if (isCli(w) && (hides(raw[j + 1], "decision") || hides(raw[j + 2], "record") || (raw[j + 1] === "decision" && raw[j + 2] === "record"))) return true;
+      // A script word right after a flag is that flag's value (`--loader ./l.mjs`), so the scan goes on.
+      if (/\.[cm]?[jt]s$/.test(w) && !/^-/.test(raw[j - 1])) break;
+    }
+    return false;
+  }
+  if (raw[i] === undefined) return false;
+  if (isBare) return hides(raw[i], "decision") || (raw[i] === "decision" && hides(raw[i + 1], "record"));
+  if (hides(raw[i], "scripts/github/record-operator-decision.mjs") || hitsScript(raw[i])) return true;
+  return isCli(raw[i]) && (hides(raw[i + 1], "decision") || hides(raw[i + 2], "record") || (raw[i + 1] === "decision" && raw[i + 2] === "record"));
 }

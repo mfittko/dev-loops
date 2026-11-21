@@ -93,4 +93,7 @@ test("an OWNER-authored fixer disposition marker does not pause; a plain comment
   assert.equal((await detect([bot, reviewMarker, comment(4, "owner", "OWNER", "please wait")])).paused, true);
   const operatorMarker = comment(5, "owner", "OWNER", `<!-- dev-loops:copilot-body-disposition review=42 head=${sha} operator -->`);
   assert.equal((await detect([bot, operatorMarker])).paused, true);
+  const deferMarker = comment(6, "owner", "OWNER", `<!-- dev-loops:copilot-body-disposition review=PRR_x head=${sha} defer=pre_approval_gate -->`);
+  const rejectMarker = comment(7, "owner", "OWNER", `<!-- dev-loops:copilot-body-disposition review=PRR_x head=${sha} reject=draft_gate -->`);
+  assert.equal((await detect([bot, deferMarker, rejectMarker])).paused, false);
 });

@@ -6,7 +6,10 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { autoDetectSnapshot } from "../../scripts/loop/detect-copilot-loop-state.mjs";
+import { interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
+import * as unobservableRecord from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import {
+  GH_RUNNER,
   fixturePath,
   makeComment,
   makeThread,
@@ -1677,6 +1680,32 @@ test("detect-copilot-loop-state preserves success when multiple hidden checks fa
     assert.equal(output.state, "ready_to_rerequest_review");
     assert.equal(output.snapshot.copilotReviewOnCurrentHead, false);
     assert.deepEqual(output.snapshot.excludedFailureDetails, ["copilot", "lint"]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("auto-detect reads the unobservable-request record and the loop reports copilot_unavailable", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-auto-unobservable-"));
+  try {
+    const checkpointDir = path.join(tempDir, "checkpoint");
+    const pr = { repo: "owner/repo", pr: 17 };
+    for (let i = 0; i < 2; i += 1) {
+      await unobservableRecord.recordUnobservableRequest({ ...pr, headSha: "abc123" }, { checkpointDir });
+      await unobservableRecord.recordTimedOutProbe({ ...pr, headSha: "abc123" }, { checkpointDir });
+    }
+    const emptyThreads = JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+    const { env } = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
+        stdout: `${JSON.stringify({ headRefOid: "abc123", isDraft: false, state: "OPEN", number: 17, reviews: [], statusCheckRollup: [] })}\n`,
+      },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: `${emptyThreads}\n` },
+    ]);
+    const snapshot = await autoDetectSnapshot({ ...pr, checkpointDir }, { env, runChild: env[GH_RUNNER] });
+    assert.equal(snapshot.copilotRequestNotObservable, true);
+    assert.equal(interpretLoopState(snapshot, { maxCopilotRounds: 3 }).state, "copilot_unavailable");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

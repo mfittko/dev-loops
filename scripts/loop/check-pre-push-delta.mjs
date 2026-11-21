@@ -54,7 +54,7 @@ import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
-import { fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
+import { assertPlanSourceHasNoThreads, fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
 import { capRoundActList, clearingChainWalk } from "../github/write-gate-context.mjs";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -72,13 +72,13 @@ import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --result-path <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--worktree <dir>]   (fixer handbackCheck run)
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
-       check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list)
+       check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list; with no unresolved thread the --fixer-plan's operator focus round is the one act item)
        check-pre-push-delta.mjs --reviewer-only --repo <owner/name> --pr <n> --baseline <sha> --pr-head <sha> --findings-log <cap-round log> --spec-identity <id> --result-path <path> [--worktree <dir>]   (code-range clearing, act list derived from the ledger)
        check-pre-push-delta.mjs --reviewer-only --repo <owner/name> --pr <n> --baseline <sha> --pr-head <sha> --findings-log <cap-round log> --result <path> --invocation <1-3> [--worktree <dir>]
 
 Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
 
-  --act-list <path>       The judge-pass --out act list the fix resolves. An act item that names no file (a PR-body item) leaves the act set and is printed as bodyItems, a top-level field of the input-run output that is present only when at least one act item was dropped; edit the PR body through scripts/github/edit-pr.mjs and the next gate round verifies it. An act list of only such items refuses delta_body_only_act_set, except on the --reviewer-only route, where it yields an empty code act set and prints bodyItems
+  --act-list <path>       The judge-pass --out act list the fix resolves. An act item that names no file or carries remedyKind pr_body (a PR-body item) leaves the act set and is printed as bodyItems, a top-level field of the input-run output that is present only when at least one act item was dropped; edit the PR body through scripts/github/edit-pr.mjs and the next gate round verifies it. An act list of only such items refuses delta_body_only_act_set, except on the --reviewer-only route, where it yields an empty code act set and prints bodyItems
   --threads-file <path>   Thread route, in place of --act-list: successful list-review-threads --unresolved-only
                           output, or a github-sourced capture-review-threads --unresolved --bodies file, for --repo/--pr. Each unresolved thread is one act item; its ref is the threadId.
   --repo <owner/name>     Required with --threads-file and --reviewer-only
@@ -90,7 +90,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --fixer-plan <path>     Canonical current pulled commit_only plan; pair with --site-coverage for ACT/THREAD closure (required for ACT input/result)
   --findings-log <path>   Required on the act-list route, input mode: the reviewed gate round's findings log (its headSha must equal --baseline, or its sealed clearing chain or a base-only merge must reach --baseline: PRE-PUSH-DELTA-INPUT-CAP-CHAIN);
                           its provenance.perAngle angles join the surface hints (PRE-PUSH-DELTA-INPUT). Refused with --threads-file.
-  --reviewer-only         Code-range clearing without a fixer plan (ADR 0255, GATE-EXEC-ROUND-CAP-CHAIN-EXTEND): an ACT sequence over baseline..PR head for a PR whose head moved past the cap round. The act list is derived from the cap-round ledger (--findings-log, required): its open act clusters, with no fixer plan or coverage record; empty for a clean cap round or a chain-end baseline.
+  --reviewer-only         Code-range clearing without a fixer plan (ADR 0255, GATE-EXEC-ROUND-CAP-CHAIN-EXTEND): an ACT sequence over baseline..PR head for a PR whose head moved past the cap round. The act list is derived from the cap-round ledger (--findings-log, required): its open act clusters, with no fixer plan or coverage record; empty for a clean cap round or a chain-end baseline. A clean merge whose parents both changed a path since their merge bases adds those overlap paths to the review; the no-PR-own refusal applies only when there is no PR-own commit and no overlap path.
                           --repo and --pr bind the log to the PR: the log must carry the same repo and pr, and the cap-round log reaches a chain-end baseline through the sealed clearing chain of that PR.
                           Needs --baseline (an ancestor of the worktree HEAD), --pr-head (equal to the worktree HEAD), --spec-identity and --result-path (input run) or --result and --invocation (result run).
                           Refuses --act-list, --threads-file, --fixer-plan, --site-coverage and --handback. The invocation bound of 3 still applies and no sequence marker is written.
@@ -230,6 +230,33 @@ export function parseCheckPrePushDeltaArgs(argv) {
     silent: values.silent === true,
     fields: values.fields,
   };
+}
+
+// The one fixer-plan authentication predicate (PRE-PUSH-DELTA-PUSH-AUTHORITY): canonical path, role, commit_only phase, source, baseline, target, mutationAuthority, worktree branch, workOrderRef and digest.
+// Returns null when the plan authenticates, else "path" (not the canonical plan file) or "predicate" (any other check).
+function planAuthenticationFailure({ plan, planPath, root, worktree, source, baseline, repo, pr }) {
+  const order = plan?.workOrder, target = order?.target;
+  const canonical = fixerPlanPath(plan?.workOrderRef, root);
+  if (!canonical || planPath !== path.resolve(canonical)) return "path";
+  const branch = spawnSync("git", ["-C", worktree, "branch", "--show-current"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+  return order?.role === "fixer" && order.phase === "commit_only" && order.source === source
+    && order.headSha === baseline && target?.repo === order.mutationAuthority?.repo && target?.pr === order.mutationAuthority?.pr
+    && (!repo || target.repo === repo) && (!pr || target.pr === pr)
+    && branch.status === 0 && branch.stdout.trim() === order.mutationAuthority?.branch
+    && plan.workOrderRef === `fixer:${target?.repo}#${target?.pr}:${baseline}:${plan.executionIdentity}`
+    && workOrderDigest(order) === plan.workOrderDigest ? null : "predicate";
+}
+
+// The operator focus of the canonical pulled commit_only threads plan for this baseline (PRE-PUSH-DELTA-PUSH-AUTHORITY). An unreadable or non-JSON plan and any other plan refuse.
+function planOperatorFocus(fixerPlan, baselineSha, worktree, repo, pr) {
+  let plan;
+  try { plan = JSON.parse(readFileSync(fixerPlan, "utf8")); } catch (error) { throw new Error(`Delta coverage binding: --fixer-plan ${fixerPlan} is unreadable or not JSON (${error.code ?? error.name}); pass the pulled plan`); }
+  const order = plan?.workOrder;
+  if (planAuthenticationFailure({ plan, planPath: realpathSync(fixerPlan), root: realpathSync(resolveGateArtifactTmpRoot(worktree)), worktree, source: "threads", baseline: baselineSha, repo, pr })) {
+    throw new Error("Delta coverage binding: --fixer-plan is not the canonical commit_only threads plan for this baseline; pass the pulled plan");
+  }
+  assertPlanSourceHasNoThreads(order);
+  return order.operatorFocus;
 }
 
 function gitRevParse(worktree, rev) {
@@ -401,13 +428,14 @@ function fetchAndResolveBase(worktree, base, { revParse, fetchBase }) {
   try { revParse(worktree, `origin/${base}`); } catch { throw new Error(`reviewer-only: origin/${base} does not exist in ${worktree}; run \`git fetch origin ${base}\` and rerun`); }
 }
 // The PR-own commit count of baseline..head under the reviewer-only rules: non-merge commits origin/<base> lacks plus non-base-only merges whose remerge diff names a path.
+// A clean merge whose parents overlap adds review paths and counts as one PR-own commit: the body-only post must not carry a verdict across it unreviewed.
 // The body-only converged post (ADR 0271) asks the same question, so it calls this instead of counting on its own.
 export async function countPrOwnCommits(worktree, baseline, head, base, { revParse = gitRevParse, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin, isAncestor = gitIsAncestor } = {}) {
   fetchAndResolveBase(worktree, base, { revParse, fetchBase });
   // A head that does not descend from the baseline (reset or force-pushed backward) has an empty baseline..head range, which must not read as "no PR-own commit".
   if (baseline !== head && !isAncestor(worktree, baseline, head)) throw new Error(`own_commit_in_range: ${head} does not descend from the reviewed head ${baseline}; the head moved backward or sideways, so the range holds code the cap round never reviewed`);
-  const { ownCommits, resolvedMerges } = await reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base });
-  return ownCommits + resolvedMerges.length;
+  const { ownCommits, resolvedMerges, overlapMerges } = await reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base });
+  return ownCommits + resolvedMerges.length + overlapMerges;
 }
 async function reviewerOnlyBase(worktree, baseline, head, deps) {
   const { base } = deps;
@@ -422,6 +450,7 @@ async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyM
   const ownCommits = revList(worktree, baseline, head, ["--no-merges", `^origin/${base}`]).length;
   // A merge that is not base-only is reviewed through its resolution diff (`git show --remerge-diff`: the merge against an automatic remerge of its parents), whose paths join the PR-own paths.
   const resolvedPaths = [], resolvedMerges = [];
+  let overlapMerges = 0;
   for (const merge of revList(worktree, baseline, head, ["--merges", `^origin/${base}`])) {
     if (await baseOnlyMerge({ fromHead: revParse(worktree, `${merge}^1`), head: merge, mainRef: `origin/${base}`, repoRoot })) continue;
     const parents = spawnSync("git", ["-C", repoRoot, "rev-list", "--parents", "-n", "1", merge], { encoding: "utf8", env: gitEnvNoDirOverrides() });
@@ -429,11 +458,42 @@ async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyM
       ? gitRemergeShow(repoRoot, merge, ["--name-only", "-z"], "utf8") : null;
     if (shown?.status !== 0) throw new Error(`non_base_only_merge: merge ${merge} in ${baseline}..${head} ${shown || parents.status !== 0 ? "has a resolution diff or parents that cannot be read" : `is an octopus merge (${parents.stdout.trim().split(" ").length - 1} parents)`} (${((shown ?? parents).stderr ?? "").trim() || (shown ?? parents).error?.message}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
     const paths = shown.stdout.split("\0").filter(Boolean);
-    if (paths.length === 0) continue; // a clean merge adds no change of its own
+    if (paths.length === 0) {
+      // A clean merge adds no change of its own, but the files both parents changed since their merge base are reviewed: the delta covers where main and the PR meet.
+      const [, p1, p2] = parents.stdout.trim().split(" ");
+      // Criss-cross history has several best bases (the ort merge used a virtual base of all of them): union the overlap over every one.
+      const mb = spawnSync("git", ["-C", repoRoot, "merge-base", "--all", p1, p2], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: gitEnvNoDirOverrides() });
+      const fail = (why) => new Error(`non_base_only_merge: cannot read the paths merge ${merge} brought in (${why}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
+      // Each side is listed with rename detection, as the ort merge applies one side's edit of a renamed file to its destination.
+      const sideNames = (mergeBase, tip) => {
+        const r = spawnSync("git", ["-C", repoRoot, "diff", "-M", "--no-relative", "--no-ext-diff", "--ignore-submodules=none", "--name-status", "-z", mergeBase, tip], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: gitEnvNoDirOverrides() });
+        if (r.status !== 0) throw fail((r.stderr ?? "").trim() || r.error?.message);
+        const fields = r.stdout.split("\0").filter(Boolean), names = [], renames = [];
+        for (let i = 0; i < fields.length;) {
+          const copyOrRename = /^[RC]/.test(fields[i]);
+          if (fields[i].startsWith("R")) renames.push([fields[i + 1], fields[i + 2]]);
+          names.push(...fields.slice(i + 1, i + (copyOrRename ? 3 : 2)));
+          i += copyOrRename ? 3 : 2;
+        }
+        return { names, renames };
+      };
+      if (mb.status !== 0 || !mb.stdout.trim()) throw new Error(`non_base_only_merge: cannot read the merge base of merge ${merge} (${(mb.stderr ?? "").trim() || mb.error?.message}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
+      const overlap = new Set();
+      for (const mergeBase of mb.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
+        const pr = sideNames(mergeBase, p1), main = sideNames(mergeBase, p2);
+        const mainSet = new Set(main.names), prSet = new Set(pr.names);
+        for (const f of pr.names) if (mainSet.has(f)) overlap.add(f);
+        for (const [from, to] of pr.renames) if (mainSet.has(from)) overlap.add(to);
+        for (const [from, to] of main.renames) if (prSet.has(from)) overlap.add(to);
+      }
+      resolvedPaths.push(...overlap);
+      if (overlap.size > 0) overlapMerges += 1;
+      continue;
+    }
     resolvedPaths.push(...paths);
     resolvedMerges.push(merge);
   }
-  return { ownCommits, resolvedPaths, resolvedMerges };
+  return { ownCommits, resolvedPaths, resolvedMerges, overlapMerges };
 }
 
 async function authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor, { closureOnly = false } = {}) {
@@ -441,16 +501,10 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   const planPath = realpathSync(options.fixerPlan), plan = JSON.parse(readFileSync(planPath, "utf8"));
   const order = plan.workOrder, origin = { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity };
   const refuse = (condition, reason) => { if (!condition) throw new Error(`Delta coverage binding: ${reason}`); };
-  const canonicalPlan = fixerPlanPath(plan.workOrderRef, root);
-  refuse(canonicalPlan && planPath === path.resolve(canonicalPlan), "not the canonical current fixer plan");
-  const branch = spawnSync("git", ["-C", options.worktree, "branch", "--show-current"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
-  const target = order?.target;
-  refuse(order?.role === "fixer" && order.phase === "commit_only" && order.source === (options.threadsFile ? "threads" : "act-list")
-    && order.headSha === sequence.reviewBaselineHead && target?.repo === order.mutationAuthority?.repo && target?.pr === order.mutationAuthority?.pr
-    && (!options.repo || target.repo === options.repo) && (!options.pr || target.pr === options.pr)
-    && branch.status === 0 && branch.stdout.trim() === order.mutationAuthority?.branch
-    && plan.workOrderRef === `fixer:${target?.repo}#${target?.pr}:${sequence.reviewBaselineHead}:${plan.executionIdentity}`
-    && workOrderDigest(order) === plan.workOrderDigest, "wrong role, target, phase, baseline, branch or semantic digest");
+  const failure = planAuthenticationFailure({ plan, planPath, root, worktree: options.worktree, source: options.threadsFile ? "threads" : "act-list", baseline: sequence.reviewBaselineHead, repo: options.repo, pr: options.pr });
+  refuse(failure !== "path", "not the canonical current fixer plan");
+  refuse(!failure, "wrong role, target, phase, baseline, branch or semantic digest");
+  const target = order.target;
   const unit = await locateFixerUnit({ ref: plan.workOrderRef, cwd: options.worktree, tmpRoots: [root], closureOnly });
   refuse(unit && !unit.stale && unit.executionIdentity === plan.executionIdentity, unit?.stale ?? "no current emitted unit");
   const dir = path.dirname(planPath), expectedOutput = path.join(dir, plan.executionIdentity, "fixer-disposition.json");
@@ -470,7 +524,7 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   const actRead = order.requiredReads?.find((read) => read.kind === order.source);
   const actBytes = readFileSync(sourcePath);
   refuse(actRead && actRead.sha256 === sha256Hex(actBytes).slice(7) && order.authority?.sourceDigest === sha256Hex(JSON.parse(actBytes)).slice(7)
-    && startDeltaSequence({ reviewBaselineHead: sequence.reviewBaselineHead, actList: options.threadsFile ? threadsToActList(JSON.parse(actBytes), { repo: options.repo, pr: options.pr }) : JSON.parse(actBytes) }).actSetId === sequence.actSetId, "changed ACT source or authority");
+    && startDeltaSequence({ reviewBaselineHead: sequence.reviewBaselineHead, actList: options.threadsFile ? threadsToActList(JSON.parse(actBytes), { repo: options.repo, pr: options.pr, operatorFocus: order.operatorFocus }) : JSON.parse(actBytes) }).actSetId === sequence.actSetId, "changed ACT source or authority");
   refuse(raw.headSha === (result ? result.candidateHead : currentHead)
     && isAncestor(options.worktree, sequence.reviewBaselineHead, raw.headSha)
     && isAncestor(options.worktree, raw.headSha, currentHead), "handback candidate is not the reviewed contained commit");
@@ -488,7 +542,7 @@ async function readPrBase(fetchPr, { repo, pr }) {
 
 // Remedies the reviewer-only refusals name (each command exists in the CLI registry; the conformance walk checks it).
 // The coordinator routes the cap-round state back to extend-cap-round-chain and this tool, so no remedy here names it.
-const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit it on the PR branch (the worktree HEAD is the PR head), then rerun the reviewer-only delta. When every open act item is a PR-body item (no file named), edit the PR body and post upsert-checkpoint-verdict.mjs --converged-json with { fixerCommit, actList, bodyOnly: true } instead (ADR 0271)";
+const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit it on the PR branch (the worktree HEAD is the PR head), then rerun the reviewer-only delta. When every open act item is a PR-body item (no file named, or remedyKind pr_body), edit the PR body and post upsert-checkpoint-verdict.mjs --converged-json with { fixerCommit, actList, bodyOnly: true } instead (ADR 0271)";
 // A locally_clear record or an extension at the baseline means the act items are cleared: the next range starts at the chain end.
 // Both render at use time so the form follows CLAUDECODE at the refusal, like the sibling call-time cliError.
 const chainEndRemedy = () => renderCliText("The cap round's act items are already cleared: run dev-loops gate extend-cap-round-chain --repo <owner/name> --pr <n> (its refusal names the reviewer-only delta and the baseline to use)");
@@ -602,12 +656,18 @@ export async function runCli(
     await roundAnglesOf(options.findingsLog, baselineSha, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target: { repo: options.repo, pr: options.pr }, route, prBase });
     if (!route.chainEnd) derivedActList = capRoundActList(log.findings, log.headSha);
   }
+  // The plan is read only when no unresolved thread exists, so a non-empty thread route never gates on --fixer-plan.
+  let threadActList = null;
+  if (options.threadsFile && !options.reviewerOnly) {
+    const threads = JSON.parse(readFileSync(options.threadsFile, "utf8"));
+    threadActList = threadsToActList(threads, { repo: options.repo, pr: options.pr });
+    if (threadActList.length === 0 && options.fixerPlan) threadActList = threadsToActList(threads, { repo: options.repo, pr: options.pr, operatorFocus: planOperatorFocus(options.fixerPlan, baselineSha, options.worktree, options.repo, options.pr) });
+  }
+  if (threadActList?.length === 0) throw new Error("threads file holds no unresolved thread and the --fixer-plan carries no operator focus round; pass the pulled --fixer-plan of an emission that had an --operator-focus-file with a round");
   const sequence = startDeltaSequence({
     reviewBaselineHead: baselineSha,
     reviewerOnly: options.reviewerOnly,
-    actList: options.reviewerOnly ? derivedActList : options.threadsFile
-      ? threadsToActList(JSON.parse(readFileSync(options.threadsFile, "utf8")), { repo: options.repo, pr: options.pr })
-      : JSON.parse(readFileSync(options.actList, "utf8")),
+    actList: options.reviewerOnly ? derivedActList : options.threadsFile ? threadActList : JSON.parse(readFileSync(options.actList, "utf8")),
   });
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: the PR head moved since the gate round reviewed it (a stray push).
   if (options.prHead && !options.reviewerOnly && revParse(options.worktree, options.prHead) !== sequence.reviewBaselineHead) {

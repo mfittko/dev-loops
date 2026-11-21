@@ -4,9 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { classifyDecisionRecorderCommand } from "../src/loop/bash-command-classify.mjs";
 import {
   BASH_GATE_RULES,
   decideBashGateDeny,
+  decideMergePrOwnerDeny,
   decideUnresolveOwnerDeny,
 } from "../src/loop/bash-gate-decisions.mjs";
 
@@ -62,6 +64,11 @@ const RULE_FIXTURES = [
     id: "COPILOT-FOLLOWUP-WAIT-TOOLS",
     facts: { ...BASE, command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 &" },
     reason: "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through a bounded FOREGROUND probe (scripts/github/probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit --timeout <seconds>; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops-run cli/index.mjs loop watch-cycle; gh run watch) — nohup/disown/tmux/screen detach, while-sleep-poll loops, and bare-`&` backgrounding of a probe/wait script are barred for the coordinator and every subagent (a backgrounded wait orphans under Claude Code, which has no async wake to join it).",
+  },
+  {
+    id: "OPERATOR-DECISION-RECORDER",
+    facts: { ...BASE, role: "developer", command: "dev-loops-run cli/index.mjs decision record --repo o/n --target pr 5 --kind accept" },
+    reason: "OPERATOR-DECISION-RECORDER: `decision record` runs only from the main agent as `dev-loops-run cli/index.mjs decision record ...` from the checkout, the plain prefix the operator's permission prompt matches. A subagent returns the needed decision in its hand-back, and the orchestrator asks the operator and runs the recorder. The `--repo-root` spelling, `node`, `bun`, the `scripts/github/record-operator-decision.mjs` path, `.claude/bin/dev-loops-run`, bare `dev-loops`, quoted or escaped words and extra whitespace are denied. If the command only quotes the recorder as data, rephrase it or move the text into a file.",
   },
   {
     id: "SUBISSUE-NO-ADHOC-BYPASS",
@@ -243,8 +250,16 @@ const ORDER_PAIRS = [
   },
   {
     earlier: "COPILOT-FOLLOWUP-WAIT-TOOLS",
+    later: "OPERATOR-DECISION-RECORDER",
+    facts: { ...BASE, role: "developer" },
+    command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & dev-loops-run cli/index.mjs decision record --kind accept",
+    laterOnly: "dev-loops-run cli/index.mjs decision record --kind accept",
+  },
+  {
+    earlier: "OPERATOR-DECISION-RECORDER",
     later: "SUBISSUE-NO-ADHOC-BYPASS",
-    command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
+    facts: { ...BASE, role: "developer" },
+    command: "dev-loops-run cli/index.mjs decision record --kind accept && gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
     laterOnly: "gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
   },
   {
@@ -301,7 +316,7 @@ const ORDER_PAIRS = [
 
 /**
  * The two INLINE denies (no registered rule id) sit INSIDE the same ordered body: the `timeout`-wrapped
- * sanctioned-command deny between COPILOT-FOLLOWUP-WAIT-TOOLS and SUBISSUE-NO-ADHOC-BYPASS, and the
+ * sanctioned-command deny between COPILOT-FOLLOWUP-WAIT-TOOLS and OPERATOR-DECISION-RECORDER, and the
  * subagent ad-hoc external-write deny between WORKTREE-NO-STASH and STOP-HUMAN-MERGE-001. The pair
  * table above is asserted to cover exactly the registered consecutive pairs, so an inline deny cannot
  * ride in it; each entry here pins its deny's PLACE with two commands: one that also trips the
@@ -318,8 +333,8 @@ const INLINE_ORDER_PAIRS = [
       command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & timeout 30 dev-loops-run cli/index.mjs gate resolve-validation",
     },
     below: {
-      id: "SUBISSUE-NO-ADHOC-BYPASS",
-      command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation && gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
+      id: "OPERATOR-DECISION-RECORDER",
+      command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation && node cli/index.mjs decision record --kind accept",
     },
   },
   {
@@ -555,4 +570,266 @@ test("a readyGate probe whose `error` is an empty string is refused naming ready
   assert.ok(decision, "an empty `error` must deny instead of degrading to 'not probed'");
   assert.equal(decision.ruleId, null);
   assert.match(decision.reason, /supplied no valid readyGate fact/);
+});
+
+const RECORDER_TAIL = "decision record --repo o/n --target pr 5 --kind accept --head x --operator-answer-file a.json --body-file b.md";
+const RECORDER_SPELLINGS = [
+  `dev-loops-run --repo-root /w cli/index.mjs ${RECORDER_TAIL}`,
+  `dev-loops-run scripts/github/record-operator-decision.mjs --repo o/n`,
+  `dev-loops-run --repo-root /w scripts/github/record-operator-decision.mjs --repo o/n`,
+  `node scripts/github/record-operator-decision.mjs --repo o/n`,
+  `bun /w/scripts/github/record-operator-decision.mjs --repo o/n`,
+  `dev-loops-run cli/index.mjs decision "record" --repo o/n`,
+  `dev-loops-run cli/index.mjs 'decision' record --repo o/n`,
+  `dev-loops-run cli/index.mjs dec""ision record --repo o/n`,
+  `dev-loops-run cli/index.mjs de\\cision record --repo o/n`,
+  "dev-loops-run cli/index.mjs decision \\\nrecord --repo o/n",
+  `dev-loops-run  cli/index.mjs ${RECORDER_TAIL}`,
+  `dev-loops-run\tcli/index.mjs ${RECORDER_TAIL}`,
+  `dev-loops-run cli/index.mjs decision  record --repo o/n`,
+  `dev-loops-run scripts/github/Record-Operator-Decision.mjs --repo o/n`,
+  `dev-loops-run scripts/github/RECORD-OPERATOR-DECISION.MJS --repo o/n`,
+  `dev-loops-run CLI/Index.mjs decision record --repo o/n`,
+  `node scripts/github/Record-Operator-Decision.mjs --repo o/n`,
+  `env node scripts/github/record-operator-decision.mjs --repo o/n`,
+  `./scripts/github/record-operator-decision.mjs --repo o/n`,
+  `node --loader ./l.mjs scripts/github/record-operator-decision.mjs --repo o/n`,
+  `dev-loops-run cli/index.mjs Decision Record --repo o/n`,
+  `cat $(node scripts/github/record-operator-decision.mjs --repo o/n)`,
+  "cat `node scripts/github/record-operator-decision.mjs --repo o/n`",
+  `diff <(node scripts/github/record-operator-decision.mjs --repo o/n) x`,
+  `git rebase -x 'node scripts/github/record-operator-decision.mjs --repo o/n' HEAD~1`,
+  `git rebase --exec 'node scripts/github/record-operator-decision.mjs --repo o/n' HEAD~1`,
+  `git bisect run node scripts/github/record-operator-decision.mjs --repo o/n`,
+  `git -c alias.r='!node scripts/github/record-operator-decision.mjs --repo o/n' r`,
+  `git -c core.pager='node scripts/github/record-operator-decision.mjs --repo o/n' log`,
+  `GIT_PAGER='node scripts/github/record-operator-decision.mjs --repo o/n' git log`,
+  `git -c diff.external='node scripts/github/record-operator-decision.mjs' diff`,
+  `git difftool --extcmd='node scripts/github/record-operator-decision.mjs' x`,
+  `rg --pre scripts/github/record-operator-decision.mjs x .`,
+];
+
+test("every non-canonical recorder spelling is denied, with and without a subagent role", () => {
+  for (const command of RECORDER_SPELLINGS) {
+    for (const role of [null, "developer"]) {
+      const decision = decideBashGateDeny({ ...BASE, role, command });
+      assert.ok(decision, `${command} (role ${role})`);
+      assert.match(decision.reason, /^OPERATOR-DECISION-RECORDER/);
+    }
+  }
+});
+
+// Issue 2500: a subagent Bash command whose raw text contains `merge-pr` is denied, `--check` included.
+const MERGE_DENY_FORMS = [
+  "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 2630 --human-approved-by mfittko",
+  "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5 --check",
+  "bun scripts/github/merge-pr.mjs --check --pr 5",
+  'node "scripts/github/merge-pr.mjs" --pr 5',
+  "node 'scripts/github/'merge-pr.mjs --pr 5",
+  "bun --check scripts/github/merge-pr.mjs",
+  "node scripts/github/merge-pr.mjs --pr 5 {fd}>&2",
+  "cat <<EOF\n$(node scripts/github/merge-pr.mjs --repo a/b --pr 5)\nEOF",
+  "bash <<EOF\nnode scripts/github/merge-pr.mjs --pr 5\nEOF",
+  'bash -c "node scripts/github/merge-pr.mjs --pr 5"',
+  'node scripts/github/merge-""pr.mjs --pr 5',
+  "node scripts/github/merge-''pr.mjs --pr 5",
+  "node scripts/github/merge\\-pr.mjs --pr 5",
+  "node scripts/github/merge-$''pr.mjs --pr 5",
+  'node scripts/github/merge-$""pr.mjs --pr 5',
+];
+
+test("any subagent role is denied a command naming merge-pr, --check included (issue 2500)", () => {
+  for (const role of ["dev-loop", "dev-loops:dev-loop", "gate-coordinator", "fixer"]) {
+    for (const command of MERGE_DENY_FORMS) {
+      const d = decideBashGateDeny({ ...BASE, role, command });
+      assert.ok(d, `${role}: ${command}`);
+      assert.equal(d.ruleId, null);
+      assert.equal(d.reason, decideMergePrOwnerDeny({ command, role }).reason);
+      assert.match(d.reason, /orchestrator/);
+    }
+  }
+});
+
+test("the canonical spelling passes for the main agent and is denied for a subagent", () => {
+  const command = `dev-loops-run cli/index.mjs ${RECORDER_TAIL}`;
+  assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null);
+  assert.match(decideBashGateDeny({ ...BASE, role: "developer", command }).reason, /^OPERATOR-DECISION-RECORDER/);
+});
+
+const SHELL_BUILT_RECORDER_SPELLINGS = [
+  `dev-loops-run cli/index.mjs decision$IFS record --repo o/n`,
+  `dev-loops-run cli/index.mjs $'decision' record --repo o/n`,
+  `dev-loops-run cli/index.mjs \${x:-decision} record --repo o/n`,
+  `dev-loops-run cli/index.mjs {decision,} record --repo o/n`,
+  `dev-loops-run cli/index.mjs $(echo decision) record --repo o/n`,
+  `dev-loops-run scripts/github/record-operator-decision.m?s --repo o/n`,
+  `dev-loops-run scripts/github/record-operator-*.mjs --repo o/n`,
+  ...["node", "bun"].flatMap((runner) => [
+    `${runner} cli/index.mjs decision$IFS record --repo o/n`,
+    `${runner} cli/index.mjs decision $'record' --repo o/n`,
+    `${runner} scripts/github/record-operator-*.mjs --repo o/n`,
+  ]),
+  `env dev-loops-run cli/index.mjs decision$IFS record --repo o/n`,
+  `command dev-loops-run scripts/github/record-operator-*.mjs --repo o/n`,
+  `exec node cli/index.mjs decision $'record' --repo o/n`,
+  `X="a b" dev-loops-run cli/index.mjs decision$IFS record --repo o/n`,
+  `node --no-warnings cli/index.mjs decision$IFS record --repo o/n`,
+  `bun run cli/index.mjs decision $'record' --repo o/n`,
+  `node --env-file=.env scripts/github/record-operator-*.mjs --repo o/n`,
+  `node --env-file .env scripts/github/record-operator-*.mjs --repo o/n`,
+  `env -u NAME dev-loops-run cli/index.mjs decision$IFS record --repo o/n`,
+  `env -C /w dev-loops-run cli/index.mjs decision$IFS record --repo o/n`,
+  `/usr/bin/env dev-loops-run cli/index.mjs decision$IFS record --repo o/n`,
+  `command -p dev-loops-run cli/index.mjs decision$IFS record --repo o/n`,
+  `node --loader ./l.mjs cli/index.mjs decision$IFS record --repo o/n`,
+  `node --experimental-loader x cli/index.mjs decision$IFS record --repo o/n`,
+  `dev-loops decision$IFS record --repo o/n`,
+  `dev-loops {decision,} record --repo o/n`,
+  `dev-loops decision $'record' --repo o/n`,
+  `dev-loops-run --repo-root "/Users/me/My Projects/repo" cli/index.mjs decision $'record' --repo o/n`,
+  `dev-loops-run --repo-root "/Users/x/My Projects/repo" scripts/github/record-operator-*.mjs --repo o/n`,
+  `dev-loops-run --repo-root "/a b"/r scripts/github/record-operator-*.mjs --repo o/n`,
+  `bun scripts/github/record-operator-decision.m?s --repo o/n`,
+  `time dev-loops-run cli/index.mjs decision$IFS record --repo o/n --target pr 5 --kind accept`,
+  `nice dev-loops-run cli/index.mjs decision$IFS record --repo o/n --target pr 5 --kind accept`,
+  `node cli/ind*.mjs decision record --repo o/n --target pr 5 --kind accept`,
+  `node cli/index.mj? decision record --repo o/n`,
+  `node cli/*.mjs decision record --repo o/n`,
+  `node $X cli/ind*.mjs decision record --repo o/n`,
+  `node $X scripts/github/record-operator-*.mjs --repo o/n`,
+  `bun cli/i*x.mjs decision record --repo o/n`,
+  `dev-loops-run cli/ind*.mjs decision record --repo o/n`,
+  `node ./cli/ind*.mjs decision record --repo o/n`,
+  `node ./cli/*.mjs decision record --repo o/n`,
+  `node /abs/repo/cli/*.mjs decision record --repo o/n`,
+  `dev-loops-run ./cli/*.mjs decision record --repo o/n`,
+  `node /Users/x/repo/cli/ind*.mjs decision record --repo o/n`,
+  `node tmp/worktrees/w/cli/i*x.mjs decision record --repo o/n`,
+  `node /abs/scripts/github/record-operator-*.mjs --repo o/n`,
+  `node ~/repo/cli/ind*.mjs decision record --repo o/n`,
+  `node $HOME/repo/cli/ind*.mjs decision record --repo o/n`,
+  `node $E decision record --repo o/n`,
+  `bun ${'$'}{E} decision record --repo o/n`,
+  `node ~/repo/scripts/github/record-operator-*.mjs --repo o/n`,
+  `dev-loops-run ./scripts/github/record-operator-*.mjs --repo o/n`,
+  `node $D/record-operator-*.mjs --repo o/n`,
+  `node scripts/github/record-operator-$S.mjs --repo o/n`,
+];
+
+test("a many-wildcard launcher word is denied in linear time", () => {
+  const command = "dev-loops-run *?*?*?*?*?*?*?*?*?*?*?*?*Z; gh pr view 5";
+  const started = Date.now();
+  const decision = decideBashGateDeny({ ...BASE, role: null, command });
+  assert.ok(Date.now() - started < 1000);
+  assert.match(decision.reason, /^OPERATOR-DECISION-RECORDER/);
+});
+
+test("quoted prose that mentions dev-loops-run and plain runner commands are not denied", () => {
+  for (const command of [
+    `git commit -m "docs: run dev-loops-run scripts/foo.mjs"`,
+    `echo "use dev-loops-run scripts/a.mjs"`,
+    `node scripts/github/validate-decision-records.mjs`,
+    `node "$SCRIPT"`,
+    `node $HOME/x.mjs`,
+    `node 'scripts/foo.mjs'`,
+    `dev-loops status`,
+    `dev-loops-run --repo-root "/Users/me/My Projects/repo" scripts/loop/startup.mjs`,
+    `dev-loops-run --repo-root /w scripts/loop/startup.mjs`,
+    `dev-loops-run --repo-root "/Users/x/My Projects/repo" scripts/github/merge-pr.mjs --repo o/n --pr 5`,
+    `bun x eslint *.mjs`,
+    `node scripts/x.mjs *.mjs`,
+    `node --no-warnings scripts/x.mjs *.mjs`,
+    `node --test *.mjs`,
+    `node cli/*.mjs gate resolve-validation`,
+    `node scripts/*/validate-decision-records.mjs`,
+    `node ~/tools/build.mjs`,
+    `node ~/tools/build.mjs $OUT`,
+    `node "$HOME/x.mjs" "$1"`,
+    `bun run test:unit $FILE`,
+    `dev-loops-run cli/index.mjs loop tmp/*`,
+    `bun test packages/core/test/*decision*`,
+  ]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
+  }
+});
+
+test("plain file commands on the recorder source are not denied, for the main agent and a subagent", () => {
+  for (const command of ["git add scripts/github/record-operator-decision.mjs", "git diff -- scripts/github/record-operator-decision.mjs", "git log -- scripts/github/record-operator-decision.mjs", "rg foo scripts/github/record-operator-decision.mjs"]) {
+    for (const role of [null, "developer"]) assert.equal(decideBashGateDeny({ ...BASE, role, command }), null, command);
+  }
+});
+
+test("plain file commands that quote the recorder cli are not denied; runner, launcher and nested-run spellings stay denied", () => {
+  for (const command of ['grep -rn "dev-loops-run cli/index.mjs decision record" skills/', 'git commit -m "feat(cli): add dev-loops decision record"', "rg -n 'dev-loops decision record' docs/"]) {
+    for (const role of [null, "developer"]) assert.equal(decideBashGateDeny({ ...BASE, role, command }), null, command);
+  }
+  for (const command of [
+    "node cli/index.mjs decision record --repo o/n",
+    "dev-loops decision record --repo o/n",
+    "dev-loops-run --repo-root /x cli/index.mjs decision record --repo o/n",
+    "git -c alias.x='!dev-loops-run cli/index.mjs decision record' x",
+    "rg --pre 'dev-loops-run cli/index.mjs decision record' x .",
+    "grep -n x f; node cli/index.mjs decision record --repo o/n",
+    "git submodule foreach 'dev-loops-run --repo-root /x cli/index.mjs decision record --repo o/n'",
+    "git grep -O'node cli/index.mjs decision record' x",
+    "git grep --open-files-in-pager='node cli/index.mjs decision record' x",
+    "git filter-branch --tree-filter 'node cli/index.mjs decision record --repo o/n' HEAD",
+    "git send-email --to-cmd='node cli/index.mjs decision record --repo o/n' x",
+    "git ls-remote --upload-pack='node cli/index.mjs decision record --repo o/n' .",
+    "git fetch --upload-pack='node cli/index.mjs decision record --repo o/n' .",
+    "git clone -u 'node cli/index.mjs decision record --repo o/n' . x",
+    "git push --receive-pack='node cli/index.mjs decision record --repo o/n' .",
+  ]) {
+    for (const role of [null, "developer"]) assert.match(decideBashGateDeny({ ...BASE, role, command })?.reason ?? "", /^OPERATOR-DECISION-RECORDER/, command);
+  }
+});
+
+test("an inline-code runner command is not classified as the recorder", () => {
+  for (const command of [`node -e "console.log(1)"`, `bun -e 'console.log(1)'`, `node -p "1+1"`, `node --eval "x"`]) {
+    assert.equal(classifyDecisionRecorderCommand(command), null, command);
+  }
+});
+
+test("a shell-built or globbed recorder word is denied, with and without a subagent role", () => {
+  for (const command of SHELL_BUILT_RECORDER_SPELLINGS) {
+    for (const role of [null, "developer"]) {
+      const decision = decideBashGateDeny({ ...BASE, role, command });
+      assert.ok(decision, `${command} (role ${role})`);
+      assert.match(decision.reason, /^OPERATOR-DECISION-RECORDER/);
+    }
+  }
+});
+
+test("scripts that only have `decision` in their name are not affected", () => {
+  for (const command of ["dev-loops-run scripts/loop/check-judge-decision.mjs --file x.json", "dev-loops-run scripts/*/validate-decision-records.mjs"]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
+  }
+});
+
+test("the canonical recorder inside a multi-segment command is denied", () => {
+  for (const command of [`eval "x; dev-loops-run cli/index.mjs ${RECORDER_TAIL}"`, `bash -c "true; dev-loops-run cli/index.mjs ${RECORDER_TAIL}"`]) {
+    assert.match(decideBashGateDeny({ ...BASE, role: null, command }).reason, /^OPERATOR-DECISION-RECORDER/, command);
+  }
+});
+
+test("the recorder deny tells a quoting command to rephrase", () => {
+  const { reason } = decideBashGateDeny({ ...BASE, role: null, command: `node scripts/github/record-operator-decision.mjs --repo o/n` });
+  assert.match(reason, /If the command only quotes the recorder as data, rephrase it or move the text into a file\./);
+});
+
+test("a subagent command naming merge-preconditions.md is allowed (issue 2500)", () => {
+  for (const command of [
+    "git add skills/docs/merge-preconditions.md",
+    "grep -n approve skills/docs/merge-preconditions.md",
+    "rg -n approve .claude/skills/docs/merge-preconditions.md",
+  ]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: "fixer", command }), null, command);
+  }
+});
+
+test("merge-pr stays open to the top-level session and an unrelated command stays allowed (issue 2500)", () => {
+  for (const command of MERGE_DENY_FORMS) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
+  }
+  assert.equal(decideBashGateDeny({ ...BASE, role: "fixer", command: "dev-loops-run scripts/github/wait-pr-checks.mjs --repo mfittko/dev-loops --pr 5" }), null);
 });
