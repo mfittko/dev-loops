@@ -164,6 +164,7 @@ async function roundStartedAtCurrentBase(options, headSha, repoRoot, base) {
 const roundCapReachedError =(round, cap) => new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs and no fixer follows. After the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`; pre_approval_gate judges what remains. When every open act item is a PR-body item, edit the PR body and run \`--converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`);
 
 const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>; on --gate review, --findings-ledger alone suffices; a draft_gate post requires --findings-ledger carrying overallVerdict while gates.draft.maxReviewRounds > 0) [--next-action <text> (required except on --gate review)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
+   or: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --gate draft_gate --post-sealed-cap-round (head, verdict and findings derive from the sealed clean cap-round ledger)
 The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin, except on --gate draft_gate while gates.draft.maxReviewRounds > 0 (GATE-EXEC-ROUND-CAP): there --findings-ledger carrying overallVerdict is the only accepted input, and --findings-json and --findings-file posts are refused (an inline clean with only --findings-summary stays accepted, as reconcile-draft-gate posts it, except at round N+1, where every post but --converged-json is refused with round_cap_reached, ADR 0208).
 Post the gate round's SINGLE visible surface: one PR review of type COMMENT whose
 body carries the checkpoint verdict fields and, with --findings-ledger, the
@@ -186,7 +187,7 @@ force a fresh review round instead.
 Required:
   --repo <owner/name>
   --pr <number>
-  --head-sha <sha>                            FULL current head commit SHA (40 or 64 hex chars) — a short prefix is rejected (with --gate draft_gate and a clean verdict, the head of a completed clean cap round that the PR head descends from is also accepted)
+  --head-sha <sha>                            FULL current head commit SHA (40 or 64 hex chars), except with --post-sealed-cap-round, which refuses it — a short prefix is rejected (with --gate draft_gate and a clean verdict, the head of a completed clean cap round that the PR head descends from is also accepted)
   --verdict <clean|findings_present|blocked>   Optional when --findings-ledger
                                             carries the consolidator's
                                             overallVerdict (the durable
@@ -200,7 +201,8 @@ Required:
                                             GATE-COMMENT-VERDICT-VALUES).
                                             Required otherwise.
   --findings-summary <text>                 Findings summary as a single argument
-                                            (use --findings-file for multi-line)
+                                            (use --findings-file for multi-line;
+                                            refused with --post-sealed-cap-round)
   --findings-file <path>                    Read findings summary from file;
                                             alternative to --findings-summary.
                                             Refused on draft_gate while
@@ -414,6 +416,16 @@ Optional:
                                             hatch when a correction needs a new
                                             inline comment a submitted review
                                             cannot carry.
+  --post-sealed-cap-round                   Requires --gate draft_gate. Post the
+                                            sealed CLEAN cap-round verdict that
+                                            was never posted: head, verdict,
+                                            findings ledger and mode all derive
+                                            from the sealed ledger, so --head-sha,
+                                            --verdict, --findings-*,
+                                            --next-action, --execution-mode,
+                                            --inline-reason and --converged-json
+                                            are not passed. Refuses
+                                            when no sealed clean cap round exists.
   --auto                                   Headless/non-interactive run (mirrors
                                             scripts/projects/add-queue-item.mjs's
                                             --auto). Only meaningful together with
@@ -740,6 +752,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       "size-budget-json": { type: "string" },
       submit: { type: "string" },
       "new-round": { type: "boolean" },
+      "post-sealed-cap-round": { type: "boolean" },
       auto: { type: "boolean" },
       "interactive-confirm": { type: "boolean" },
       "spec-authority": { type: "string" },
@@ -773,6 +786,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     sizeBudgetJson: undefined,
     submit: undefined,
     newRound: false,
+    postSealedCapRound: false,
     auto: false,
     interactiveConfirm: false,
     specAuthority: undefined,
@@ -932,6 +946,10 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       options.newRound = true;
       continue;
     }
+    if (token.name === "post-sealed-cap-round") {
+      options.postSealedCapRound = true;
+      continue;
+    }
     if (token.name === "auto") {
       options.auto = true;
       continue;
@@ -969,11 +987,19 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   // Default execution mode to inline_single_agent when omitted. inlineReason is
   // only meaningful for inline mode; drop it for fanout_fanin to avoid recording
   // a misleading reason.
+  // The sealed cap-round ledger supplies head, verdict, findings and mode at run time (a cap-round ledger is fan-out).
+  if (options.postSealedCapRound) {
+    if (options.gate !== "draft_gate") throw parseError("--post-sealed-cap-round requires --gate draft_gate");
+    // The sealed ledger supplies these; a caller-supplied value would be silently replaced or passed through.
+    const supplied = ["headSha", "verdict", "findingsJson", "findingsFile", "findingsLedger", "findingsSummary", "findingsSeverityCounts", "nextAction", "executionMode", "inlineReason", "convergedJson"].filter((key) => options[key] !== undefined);
+    if (supplied.length > 0) throw parseError(`--post-sealed-cap-round derives head, verdict, findings, next action and execution mode from the sealed ledger; do not pass ${supplied.join(", ")}`);
+    options.executionMode = "fanout_fanin";
+  }
   options.executionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
   if (options.executionMode !== "inline_single_agent") {
     options.inlineReason = undefined;
   }
-  const missing = ["repo", "pr", "headSha", "verdict", "findingsSummary", ...(options.gate === "review" ? [] : ["nextAction"])]
+  const missing = ["repo", "pr", ...(options.postSealedCapRound ? [] : ["headSha", "verdict", "findingsSummary"]), ...(options.gate === "review" || options.postSealedCapRound ? [] : ["nextAction"])]
     .filter((key) => options[key] === undefined);
   // --findings-file and --findings-json (and --findings-ledger on --gate review)
   // each provide the findings body, so any of them satisfies the findingsSummary requirement.
@@ -2762,6 +2788,18 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   if (Array.isArray(configErrors) && configErrors.length > 0) {
     throw new Error(`This worktree's config (repoRoot ${JSON.stringify(repoRoot)}) could not be fully loaded/validated; refusing to post a gate verdict: ${JSON.stringify(configErrors)}`);
   }
+  // --post-sealed-cap-round: derive the post from the sealed clean cap-round ledger, then take the cap-round catch-up path below.
+  if (options.postSealedCapRound) {
+    const { headRefOid } = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], { env, ghCommand, runChild });
+    const capRound = await resolveCapRound({ repo: options.repo, pr: options.pr, headSha: headRefOid }, { repoRoot });
+    if (!isCleanCapRound(capRound)) throw new Error(`--post-sealed-cap-round: ${options.repo}#${options.pr} has no sealed clean draft_gate cap round at ${headRefOid} to post (the cap round is missing, unreadable or has act items).`);
+    const findings = capRound.log.findings ?? [];
+    const n = findings.length;
+    // A clean cap round holds no open act item, so the unresolved severity counts the clean floor reads are the act items per severity (zero).
+    const findingsSeverityCounts = { high: 0, medium: 0, low: 0, question: 0, nit: 0 };
+    for (const f of listOpenActItems(findings)) findingsSeverityCounts[normalizeSeverity(f.severity)] = (findingsSeverityCounts[normalizeSeverity(f.severity)] ?? 0) + 1;
+    options = { ...options, headSha: capRound.log.headSha, findingsLedger: capRound.ledgerPath, nextAction: "mark ready for review", findingsSummary: `${n} ${n === 1 ? "finding" : "findings"} from the findings ledger.`, findingsSeverityCounts };
+  }
   // Root cause 1: allow resurrected sessions to claim ownership when the previous
   // run's coordination record is stale. Without this, a new run ID is rejected even
   // though the old run is dead, forcing manual file deletion.
@@ -3006,7 +3044,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       // Proceed with the default (external Copilot review) mode.
     }
     // ADR 0208: the same cap-round-fixed proof the detector resolves, so a ready cap-fixed PR can enter pre_approval_gate; fail closed on error.
-    const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact({ ...coordinationContext, repo: options.repo, pr: options.pr }, { repoRoot });
+    const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact({ ...coordinationContext, repo: options.repo, pr: options.pr }, { repoRoot, requirePostedCleanCap: !(options.postSealedCapRound || capRoundHead), trustRuntime: { env, ghCommand, runChild } });
     coordination = evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
       draftCapRoundFixed,
       draftCapRoundFailure,

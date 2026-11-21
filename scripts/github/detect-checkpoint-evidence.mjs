@@ -22,7 +22,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
-import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "./_gate-finding-surface.mjs";
+import { countUnresolvedGateAuthoredThreadsFromRawNodes, draftGatePostedHeads } from "./_gate-finding-surface.mjs";
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
@@ -32,7 +32,7 @@ import { FANOUT_UNAVAILABLE_MESSAGE, JUDGE_DISPOSITIONS, VALID_SEVERITIES, check
 import { detectMergeBaseChangedFiles } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { resolveCapRoundFixed } from "./write-gate-context.mjs";
+import { cleanCapVerdictUnposted, resolveCapRoundFixed } from "./write-gate-context.mjs";
 import { buildGateContextPath } from "./_gate-artifact-paths.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { crossCheckRoundFromReviewBodies, normalizePrReviewsPayload, resolveTrustedEvidencePredicate, parseFindingMarker, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
@@ -1364,6 +1364,8 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     reviewsReadFailed,
     // The cap round when any posted draft_gate review header carries it (a later post-cap header does not mask it), else null (GitHub-visible; no tmp record).
     capRoundNumber: (() => { const cap = resolveGateConfig(config, "draft").maxReviewRounds ?? 0; return prReviews.some((r) => isCapRound(crossCheckRoundFromReviewBodies([r.body], "draft_gate"), cap)) ? cap : null; })(),
+    // Posted draft_gate review heads from the same trusted-evidence set the coordinator and ready-for-review read (association or the authenticated viewer).
+    draftGatePostedHeads: draftGatePostedHeads(allComments.map((e) => e?.body)),
     fanoutEnforcement,
     ...(runnerOwnership.status !== "skipped_no_async_run_id" ? { runnerOwnership } : {}),
     staleRunner: {
@@ -1408,7 +1410,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
  * same fact.
  */
 export async function detectCheckpointEvidence(options, ctx) {
-  const { reviews: _reviews, comments: _comments, capRoundNumber: _capRoundNumber, ...publicResult } = await gatherCheckpointEvidenceRaw(options, ctx);
+  const { reviews: _reviews, comments: _comments, capRoundNumber: _capRoundNumber, draftGatePostedHeads: _draftGatePostedHeads, ...publicResult } = await gatherCheckpointEvidenceRaw(options, ctx);
   if (typeof ctx?.unresolvedGateThreadCount === "number") {
     publicResult.draftGateSatisfied = publicResult.draftGateSatisfied && ctx.unresolvedGateThreadCount === 0;
   }
@@ -1489,8 +1491,11 @@ async function main() {
     };
     // The proof is read only when no clean draft_gate comment is visible and the caller named the base branch.
     const draftClean = result.draftGate.visible && result.draftGate.verdict === "clean";
-    const capRoundFixed = !draftClean && (githubCapFixed || (Boolean(options.baseRefName)
-      && Boolean(await resolveCapRoundFixed({ repo: result.repo, pr: result.pr, headSha: result.currentHeadSha, baseRefName: options.baseRefName, anyHead: true }, { repoRoot: resolveRepoRoot(process.cwd()) }).catch(() => null))));
+    // A clean cap round proven only by its local ledger is no evidence: its draft_gate verdict must be posted by a trusted author.
+    const localCapRound = !draftClean && !githubCapFixed && options.baseRefName
+      ? await resolveCapRoundFixed({ repo: result.repo, pr: result.pr, headSha: result.currentHeadSha, baseRefName: options.baseRefName, anyHead: true }, { repoRoot: resolveRepoRoot(process.cwd()) }).catch(() => null)
+      : null;
+    const capRoundFixed = !draftClean && (githubCapFixed || (Boolean(localCapRound) && !cleanCapVerdictUnposted(localCapRound, result.draftGatePostedHeads)));
     // Without --patch-id (the CI path) the detector derives it itself when the head contains origin/<base> (ADR 0279); any git error leaves head-only matching.
     const patchId = options.patchId ?? (options.baseRefName
       ? computePatchIdWhenIntegrated({ base: `origin/${options.baseRefName}`, head: result.currentHeadSha, repoRoot: resolveRepoRoot(process.cwd()) })
@@ -1503,7 +1508,7 @@ async function main() {
     // consumer (merge-pr.mjs reads only preMergeGateCheck.failures), so they
     // are excluded here to keep emitted output bounded regardless of how many
     // comments the PR has accumulated.
-    const { reviews: _reviews, comments: _comments, capRoundNumber: _capRoundNumber, ...serializableResult } = result;
+    const { reviews: _reviews, comments: _comments, capRoundNumber: _capRoundNumber, draftGatePostedHeads: _draftGatePostedHeads, ...serializableResult } = result;
     const output = { ...serializableResult, preMergeGateCheck, staleRunnerCheck, evidenceState, ...(skippedUntrusted.length > 0 ? { skippedUntrusted } : {}) };
     if (!preMergeGateCheck.ok) {
       process.stderr.write(`${JSON.stringify({

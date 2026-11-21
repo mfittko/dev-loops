@@ -59,7 +59,7 @@ import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContextReusingSnapshot
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
-import { fingerprintFinding } from "./_gate-finding-surface.mjs";
+import { draftGatePostedHeads, fingerprintFinding, resolveTrustedEvidencePredicate } from "./_gate-finding-surface.mjs";
 import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -115,20 +115,35 @@ export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied
 
 /**
  * The one cap-round-fixed fact of a PR coordination context (issue 3139): `{ capRoundFixed, failure }`, `failure` the typed `resolveCapRoundFixed` `onFailure` condition
- * (`cap_round_unresolved` on a throw or a cap reached with an unreadable ledger; a PR below the cap reports `failure: null`). The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
+ * (`cap_round_unresolved` on a throw or a cap reached with an unreadable ledger; a PR below the cap reports `failure: null`), or `clean_cap_verdict_unposted` for a clean cap round with no posted draft_gate review at its head (read from `prData.reviews`, trusted authors only).
+ * `requirePostedCleanCap` (default true) turns that posted-verdict check off; `trustRuntime` is the runtime the trusted-evidence predicate reads. The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
  * A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
- * @param {{ repo: string, pr: number, currentHeadSha: string, prData?: { isDraft?: boolean, baseRefName?: string } }} context
+ * @param {{ repo: string, pr: number, currentHeadSha: string, prData?: { isDraft?: boolean, baseRefName?: string, reviews?: object[] } }} context
  */
-export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = resolveCapRoundFixed }) {
+export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = resolveCapRoundFixed, requirePostedCleanCap = true, trustRuntime = {} }) {
   let failure = null;
   const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
-  const capRoundFixed = await resolve(
+  const capRound = await resolve(
     { repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName, anyHead: context.prData?.isDraft !== true },
     // `resolveCapRoundFixed` reports no_cap_round below the round cap, the normal state: that is no failure. A cap reached with an unresolvable ledger (cap_round_unresolved) or a thrown resolver error is.
     { repoRoot, onFailure: (condition) => { if (condition !== "no_cap_round") failure = condition; } },
-  ).then(Boolean, () => { failure = "cap_round_unresolved"; return false; });
-  return { capRoundFixed, failure };
+  ).catch(() => { failure = "cap_round_unresolved"; return null; });
+  // A clean cap round has no fixer pass: only its posted review is visible to CI, so a ledger-only proof is no clean draft_gate evidence.
+  // Absent reviews and untrusted authors prove nothing (fail closed), matching the detector and ready-for-review.
+  if (capRound && requirePostedCleanCap && isCleanCapRound(capRound)) {
+    // `gh pr view --json reviews` carries camelCase `author`/`authorAssociation`; the trust predicate reads the REST shape.
+    const restShaped = (Array.isArray(context.prData?.reviews) ? context.prData.reviews : []).map((r) => ({ body: r?.body, user: { login: r?.author?.login, type: r?.author?.type }, author_association: r?.authorAssociation }));
+    const isTrusted = await resolveTrustedEvidencePredicate(restShaped, trustRuntime);
+    if (cleanCapVerdictUnposted(capRound, draftGatePostedHeads(restShaped.filter(isTrusted).map((r) => r.body)))) return { capRoundFixed: false, failure: "clean_cap_verdict_unposted" };
+  }
+  return { capRoundFixed: Boolean(capRound), failure };
 }
+
+/** True when `capRound` is a clean cap round (ADR 0250) with no posted draft_gate header (`{ head, round }`) at its head and cap round: the proof then lives in a local ledger only. */
+export const cleanCapVerdictUnposted = (capRound, postedHeads) => {
+  const head = String(capRound?.log?.headSha ?? "").toLowerCase();
+  return isCleanCapRound(capRound) && !postedHeads.some((posted) => head.startsWith(posted.head) && posted.round === capRound.round);
+};
 
 // Map the artifact gate name (draft_gate | pre_approval_gate) to the config
 // gate key understood by resolveGateAnglesDynamic (draft | preApproval).
@@ -2227,7 +2242,7 @@ export async function resolveCapRound(options, { repoRoot, onFailClosed = () => 
   const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => (isOpenActItem(f) && !isFixed(f)) || f?.capClosed).map((f) => ({
     fingerprint: fingerprintFinding(f), file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary, disposition: isOpenActItem(f) ? "act" : "cap_closed",
   }));
-  return { log, residue, ledgerPath: picked.ledgerPath };
+  return { log, residue, ledgerPath: picked.ledgerPath, round: cap };
 }
 
 // A head is a path segment of the record lookup: only a 40 or 64 character hex SHA (after trim and lowercase) is looked up or compared.
@@ -4318,7 +4333,7 @@ export async function main(
         // A ready PR whose cap round is fixed holds no clean draft verdict: the sealed proof stands in for it, so pre_approval_gate can build its context.
         const evidenceSatisfied = isCleanDraftVerdict(draftVerdict);
         const { capRoundFixed, failure: capRoundFailure } = coordination.prData?.isDraft === false && !evidenceSatisfied
-          ? await resolveDraftCapRoundFact({ ...coordination, repo: options.repo, pr: options.pr }, { repoRoot, resolve: resolveCapRoundFixedSeam })
+          ? await resolveDraftCapRoundFact({ ...coordination, repo: options.repo, pr: options.pr }, { repoRoot, resolve: resolveCapRoundFixedSeam, trustRuntime: { env, runChild: run } })
           : { capRoundFixed: false, failure: null };
         const refusal = prematureGateOrderingRefusal({
           gate: options.gate,
