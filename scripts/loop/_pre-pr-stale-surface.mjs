@@ -28,9 +28,8 @@ function readIssueBodyFromGitHub({ cwd, issue }) {
  * Scan `merge-base(base, HEAD)..HEAD` and, with a linked issue, compare the PR body file with the issue body.
  * Any git or read error throws (fail closed).
  */
-export async function scanPrePrStaleSurface({ cwd, base, bodyFile, issue, staleSurface = gitStaleSurfaceHits, readIssueBody = readIssueBodyFromGitHub }) {
-  const head = git(cwd, ["rev-parse", "HEAD"]);
-  const baseline = git(cwd, ["merge-base", base, "HEAD"]);
+export async function scanPrePrStaleSurface({ cwd, base, bodyFile, issue, staleSurface = gitStaleSurfaceHits, readIssueBody = readIssueBodyFromGitHub, head = git(cwd, ["rev-parse", "HEAD"]) }) {
+  const baseline = git(cwd, ["merge-base", base, head]);
   if (baseline === head) throw new Error(`empty scan range: merge-base of ${base} and HEAD is HEAD, nothing to scan (PRE-PR-STALE-SURFACE-SWEEP fails closed)`);
   const found = staleSurface(cwd, baseline, head);
   const staleSurfaceHits = [...found.hits];
