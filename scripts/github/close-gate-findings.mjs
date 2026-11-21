@@ -23,11 +23,12 @@ import {
   resolveGateRound,
 } from "./_gate-finding-surface.mjs";
 import { replyAndMaybeResolve } from "./_review-thread-mutations.mjs";
-import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateConfig, resolveTrackerProvider } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY, isOpenActItem } from "@dev-loops/core/loop/gate-fanin";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
+import { prBodySha256, readGateContext, readReviewedBodySha256 } from "./write-gate-context.mjs";
 
 const USAGE = `Usage: close-gate-findings.mjs --ledger <findings-log path> [--tmp-root <dir>]
 Run a closed gate round's THREAD DISPOSITION pass. This helper posts NO review of
@@ -42,8 +43,8 @@ current-ledger duplicate-fingerprint entries that disagree or prior ledgers
 that disagree, also skips) is never
 selected, at any severity and round (ADR 0089): it gets no
 stamp, no reply, no resolve, and no deferral entry, and stays open until the fixer
-replies with the fixing commit or a decline reason and resolves it. Two exceptions: (1) a thread whose markers are all judge \`act\`
-with remedyKind evidence_only is closed with an evidence-only reply (evidenceOnlyClosed); (2) a nit member
+replies with the fixing commit or a decline reason and resolves it. Three exceptions: (1) a thread whose markers are all judge \`act\`
+with remedyKind evidence_only is closed with an evidence-only reply (evidenceOnlyClosed); (2) a thread whose markers are all judge \`act\` with remedyKind pr_body is closed with a reply citing the PR-body change by its two digest prefixes (no commit) once the live PR body digest differs from the digest the disposing ledger recorded (else the gate context's digest at each marker's verdict head) (prBodyActClosed; an unchanged digest leaves it open; for a ledger with no recorded digest, a missing, unreadable or ambiguous context digest, a context rebuilt at the same head, a digest found only in a non-reviewed checkout or an unknown verdict head records body_read_unrecorded; a failed live body read records body_read_failed, both in dispositionFailures); (3) a nit member
 of a judge-deferred mixed cluster closes with the cluster rationale ("Closed at gate close"),
 with no stamp and no filing. Otherwise only a thread whose every marker the judge
 disposed \`defer\` is replied-to + resolved ("deferred at gate close"), whatever its
@@ -116,11 +117,12 @@ Output (stdout, JSON):
   { "ok": true, "repo": "...", "pr": 42, "gate": "...", "headSha": "...", "round": N,
     "deferredResolved": <threads the judge deferred, plus nit members of a judge-deferred cluster, reply+resolved this pass; 0 when none qualify>,
     "evidenceOnlyClosed": <threads whose every marker is a judge act with remedyKind evidence_only, reply+resolved with no stamp and no filing; 0 when none qualify>,
+    "prBodyActClosed": <threads whose every marker is a judge act with remedyKind pr_body, reply+resolved with no stamp and no filing because the live PR body digest differs from the digest recorded at the verdict head; 0 when none qualify>,
     "rejectClosed": <answered, judge-rejected question threads and judge-rejected medium/low/nit defect threads reply+resolved this pass (ADR 0088, 0144); 0 when none qualify>,
-    "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer, reject-close and evidence-only passes; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585); folded findings (#2263) never create a thread, so they never enter this count>,
+    "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer, reject-close, evidence-only and PR-body act passes; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585); folded findings (#2263) never create a thread, so they never enter this count>,
     "foldedFiled": <#2263: folded (below gates.<gate>.inlineSeverityFloor) non-nit findings the judge disposed defer, newly listed in the deferral comment this pass, from the ledger directly (they carry no thread of their own); on a PR target no comment is posted and it counts the folded entries recorded in the verdict body's Details block under any group (Deferred, Rejected or Not judged; only a Deferred-group marker carries issue=<pr>); a nit is never filed>,
     "followUpIssueNumber"?: <the deferral target number (the linked spec issue the comment goes to, or the PR itself, which gets no comment); present when the round had a fileable thread target OR a fileable folded finding>,
-    "dispositionFailures"?: [ { "commentId": ..., "threadId": "...", "severity": "...", "angle": "...", "error": "..." } ] <present only when a target's reply could not be built/posted; that thread stays unresolved rather than deadlocking the batch (#1882)> }
+    "dispositionFailures"?: [ { "commentId": ..., "threadId": "...", "severity": "...", "angle": "...", "error": "..." } ] <present only when a target's reply could not be built/posted, or a PR-body act candidate's recorded or live PR body digest could not be read (body_read_unrecorded, body_read_failed); that thread stays unresolved rather than deadlocking the batch (#1882)> }
 
 ${JQ_OUTPUT_USAGE}
 Exit codes:
@@ -573,7 +575,7 @@ function findingFingerprintMatches(finding, fp) {
 // ambiguity tier 2 already flagged would reject-close a thread that this
 // pass cannot actually resolve on the merits. A plain `null` (no matching
 // prior ledger at all) is a genuine cache miss and still falls through.
-async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate, headSha, tmpRoot, repoRoot, allowRendered = true }) {
+async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate, headSha, tmpRoot, repoRoot, allowRendered = true, currentBodySha256 = null }) {
   // Fingerprint match FIRST, independent of whether judgeDisposition is
   // present — a current-ledger finding this round already knows about (by
   // fingerprint) is never a tier-2/3 cache miss, even when the judge hasn't
@@ -605,8 +607,8 @@ async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate,
       ? current.judgeRationale.trim()
       : null;
     const reason = typeof current.judgeReason === "string" && current.judgeReason.trim().length > 0 ? current.judgeReason.trim() : null;
-    const remedyKind = currentMatches.every((f) => f.remedyKind === "evidence_only") ? "evidence_only" : null;
-    return { disposition: dispositions[0], rationale, reason, ...(remedyKind ? { remedyKind } : {}) };
+    const remedyKind = ["evidence_only", "pr_body"].find((kind) => currentMatches.every((f) => f.remedyKind === kind)) ?? null;
+    return { disposition: dispositions[0], rationale, reason, headSha, ...(currentBodySha256 ? { bodySha256: currentBodySha256 } : {}), ...(remedyKind ? { remedyKind } : {}) };
   }
   const prior = await findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp });
   if (prior?.ambiguous) return null;
@@ -621,20 +623,23 @@ async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate,
 // disposition only when EVERY finding marker on its root (a merged inline comment carries one
 // per member) resolves to it. Returns the primary marker's judgement (it supplies the closing
 // rationale), else null so the thread stays open.
-async function resolveThreadDisposition(wanted, { fp, threadBody, ...rest }) {
+async function resolveThreadDisposition(wanted, { fp, threadBody, remedyKind = "evidence_only", ...rest }) {
   const fps = new Set([fp]);
   collectFingerprints(threadBody, fps);
   let primary = null;
+  const verdicts = new Map(); // One entry per distinct head and ledger-recorded digest.
   for (const memberFp of fps) {
     // The rendered header suffix (tier 3) carries only the primary's disposition, so a
     // non-primary member never reads it: with no ledger evidence the thread stays open.
     const judgement = await resolveJudgeRejection({ fp: memberFp, threadBody: memberFp === fp ? threadBody : "", allowRendered: wanted !== "defer", ...rest });
     if (judgement?.disposition !== wanted) return null;
-    // An act owns a closing thread only as an evidence-only remedy; any open act keeps the thread open.
-    if (wanted === "act" && judgement.remedyKind !== "evidence_only") return null;
+    // An act owns a closing thread only as the wanted remedy (evidence-only by default); any open act keeps the thread open.
+    if (wanted === "act" && judgement.remedyKind !== remedyKind) return null;
+    // An empty head marks a marker with no recorded verdict head; a null digest marks a ledger that recorded none.
+    verdicts.set(`${judgement.headSha ?? ""} ${judgement.bodySha256 ?? ""}`, { head: judgement.headSha ?? "", digest: judgement.bodySha256 ?? null });
     primary ??= judgement;
   }
-  return primary;
+  return primary && { ...primary, verdicts: [...verdicts.values()] };
 }
 
 // True when ledger evidence for any marker on the thread carries a disposition other than defer.
@@ -686,6 +691,75 @@ async function runEvidenceOnlyClosePass({ repo, pr, gate, headSha, round, thread
     }
   }
   return { evidenceOnlyClosed, dispositionFailures };
+}
+
+// The gate context sits in the reviewed worktree while the ledger sits in the main checkout. repoRoot is the reviewed worktree, so
+// readReviewedBodySha256 keeps its guard: a digest found only in another checkout belongs to an earlier same-head round and fails closed.
+async function readRecordedBodyDigest(options, verdictHead, repoRoot) {
+  try {
+    const digest = await readReviewedBodySha256(options, verdictHead, repoRoot);
+    if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) return null;
+    // A later same-head build rewrites the pr-body read with the edited body while the sticky baseline keeps the first body, so a differing baseline means the disposing round's body is unknown.
+    const baseline = (await readGateContext({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: verdictHead }, { repoRoot }).catch(() => null))?.prBodyBaselineSha256;
+    if (typeof baseline === "string" && baseline !== digest) throw new Error(`body_read_unrecorded: the context at ${verdictHead} was rebuilt at the same head (its sticky baseline ${baseline.slice(0, 12)} differs from its pr-body read ${digest.slice(0, 12)}), so the disposing round's body is unknown`);
+    return digest;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`${message.replace(/,? or fix the items with a commit/, "")}; rerun close-gate-findings from the reviewed worktree or escalate`);
+  }
+}
+
+// PR-body act close (GATE-EXEC-THREAD-DISPOSITION): a gate-authored thread whose every marker the judge disposed `act`
+// with remedyKind pr_body closes once the live PR body digest differs from the pr-body digest the gate context recorded at
+// that marker's verdict head. The changed digest is the evidence (ADR 0271); the reply cites both digests and no commit.
+// An unchanged digest leaves the thread open silently; an unrecorded or unreadable baseline fails closed in dispositionFailures.
+async function runPrBodyActClosePass({ repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, ledgerPath, currentBodySha256 = null, allowedRefs = [] }, { env, ghCommand, runChild }) {
+  let prBodyActClosed = 0;
+  const dispositionFailures = [];
+  let liveDigest;
+  let liveFailure = null; // A failed live read is cached once per run and recorded for each candidate.
+  for (const thread of threads) {
+    if (thread.isResolved || thread.author !== login) continue;
+    const marker = parseFindingMarker(thread.body);
+    if (!marker) continue;
+    const failure = (error) => dispositionFailures.push({ commentId: thread.commentId, threadId: thread.threadId, severity: marker.severity, angle: marker.angle, error: error instanceof Error ? error.message : String(error) });
+    try {
+      const judgement = await resolveThreadDisposition("act", { fp: marker.fp, threadBody: thread.body, remedyKind: "pr_body", findings, repo, pr, gate, headSha, tmpRoot, repoRoot, currentBodySha256 });
+      if (!judgement) continue;
+      if (!Number.isInteger(thread.commentId) || thread.commentId <= 0) {
+        failure(`PR-body act thread ${thread.threadId} has no valid root commentId (${String(thread.commentId)}); left open`);
+        continue;
+      }
+      const recorded = [];
+      for (const { head: verdictHead, digest: ledgerDigest } of judgement.verdicts) {
+        // The disposing ledger's own digest wins; the context path (with its fail-closed refusals) serves only a ledger that recorded none.
+        const digest = ledgerDigest ?? (verdictHead ? await readRecordedBodyDigest({ repo, pr, gate, findingsLedger: ledgerPath }, verdictHead, repoRoot) : null);
+        if (!digest) throw new Error(`body_read_unrecorded: no pr-body digest is recorded for the verdict head of thread ${thread.threadId} (${verdictHead || "unknown head"}); left open`);
+        recorded.push(digest);
+      }
+      if (liveFailure) throw new Error(liveFailure);
+      if (liveDigest === undefined) {
+        try {
+          liveDigest = prBodySha256((await runGhJson(["pr", "view", String(pr), "--repo", repo, "--json", "body"], { env, ghCommand, runChild })).body);
+        } catch (err) {
+          liveFailure = `body_read_failed: ${err instanceof Error ? err.message : String(err)}`;
+          throw new Error(liveFailure);
+        }
+      }
+      if (recorded.includes(liveDigest)) continue; // The body edit is not applied yet.
+      const summary = escapeProse(extractFindingSummary(thread.body)).replace(/"/g, "'");
+      const was = [...new Set(recorded)].map((d) => d.slice(0, 12)).join(", ");
+      const message = `${GATE_REJECT_CLOSE_REPLY_PREFIX}round ${round}, fingerprint ${marker.fp}, severity ${marker.severity}, angle ${marker.angle}): Examined on merits: "${summary}" was accepted by the judge with a PR-body remedy, and the PR body changed after the verdict (digest ${was} to ${liveDigest.slice(0, 12)}), so no file change applies.`;
+      await replyAndMaybeResolve(
+        { repo, pr, commentId: thread.commentId, threadId: thread.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
+        { env, ghCommand, runChild },
+      );
+      prBodyActClosed += 1;
+    } catch (err) {
+      failure(err);
+    }
+  }
+  return { prBodyActClosed, dispositionFailures };
 }
 
 const NO_JUDGE_RATIONALE_TEXT = "the judge rejected this finding on its merits; no rationale text is recorded for it";
@@ -841,7 +915,7 @@ export function parseCloseGateFindingsCliArgs(argv) {
 // ---------------------------------------------------------------------------
 
 export async function closeGateFindings(options, { env = process.env, ghCommand = "gh", runChild, repoRoot = process.cwd() } = {}) {
-  const { repo, pr, gate, headSha, findings } = await readGateFindingsLedger(options.ledgerPath, { errorFactory: parseError });
+  const { repo, pr, gate, headSha, findings, prBodySha256: ledgerBodySha256 } = await readGateFindingsLedger(options.ledgerPath, { errorFactory: parseError });
   // The findings-log ledger (resolveGateRound's local-count cross-check) is
   // anchored at the MAIN worktree; default there so a close running
   // inside a linked worktree still counts the centralized prior-round ledgers.
@@ -918,10 +992,14 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // so (GATE-EXEC-FINDING-THREADS). rejectClosed (ADR 0088) subtracts the same
   // way deferredResolved does: both passes reply+resolve a thread this count
   // would otherwise still include.
-  const unresolvedGateThreadCount = countUnresolvedGateAuthoredThreads(threads, login) - deferredResolved - rejectClosed - evidenceOnlyClosed;
-  const combinedDispositionFailures = [...(dispositionFailures ?? []), ...(rejectCloseFailures ?? []), ...evidenceOnlyFailures];
+  const { prBodyActClosed, dispositionFailures: prBodyActFailures } = await runPrBodyActClosePass(
+    { repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, ledgerPath: options.ledgerPath, currentBodySha256: ledgerBodySha256, allowedRefs: options.allowedRefs ?? [] },
+    gh,
+  );
+  const unresolvedGateThreadCount = countUnresolvedGateAuthoredThreads(threads, login) - deferredResolved - rejectClosed - evidenceOnlyClosed - prBodyActClosed;
+  const combinedDispositionFailures = [...(dispositionFailures ?? []), ...(rejectCloseFailures ?? []), ...evidenceOnlyFailures, ...prBodyActFailures];
 
-  const result = { ok: true, repo, pr, gate, headSha, round, deferredResolved, rejectClosed, evidenceOnlyClosed, unresolvedGateThreadCount, foldedFiled };
+  const result = { ok: true, repo, pr, gate, headSha, round, deferredResolved, rejectClosed, evidenceOnlyClosed, prBodyActClosed, unresolvedGateThreadCount, foldedFiled };
   // GATE-EXEC-DEFERRAL-RECORD: only present when the round had a fileable
   // deferral — the number of the comment target (linked spec issue or PR).
   if (followUpIssueNumber !== undefined) {

@@ -68,7 +68,7 @@ import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import { countPrOwnCommits as realCountPrOwnCommits } from "../loop/check-pre-push-delta.mjs";
 import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
-import { buildValidationResultsPath, countCompletedRounds, buildGateContextPath, isCleanCapRound, prBodySha256, readGateContext, resolveCapRound, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
+import { buildValidationResultsPath, countCompletedRounds, isCleanCapRound, ledgerTmpRoot, prBodySha256, readGateContext, readReviewedBodySha256, resolveCapRound, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
@@ -146,40 +146,6 @@ const REMOVED_FLAGS = new Set([
   "--force",
   "--force-reason",
 ]);
-// The writer's --tmp-root of a ledger at <root>/gate-findings/<slug>/pr-N/<file>; undefined for any other layout (default root).
-function ledgerTmpRoot(ledgerPath) {
-  if (!ledgerPath) return undefined;
-  const parts = path.resolve(ledgerPath).split(path.sep);
-  return parts.length > 4 && parts.at(-4) === "gate-findings" && /^pr-\d+$/.test(parts.at(-2)) ? parts.slice(0, -4).join(path.sep) || path.sep : undefined;
-}
-
-// The pr-body digest the cap round's context recorded. write-gate-context.mjs writes the context under the reviewed worktree's tmp/,
-// while the ledger sits under the main checkout's tmp/, so every checkout's tmp/ and --context-tmp-root come first and the ledger root is the fallback.
-async function readReviewedBodySha256(options, headSha, repoRoot) {
-  const id = { repo: options.repo, pr: options.pr, gate: options.gate, headSha };
-  // Every root is read: a same-head earlier round under another root can hold an older digest, so disagreeing digests refuse.
-  const found = new Map();
-  // The cap round's own context sits in the reviewed worktree (the first checkout); a digest found only elsewhere is an earlier round's and never stands alone.
-  let reviewedWorktreeHasContext = false;
-  for (const [t, tmpRoot] of [options.contextTmpRoot, undefined, ledgerTmpRoot(options.findingsLedger)].entries()) {
-    for (const [i, root] of resolveLedgerCheckouts(repoRoot).entries()) {
-      const file = path.resolve(root, buildGateContextPath({ ...id, tmpRoot: tmpRoot || "tmp" }));
-      // A strict read: only a missing context is absent. A truncated or unreadable one refuses, so a stale same-head digest cannot stand alone.
-      const context = await readGateContext({ ...id, tmpRoot }, { repoRoot: root }).catch((err) => {
-        throw new Error(`body_read_unrecorded: the context ${file} cannot be read (${err instanceof Error ? err.message : String(err)}); remove or repair it, or fix the items with a commit`);
-      });
-      const sha = Array.isArray(context?.requiredReads) ? context.requiredReads.find((r) => r?.kind === "pr-body")?.sha256 : null;
-      if (typeof sha === "string" && sha) {
-        found.set(file, sha);
-        if (i === 0 && t < 2) reviewedWorktreeHasContext = true;
-      }
-    }
-  }
-  if (found.size && !reviewedWorktreeHasContext) throw new Error(`body_read_unrecorded: the reviewed worktree holds no context at ${headSha}, so the cap round's reviewed body is unknown; the only digests found belong to other checkouts (${[...found.keys()].join(", ")}). Rebuild the cap round's context or fix the items with a commit`);
-  if (new Set(found.values()).size > 1) throw new Error(`body_read_unrecorded: the contexts at ${headSha} record different pr-body digests, so the cap round's reviewed body is ambiguous; remove the stale context of the earlier same-head round or fix the items with a commit. Contexts: ${[...found].map(([file, sha]) => `${file} (${sha})`).join(", ")}`);
-  return [...found.values()][0] ?? null;
-}
-
 // GATE-EXEC-BASE-REFRESH proof that only the base moved: every same-head round's write-gate-context refuses at a stale base, so a base_current context for this gate and head proves the head held the base when that context was written.
 // Only the reviewed worktree (the first checkout) counts: a context in another checkout belongs to an earlier same-head round (as in readReviewedBodySha256).
 // A missing or unreadable context, or one for another base, is no proof (fail closed).

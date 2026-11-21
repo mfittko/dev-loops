@@ -54,6 +54,7 @@ import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
+import { promptEndsWithWorkOrder } from "../github/_fixer-emission-evidence.mjs";
 import { assertPlanSourceHasNoThreads, fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
 import { capRoundActList, clearingChainWalk } from "../github/write-gate-context.mjs";
 
@@ -517,9 +518,11 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   refuse(subject?.repo === target.repo && subject.pr === target.pr && subject.headSha === sequence.reviewBaselineHead
     && subject.branch === order.mutationAuthority.branch && subject.phase === "commit_only"
     && typeof subject.planPath === "string" && realpathSync(subject.planPath) === planPath, "wrong original pull subject");
-  const renderedHash = materializationHash(readFileSync(expectedPrompt));
-  refuse(renderedHash === plan.materializationHash && renderedHash === unit.materializationHash
-    && renderedHash === pull.receipt.materializationHash, "materialization differs from actual bytes, renderer, plan or receipt");
+  const promptBytes = readFileSync(expectedPrompt), renderedHash = materializationHash(promptBytes);
+  // The emit-time plan hash and the pull-time receipt hash bind the bytes; a re-render would refuse any fix that edits the renderer.
+  refuse(renderedHash === plan.materializationHash && renderedHash === pull.receipt.materializationHash, "materialization differs from actual bytes, plan or receipt");
+  // The trailing Work order JSON block binds the plan's local fields (the LOCAL_MATERIAL_KEYS fields and absolute-path strings such as `executionRules.contract`) that the semantic digest drops.
+  refuse(promptEndsWithWorkOrder(promptBytes, order), "materialization differs from the plan's work order");
   const sourcePath = options.threadsFile ?? options.actList;
   const actRead = order.requiredReads?.find((read) => read.kind === order.source);
   const actBytes = readFileSync(sourcePath);
