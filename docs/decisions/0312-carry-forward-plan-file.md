@@ -18,4 +18,4 @@ Fan-in and the emitter read the plan from `--carry-forward-plan-file <absolute p
 
 - Carried finding text stays off the command line and out of the Bash hook.
 - The gate procedure has one plan source, the keyed artifact the resolver wrote.
-- A caller that passes both flags gets an immediate refusal, not a silent pick.
+- A caller that passes both flags gets an immediate mutual-exclusion refusal.

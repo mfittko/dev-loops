@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { readSealed } from "./_gate-artifact-seal.mjs";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
-import { requireAbsolutePlanFilePath, validateZeroUnitCarryProof, verifyCarryForwardPlanIdentity } from "./_carried-angles.mjs";
+import { requireAbsolutePlanFilePath, validateCarryForwardPlanShape, validateZeroUnitCarryProof, verifyCarryForwardPlanIdentity } from "./_carried-angles.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { VERIFIED_ITEMS_ANGLES, baseAngleName } from "@dev-loops/core/loop/gate-fanin";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -635,6 +635,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       requireAbsolutePlanFilePath(planFile);
       planFileProof = JSON.parse(await readFile(planFile, "utf8"));
       verifyCarryForwardPlanIdentity(planFileProof, { headSha, gate, repo, pr });
+      try { validateCarryForwardPlanShape(planFileProof); } catch (shapeError) { throw new Error(shapeError.message.replace(/^--carry-forward-plan(?=\s)/, "--carry-forward-plan-file")); }
     } catch (error) {
       return finish({ ok: false, error: `${units.length === 0 ? "zero-unit carry proof" : "carry-forward plan file"} refused: ${error.message}`, recovery: "Pass --carry-forward-plan-file <keyed carry-forward-plan.json path> with the resolver's complete plan, or rebuild the context and dispatch every angle." }, false);
     }
