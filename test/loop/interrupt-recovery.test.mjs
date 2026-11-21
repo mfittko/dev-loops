@@ -11,6 +11,7 @@ import path from "node:path";
 import { afterAll, describe, test } from "bun:test";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
+import { repoSlugFor } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { emitFixerWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { addLocalOrigin, runGitFixture, runIdFreeEnv } from "../_helpers.mjs";
@@ -20,10 +21,12 @@ const COORDINATION = path.resolve("scripts/loop/detect-pr-gate-coordination-stat
 const CONSOLIDATE = path.resolve("scripts/loop/consolidate-fanin.mjs");
 const EMITTER_STEPS = { round: ["context", "sentinel", "artifact-tmp", "artifact", "fanin"], fixer: ["lock", "plan-tmp", "plan", "release"] };
 
-// `${unit}:${killedAfter}` -> the open issue that keeps this recovery failing. Remove an entry when its issue closes.
+// `${unit}:${killedAfter}` -> [open issue, the refusal that keeps this recovery failing]. Remove an entry when its issue closes.
+// A reviewer killed after its sentinel recovers today through the documented `--same-head-retry`; issue 3416 tracks the
+// rebuilt-context case (see the 3416 test below), so no round step is listed here.
+const EEXIST = /EEXIST/;
 const KNOWN_FAILURES = new Map([
-  ["round:sentinel", 3416], ["round:artifact-tmp", 3416], ["round:artifact", 3416], // a stale sentinel refuses the re-fanned reviewer
-  ["fixer:lock", 3417], ["fixer:plan-tmp", 3417], ["fixer:plan", 3417], // a dead emitter's lock and temporary plan stay
+  ["fixer:lock", [3417, EEXIST]], ["fixer:plan-tmp", [3417, EEXIST]], ["fixer:plan", [3417, EEXIST]], // a dead emitter's lock stays
 ]);
 
 const roots = [];
@@ -64,14 +67,15 @@ const coordinate = (root) => spawnSync("node", [COORDINATION, "--repo", "owner/r
 async function snapshot(root) {
   const walk = async (dir) => (await readdir(dir, { withFileTypes: true })).flatMap((e) => e.name === "bin" || e.name === ".git" ? [] : e.isDirectory() ? [] : [e.name]).sort();
   const out = [];
-  for (const dir of ["tmp", "tmp/gate-context", "tmp/findings", "tmp/fixer"]) if (existsSync(path.join(root, dir))) out.push(...(await walk(path.join(root, dir))).map((n) => `${dir}/${n.replace(/[0-9a-f]{40}/, "<head>")}`));
+  for (const dir of ["tmp", "tmp/gate-context", "tmp/findings", `tmp/gate-fixer/${repoSlugFor("owner/repo")}/pr-266`]) if (existsSync(path.join(root, dir))) out.push(...(await walk(path.join(root, dir))).map((n) => `${dir}/${n.replace(/[0-9a-f]{40}/, "<head>").replace(/\.tmp-f[0-9]+-[0-9a-f]{8}$/, ".tmp-<id>")}`));
   return out;
 }
 
 // Issue 3420 adds a `recovery` field to refusals; surface it when present, never require it.
 const recoveryHint = (stdout) => { try { const hint = JSON.parse(stdout).recovery; return hint ? ` [recovery: ${JSON.stringify(hint)}]` : ""; } catch { return ""; } };
 
-// The step's recovery: a unit whose last step finished needs none; otherwise a fresh worker redoes the unit.
+// The step's recovery: a fresh worker redoes the unit (a reviewer with the sanctioned --same-head-retry). A kill after the
+// last step leaves a finished unit, so that case only checks the finished state equals the baseline; it runs no recovery.
 async function recoverAfter(unit, killedAfter) {
   const root = await makeRoot();
   const steps = EMITTER_STEPS[unit];
@@ -79,7 +83,8 @@ async function recoverAfter(unit, killedAfter) {
   assert.equal(killed.signal, "SIGKILL", `${unit} child was not killed after ${killedAfter}: ${killed.stderr}`);
   const before = coordinate(root); // the fresh coordinator path must keep working on the interrupted state
   assert.equal(before.status, 0, before.stderr);
-  const redo = killedAfter === steps.at(-1) ? { status: 0, stdout: "", stderr: "" } : runChild(unit, root);
+  assert.notEqual(before.stdout.trim(), "", "gate-coordination must answer on the interrupted state");
+  const redo = killedAfter === steps.at(-1) ? { status: 0, stdout: "", stderr: "" } : runChild(unit, root, unit === "round" ? { SAME_HEAD_RETRY: "1" } : {});
   const after = coordinate(root);
   return { redo, coordination: after.stdout, state: await snapshot(root), before: before.stdout };
 }
@@ -94,18 +99,31 @@ describe("interrupt a stubbed draft_gate round and fix pass after each step", as
   }
   for (const [unit, steps] of Object.entries(EMITTER_STEPS)) {
     for (const step of steps) {
-      const known = KNOWN_FAILURES.get(`${unit}:${step}`);
+      const [known, refusal] = KNOWN_FAILURES.get(`${unit}:${step}`) ?? [];
       test(`${unit}: killed after ${step} recovers to the uninterrupted state${known ? ` (known failure, issue ${known})` : ""}`, async () => {
         const run = await recoverAfter(unit, step);
         const reasons = [];
         if (run.redo.status !== 0) reasons.push(`recovery exited ${run.redo.status}: ${(run.redo.stdout + run.redo.stderr).trim().slice(0, 300)}${recoveryHint(run.redo.stdout)}`);
         if (JSON.stringify(run.state) !== JSON.stringify(baselines[unit].state)) reasons.push(`state ${JSON.stringify(run.state)} differs from ${JSON.stringify(baselines[unit].state)}`);
         if (run.coordination !== baselines[unit].coordination) reasons.push("gate-coordination output differs from the uninterrupted run");
-        if (known) assert.notEqual(reasons.length, 0, `recovery now works: remove ${unit}:${step} from KNOWN_FAILURES (issue ${known}) so the suite turns strict`);
-        else assert.deepEqual(reasons, []);
+        if (known) {
+          assert.notEqual(reasons.length, 0, `recovery now works: remove ${unit}:${step} from KNOWN_FAILURES (issue ${known}) so the suite turns strict`);
+          assert.match(run.redo.stdout + run.redo.stderr, refusal, `${unit}:${step} now fails for a different reason; re-check issue ${known}`);
+        } else assert.deepEqual(reasons, []);
       });
     }
   }
+});
+
+// A coordinator that rebuilds the gate context at the same head changes the briefing prefix hash, so the killed
+// reviewer's sentinel refuses the fresh reviewer even with the sanctioned retry. Issue 3416 retires the stale round.
+test("known failure (issue 3416): a reviewer re-fanned after a context rebuild at the same head is refused", async () => {
+  const root = await makeRoot();
+  const killed = runChild("round", root, { INTERRUPT_AFTER: "sentinel" });
+  assert.equal(killed.signal, "SIGKILL", killed.stderr);
+  const redo = runChild("round", root, { PREFIX_HASH: "b".repeat(64), SAME_HEAD_RETRY: "1" });
+  assert.notEqual(redo.status, 0, "recovery now works: remove the 3416 known failure so the suite turns strict");
+  assert.match(redo.stdout + redo.stderr, /DIFFERENT prefix hash/, "the refusal changed; re-check issue 3416");
 });
 
 // A fix pass killed after the plan is on disk leaves the carry-forward plan file for the next fan-in: the coordinator
@@ -143,11 +161,13 @@ async function emitOverUnfinishedPlan() {
   await emitFixerWorkOrder({ ...common, phase: "commit_only", threadsFile: threads, executionIdentity: "f1790000000000-0000abcd" });
   const ci = path.join(src, "ci.json");
   await writeFile(ci, JSON.stringify({ ok: true, status: "failure", ciStatus: "failure", settled: true, headSha: head, failedChecks: [{ name: "build (24)", conclusion: "failure" }] }));
-  return emitFixerWorkOrder({ ...common, phase: "full", ciFile: ci, executionIdentity: "f1790000000001-0000abcd" });
+  return () => emitFixerWorkOrder({ ...common, phase: "full", ciFile: ci, executionIdentity: "f1790000000001-0000abcd" });
 }
 
 test("known failure (issue 3419): a CI-fix emission over an unfinished thread plan keeps its thread obligations", async () => {
   // Today the emitter refuses while the plan is unfinished; the fix either carries the thread read or completes the plan.
-  const carried = await emitOverUnfinishedPlan().then((unit) => unit.workOrder.requiredReads.some((read) => read.kind === "threads"), () => false);
-  assert.equal(carried, false, "recovery now works: remove the 3419 known failure so the suite turns strict");
+  const ciEmission = await emitOverUnfinishedPlan(); // the first (thread) emission must succeed; its failure fails the test
+  const outcome = await ciEmission().then((unit) => ({ unit }), (error) => ({ error }));
+  assert.ok(outcome.error, "recovery now works (the emission succeeded): remove the 3419 known failure so the suite turns strict");
+  assert.match(String(outcome.error.message), /sequence is active/, `the refusal changed; re-check issue 3419: ${outcome.error.message}`);
 });
