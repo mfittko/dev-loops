@@ -111,7 +111,7 @@ export function buildFixerDir({ repo, pr, tmpRoot }) {
 }
 
 // emitFixerWorkOrder renders the message for the target harness before it rethrows.
-const rerunRecovery = (repo, headSha) => `dev-loops-run scripts/github/rerun-failed-ci.mjs --repo ${repo} --head-sha ${headSha}`;
+const rerunRecovery = (repo, pr, headSha) => `dev-loops-run scripts/github/rerun-failed-ci.mjs --repo ${repo} --pr ${pr} --head-sha ${headSha}`;
 class Refusal extends Error {
   constructor(message, refusal, recovery) { super(message); if (refusal) this.refusal = refusal; if (recovery) this.recovery = recovery; }
 }
@@ -635,11 +635,11 @@ async function emitPlan({
       const runtime = { env, ghCommand, runChild };
       const headRun = await findHeadCiRun({ repo, headSha }, runtime).catch(() => null);
       // A re-run already started (or the run is otherwise unsettled): emit nothing until CI settles, as the re-run script's run_in_progress refusal does.
-      if (headRun && headRun.status !== "completed") throw new Refusal(`CI run ${headRun.databaseId} is ${headRun.status}, not completed; run scripts/github/rerun-failed-ci.mjs --repo ${repo} --head-sha ${headSha}, which waits for the run to complete (wait-pr-checks.mjs returns at once on a red head), then emit again`, undefined, rerunRecovery(repo, headSha));
+      if (headRun && headRun.status !== "completed") throw new Refusal(`CI run ${headRun.databaseId} is ${headRun.status}, not completed; run scripts/github/rerun-failed-ci.mjs --repo ${repo} --pr ${pr} --head-sha ${headSha}, which waits for the run to complete (wait-pr-checks.mjs returns at once on a red head), then emit again`, undefined, rerunRecovery(repo, pr, headSha));
       // A completed green run makes the red ci file stale: a fixer order would fix a head that has nothing to fix.
-      if (headRun?.conclusion === "success") throw new Refusal(`CI run ${headRun.databaseId} completed green, so ci file ${ciFile} is stale; ${next}`);
+      if (headRun?.conclusion === "success") throw new Refusal(`CI run ${headRun.databaseId} completed green, so ci file ${ciFile} is stale; ${next}`, undefined, `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${repo} --pr ${pr}`);
       const run = headRun && isRerunnableAttempt(headRun.attempt) && await isSmokeTimeoutOnlyRun({ repo, runId: headRun.databaseId }, runtime).catch(() => false) ? headRun : null;
-      if (run) throw new Refusal(`every failed job of CI run ${run.databaseId} is a timed-out smoke job: a hang, not a code defect, so emit no fixer; run scripts/github/rerun-failed-ci.mjs --repo ${repo} --head-sha ${headSha}, then wait for CI again`, undefined, rerunRecovery(repo, headSha));
+      if (run) throw new Refusal(`every failed job of CI run ${run.databaseId} is a timed-out smoke job: a hang, not a code defect, so emit no fixer; run scripts/github/rerun-failed-ci.mjs --repo ${repo} --pr ${pr} --head-sha ${headSha}, then wait for CI again`, undefined, rerunRecovery(repo, pr, headSha));
     }
   }
   const isActItem = (f) => f?.judgeDisposition === "act" && (gate === "draft_gate" ? hasSeverityText(f) : typeof f.severity === "string" && VALID_SEVERITIES.has(f.severity)) && typeof f.summary === "string" && f.summary.trim() !== "";

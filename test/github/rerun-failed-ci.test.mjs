@@ -10,7 +10,9 @@ const RUNNER_JOB_TIMEOUT = "The job running on runner GitHub Actions 2 has excee
 const STEP_TIMEOUT = "The action 'Set up Playwright WebKit' has timed out after 10 minutes.";
 const BARE_STEP_TIMEOUT = "The action has timed out.";
 
-const opts = { repo: "owner/repo", headSha: "a".repeat(40) };
+const opts = { repo: "owner/repo", pr: "7", headSha: "a".repeat(40) };
+const waitRecovery = "dev-loops-run scripts/github/wait-pr-checks.mjs --repo owner/repo --pr 7";
+const fixerRecovery = `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo owner/repo --pr 7 --head-sha ${"a".repeat(40)} --phase full --ci-file <wait-pr-checks JSON path>`;
 const list = (over = {}) => ({ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 99, status: "completed", attempt: 1, ...over }]) });
 const jobs = (...entries) => ({ assertArgs: ["view", "99"], stdout: JSON.stringify({ jobs: [{ databaseId: 5, name: "build (24)", conclusion: "success" }, ...entries] }) });
 const annotations = (id, message) => ({ assertArgs: ["api", `repos/owner/repo/check-runs/${id}/annotations?per_page=100`], stdout: JSON.stringify([{ annotation_level: "failure", message }, { annotation_level: "failure", message: "The operation was canceled." }]) });
@@ -35,7 +37,7 @@ test("the verify aggregator failing beside a timed-out smoke job still re-runs, 
 
 test("refuses a run still in progress after the bounded wait, without a re-run call", async () => {
   const { call, calls } = await run([list({ status: "in_progress" }), list({ status: "in_progress" })]);
-  await assert.rejects(call(), (error) => /run_in_progress.*run this script again/.test(error.message) && error.recovery === `dev-loops-run scripts/github/rerun-failed-ci.mjs --repo ${opts.repo} --head-sha ${opts.headSha}`);
+  await assert.rejects(call(), (error) => /run_in_progress.*run wait-pr-checks\.mjs once/.test(error.message) && error.recovery === waitRecovery);
   assert.equal(calls.length, 2);
 });
 
@@ -47,13 +49,13 @@ test("waits for an in-progress run to complete, then re-runs its timed-out smoke
 
 test("an in-progress run that completes green refuses run_succeeded, not the fixer route, without a re-run call", async () => {
   const { call, calls } = await run([list({ status: "in_progress" }), list({ attempt: 2, conclusion: "success" })]);
-  await assert.rejects(call(), /run_succeeded.*wait-pr-checks/);
+  await assert.rejects(call(), (error) => /run_succeeded.*wait-pr-checks/.test(error.message) && error.recovery === waitRecovery);
   assert.equal(calls.length, 2);
 });
 
 test("refuses at the per-head attempt cap, without a re-run call", async () => {
   const { call, calls } = await run([list({ attempt: 3 })]);
-  await assert.rejects(call(), (error) => /attempt_cap.*emit the ci-failure fixer order instead/.test(error.message) && !/escalate/.test(error.message));
+  await assert.rejects(call(), (error) => /attempt_cap.*emit the ci-failure fixer order instead/.test(error.message) && !/escalate/.test(error.message) && error.recovery === fixerRecovery);
   assert.equal(calls.length, 1);
 });
 
@@ -81,21 +83,21 @@ test("the wait budget is wall time: gh call time counts, so fewer intervals are 
 
 test("refuses a smoke failure without a timeout annotation, without a re-run call", async () => {
   const { call, calls } = await run([list(), jobs({ databaseId: 11, name: "deck-smoke", conclusion: "failure" }), annotations(11, "Process completed with exit code 1.")]);
-  await assert.rejects(call(), /not_smoke_timeout/);
+  await assert.rejects(call(), (error) => /not_smoke_timeout/.test(error.message) && error.recovery === fixerRecovery);
   assert.equal(calls.length, 3);
 });
 
 test("refuses when the head has no run, with the stable no_run token", async () => {
   const { call } = await run([{ stdout: "[]" }]);
-  await assert.rejects(call(), /^Error: no_run: no ci\.yml run/);
+  await assert.rejects(call(), (error) => /^no_run: no ci\.yml run/.test(error.message) && error.recovery === waitRecovery);
 });
 
-test("parses args, requires --repo and --head-sha, and rejects a head that is not a full 40-hex SHA", () => {
+test("parses args, requires --repo, --pr and --head-sha, and rejects a head that is not a full 40-hex SHA", () => {
   const sha = "a".repeat(40);
-  assert.throws(() => parseRerunFailedCiCliArgs(["--repo", "o/r"]), /requires --repo and --head-sha/);
-  assert.throws(() => parseRerunFailedCiCliArgs(["--repo", "o/r", "--head-sha", sha, "--max-attempts", "2"]), /Unknown argument: --max-attempts/);
-  assert.equal(parseRerunFailedCiCliArgs(["--repo", "o/r", "--head-sha", sha]).headSha, sha);
-  for (const bad of ["abc123", `${sha}XX`]) assert.throws(() => parseRerunFailedCiCliArgs(["--repo", "o/r", "--head-sha", bad]), /full 40-character/, bad);
+  assert.throws(() => parseRerunFailedCiCliArgs(["--repo", "o/r"]), /requires --repo, --pr and --head-sha/);
+  assert.throws(() => parseRerunFailedCiCliArgs(["--repo", "o/r", "--pr", "7", "--head-sha", sha, "--max-attempts", "2"]), /Unknown argument: --max-attempts/);
+  assert.equal(parseRerunFailedCiCliArgs(["--repo", "o/r", "--pr", "7", "--head-sha", sha]).headSha, sha);
+  for (const bad of ["abc123", `${sha}XX`]) assert.throws(() => parseRerunFailedCiCliArgs(["--repo", "o/r", "--pr", "7", "--head-sha", bad]), /full 40-character/, bad);
 });
 
 test("isSmokeOnly pre-filters on smoke job names and ignores a failed verify aggregator beside a smoke failure", () => {

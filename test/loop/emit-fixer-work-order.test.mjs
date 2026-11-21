@@ -3745,7 +3745,7 @@ test("issue 3251: a smoke-only red head whose failed jobs carry GitHub timeout a
     ]);
     const ghCalls = (mock) => mock.calls.filter((c) => c.command === "gh").length;
     const timedOut = gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }], ["The action 'Run inspect-run viewer WebKit smoke' has timed out after 10 minutes."]);
-    const recovery = `dev-loops-run scripts/github/rerun-failed-ci.mjs --repo ${REPO} --head-sha ${fx.head}`;
+    const recovery = `dev-loops-run scripts/github/rerun-failed-ci.mjs --repo ${REPO} --pr ${PR} --head-sha ${fx.head}`;
     await assert.rejects(emitCi(fx, { runChild: timedOut.runChild }, smokeOnly), (error) => /timed-out smoke job.*rerun-failed-ci\.mjs/.test(error.message) && error.recovery === recovery);
     const realFailure = gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }], ["Process completed with exit code 1."]);
     assert.equal((await emitCi(fx, { runChild: realFailure.runChild }, smokeOnly)).workOrder.source, "ci-failure");
@@ -3774,7 +3774,7 @@ test("issue 3251: a smoke-only red head whose failed jobs carry GitHub timeout a
     assert.equal(ghCalls(inProgress), 1);
     // The re-run completed green: the red ci file is stale, so no fixer order.
     const green = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", conclusion: "success", attempt: 2 }]) }]);
-    await assert.rejects(emitCi(fx, { runChild: green.runChild }, smokeOnly), /completed green.*stale/);
+    await assert.rejects(emitCi(fx, { runChild: green.runChild }, smokeOnly), (error) => /completed green.*stale/.test(error.message) && error.recovery === `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${REPO} --pr ${PR}`);
     assert.equal(ghCalls(green), 1);
     // A run with no numeric attempt fails closed to the fixer route and never reads the jobs.
     const noAttempt = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed" }]) }]);
