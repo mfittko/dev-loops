@@ -27,19 +27,21 @@ test("the shipped defaults carry the checklist ids under the mapped angles", asy
   assert.deepEqual(byAngle, {
     coverage: ["C1", "C2", "C3"],
     correctness: ["K1"],
-    "contract-surface": ["CS1", "CS2"],
-    "input-validation": ["I1", "I2"],
+    determinism: ["A6"],
+    "contradiction-lens": ["A8"],
+    "contract-surface": ["CS1", "CS2", "A4", "A5"],
+    "input-validation": ["I1", "I2", "A2"],
     "threat-model": ["T1"],
-    "packaging-runtime": ["PK1"],
-    "state-concurrency": ["S1"],
+    "packaging-runtime": ["PK1", "A7"],
+    "state-concurrency": ["S1", "A3"],
     "pr-description": ["P1", "P2"],
-    holistic: ["K2"],
+    holistic: ["K2", "A1"],
   });
 });
 
 test("resolveChecklistItems splits id and text and marks only the final-step ids", async () => {
   const items = await resolveChecklistItems(emptyRoot(), ["src/b.mjs"]);
-  assert.ok(items.length > 0 && items.length <= 14);
+  assert.ok(items.length > 0 && items.length <= 22);
   assert.ok(!items.some((i) => i.id === "T1"), "T1 rides only a seam diff");
   assert.deepEqual(items.filter((i) => i.finalStep).map((i) => i.id).sort(), [...FINAL_STEP_CHECKLIST_IDS].sort());
   const c1 = items.find((i) => i.id === "C1");

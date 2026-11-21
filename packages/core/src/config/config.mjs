@@ -1333,6 +1333,9 @@ function resolveTierMapping(config, tierAlias, harness) {
   return trimmedOrNull(model);
 }
 
+// The gate rendering of an angle's `developer-checklist`: the developer brief renders the same entry (issue 3396 ac:4).
+const withChecklist = (prompt, checklist) => (typeof prompt === "string" && checklist?.length ? `${prompt}\n\nChecklist (the developer applies the same lines while writing):\n${checklist.map((line) => `- ${line}`).join("\n")}` : prompt);
+
 /**
  * Resolve a gate angle name to a reviewer persona and model. Resolution:
  * the angle's own configured entry (findAngleEntry), else BUILTIN_PERSONAS,
@@ -1361,7 +1364,7 @@ export function resolveReviewerRole(config, angle) {
     return {
       persona: personaName,
       model: modelOverride || builtinPersona?.defaultModel || null,
-      prompt: entry?.prompt ?? null,
+      prompt: withChecklist(entry?.prompt ?? null, entry?.["developer-checklist"]),
       fallback: false,
     };
   }
