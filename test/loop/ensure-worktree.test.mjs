@@ -287,9 +287,11 @@ test("ensure: a DETACHED-HEAD worktree at the path is reused as-is, never fabric
   const repo = makeRepo();
   try {
     const target = path.join(repo.root, "tmp/worktrees/dev-loops/issue-4002");
+    commitBunLock(repo);
     repo.git("worktree", "add", "--detach", target, "main");
 
-    const res = await ensureWorktree({ repoRoot: repo.root, issue: 4002 });
+    let installs = 0;
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 4002 }, { installDeps: () => { installs += 1; return { ok: true }; } });
     assert.equal(res.ok, true);
     assert.equal(res.created, false);
     assert.equal(res.reused, true);
@@ -299,6 +301,9 @@ test("ensure: a DETACHED-HEAD worktree at the path is reused as-is, never fabric
     // MUST-FIX regression (issue #1869): commitMsgGuard must be present on
     // the reused-detached return site too, not just create/reused-local.
     assert.equal(res.commitMsgGuard.ok, true);
+    // The reused-detached return site reports the dep refresh after a lockfile change.
+    assert.equal(res.deps.ran, true);
+    assert.equal(installs, 1);
   } finally {
     repo.cleanup();
   }
@@ -1437,7 +1442,7 @@ test("ensure: no bun.lock skips the install", async () => {
   }
 });
 
-test("ensure: reuse does not install and reports no deps", async () => {
+test("ensure: reuse with unchanged deps does not install and reports no deps", async () => {
   const repo = makeRepo();
   try {
     commitBunLock(repo);
@@ -1445,6 +1450,24 @@ test("ensure: reuse does not install and reports no deps", async () => {
     const reused = await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps: () => assert.fail("must not install on reuse") });
     assert.equal(reused.reused, true);
     assert.equal(reused.deps, undefined);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: a filesystem error in the deps stamp never throws and reports stampWritten false", async () => {
+  const repo = makeRepo();
+  try {
+    commitBunLock(repo);
+    const created = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, { installDeps: () => ({ ok: true }) });
+    // A directory at the stamp path makes the stamp read fail with EISDIR and the rewrite fail too.
+    const stamp = path.join(created.path, "node_modules", ".dev-loops-deps-stamp");
+    rmSync(stamp, { force: true });
+    mkdirSync(stamp, { recursive: true });
+    const reused = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, { installDeps: () => ({ ok: true }) });
+    assert.equal(reused.reused, true);
+    assert.equal(reused.deps.ran, true);
+    assert.equal(reused.deps.stampWritten, false);
   } finally {
     repo.cleanup();
   }
@@ -1533,6 +1556,25 @@ test("ensure: dirty_after_provision ignores an inherited GIT_DIR", async () => {
     assert.deepEqual(res.warning, { code: "dirty_after_provision", paths: ["provision-leftover.txt"] });
   } finally {
     for (const [k, v] of [["GIT_DIR", saved.dir], ["GIT_WORK_TREE", saved.tree]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    repo.cleanup();
+  }
+});
+
+test("ensure: a reused worktree reinstalls when the lockfile changed since the last install, and not otherwise", async () => {
+  const repo = makeRepo();
+  try {
+    commitBunLock(repo);
+    const created = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, { installDeps: () => ({ ok: true }) });
+    const unchanged = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, { installDeps: () => assert.fail("must not install when deps are unchanged") });
+    assert.equal(unchanged.deps, undefined);
+    writeFileSync(path.join(created.path, "bun.lock"), `${BUN_LOCK}\n// new dep\n`);
+    const calls = [];
+    const reused = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, { installDeps: (cwd) => { calls.push(cwd); return { ok: true }; } });
+    assert.deepEqual(calls, [created.path]);
+    assert.deepEqual(reused.deps, { ran: true, ok: true });
+    const again = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, { installDeps: () => assert.fail("stamp must be refreshed after the install") });
+    assert.equal(again.deps, undefined);
+  } finally {
     repo.cleanup();
   }
 });
