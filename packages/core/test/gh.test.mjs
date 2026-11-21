@@ -482,6 +482,31 @@ describe("secondary rate limit backoff", () => {
     await assert.rejects(() => withSecondaryLimitBackoff(async () => { throw new Error("not found"); }, opts), { message: "not found" });
   });
 
+  test("withSecondaryLimitBackoff reads a thrown error's stderr only when it has one: accepted and rejected forms", async () => {
+    const run = async (error) => {
+      let runs = 0;
+      const sleeps = [];
+      let thrown;
+      try { await withSecondaryLimitBackoff(async () => { runs += 1; throw error; }, { backoffMs: 7, sleep: async (ms) => { sleeps.push(ms); } }); } catch (e) { thrown = e; }
+      return { runs, sleeps, thrown };
+    };
+    const stderrForm = await run(Object.assign(new Error("Command failed: gh x"), { stderr: "You have exceeded a secondary rate limit. Please wait a few minutes before you try again." }));
+    assert.equal(stderrForm.runs, 2);
+    assert.equal(stderrForm.thrown.code, "RATE_LIMITED");
+    const messageForm = await run(new Error("gh run watch failed: HTTP 403: secondary rate limit"));
+    assert.equal(messageForm.runs, 2);
+    assert.equal(messageForm.thrown.code, "RATE_LIMITED");
+    for (const error of [
+      Object.assign(new Error("Command failed: gh api graphql -f threadId=secondary rate limit"), { stderr: "Could not resolve to a node" }),
+      Object.assign(new Error("Command failed: gh issue create --title secondary rate limit"), { stderr: "" }),
+    ]) {
+      const out = await run(error);
+      assert.equal(out.runs, 1);
+      assert.deepEqual(out.sleeps, []);
+      assert.equal(out.thrown, error);
+    }
+  });
+
   describe("default runChild and runCommand (a gh stub that always hits the secondary limit)", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "issue-3340-limit-"));
     const countFile = path.join(dir, "count");

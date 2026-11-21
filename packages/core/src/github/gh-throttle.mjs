@@ -24,6 +24,8 @@ const LOCK_TIMEOUT_MS = 10_000;
 // A stored slot further ahead than any legitimate queue (60 callers at the 10000 ms maximum interval) is stale.
 const MAX_QUEUE_HORIZON_MS = 600_000;
 const STALE_LOCK_MS = 5_000;
+// A lock this old is stolen even when its holder pid looks alive (a reused pid or EPERM): the critical section lasts milliseconds.
+const HARD_STALE_LOCK_MS = 6 * LOCK_TIMEOUT_MS;
 const LOCK_POLL_MS = 20;
 const GIT_TIMEOUT_MS = 10_000;
 
@@ -31,20 +33,23 @@ const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const unavailable = (message, cause) =>
   Object.assign(new Error(`gh throttle unavailable: ${message}`), { code: "GH_THROTTLE_UNAVAILABLE", cause });
 
-let cachedRoot;
+const cachedRoots = new Map();
 let cachedIntervalMs;
 
-/** The main checkout root (parent of the shared git dir), cached per process. */
-export function resolveMainRoot({ execFile = execFileSync } = {}) {
-  if (cachedRoot) return cachedRoot;
+/** The main checkout root (parent of the shared git dir) for the call cwd (default: the process cwd), cached per cwd. */
+export function resolveMainRoot({ execFile = execFileSync, cwd } = {}) {
+  const key = path.resolve(cwd ?? process.cwd());
+  if (cachedRoots.has(key)) return cachedRoots.get(key);
   try {
     const gitDir = execFile("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
       encoding: "utf8",
       timeout: GIT_TIMEOUT_MS,
+      cwd: key,
     }).trim();
     if (!gitDir) throw new Error("empty git common dir");
-    cachedRoot = path.dirname(gitDir);
-    return cachedRoot;
+    const root = path.dirname(gitDir);
+    cachedRoots.set(key, root);
+    return root;
   } catch (error) {
     throw unavailable(`cannot resolve the main checkout root: ${error.message}`, error);
   }
@@ -68,7 +73,7 @@ export async function resolveIntervalMs(root, { warn = (message) => process.stde
 
 /** Test seam: forget the per-process root and interval caches. */
 export function resetThrottleCache() {
-  cachedRoot = undefined;
+  cachedRoots.clear();
   cachedIntervalMs = undefined;
 }
 
@@ -82,11 +87,11 @@ const pidAlive = (pid) => {
 };
 
 /**
- * Steal a stale lock. Stale means an old mtime and a holder pid (the token prefix) that is gone.
+ * Steal a stale lock. Stale means an old mtime and a holder pid (the token prefix) that is gone, or an mtime past the hard bound whatever the pid.
  * The steal unlinks only when the token is unchanged, so a fresh holder's lock is never removed.
  * A lock replaced between the final read and the unlink is a residual race that costs only a pacing violation.
  */
-async function stealStaleLock(lockPath, { now, staleLockMs }) {
+async function stealStaleLock(lockPath, { now, staleLockMs, hardStaleLockMs }) {
   let token;
   let mtimeMs;
   try {
@@ -98,12 +103,12 @@ async function stealStaleLock(lockPath, { now, staleLockMs }) {
   }
   if (now() - mtimeMs <= staleLockMs) return;
   const pid = Number.parseInt(token, 10);
-  if (Number.isInteger(pid) && pid > 0 && pidAlive(pid)) return;
+  if (now() - mtimeMs <= hardStaleLockMs && Number.isInteger(pid) && pid > 0 && pidAlive(pid)) return;
   if ((await readFile(lockPath, "utf8").catch(() => null)) !== token) return;
   await unlink(lockPath).catch(() => {});
 }
 
-async function withLock(lockPath, { now, sleep, lockTimeoutMs, staleLockMs, lockPollMs }, fn) {
+async function withLock(lockPath, { now, sleep, lockTimeoutMs, staleLockMs, hardStaleLockMs, lockPollMs }, fn) {
   const deadline = now() + lockTimeoutMs;
   const token = `${process.pid}:${randomUUID()}`;
   for (;;) {
@@ -112,7 +117,7 @@ async function withLock(lockPath, { now, sleep, lockTimeoutMs, staleLockMs, lock
       handle = await open(lockPath, "wx");
     } catch (error) {
       if (error.code !== "EEXIST") throw unavailable(`cannot create the lock: ${error.message}`, error);
-      await stealStaleLock(lockPath, { now, staleLockMs });
+      await stealStaleLock(lockPath, { now, staleLockMs, hardStaleLockMs });
       if (now() >= deadline) throw unavailable(`lock ${lockPath} not acquired within ${lockTimeoutMs}ms`);
       await sleep(lockPollMs);
       continue;
@@ -141,6 +146,7 @@ export async function acquireSlot({
   sleep = realSleep,
   lockTimeoutMs = LOCK_TIMEOUT_MS,
   staleLockMs = STALE_LOCK_MS,
+  hardStaleLockMs = HARD_STALE_LOCK_MS,
   lockPollMs = LOCK_POLL_MS,
 }) {
   if (intervalMs === 0) return;
@@ -151,7 +157,7 @@ export async function acquireSlot({
   } catch (error) {
     throw unavailable(`cannot create ${dir}: ${error.message}`, error);
   }
-  const start = await withLock(path.join(dir, "lock"), { now, sleep, lockTimeoutMs, staleLockMs, lockPollMs }, async () => {
+  const start = await withLock(path.join(dir, "lock"), { now, sleep, lockTimeoutMs, staleLockMs, hardStaleLockMs, lockPollMs }, async () => {
     let next = 0;
     try {
       const parsed = Number(String(await readFile(slotPath, "utf8")).trim());
@@ -182,7 +188,7 @@ export const isUnpaced = (env) => Boolean(env?.[GH_STUB_ATTESTATION_ENV] || proc
 /** Default slot taker for the real `gh` path: resolves root and interval lazily. */
 export async function takeGhSlot(opts = {}) {
   if (!opts.root && isUnpaced(opts.env)) return;
-  const root = opts.root ?? resolveMainRoot(opts.execFile ? { execFile: opts.execFile } : undefined);
+  const root = opts.root ?? resolveMainRoot({ ...(opts.execFile && { execFile: opts.execFile }), cwd: opts.cwd });
   const intervalMs = opts.intervalMs ?? await resolveIntervalMs(root, { warn: opts.warn });
   await acquireSlot({ ...opts, root, intervalMs });
 }

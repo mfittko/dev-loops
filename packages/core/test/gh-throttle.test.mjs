@@ -83,13 +83,22 @@ describe("gh-throttle", () => {
   test("a stale-mtime lock whose holder pid is alive is not stolen", async () => {
     await mkdir(path.dirname(lockFile()), { recursive: true });
     await writeFile(lockFile(), `${process.pid}:paused-holder`);
-    const old = new Date(clock - 60_000);
+    const old = new Date(clock - 30_000);
     await utimes(lockFile(), old, old);
     await assert.rejects(
       () => acquireSlot({ root, intervalMs: 500, now, sleep, lockTimeoutMs: 100 }),
       { code: "GH_THROTTLE_UNAVAILABLE" },
     );
     assert.equal(await readFile(lockFile(), "utf8"), `${process.pid}:paused-holder`);
+  });
+
+  test("a lock whose holder pid is alive but whose mtime is past the hard bound is stolen", async () => {
+    await mkdir(path.dirname(lockFile()), { recursive: true });
+    await writeFile(lockFile(), `${process.pid}:reused-pid-holder`);
+    const old = new Date(clock - 61_000);
+    await utimes(lockFile(), old, old);
+    await acquireSlot({ root, intervalMs: 500, now, sleep, lockTimeoutMs: 100 });
+    assert.ok(Number(await readFile(slotFile(), "utf8")) > 0);
   });
 
   test("a next-slot an hour ahead (clock stepped back) is treated as no reservation", async () => {
@@ -252,6 +261,22 @@ describe("gh-throttle", () => {
     assert.equal(resolveMainRoot({ execFile }), "/repo/main");
     assert.equal(resolveMainRoot({ execFile }), "/repo/main");
     assert.equal(calls, 1);
+  });
+
+  test("the root resolves from the call cwd, cached per cwd", () => {
+    const seen = [];
+    const execFile = (_cmd, _args, opts) => { seen.push(opts.cwd); return `${opts.cwd}/.git\n`; };
+    assert.equal(resolveMainRoot({ execFile, cwd: "/repo/a" }), "/repo/a");
+    assert.equal(resolveMainRoot({ execFile, cwd: "/repo/b" }), "/repo/b");
+    assert.equal(resolveMainRoot({ execFile, cwd: "/repo/a" }), "/repo/a");
+    assert.deepEqual(seen, ["/repo/a", "/repo/b"]);
+  });
+
+  test("takeGhSlot passes its call cwd to the root resolution", async () => {
+    let cwd;
+    const execFile = (_cmd, _args, opts) => { cwd = opts.cwd; return `${root}/.git\n`; };
+    await takeGhSlot({ execFile, cwd: "/elsewhere", intervalMs: 0 });
+    assert.equal(cwd, "/elsewhere");
   });
 
   test("the interval reads the .devloops override from the root", async () => {

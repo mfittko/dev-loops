@@ -76,9 +76,10 @@ async function runWithBackoff(runChild, command, args, env, { backoffMs, sleep }
   return isSecondaryLimit(result) ? { ...result, rateLimited: true } : result;
 }
 
-// A thrown error (its message or stderr) or a resolved `{ code, stderr }` result that carries a secondary limit.
+// A thrown error or a resolved `{ code, stderr }` result that carries a secondary limit.
+// An error with a `stderr` property is read by stderr only: its message carries the whole gh argv (ADR 0305).
 function isSecondaryLimited(outcome) {
-  if (outcome instanceof Error) return isSecondaryRateLimitError(outcome) || isSecondaryRateLimitError(String(outcome.stderr ?? ""));
+  if (outcome instanceof Error) return isSecondaryRateLimitError(outcome.stderr === undefined ? outcome : String(outcome.stderr));
   return outcome?.code !== 0 && isSecondaryRateLimitError(String(outcome?.stderr ?? ""));
 }
 
