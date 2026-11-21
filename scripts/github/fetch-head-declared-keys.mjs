@@ -11,6 +11,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
+import { ghAsync } from "@dev-loops/core/github/gh-call-log";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseHeadDeclaredKeys } from "./head-declared-keys-schema.mjs";
 
@@ -31,7 +32,7 @@ export function selectHeadKeysArtifact(artifacts, headSha) {
   return matches[0] ?? null;
 }
 
-const defaultExec = async (file, args) => (await execFileAsync(file, args, { encoding: "buffer", maxBuffer: MAX_ZIP_BYTES })).stdout;
+const defaultExec = async (file, args) => (await (file === "gh" ? ghAsync : (a, b) => execFileAsync(file, a, b))(args, { encoding: "buffer", maxBuffer: MAX_ZIP_BYTES })).stdout;
 
 /** Resolve the validated declared-key list; any problem yields []. `exec(file, args)` returns stdout as a Buffer. */
 export async function fetchHeadDeclaredKeys({ repo, pr, headSha, exec = defaultExec }) {
