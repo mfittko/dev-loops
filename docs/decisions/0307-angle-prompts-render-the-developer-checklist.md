@@ -4,7 +4,7 @@
 
 Accepted — 2026-11-21 ([issue 3396](https://github.com/mfittko/dev-loops/issues/3396))
 
-Extends: 0304 ([record](./0304-developer-pre-pr-self-check.md)). The record stays unedited in meaning; only its item cap changes from 14 to 22.
+Extends: 0304 ([record](./0304-developer-pre-pr-self-check.md)). ADR 0304 states a checklist cap of 14. This record raises the cap to 22.
 
 ## Context
 

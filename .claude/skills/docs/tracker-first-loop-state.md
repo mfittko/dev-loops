@@ -92,8 +92,11 @@ They are read-only metadata in this slice and do not trigger any automation:
 ### 3.4 PR Body Template
 
 ```
-## Summary
+## Objective
 {brief description of the change}
+
+## In scope
+{what this PR changes and what it leaves out}
 
 ## Acceptance Criteria
 {copied or linked from tracker item}

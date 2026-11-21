@@ -228,7 +228,7 @@ const GateAngleEntry = z.preprocess(
     readsPrBody: z.boolean().optional().describe("Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it."),
     categories: z.array(z.enum(CHANGE_CATEGORY_NAMES)).min(1).optional().describe("Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed."),
     kinds: z.array(z.enum(FILE_KIND_NAMES)).min(1).optional().describe("File kinds (code/config/test/ci/docs/asset/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed."),
-    "developer-checklist": z.array(z.string().regex(/^[A-Z]+\d+: \S/u)).min(1).optional().describe("Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID. Only `gates.draft.angles` entries are read; on any other gate the key validates and is ignored (PRE-PR-DEVELOPER-SELF-CHECK)."),
+    "developer-checklist": z.array(z.string().regex(/^[A-Z]+\d+: \S/u)).min(1).optional().describe("Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items from `gates.draft.angles` and the pre-PR record requires evidence per ID. `resolveReviewerRole` also renders the lines into the gate angle prompt of the entry it resolves, whichever gate that entry sits under (PRE-PR-DEVELOPER-SELF-CHECK)."),
   }),
 );
 
@@ -1334,7 +1334,11 @@ function resolveTierMapping(config, tierAlias, harness) {
 }
 
 // The gate rendering of an angle's `developer-checklist`: the developer brief renders the same entry (issue 3396 ac:4).
-const withChecklist = (prompt, checklist) => (typeof prompt === "string" && checklist?.length ? `${prompt}\n\nChecklist (the developer applies the same lines while writing):\n${checklist.map((line) => `- ${line}`).join("\n")}` : prompt);
+const withChecklist = (prompt, checklist) => {
+  if (!checklist?.length) return prompt;
+  const block = `Checklist (the developer applies the same lines while writing):\n${checklist.map((line) => `- ${line}`).join("\n")}`;
+  return typeof prompt === "string" ? `${prompt}\n\n${block}` : block;
+};
 
 /**
  * Resolve a gate angle name to a reviewer persona and model. Resolution:

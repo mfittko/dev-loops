@@ -177,3 +177,32 @@ test("--findings-root works without --repo; unknown flag exits 2 with a JSON err
   assert.equal(proc.stdout.toString(), "");
   assert.equal(JSON.parse(proc.stderr.toString()).ok, false);
 });
+
+test("matches by line window when both sides carry a line, else by file", () => {
+  const index = { index: new Map([[7, new Map([["a.mjs", [{ angle: "x", line: 10 }]]])]]) };
+  const matched = (thread) => matchThreads([{ pr: 7, ...thread }], index).threads[0].matched;
+  assert.equal(matched({ path: "a.mjs", line: 12 }), true);
+  assert.equal(matched({ path: "a.mjs" }), true);
+  assert.equal(matched({ path: "a.mjs", line: 400 }), false);
+  assert.equal(matched({ path: "b.mjs", line: 10 }), false);
+});
+
+test("default findings root is main-anchored; --repo is validated like buildLogPath", async () => {
+  const { dir } = await fixture();
+  try {
+    assert.equal(parseArgsList(["--threads", "t", "--repo", "owner/name", "--repo-root", dir]).findingsRoot, path.join(dir, "tmp", "gate-findings", "owner-name"));
+    const main = Bun.spawnSync(["git", "init", "-q", "-b", "main", "main"], { cwd: dir });
+    assert.equal(main.exitCode, 0);
+    const mainDir = path.join(dir, "main");
+    Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i"], { cwd: mainDir });
+    const linked = path.join(dir, "linked");
+    assert.equal(Bun.spawnSync(["git", "worktree", "add", "-q", "-b", "b", linked], { cwd: mainDir }).exitCode, 0);
+    const root = parseArgsList(["--threads", "t", "--repo", "owner/name", "--repo-root", linked]).findingsRoot;
+    assert.equal(await Bun.file(path.join(mainDir, "x")).exists(), false);
+    assert.match(root, new RegExp(`${path.basename(mainDir)}/tmp/gate-findings/owner-name$`));
+    assert.ok(!root.includes("linked"));
+    for (const bad of ["../x", "a\\b/c", "abc"]) assert.throws(() => parseArgsList(["--threads", "t", "--repo", bad]), /--repo/, bad);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

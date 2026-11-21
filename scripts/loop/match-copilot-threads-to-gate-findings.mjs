@@ -14,21 +14,28 @@ import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { COPILOT_AUTHOR, COPILOT_BUCKETS } from "./gate-finding-classes.mjs";
+import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
+
+// A thread matches a same-file finding when both carry a line and the thread line is within this many lines of it.
+export const LINE_WINDOW = 25;
 
 const USAGE = `Usage: match-copilot-threads-to-gate-findings.mjs --threads <jsonl> --repo <owner/name> [--findings-root <dir>] [--repo-root <dir>]
 
 Required:
-  --threads <jsonl>       JSONL export; one thread per line; uses pr (integer), path (string), author and body; only lines whose author is the Copilot reviewer login are read; other fields are ignored
-  --repo <owner/name>     Selects the default findings dir tmp/gate-findings/<owner-repo>/ (not needed with --findings-root)
+  --threads <jsonl>       JSONL export; one thread per line; uses pr (integer), path (string), optional line (integer), author and body; only lines whose author is the Copilot reviewer login are read; other fields are ignored
+  --repo <owner/name>     Selects the default findings dir <main-checkout>/tmp/gate-findings/<owner-repo>/ (not needed with --findings-root)
 
 Optional:
-  --findings-root <dir>   Directory holding pr-<N>/*.json round files
-  --repo-root <dir>       Base for the default findings dir (default: cwd)
+  --findings-root <dir>   Directory holding pr-<N>/draft_gate-*.json round files
+  --repo-root <dir>       Checkout whose main worktree anchors the default findings dir (default: cwd)
   --help, -h              Show this help
 
-Matching is by file only: a thread is matched when a finding of the same PR lists
-the thread path in files[]. The export has no line, so line is never compared.
+Matching is by file and line: a thread is matched when a finding of the same PR lists
+the thread path in files[] (or the singular file) and, when both the thread and the finding
+carry a line, the thread line is within ${LINE_WINDOW} lines of the finding line. When either side
+has no line, the file match alone counts.
 
 Output (stdout, JSON):
   { "threads": [{ pr, path, matched, matchedAngles, class, shouldHaveCaughtAngles }],
@@ -83,10 +90,13 @@ export function parseArgsList(argv) {
   }
   if (!options.threads) throw parseError("--threads <jsonl> is required");
   if (!options.findingsRoot) {
-    if (!options.repo || !/^[^/\s]+\/[^/\s]+$/.test(options.repo)) {
-      throw parseError("--repo <owner/name> is required when --findings-root is not given");
+    if (!options.repo) throw parseError("--repo <owner/name> is required when --findings-root is not given");
+    // The main-anchored ledger is the authoritative copy (as in gate-finding-classes.mjs), never a worktree-local tmp/ copy.
+    try {
+      options.findingsRoot = path.dirname(path.dirname(buildLogPath({ repo: options.repo, pr: 1, gate: "draft_gate", headSha: "x", tmpRoot: resolveGateArtifactTmpRoot(options.repoRoot) })));
+    } catch (error) {
+      throw parseError(error.message);
     }
-    options.findingsRoot = path.join(options.repoRoot, "tmp", "gate-findings", options.repo.replace("/", "-"));
   }
   return options;
 }
@@ -119,7 +129,7 @@ function findingFiles(finding) {
   return files.filter((entry) => typeof entry === "string");
 }
 
-/** { index, skipped }: index is pr -> Map(path -> Set(angle)) from every draft_gate-*.json round file under <root>/pr-<N>/; skipped counts unreadable or non-object ones. */
+/** { index, skipped }: index is pr -> Map(path -> [{ angle, line }]) from every draft_gate-*.json round file under <root>/pr-<N>/; skipped counts unreadable or non-object ones. */
 export async function readFindingIndex(root) {
   let dirs;
   try {
@@ -147,8 +157,8 @@ export async function readFindingIndex(root) {
       for (const finding of Array.isArray(round.findings) ? round.findings : []) {
         for (const rawPath of findingFiles(finding)) {
           const filePath = rawPath.trim();
-          if (!byPath.has(filePath)) byPath.set(filePath, new Set());
-          if (typeof finding.angle === "string") byPath.get(filePath).add(finding.angle);
+          if (!byPath.has(filePath)) byPath.set(filePath, []);
+          byPath.get(filePath).push({ angle: typeof finding.angle === "string" ? finding.angle : null, line: Number.isInteger(finding.line) ? finding.line : null });
         }
       }
     }
@@ -159,8 +169,9 @@ export async function readFindingIndex(root) {
 
 export function matchThreads(threads, { index, skipped = 0 }) {
   const results = threads.map((thread) => {
-    const angles = index.get(thread.pr)?.get(thread.path.trim());
-    const matched = angles !== undefined;
+    const near = (index.get(thread.pr)?.get(thread.path.trim()) ?? []).filter((f) => !Number.isInteger(thread.line) || f.line === null || Math.abs(thread.line - f.line) <= LINE_WINDOW);
+    const matched = near.length > 0;
+    const angles = new Set(near.flatMap((f) => (f.angle === null ? [] : [f.angle])));
     const klass = classifyThreadBody(thread.body);
     return {
       pr: thread.pr,

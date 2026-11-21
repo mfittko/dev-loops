@@ -57,3 +57,8 @@ test("the pr-description prompt names the template headings Objective and In sco
   assert.match(prompt, /An In scope section/);
   assert.doesNotMatch(prompt, /Summary section|Scope and context/);
 });
+
+test("a prompt-less angle entry renders the checklist alone in the gate prompt", () => {
+  const config = { gates: { draft: { angles: [{ name: "x", persona: "p", "developer-checklist": ["X1: Check the thing"] }] } } };
+  assert.match(resolveReviewerRole(config, "x").prompt, /- X1: Check the thing/);
+});

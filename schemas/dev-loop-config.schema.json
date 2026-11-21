@@ -406,7 +406,7 @@
                         }
                       },
                       "developer-checklist": {
-                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID. Only `gates.draft.angles` entries are read; on any other gate the key validates and is ignored (PRE-PR-DEVELOPER-SELF-CHECK).",
+                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items from `gates.draft.angles` and the pre-PR record requires evidence per ID. `resolveReviewerRole` also renders the lines into the gate angle prompt of the entry it resolves, whichever gate that entry sits under (PRE-PR-DEVELOPER-SELF-CHECK).",
                         "minItems": 1,
                         "type": "array",
                         "items": {
@@ -659,7 +659,7 @@
                         }
                       },
                       "developer-checklist": {
-                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID. Only `gates.draft.angles` entries are read; on any other gate the key validates and is ignored (PRE-PR-DEVELOPER-SELF-CHECK).",
+                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items from `gates.draft.angles` and the pre-PR record requires evidence per ID. `resolveReviewerRole` also renders the lines into the gate angle prompt of the entry it resolves, whichever gate that entry sits under (PRE-PR-DEVELOPER-SELF-CHECK).",
                         "minItems": 1,
                         "type": "array",
                         "items": {
@@ -907,7 +907,7 @@
                         }
                       },
                       "developer-checklist": {
-                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID. Only `gates.draft.angles` entries are read; on any other gate the key validates and is ignored (PRE-PR-DEVELOPER-SELF-CHECK).",
+                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items from `gates.draft.angles` and the pre-PR record requires evidence per ID. `resolveReviewerRole` also renders the lines into the gate angle prompt of the entry it resolves, whichever gate that entry sits under (PRE-PR-DEVELOPER-SELF-CHECK).",
                         "minItems": 1,
                         "type": "array",
                         "items": {

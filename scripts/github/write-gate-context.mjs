@@ -659,9 +659,9 @@ const PR_BODY_PROMPT = /\b(?:PR|pull[ -]?request)(?:['’]s)?[\s-]+(?:body|bodie
 export function readsPrBody(angle, config) {
   const name = baseAngleName(String(angle).trim());
   if (angleReviewSurface(angle).kind === "always" || VERIFIED_ITEMS_ANGLES.has(name)) return true;
-  // The same ungated lookup the dispatch emitter uses (resolveReviewerRole), so this check reads the entry.prompt the reviewer receives; the rendered checklist lines follow it and never name the PR body.
+  // The same ungated lookup the dispatch emitter uses (resolveReviewerRole), so this check reads the entry.prompt the reviewer receives; the rendered checklist lines follow it, so they are tested with it.
   const entry = findAngleEntry(config, name);
-  return !entry || entry.readsPrBody === true || PR_BODY_PROMPT.test(entry.prompt ?? "");
+  return !entry || entry.readsPrBody === true || PR_BODY_PROMPT.test([entry.prompt ?? "", ...(entry["developer-checklist"] ?? [])].join("\n"));
 }
 
 /**
