@@ -5036,7 +5036,7 @@ test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate f
   const headSha = "abc1234";
   const finding = (round, isResolved) => ({ id: `t${round}${isResolved}`, isResolved, comments: { nodes: [{ body: `<!-- dev-loops:finding 0123456789abcdef severity=low angle=scope round=${round} -->` }] } });
   const verdict = (gate, head, v) => ["Gate review: " + gate, `Reviewed head SHA: ${head}`, `Verdict: ${v}`, "Findings summary: x", "Next action: y"].join("\n");
-  const run = async ({ round, rounds = [round], cap, threads, preHead, seedProof = false, cleanCap = false, baseRefName }) => {
+  const run = async ({ round, rounds = [round], cap, threads, preHead, seedProof = false, cleanCap = false, postedAs, baseRefName }) => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-capfixed-"));
     try {
       await writeFile(path.join(tempDir, ".devloops"), `version: 1\ngates:\n  requireFanoutEvidence: false\n${cap === undefined ? "" : `  draft:\n    maxReviewRounds: ${cap}\n`}`, "utf8");
@@ -5067,6 +5067,8 @@ test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate f
         ])}\n` },
         { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: `${JSON.stringify([
           ...rounds.map((r, i) => ({ id: 900 + i, body: `Gate findings\n<!-- dev-loops:gate-findings-review draft_gate bcd5678 round=${r} -->`, submitted_at: `2026-05-29T20:0${i}:00Z` })),
+          // The posted cap-round review of a clean cap round, by an author of the given association.
+          ...(postedAs ? [{ id: 950, body: "Gate findings\n<!-- dev-loops:gate-findings-review draft_gate aaaaaaa round=4 -->", submitted_at: "2026-05-29T20:09:00Z", user: { login: "maint", type: "User" }, author_association: postedAs }] : []),
         ])}\n` },
         { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: threads } } } } }) + "\n" },
       ]);
@@ -5091,6 +5093,9 @@ test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate f
   assert.equal(await run({ rounds: [], threads: [], preHead: headSha, seedProof: true }), "violation", "sealed proof without --base-ref-name");
   // A clean cap round proven only by its local ledger (no posted draft_gate review) is no pre-merge proof.
   assert.equal(await run({ rounds: [], threads: [], preHead: headSha, seedProof: true, cleanCap: true, baseRefName: "main" }), "violation", "unposted clean cap ledger with --base-ref-name");
+  // Paired controls on the same fixture: a trusted posted round-4 header at the cap head is the only difference that satisfies it.
+  assert.equal(await run({ rounds: [], threads: [], preHead: headSha, seedProof: true, cleanCap: true, postedAs: "OWNER", baseRefName: "main" }), "satisfied", "trusted posted cap-round header");
+  assert.equal(await run({ rounds: [], threads: [], preHead: headSha, seedProof: true, cleanCap: true, postedAs: "NONE", baseRefName: "main" }), "violation", "untrusted posted cap-round header");
 }, 60000);
 
 test("parseDetectCheckpointEvidenceCliArgs honors --read-only (skips the runner-ownership heartbeat)", () => {

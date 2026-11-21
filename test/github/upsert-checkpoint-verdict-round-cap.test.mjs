@@ -433,7 +433,7 @@ test("the closure round line renders a normalized full SHA and refuses a short, 
 
 // A clean cap round whose post was refused at its own head posts there once the PR head has moved on.
 const CAP_HEAD = "4".repeat(40);
-async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = "clean", ancestor = true, headSha = capHead, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate", sealedHead = capHead, issueComments = [], seal = "valid", mergeBaseCode, retained = false, sealedExtra = {} } = {}) {
+async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = "clean", ancestor = true, headSha = capHead, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate", sealedHead = capHead, issueComments = [], seal = "valid", mergeBaseCode, retained = false, sealedExtra = {}, bare = false } = {}) {
   await seedPrior(repoRoot, priorHeads);
   const deltaDir = path.join(repoRoot, "tmp", "gate-delta");
   await rm(deltaDir, { recursive: true, force: true });
@@ -456,7 +456,8 @@ async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = 
   const inner = makeRunChild(posted, { ...prState, calls, issueComments });
   const runChild = async (cmd, args = [], ...rest) => (cmd === "git" && args.includes("merge-base") ? { code: mergeBaseCode ?? (ancestor ? 0 : 1), stdout: "", stderr: "" } : inner(cmd, args, ...rest));
   try {
-    const options = parseUpsertCheckpointVerdictCliArgs([
+    // `bare` parses only the four flags the cap-round exit names.
+    const options = parseUpsertCheckpointVerdictCliArgs(bare ? ["--repo", "owner/repo", "--pr", "17", "--gate", gate, "--post-sealed-cap-round"] : [
       "--repo", "owner/repo", "--pr", "17", "--gate", gate, "--head-sha", headSha, "--findings-ledger", ledger,
       "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 0, question: 0, nit: 0 }), "--findings-summary", "cap round", "--next-action", "follow the verdict", "--inline-reason", "cap round", ...extraArgs,
     ]);
@@ -650,14 +651,18 @@ test("a cap-round ledger headSha that is not the filename SHA never becomes the 
   }
 });
 
-test("--post-sealed-cap-round on a ready PR posts the clean cap round at its head with a ledger-derived summary", async () => {
-  await withTempDir(async (tempDir) => {
-    const out = await postCleanCapRound(tempDir, { prState: { isDraft: false }, proven: true, sealedExtra: { provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "reviewer-a" }, { angle: "holistic", reviewer: "reviewer-b" }] } }, extraArgs: ["--post-sealed-cap-round"] });
-    assert.equal(out.error, undefined);
-    assert.equal(verdictOf(out), "clean");
-    assert.match(out.body, /round[=: ]+4\b/i);
-    assert.ok(out.body.includes(CAP_HEAD.slice(0, 7)));
-    assert.match(out.body, /\*\*Findings summary:\*\* 0 findings from the findings ledger\./);
-    assert.doesNotMatch(out.body, /undefined/);
-  }, { prefix: "dev-loops-round-cap-post-sealed-" });
-});
+// The four-flag command the cap-round exit prints, on a zero-finding and on an all-rejected clean ledger.
+const SEALED_PROVENANCE = { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "reviewer-a" }, { angle: "holistic", reviewer: "reviewer-b" }] };
+for (const [name, findings, summary] of [["zero-finding", [], "0 findings"], ["all-rejected", [finding("low", "reject")], "1 finding"]]) {
+  test(`--post-sealed-cap-round with only --repo, --pr, --gate and the flag posts a ${name} clean cap round with a ledger-derived summary`, async () => {
+    await withTempDir(async (tempDir) => {
+      const out = await postCleanCapRound(tempDir, { prState: { isDraft: false }, proven: true, bare: true, sealedExtra: { provenance: SEALED_PROVENANCE, findings } });
+      assert.equal(out.error, undefined);
+      assert.equal(verdictOf(out), "clean");
+      assert.match(out.body, /round[=: ]+4\b/i);
+      assert.ok(out.body.includes(CAP_HEAD.slice(0, 7)));
+      assert.match(out.body, new RegExp(`\\*\\*Findings summary:\\*\\* ${summary} from the findings ledger\\.`));
+      assert.doesNotMatch(out.body, /undefined/);
+    }, { prefix: "dev-loops-round-cap-post-sealed-" });
+  });
+}

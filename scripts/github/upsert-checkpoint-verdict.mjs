@@ -1019,6 +1019,9 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   // The sealed cap-round ledger supplies head, verdict, findings and mode at run time (a cap-round ledger is fan-out).
   if (options.postSealedCapRound) {
     if (options.gate !== "draft_gate") throw parseError("--post-sealed-cap-round requires --gate draft_gate");
+    // The sealed ledger supplies these; a caller-supplied value would be silently replaced or passed through.
+    const supplied = ["headSha", "verdict", "findingsJson", "findingsFile", "findingsLedger", "findingsSummary", "findingsSeverityCounts", "nextAction"].filter((key) => options[key] !== undefined);
+    if (supplied.length > 0) throw parseError(`--post-sealed-cap-round derives head, verdict, findings and next action from the sealed ledger; do not pass ${supplied.join(", ")}`);
     options.executionMode = "fanout_fanin";
   }
   options.executionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
@@ -2807,8 +2810,12 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const { headRefOid } = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], { env, ghCommand, runChild });
     const capRound = await resolveCapRound({ repo: options.repo, pr: options.pr, headSha: headRefOid }, { repoRoot });
     if (!isCleanCapRound(capRound)) throw new Error(`--post-sealed-cap-round: ${options.repo}#${options.pr} has no sealed clean draft_gate cap round at ${headRefOid} to post (the cap round is missing, unreadable or has act items).`);
-    const n = (capRound.log.findings ?? []).length;
-    options = { ...options, headSha: capRound.log.headSha, findingsLedger: capRound.ledgerPath, nextAction: "mark ready for review", findingsSummary: `${n} ${n === 1 ? "finding" : "findings"} from the findings ledger.` };
+    const findings = capRound.log.findings ?? [];
+    const n = findings.length;
+    // A clean cap round holds no open act item, so the unresolved severity counts the clean floor reads are the act items per severity (zero).
+    const findingsSeverityCounts = { high: 0, medium: 0, low: 0, question: 0, nit: 0 };
+    for (const f of listOpenActItems(findings)) findingsSeverityCounts[normalizeSeverity(f.severity)] = (findingsSeverityCounts[normalizeSeverity(f.severity)] ?? 0) + 1;
+    options = { ...options, headSha: capRound.log.headSha, findingsLedger: capRound.ledgerPath, nextAction: "mark ready for review", findingsSummary: `${n} ${n === 1 ? "finding" : "findings"} from the findings ledger.`, findingsSeverityCounts };
   }
   // Root cause 1: allow resurrected sessions to claim ownership when the previous
   // run's coordination record is stale. Without this, a new run ID is rejected even

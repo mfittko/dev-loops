@@ -59,7 +59,7 @@ import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loo
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
-import { draftGatePostedHeads, fingerprintFinding } from "./_gate-finding-surface.mjs";
+import { draftGatePostedHeads, fingerprintFinding, resolveTrustedEvidencePredicate } from "./_gate-finding-surface.mjs";
 import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -119,7 +119,7 @@ export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied
  * A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
  * @param {{ repo: string, pr: number, currentHeadSha: string, prData?: { isDraft?: boolean, baseRefName?: string } }} context
  */
-export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = resolveCapRoundFixed, requirePostedCleanCap = true }) {
+export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = resolveCapRoundFixed, requirePostedCleanCap = true, trustRuntime = {} }) {
   let failure = null;
   const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
   const capRound = await resolve(
@@ -128,15 +128,17 @@ export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = re
     { repoRoot, onFailure: (condition) => { if (condition !== "no_cap_round") failure = condition; } },
   ).catch(() => { failure = "cap_round_unresolved"; return null; });
   // A clean cap round has no fixer pass: only its posted review is visible to CI, so a ledger-only proof is no clean draft_gate evidence.
-  // shortcut: reviews absent from the context (a caller that read none) skip this check; every routed caller reads them.
-  if (capRound && requirePostedCleanCap && Array.isArray(context.prData?.reviews) && cleanCapVerdictUnposted(capRound, draftGatePostedHeads(context.prData.reviews.map((r) => r?.body)))) {
-    return { capRoundFixed: false, failure: "clean_cap_verdict_unposted" };
+  // Absent reviews and untrusted authors prove nothing (fail closed), matching the detector and ready-for-review.
+  if (capRound && requirePostedCleanCap && isCleanCapRound(capRound)) {
+    // `gh pr view --json reviews` carries camelCase `author`/`authorAssociation`; the trust predicate reads the REST shape.
+    const restShaped = (Array.isArray(context.prData?.reviews) ? context.prData.reviews : []).map((r) => ({ body: r?.body, user: { login: r?.author?.login, type: r?.author?.type }, author_association: r?.authorAssociation }));
+    const isTrusted = await resolveTrustedEvidencePredicate(restShaped, trustRuntime);
+    if (cleanCapVerdictUnposted(capRound, draftGatePostedHeads(restShaped.filter(isTrusted).map((r) => r.body)))) return { capRoundFixed: false, failure: "clean_cap_verdict_unposted" };
   }
   return { capRoundFixed: Boolean(capRound), failure };
 }
 
 /** True when `capRound` is a clean cap round (ADR 0250) with no posted draft_gate header (`{ head, round }`) at its head and cap round: the proof then lives in a local ledger only. */
-// shortcut: the header is matched by text from any author, so a forged header passes; upgrade by filtering to trusted authors where the caller has them.
 export const cleanCapVerdictUnposted = (capRound, postedHeads) => {
   const head = String(capRound?.log?.headSha ?? "").toLowerCase();
   return isCleanCapRound(capRound) && !postedHeads.some((posted) => head.startsWith(posted.head) && posted.round === capRound.round);

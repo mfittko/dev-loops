@@ -10783,11 +10783,18 @@ test("resolveDraftCapRoundFact: a clean cap round with no posted draft_gate revi
   const capHead = "98".repeat(20);
   const cleanCapRound = { log: { verdict: "clean", headSha: capHead, findings: [] }, residue: [], round: 4 };
   const header = (head, round) => `<!-- dev-loops:gate-findings-review draft_gate ${head} round=${round} -->`;
-  const fact = (reviews, extra = {}, capRound = cleanCapRound) => resolveDraftCapRoundFact({ repo: "o/r", pr: 9, currentHeadSha: "ab".repeat(20), prData: { isDraft: false, baseRefName: "main", reviews } }, { repoRoot: ".", resolve: async () => capRound, ...extra });
-  assert.deepEqual(await fact([{ body: header("6ef58a1", 3) }]), { capRoundFixed: false, failure: "clean_cap_verdict_unposted" });
-  assert.deepEqual(await fact([{ body: header(capHead.slice(0, 7), 4) }]), { capRoundFixed: true, failure: null }, "the posted cap-round review proves it");
-  assert.deepEqual(await fact([{ body: header(capHead.slice(0, 7), 3) }]), { capRoundFixed: false, failure: "clean_cap_verdict_unposted" }, "a header at the cap head but another round does not prove it");
-  assert.deepEqual(await fact([{ body: header("6ef58a1", 3) }], { requirePostedCleanCap: false }), { capRoundFixed: true, failure: null }, "the post itself is not gated on the post");
+  // The shape `gh pr view --json reviews` returns; trustRuntime stubs the viewer lookup so no real gh runs.
+  const review = (body, association = "OWNER") => ({ body, author: { login: "maint" }, authorAssociation: association });
+  const fact = (reviews, extra = {}, capRound = cleanCapRound) => resolveDraftCapRoundFact({ repo: "o/r", pr: 9, currentHeadSha: "ab".repeat(20), prData: { isDraft: false, baseRefName: "main", reviews } }, { repoRoot: ".", resolve: async () => capRound, trustRuntime: { runChild: async () => ({ code: 1, stdout: "", stderr: "no viewer" }) }, ...extra });
+  const unposted = { capRoundFixed: false, failure: "clean_cap_verdict_unposted" };
+  assert.deepEqual(await fact([review(header("6ef58a1", 3))]), unposted);
+  assert.deepEqual(await fact([review(header(capHead.slice(0, 7), 4))]), { capRoundFixed: true, failure: null }, "the posted cap-round review proves it");
+  assert.deepEqual(await fact([review(header(capHead.slice(0, 7), 3))]), unposted, "a header at the cap head but another round does not prove it");
+  assert.deepEqual(await fact([review(header("6ef58a1", 3))], { requirePostedCleanCap: false }), { capRoundFixed: true, failure: null }, "the post itself is not gated on the post");
+  assert.deepEqual(await fact([review(header(capHead.slice(0, 7), 4), "NONE")]), unposted, "a forged header from an untrusted author proves nothing");
+  assert.deepEqual(await fact(undefined), unposted, "absent reviews fail closed");
+  assert.deepEqual(await fact([review(header("deadbee", 4))]), unposted, "a header whose head prefix does not match the cap head does not prove it");
+  assert.deepEqual(await fact([], { resolve: async () => { throw new Error("unreadable"); } }), { capRoundFixed: false, failure: "cap_round_unresolved" }, "a thrown resolver is the typed failure, never a posted-check result");
   const withAct = { log: { verdict: "findings_present", headSha: capHead, findings: [{ judgeDisposition: "act", severity: "low", summary: "x" }] }, residue: [] };
   assert.deepEqual(await fact([], {}, withAct), { capRoundFixed: true, failure: null }, "a cap round with act items posts through the normal flow");
 });
