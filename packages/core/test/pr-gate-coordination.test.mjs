@@ -5087,6 +5087,7 @@ test("#3373: the reply_resolve_review_threads reason names the close-gate-findin
   for (const result of [cleanMarker, capFixed]) {
     assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
     assert.match(result.reason, /judge-act thread with remedyKind pr_body is closed by a close-gate-findings rerun after the PR-body edit/);
+    assert.match(result.reason, /judge-disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied — closed by a close-gate-findings rerun/);
   }
   assert.match(capFixed.reason, /cap round's fixer pass landed/);
 });

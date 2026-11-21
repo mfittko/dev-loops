@@ -23,7 +23,7 @@ import {
   resolveGateRound,
 } from "./_gate-finding-surface.mjs";
 import { replyAndMaybeResolve } from "./_review-thread-mutations.mjs";
-import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateConfig, resolveTrackerProvider } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY, isOpenActItem } from "@dev-loops/core/loop/gate-fanin";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -692,6 +692,25 @@ async function runEvidenceOnlyClosePass({ repo, pr, gate, headSha, round, thread
   return { evidenceOnlyClosed, dispositionFailures };
 }
 
+// The gate context sits in the reviewed worktree while the ledger sits in the main checkout, so each resolved checkout is tried as the
+// reviewed worktree. A checkout holding no context is skipped; any other read error, conflicting digests or a malformed digest fail closed.
+async function readRecordedBodyDigest(options, verdictHead, repoRoot) {
+  const hint = "rerun close-gate-findings from the reviewed worktree or rebuild the gate context at the verdict head";
+  const digests = new Set();
+  for (const root of resolveLedgerCheckouts(repoRoot)) {
+    try {
+      digests.add(await readReviewedBodySha256(options, verdictHead, root));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.includes("holds no context")) throw new Error(`${message.replace(/,? or fix the items with a commit/, "")}; ${hint}`);
+    }
+  }
+  digests.delete(null);
+  if (digests.size > 1) throw new Error(`body_read_unrecorded: the checkouts record different pr-body digests at ${verdictHead}; ${hint}`);
+  const [digest] = digests;
+  return typeof digest === "string" && /^[0-9a-f]{64}$/.test(digest) ? digest : null;
+}
+
 // PR-body act close (GATE-EXEC-THREAD-DISPOSITION): a gate-authored thread whose every marker the judge disposed `act`
 // with remedyKind pr_body closes once the live PR body digest differs from the pr-body digest the gate context recorded at
 // that marker's verdict head. The changed digest is the evidence (ADR 0271); the reply cites both digests and no commit.
@@ -700,6 +719,7 @@ async function runPrBodyActClosePass({ repo, pr, gate, headSha, round, threads, 
   let prBodyActClosed = 0;
   const dispositionFailures = [];
   let liveDigest;
+  let liveFailure = null; // A failed live read is cached once per run and recorded for each candidate.
   for (const thread of threads) {
     if (thread.isResolved || thread.author !== login) continue;
     const marker = parseFindingMarker(thread.body);
@@ -714,11 +734,19 @@ async function runPrBodyActClosePass({ repo, pr, gate, headSha, round, threads, 
       }
       const recorded = [];
       for (const verdictHead of judgement.verdictHeads) {
-        const digest = verdictHead ? await readReviewedBodySha256({ repo, pr, gate, findingsLedger: ledgerPath }, verdictHead, repoRoot) : null;
+        const digest = verdictHead ? await readRecordedBodyDigest({ repo, pr, gate, findingsLedger: ledgerPath }, verdictHead, repoRoot) : null;
         if (!digest) throw new Error(`body_read_unrecorded: no pr-body digest is recorded for the verdict head of thread ${thread.threadId} (${verdictHead || "unknown head"}); left open`);
         recorded.push(digest);
       }
-      liveDigest ??= prBodySha256((await runGhJson(["pr", "view", String(pr), "--repo", repo, "--json", "body"], { env, ghCommand, runChild })).body);
+      if (liveFailure) throw new Error(liveFailure);
+      if (liveDigest === undefined) {
+        try {
+          liveDigest = prBodySha256((await runGhJson(["pr", "view", String(pr), "--repo", repo, "--json", "body"], { env, ghCommand, runChild })).body);
+        } catch (err) {
+          liveFailure = `body_read_failed: ${err instanceof Error ? err.message : String(err)}`;
+          throw new Error(liveFailure);
+        }
+      }
       if (recorded.includes(liveDigest)) continue; // The body edit is not applied yet.
       const summary = escapeProse(extractFindingSummary(thread.body)).replace(/"/g, "'");
       const was = [...new Set(recorded)].map((d) => d.slice(0, 12)).join(", ");
