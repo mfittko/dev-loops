@@ -317,6 +317,8 @@ test("wait-pr-checks --help prints usage and exits 0", async () => {
   assert(result.stdout.includes("wait-pr-checks.mjs"));
   assert(result.stdout.includes("--timeout"));
   assert(result.stdout.includes("--poll"));
+  assert(result.stdout.includes("A GraphQL limit alone switches the head read to REST"));
+  assert(result.stdout.includes("Only when the REST head read also fails does the"));
   // USAGE must match the actual exit-code behavior: argument/gh/runtime errors
   // exit 1 (repo convention, asserted above), exit 2 is not-settled only.
   assert(result.stdout.includes('1  Red (status "failure"), or an argument/gh/runtime error'));

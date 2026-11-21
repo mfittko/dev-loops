@@ -73,8 +73,10 @@ once with the core reset as resetAt), anything else is a "secondary" burst limit
 A rate limit is never reported as CI success or failure.
 The RATE_LIMITED envelope is written to stdout when output is unfiltered, and
 always to stderr.
-On GraphQL rate-limit exhaustion the tool waits for the reset inside the
-remaining --timeout budget (heartbeats continue) and retries once. A
+A GraphQL limit alone switches the head read to REST and the watch continues
+(see the race-guard exception). Only when the REST head read also fails does the
+tool wait for the GraphQL reset inside the remaining --timeout budget
+(heartbeats continue) and retry once, with budget "primary_graphql". A
 GraphQL reset past the requested budget, or a core limit, returns RATE_LIMITED at once.
 On a secondary limit the tool backs off and retries inside
 --timeout: the delay is the exponential step, raised to the error's retry-after seconds
