@@ -357,9 +357,10 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
       if (body.includes("Gate review:") || body.includes("**draft_gate**") || body.includes("**pre_approval_gate**") || isGateMachineArtifactBody(body)) {
         continue;
       }
-      // The loop's own fixer disposition markers are tool output, whatever login `gh` posts under.
+      // The loop's own fixer and judge-bound disposition markers are tool output, whatever login `gh` posts under.
       // shortcut: markers are not matched to loop records, a pasted marker silences a comment; upgrade if abused.
-      if (parseReviewBodyDispositionMarkers(body).length > 0 || parseCopilotBodyDispositionMarker(body)?.fixSha) {
+      const copilotMarker = parseCopilotBodyDispositionMarker(body);
+      if (parseReviewBodyDispositionMarkers(body).length > 0 || copilotMarker?.fixSha || copilotMarker?.judgeBinding) {
         continue;
       }
       humanComments.push({
