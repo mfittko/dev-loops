@@ -406,6 +406,10 @@ test("verify-release-approval appends one record per gh call", async () => {
     const records = readLog(logPath);
     assert.equal(records.length, 1);
     assert.equal(records[0].status, 0);
+    const coreLog = path.join(dir, "core.jsonl");
+    recordGhCall(["api", "-X", "GET", "search/issues", "-f", "q=x"], { durationMs: 0, status: 0, stderr: null, script: records[0].script, logPath: coreLog });
+    const pick = ({ script, pr, kind, subcommand, status, rateLimited }) => ({ script, pr, kind, subcommand, status, rateLimited });
+    assert.deepEqual(pick(records[0]), pick(readLog(coreLog)[0]));
   });
 });
 
@@ -428,6 +432,10 @@ test("post-gate-verdict-fallback appends one record for its gh api call", async 
     }
     const records = readLog(logPath);
     assert.equal(records.length, 1);
-    assert.equal(records[0].subcommand, "api POST");
+    const coreLog = path.join(dir, "core.jsonl");
+    recordGhCall(["api", "--method", "POST", "-H", "Content-Type: application/json", "--input", "-", "repos/o/r/issues/1/comments"], { durationMs: 0, status: 0, stderr: "", script: records[0].script, logPath: coreLog });
+    const pick = ({ script, pr, kind, subcommand, status, rateLimited }) => ({ script, pr, kind, subcommand, status, rateLimited });
+    assert.deepEqual(pick(records[0]), pick(readLog(coreLog)[0]));
+    assert.deepEqual([records[0].subcommand, records[0].pr], ["api", 1]);
   });
 });

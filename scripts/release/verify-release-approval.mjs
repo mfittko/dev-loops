@@ -292,9 +292,19 @@ export function recordGhCall(args, { durationMs, status }) {
       if (!main) return;
       file = path.join(main, "tmp", "gh-calls.jsonl");
     }
-    const subcommand = args.slice(0, 3).filter((a) => !a.startsWith("-")).join(" ");
+    // Mirror core describeGhCall/extractPr for the `gh api <endpoint>` shapes this script uses.
+    const words = [];
+    for (const arg of args.slice(0, 3)) {
+      if (arg.startsWith("-") || /^\d+$/u.test(arg)) break;
+      words.push(arg);
+    }
+    const subcommand = words.join(" ");
+    const valueFlags = new Set(["-F", "-f", "--field", "--raw-field", "-H", "--header", "--jq", "-q", "-X", "--method", "--input", "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
+    const endpoint = args[0] === "api" ? args.slice(1).find((a, i, rest) => !a.startsWith("-") && !valueFlags.has(rest[i - 1])) : undefined;
+    const prMatch = endpoint === undefined ? null : /\/(?:pulls|issues)\/(\d+)(?:\/|$)/u.exec(endpoint);
+    const pr = prMatch ? Number(prMatch[1]) : null;
     mkdirSync(path.dirname(file), { recursive: true });
-    appendFileSync(file, `${JSON.stringify({ timestamp: new Date().toISOString(), script: path.basename(process.argv[1] ?? ""), pr: null, kind: args[0] === "api" && args[1] !== "graphql" ? "rest" : "graphql", subcommand, durationMs, status, rateLimited: status === 0 ? false : null })}\n`);
+    appendFileSync(file, `${JSON.stringify({ timestamp: new Date().toISOString(), script: path.basename(process.argv[1] ?? ""), pr, kind: args[0] === "api" && args[1] !== "graphql" ? "rest" : "graphql", subcommand, durationMs, status, rateLimited: status === 0 ? false : null })}\n`);
   } catch { /* swallow */ }
 }
 
