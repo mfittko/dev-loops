@@ -2,6 +2,7 @@ import { test, mock } from "bun:test";
 import assert from "node:assert/strict";
 import { recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { mergePr, parseMergePrCliArgs, main, defaultReadMergeDiff, defaultIsAncestor, defaultComputePatchId, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
+import { extractYesApproval, buildApprovalQuestion, writeApprovalRecord, buildApprovalComment } from "@dev-loops/core/github/ask-merge-approval";
 import { runChild } from "../../scripts/_cli-primitives.mjs";
 import { captureStream } from "../_helpers.mjs";
 import { scanDiffText } from "@dev-loops/core/security/secret-scan";
@@ -1713,6 +1714,34 @@ test("a patch-id marker for a different patch-id is refused with the stale-appro
   runtime.computePatchId = () => PATCH_ID;
   const threw = await mergePr(baseOptions({ standingAuthorization: false }), runtime).catch((e) => e);
   assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "merge_approval" && /no fresh mfittko approval on head/.test(f.reason)));
+});
+
+async function askApprovalRuntime({ forge }) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pr-ask-merge-"));
+  const env = { ...process.env, DEVLOOPS_APPROVAL_DIR: path.join(dir, "approvals") };
+  const approval = extractYesApproval({
+    tool_input: { questions: [{ question: buildApprovalQuestion({ repo: "mfittko/dev-loops", pr: 5, headSha: OLD_HEAD, patchId: PATCH_ID }) }] },
+    tool_response: { answers: { [buildApprovalQuestion({ repo: "mfittko/dev-loops", pr: 5, headSha: OLD_HEAD, patchId: PATCH_ID })]: "Yes" } },
+  });
+  const id = forge ? "f".repeat(64) : writeApprovalRecord({ approval }, env).id;
+  const { runtime } = makeRuntime({
+    evidence: ESCALATED_EVIDENCE,
+    comments: [{ user: { login: "mfittko" }, body: buildApprovalComment({ id, headSha: OLD_HEAD, patchId: PATCH_ID }) }],
+  });
+  runtime.env = env;
+  runtime.computePatchId = () => PATCH_ID;
+  return runtime;
+}
+
+test("a hook-marked approval comment with its harness record approves an escalated merge (MERGE-ASK-APPROVAL)", async () => {
+  const result = await mergePr(baseOptions({ standingAuthorization: false }), await askApprovalRuntime({ forge: false }));
+  assert.equal(result.ok, true);
+  assert.equal(result.approvalMatch, "patch_id");
+});
+
+test("a hook-marked approval comment without a harness record fails closed with a recovery", async () => {
+  const threw = await mergePr(baseOptions({ standingAuthorization: false }), await askApprovalRuntime({ forge: true })).catch((e) => e);
+  assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "merge_approval" && /Recovery: ask the operator the approval question again/.test(f.reason)));
 });
 
 test("a patch-id marker is refused when the base is not contained (no patch-id computed)", async () => {

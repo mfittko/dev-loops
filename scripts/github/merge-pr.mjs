@@ -26,6 +26,7 @@ import {
   toReviewFact,
   projectSubmittedReviewFacts,
 } from "@dev-loops/core/loop/merge-approval";
+import { filterAskApprovalComments } from "@dev-loops/core/github/ask-merge-approval";
 import { summarizeCopilotReviews, resolveDraftGateRoundResetMs } from "@dev-loops/core/github/copilot-helpers";
 import { isCopilotReviewObservableViaGraphql } from "./request-copilot-review.mjs";
 import { getLastCopilotReview, getLastCopilotReviewHeadSha, fetchDeltaChangedFiles, resolveCarriedConvergence } from "../loop/_copilot-convergence-carry.mjs";
@@ -876,6 +877,8 @@ export async function mergePr(options, runtime = {}) {
     { env, ghCommand, runChild, ghJson },
   ).catch((error) => `could not check ADR numbers: ${error instanceof Error ? error.message : String(error)}`);
 
+  // A hook-marked approval comment counts only with a matching harness record (MERGE-ASK-APPROVAL, ADR 0315); an unmarked operator line (Pi path) passes through.
+  const askApproval = filterAskApprovalComments({ comments, repo: options.repo, pr: Number(options.pr), currentHeadSha, currentPatchId, env });
   const approverAssumed = options.check === true && options.humanApprovedBy === undefined;
   const verdict = evaluateMergePreconditions({
     // --check without an approver passes a sentinel isValidGithubLogin rejects, so no account can match it and the report names the approval still needed.
@@ -896,7 +899,7 @@ export async function mergePr(options, runtime = {}) {
     currentHeadSha,
     currentPatchId,
     reviews: submittedReviews,
-    comments,
+    comments: askApproval.comments,
     standingAuthorized,
     stableRelease: options.stableRelease === true,
     copilotAbsentReviewDisposition,
@@ -917,11 +920,14 @@ export async function mergePr(options, runtime = {}) {
     && verdict.copilotConvergenceState === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW
     && options.lightweight !== true
     && resolveEffectiveCopilotRoundCap(capConfig, { lightweight: true }) < resolveEffectiveCopilotRoundCap(capConfig);
-  const failures = lightweightRemedy
+  const failures = (lightweightRemedy
     ? verdict.failures.map((f) => (f.precondition === "copilot_convergence"
       ? { ...f, reason: `${f.reason}. If this PR was light-dispatched (and only then), re-run merge-pr with --lightweight so the composed lightweight round cap applies` }
       : f))
-    : verdict.failures;
+    : verdict.failures
+  ).map((f) => (askApproval.refusals.length > 0 && (f.precondition === "merge_approval" || f.precondition === "size_budget_human_approval")
+    ? { ...f, reason: `${f.reason}. ${askApproval.refusals.join(" ")}` }
+    : f));
   // Unreadable evidence, or evidence for another head, has no size outcome for this head: sizeClass is unknown, and so is mergeClass unless a stable release forces escalated.
   const approval = {
     ...describeApproval({ verdict, headSha: currentHeadSha, patchId: currentPatchId, sizeClass: evidence.sizeOutcome }),

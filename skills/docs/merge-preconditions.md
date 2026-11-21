@@ -466,6 +466,11 @@ After a confirmed merge, `merge-pr.mjs` runs three steps itself and reports them
 - Clean up stale branches
 - <!-- rule: MERGE-POSTMERGE-FULL-SHA-REPORT --> `MERGE-POSTMERGE-FULL-SHA-REPORT`: the merge report MUST name the full 40-hex merge commit SHA, never an abbreviated SHA.
 
+## Ask-dialog approval (Claude Code)
+
+<!-- rule: MERGE-ASK-APPROVAL -->
+`MERGE-ASK-APPROVAL`: Parent: `PURPOSE-HIGHEST-SAFE-AUTONOMY`. Under Claude Code, an operator's yes answer in the ask dialog counts as the per-merge approval of an escalated or stable-release merge. The orchestrator asks one question with the exact text `Approve merge of <owner/name> PR #<n> at head <40-hex> with patch-id <40-hex>?`. The PostToolUse `AskUserQuestion` hook (`.claude/hooks/post-tool-use-ask-approval.mjs`) reads the answer. On a yes it writes a record (repo, PR, head SHA, patch-id, question, answer, time, session) outside every checkout, signed with an HMAC key the harness holds (ADR 0315). It then posts `approve merge <head> patch-id <id>` plus a marker line `<!-- dev-loops:ask-approval id=<record-id> -->` on the PR. `merge-pr.mjs` accepts an unmarked operator comment as today (the Pi path). It accepts a marked comment only when a signed record for the same repo, PR, head and patch-id exists and the head or the patch-id equals the current one. Any other marked comment is dropped and the refusal names the recovery: ask the approval question again with the current facts. `.claude/hooks/pre-tool-use-approval-guard.mjs` denies every agent tool call that reads, writes or names the record directory. The raw comment write deny and the comment writers (`OPERATOR-OWNED-LINE`) keep agents from posting the line. Only the hook posts it. Decision: ADR 0315 (`docs/decisions/0315-ask-dialog-merge-approval-record.md`).
+
 ## Cross-references
 
 - [Confirmation rules](confirmation-rules.md)
