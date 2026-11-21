@@ -1706,7 +1706,7 @@ export function assertJudgeSpecSourceMatchesLedger(options, ledgerFindings) {
 // `nonLocatableFindings` also drives an invisible fingerprint+disposition
 // marker per finding, load-bearing for GATE-EXEC-FINDING-THREADS's
 // cross-round suppression/deferral tracking.
-export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, converged, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, closureFromHead, pr, judgeSpecSource, judgeUnavailableReason, staleBaseNote }) {
+export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, converged, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, closureFromHead, pr, judgeSpecSource, judgeUnavailableReason, staleBaseNote, judgeSkippedNoFindings }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1730,6 +1730,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     ...(staleBaseNote ? [`**Base freshness:** stale; ${staleBaseNote}`] : []),
     ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockerCounts(gateBlockers)}`] : []),
     ...(judgeSpecSource ? [judgeSpecSource === "unavailable" ? JUDGE_UNAVAILABLE_LINES[judgeUnavailableReason] : JUDGE_SPEC_LINES[judgeSpecSource]] : []),
+    ...(judgeSkippedNoFindings ? ["**Judge:** skipped, the round has no findings to dispose"] : []),
     ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),
     // GATE-EXEC-LOW-NIT-CONVERGENCE: rendered only for a validated converged draft_gate post.
     ...(gate === "draft_gate" && verdict === "clean" && converged ? [`**Converged:** fixer \`${converged.fixerCommit}\` delta \`${converged.deltaDigest}\``] : []),
@@ -3891,6 +3892,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     headSha: canonicalHeadSha,
     converged: convergedMarker,
     staleBaseNote,
+    judgeSkippedNoFindings: Array.isArray(preloadedFindingsLedger?.findings) && preloadedFindingsLedger.findings.length === 0,
     findingsSummary: effectiveFindingsSummary,
     structuredFindings,
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,

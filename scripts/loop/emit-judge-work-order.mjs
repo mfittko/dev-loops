@@ -229,6 +229,15 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   // The judge pass appends the pinned finding after the findings read, so its cluster id is the array index of the first appended finding (the read length; 0 for an empty read).
   const findingsRead = parseSource(findings);
   const copilotBodyClusterId = (Array.isArray(findingsRead) ? findingsRead : findingsRead?.findings ?? []).length;
+  // A well-formed empty ledger with no pinned Copilot body has nothing to dispose (GATE-EXEC-JUDGE-PHASE); write no plan, work order or index entry.
+  const ledgerFindings = Array.isArray(findingsRead) ? findingsRead : findingsRead?.findings;
+  if (Array.isArray(ledgerFindings) && ledgerFindings.length === 0 && !copilotBody) {
+    return {
+      judgeSkipped: { reason: "no_findings", specDigest },
+      scopeDrift: { verdict: "within_scope", derivedFrom: "spec_identity", rationale: "The round has no findings and the spec identity pins the spec digest, so no drift is recorded.", driftedAreas: [] },
+      nextStep: "Dispatch no judge, run no judge-pass, and write the findings log without --judge-verdict.",
+    };
+  }
   const operatorFocus = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined);
   // Slice linkage arms from the sha-verified pr-body read. An empty body is the absence sentinel line and arms nothing.
   const prBodyText = prBody.bytes.toString("utf8").replace(/\n$/, "");
@@ -418,6 +427,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
       findingsFile: values["findings-file"], specFile: values["spec-file"], identityFile: values["identity-file"],
       priorVerdicts: values["prior-verdict"] ?? [], ...(values.harness !== undefined ? { harness: values.harness } : {}), ...(values["operator-focus-file"] ? { operatorFocusFile: values["operator-focus-file"] } : {}), ...(values.round !== undefined ? { round: /^[1-9][0-9]*$/.test(values.round) ? Number(values.round) : values.round } : {}), cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}), ...(fetchLivePrBody ? { fetchLivePrBody } : {}),
     });
+    if (plan.judgeSkipped) return emit({ ok: true, judgeSkipped: plan.judgeSkipped, scopeDrift: plan.scopeDrift, nextStep: plan.nextStep });
     const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath });
   } catch (err) {

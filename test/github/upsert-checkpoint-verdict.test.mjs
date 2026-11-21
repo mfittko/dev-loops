@@ -9248,6 +9248,7 @@ test("#1808: --gate review on a CLEAN ledger renders with no blocking-severity l
       ...reviewGateFindingSurfaceEntries({ files: null }),
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Judge:** skipped, the round has no findings to dispose"],
         stdout: '{"id":902,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-902"}\n',
       },
     ];
@@ -9281,6 +9282,7 @@ test("--gate review with --judge-spec-source none and a clean ledger holding one
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         assertStdinIncludes: ["read the findings, none was judged"],
+        assertStdinNotIncludes: ["**Judge:** skipped, the round has no findings to dispose"],
         stdout: '{"id":903,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-903"}\n',
       },
     ];
