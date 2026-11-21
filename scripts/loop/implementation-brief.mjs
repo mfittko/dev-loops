@@ -29,7 +29,11 @@ import {
   extractRuleDefinitions,
   ruleOwnerIndex,
 } from "../docs/validate-rule-ownership.mjs";
-import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
+import { loadDevLoopConfig, resolveGateAngles, resolveGateAnglesDynamic } from "@dev-loops/core/config";
+import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
+import { collectFindingClasses } from "./gate-finding-classes.mjs";
+import { SELF_CHECK_ITEMS } from "./_self-check-items.mjs";
 import { CONTRACT_DOC_RE, DEVLOOPS_CONFIG_PATHS, GATE_CONFIG_PATH } from "./check-adr-tripwire.mjs";
 import { citedAdrNumbers, indexDecisionRecords, inForceAmenders, loadKnownRuleIds, stripFencedCode } from "./spec-lint.mjs";
 
@@ -53,6 +57,8 @@ Output (stdout, JSON):
     "adrNeed": "<section text>" | "unstated", "adrTripwirePaths": ["..."],
     "helperInventory": { "modules": [{ "path", "exports": ["<name>"] }], "overflowModules": ["<path>"] },
     "importers": null | { "<touched source module>": { "files": ["<path>"], "importersTruncated"?: true } },
+    "selfCheck": { "angles": ["<draft_gate angle>"], "classes": [{ "angle", "count", "share", "examples": ["<one summary>"] }],
+      "items": [{ "id", "check" }] },
     "requiredReads": ["skills/docs/structural-quality.md", "changes/README.md"],
     "findings": [{ "kind", "reason" }] }
 
@@ -94,6 +100,13 @@ no entry. When git ls-files fails (including a non-git --repo-root nested in ano
 tree), "helperInventory" is empty, "importers" is null and "findings" carries
 importers_unavailable with the reason. Check each listed importer before hand-back and search
 for string-path and package-name references yourself.
+
+"selfCheck" is the developer's pre-PR self-check (PRE-PR-DEVELOPER-SELF-CHECK). "angles" is the
+draft_gate angle set that applies to the touched paths (the configured gate resolution; empty when
+the config does not load). "classes" is the top 3 act-finding angles of past first draft_gate rounds
+(offline, from the findings logs; one example of at most 160 characters each; empty when no logs
+exist). "items" is the fixed generic list (tests, description, surface-text, edge-cases). Record one
+{ "id", "status": "done"|"na", "evidence" } per item id with record-pre-pr-review --self-check-file.
 
 ${JQ_OUTPUT_USAGE}
 
@@ -421,6 +434,22 @@ async function importersByModule(root, touchedPaths, resolved, tracked) {
   }));
 }
 
+// Offline and best effort: a config or log problem yields empty angles/classes, never a failure.
+async function selfCheck(root, touchedPaths) {
+  let angles = [];
+  try {
+    const { config } = await loadDevLoopConfig({ repoRoot: root });
+    const diff = { nameStatusOutput: touchedPaths.map((p) => `M\t${p}`).join("\n") };
+    angles = (await resolveGateAnglesDynamic(config, "draft", { diff })).recommendedAngles ?? resolveGateAngles(config, "draft") ?? [];
+  } catch { /* no usable config */ }
+  let classes = [];
+  try {
+    const repo = detectRepoSlug(root);
+    if (repo) classes = collectFindingClasses({ repo, tmpRoot: resolveGateArtifactTmpRoot(root), top: 3 }).classes.map((c) => ({ ...c, examples: c.examples.slice(0, 1) }));
+  } catch { /* no logs */ }
+  return { angles, classes, items: SELF_CHECK_ITEMS.map((i) => ({ ...i })) };
+}
+
 /**
  * Build the brief for one spec body. All inputs are files: `paths` is the
  * declared touch set (`--paths`), `repoRoot` is the only checkout reference, so
@@ -575,6 +604,7 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
     adrTripwirePaths: touchedPaths.filter(matchesAdrTripwire),
     helperInventory: await helperInventory(root, touchedPaths, resolved, trackedSources.files),
     importers: await importersByModule(root, touchedPaths, resolved, trackedSources.files),
+    selfCheck: await selfCheck(root, touchedPaths),
     requiredReads: [...REQUIRED_READS],
     findings,
   };

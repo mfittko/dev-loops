@@ -1185,3 +1185,12 @@ test("exactly 50 importers are listed without importersTruncated", async () => {
   assert.equal(entry.files.length, 50);
   assert.equal("importersTruncated" in entry, false);
 });
+
+test("the brief carries selfCheck with the four generic items and no classes when no logs exist", async () => {
+  const root = await fixtureRepo();
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root });
+  assert.deepEqual(brief.selfCheck.items.map((i) => i.id), ["tests", "description", "surface-text", "edge-cases"]);
+  assert.ok(brief.selfCheck.items.every((i) => i.check.length > 0));
+  assert.deepEqual(brief.selfCheck.classes, []);
+  assert.ok(Array.isArray(brief.selfCheck.angles));
+});

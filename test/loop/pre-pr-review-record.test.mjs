@@ -110,7 +110,7 @@ test("the CLI writes the record from git HEAD and takes no head argument", async
     git(dir, "checkout", "-q", "-b", "feature");
     commit(dir, "src/b.mjs", "export const b = 1;\n");
     let out = "";
-    const code = await runCli(["--verdict", "findings_fixed", "--disposition", "all_applied", "--base", "main", "--no-linked-issue"], { cwd: dir, stdout: { write: (s) => { out += s; } }, stderr: { write() {} } });
+    const code = await runCli(["--verdict", "findings_fixed", "--disposition", "all_applied", "--base", "main", "--no-linked-issue", "--self-check-file", selfCheckFile(dir)], { cwd: dir, stdout: { write: (s) => { out += s; } }, stderr: { write() {} } });
     assert.equal(code, 0);
     const result = JSON.parse(out);
     assert.equal(result.head, git(dir, "rev-parse", "HEAD"));
@@ -315,3 +315,35 @@ test("a docs/phases-only branch validates from a subdirectory with diff.relative
   commit(dir, "src/a.mjs", "export const a = 2;\n");
   assert.equal((await validatePrePrReview({ cwd: path.join(dir, "docs"), ...feature })).ok, false);
 }));
+
+// PRE-PR-DEVELOPER-SELF-CHECK
+const IDS = ["tests", "description", "surface-text", "edge-cases"];
+function selfCheckFile(dir, entries = IDS.map((id) => ({ id, status: "done", evidence: `${id} evidence` }))) {
+  const file = path.join(dir, "self-check.json");
+  writeFileSync(file, typeof entries === "string" ? entries : JSON.stringify(entries));
+  return file;
+}
+
+test("record mode refuses with pre_pr_self_check_missing for a missing flag, file, id or empty evidence, and stores a valid self-check", async () => {
+  const dir = fixtureRepo();
+  try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    commit(dir, "src/b.mjs", "export const b = 1;\n");
+    const base = ["--verdict", "clean", "--disposition", "none", "--base", "main", "--no-linked-issue"];
+    const refuse = async (extra) => {
+      let err = "";
+      assert.equal(await runCli([...base, ...extra], { cwd: dir, stdout: { write() {} }, stderr: { write: (s) => { err += s; } } }), 1);
+      assert.equal(JSON.parse(err).code, "pre_pr_self_check_missing");
+    };
+    await refuse([]);
+    await refuse(["--self-check-file", path.join(dir, "nope.json")]);
+    await refuse(["--self-check-file", selfCheckFile(dir, "{not json")]);
+    await refuse(["--self-check-file", selfCheckFile(dir, { id: "tests" })]);
+    await refuse(["--self-check-file", selfCheckFile(dir, IDS.slice(1).map((id) => ({ id, status: "na", evidence: "e" })))]);
+    await refuse(["--self-check-file", selfCheckFile(dir, IDS.map((id) => ({ id, status: "done", evidence: "  " })))]);
+    await refuse(["--self-check-file", selfCheckFile(dir, IDS.map((id) => ({ id, status: "maybe", evidence: "e" })))]);
+    let out = "";
+    assert.equal(await runCli([...base, "--self-check-file", selfCheckFile(dir)], { cwd: dir, stdout: { write: (s) => { out += s; } }, stderr: { write() {} } }), 0);
+    assert.deepEqual(JSON.parse(readFileSync(JSON.parse(out).file, "utf8")).selfCheck.map((e) => e.id), IDS);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
