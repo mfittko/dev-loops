@@ -10,7 +10,7 @@ import { afterEach, test } from "bun:test";
 
 import { runCli } from "../../cli/index.mjs";
 import { pathsMissingFromMatrix } from "../../scripts/github/waive-adr-tripwire.mjs";
-import { indexDecisionRecords, lintContractDocsInMatrix, lintRuleOwnerDocsInMatrix, lintSimplestDesign, lintSizeForecast, lintSpec, main } from "../../scripts/loop/spec-lint.mjs";
+import { indexDecisionRecords, lintContractDocsInMatrix, lintRuleOwnerDocsInMatrix, lintSimplestDesign, lintSizeForecast, lintSpec, lintStateRecoveryRows, main } from "../../scripts/loop/spec-lint.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const tempDirs = [];
@@ -542,4 +542,71 @@ test("contract_doc_not_in_matrix: a cited rule ID owned by a contract doc needs 
   const body =`${ruleMatrix("`XXX-YYY-ZZZ` holds.")}${FORECAST.replace("files=a.mjs", `files=${owner}`)}`;
   const found = (await lintSpec({ body, repoRoot: root })).findings.filter((f) => f.kind === "contract_doc_not_in_matrix");
   assert.deepEqual(found.map((f) => f.id), [owner]);
+});
+
+const recoverySpec = (...rows) => ["## AC / DoD matrix", "", "| Acceptance criterion | Completion evidence |", "| --- | --- |", ...rows.map((r) => `| ${r[0]} | ${r[1]} |`), ""].join("\n");
+
+test("state_recovery_rows_missing: a spec adding a lock file without recovery rows is flagged (REFINE-STATE-RECOVERY-ROWS)", () => {
+  const flagged = lintStateRecoveryRows(recoverySpec(["The loop writes a lock file per run", "unit test"]));
+  assert.deepEqual(flagged.map((f) => f.id), ["crash", "rebuild at the same head", "replacement by a later step"]);
+  assert.ok(flagged.every((f) => f.kind === "state_recovery_rows_missing"));
+  assert.deepEqual(lintStateRecoveryRows(recoverySpec(["A fail-closed refusal on stale heads", "unit test"])).map((f) => f.id), ["named recovery"]);
+});
+
+test("state_recovery_rows_missing: plurals and lockfile trigger the state check", () => {
+  for (const word of ["locks", "receipts", "marker files", "caches", "sentinels", "a lockfile", "plan files"]) {
+    const ids = lintStateRecoveryRows(recoverySpec([`The loop writes ${word}`, "unit test"])).map((f) => f.id);
+    assert.equal(ids.length, 3, word);
+  }
+});
+
+test("state_recovery_rows_missing: every fail(s/ed/ing) closed form triggers the named-recovery check", () => {
+  for (const phrase of ["fail-closed", "fail closed", "fails closed", "failed closed", "failing closed", "fails-closed"]) {
+    const ids = lintStateRecoveryRows(recoverySpec([`The writer ${phrase} on a stale head`, "unit test"])).map((f) => f.id);
+    assert.deepEqual(ids, ["named recovery"], phrase);
+  }
+  for (const phrase of ["fail open", "closed", "failsafe"]) { // empty row: see the separate test below
+    assert.deepEqual(lintStateRecoveryRows(recoverySpec([`The writer is ${phrase} on a stale head`, "unit test"])), [], phrase);
+  }
+});
+
+test("state_recovery_rows_missing: only criterion text is scanned, per row", () => {
+  assert.deepEqual(lintStateRecoveryRows(recoverySpec(["The parser rejects bad input", "test/cache.test.mjs covers it"])), []);
+  assert.deepEqual(lintStateRecoveryRows(recoverySpec(["The parser rejects bad input", "fail-closed in test/lock.test.mjs"])), []);
+});
+
+test("state_recovery_rows_missing: a spec with the three recovery rows and a named recovery yields no finding", () => {
+  const clean = recoverySpec(
+    ["The loop writes a lock file and refuses fail-closed on a stale head, returning the recovery command", "unit test"],
+    ["The lock survives a crash and is reclaimed", "unit test"],
+    ["A rebuild at the same head reuses the lock", "unit test"],
+    ["A later step replacement of the lock is detected", "unit test"],
+  );
+  assert.deepEqual(lintStateRecoveryRows(clean), []);
+  assert.deepEqual(lintStateRecoveryRows("no matrix here, a lock"), []);
+});
+
+test("state_recovery_rows_missing: verb forms and partial rows are matched per keyword", () => {
+  const rows = (...c) => recoverySpec(["The loop writes a lock file", "unit test"], ...c.map((r) => [r, "unit test"]));
+  for (const replace of ["A later step replaces the lock", "A later step is replacing the lock", "A later step replaced the lock"]) {
+    assert.deepEqual(lintStateRecoveryRows(rows("The lock survives a crash", "A same-head rebuild reuses it", replace)), [], replace);
+  }
+  assert.deepEqual(lintStateRecoveryRows(rows("The lock survives a crash")).map((f) => f.id), ["rebuild at the same head", "replacement by a later step"]);
+});
+
+test("state_recovery_rows_missing: lintSpec and the CLI report the finding", async () => {
+  const root = await fixtureRepo();
+  const body = `${recoverySpec(["The loop writes a lock file", "unit test"])}${FORECAST}`;
+  const found = (await lintSpec({ body, repoRoot: root })).findings.filter((f) => f.kind === "state_recovery_rows_missing");
+  assert.equal(found.length, 3);
+  assert.deepEqual((await lintSpec({ body: `${recoverySpec(["The parser rejects bad input", "unit test"])}${FORECAST}`, repoRoot: root })).findings.filter((f) => f.kind === "state_recovery_rows_missing"), []);
+  const bodyFile = path.join(root, "body.md");
+  await writeFile(bodyFile, body);
+  const stdout = buffer();
+  await main(["--body-file", bodyFile, "--repo-root", root], { stdout: stdout.stream, stderr: buffer().stream });
+  assert.equal((stdout.read().match(/state_recovery_rows_missing/g) ?? []).length, 3);
+});
+
+test("state_recovery_rows_missing: an empty row yields no finding", () => {
+  assert.deepEqual(lintStateRecoveryRows(recoverySpec(["", "unit test"])), []);
 });

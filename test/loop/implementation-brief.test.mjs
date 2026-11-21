@@ -1190,7 +1190,7 @@ test("exactly 50 importers are listed without importersTruncated", async () => {
 test("the brief carries selfCheck with the config-sourced checklist items of the selected angles (finalStep on P2, CS1, CS2), one condensed constraint line per applicable angle, and no classes without logs or an export", async () => {
   const root = await fixtureRepo();
   const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/b.mjs"] });
-  assert.deepEqual(brief.selfCheck.items.map((i) => i.id), ["C1", "C2", "C3", "K1", "CS1", "CS2", "I1", "I2", "S1", "P1", "P2", "K2"]);
+  assert.deepEqual(brief.selfCheck.items.map((i) => i.id), ["C1", "C2", "C3", "C4", "K1", "CS1", "CS2", "I1", "I2", "S1", "P1", "P2", "K2"]);
   assert.deepEqual(brief.selfCheck.items.filter((i) => i.finalStep).map((i) => i.id), ["CS1", "CS2", "P2"]);
   assert.ok(brief.selfCheck.items.every((i) => i.angle && i.check.length > 0 && i.check.length <= 170 && !i.check.startsWith(i.id)));
   assert.deepEqual(brief.selfCheck.classes, []);
