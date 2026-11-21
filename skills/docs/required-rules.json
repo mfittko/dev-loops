@@ -980,7 +980,9 @@
       "enforcement": "doc"
     },
     {
-      "id": "REFINE-STATE-RECOVERY-ROWS"
+      "id": "REFINE-STATE-RECOVERY-ROWS",
+      "enforcement": "agent",
+      "enforcementNote": "Detecting missing recovery rows in a spec is refiner and grill judgment; the contract test pins the prose, no script can read intent."
     },
     {
       "id": "REFINER-DOD-PROPOSED-SUBSECTION"
