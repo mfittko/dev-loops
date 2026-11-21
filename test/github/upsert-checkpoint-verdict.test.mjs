@@ -9248,6 +9248,7 @@ test("#1808: --gate review on a CLEAN ledger renders with no blocking-severity l
       ...reviewGateFindingSurfaceEntries({ files: null }),
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Judge:** skipped, the round has no findings to dispose"],
         stdout: '{"id":902,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-902"}\n',
       },
     ];
@@ -9271,6 +9272,28 @@ test("#1808: --gate review on a CLEAN ledger renders with no blocking-severity l
   }, { prefix: "dev-loops-upsert-review-gate-clean-" });
 });
 
+test("#2926: --gate review on a zero-finding ledger with --judge-spec-source renders the spec line and no judge-skipped line", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries({ files: null }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Judge spec:** none"],
+        assertStdinNotIncludes: ["**Judge:** skipped, the round has no findings to dispose"],
+        stdout: '{"id":904,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-904"}\n',
+      },
+    ];
+    const { runChild } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath, judgeSpecSource: "none", executionMode: "fanout_fanin",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.ok, true);
+  }, { prefix: "dev-loops-upsert-review-gate-spec-skip-" });
+});
+
 // AC6: the call site passes the unjudged flag into deriveEffectiveNextAction; a clean ledger holding an
 // unjudged finding must not render "no change requested" beside it.
 test("--gate review with --judge-spec-source none and a clean ledger holding one unjudged finding renders 'read the findings, none was judged'", async () => {
@@ -9281,6 +9304,7 @@ test("--gate review with --judge-spec-source none and a clean ledger holding one
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         assertStdinIncludes: ["read the findings, none was judged"],
+        assertStdinNotIncludes: ["**Judge:** skipped, the round has no findings to dispose"],
         stdout: '{"id":903,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-903"}\n',
       },
     ];
@@ -10292,6 +10316,27 @@ test("#1616: upsert derives the verdict from the ledger's overallVerdict when --
     assert.equal(parsed.action, "created");
     assert.equal(parsed.gate, "draft_gate");
   }, { prefix: "dev-loops-1616-derive-" });
+});
+
+test("issue 2926: a draft_gate post carries the judge-skipped line only for a zero-finding ledger", async () => {
+  const SKIP_LINE = "**Judge:** skipped, the round has no findings to dispose";
+  const post = async (tempDir, ledgerOptions, extraArgs, stdinAssertion) => {
+    const ledgerPath = await writeVerdictLedger(tempDir, ledgerOptions);
+    const env = await writeGhStub(tempDir, verdictEnforcementEntries().map((entry) => (entry.assertArgs.includes("POST") ? { ...entry, ...stdinAssertion } : entry)));
+    return runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
+      "--findings-ledger", ledgerPath, "--next-action", "stay draft and fix", "--execution-mode", "fanout_fanin", ...extraArgs,
+    ], { env });
+  };
+  await withTempDir(async (tempDir) => {
+    const result = await post(tempDir, { overallVerdict: "clean", provenance: DRAFT_GATE_PROVENANCE }, ["--findings-summary", "no issues found", "--findings-severity-counts", '{"high":0,"medium":0,"low":0,"question":0,"nit":0}'], { assertStdinIncludes: [SKIP_LINE] });
+    assert.equal(result.code, 0, result.stderr);
+  }, { prefix: "dev-loops-2926-skip-line-" });
+  await withTempDir(async (tempDir) => {
+    const findings = [{ severity: "low", angle: "holistic", summary: "one", judgeDisposition: "reject" }];
+    const result = await post(tempDir, { overallVerdict: "clean", findings, provenance: DRAFT_GATE_PROVENANCE }, ["--findings-summary", "one judged finding", "--findings-severity-counts", '{"high":0,"medium":0,"low":1,"question":0,"nit":0}'], { assertStdinNotIncludes: [SKIP_LINE] });
+    assert.equal(result.code, 0, result.stderr);
+  }, { prefix: "dev-loops-2926-no-skip-line-" });
 });
 
 test("#1616: upsert accepts a matching explicit --verdict unchanged", async () => {

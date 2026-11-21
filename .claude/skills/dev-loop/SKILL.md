@@ -210,7 +210,9 @@ and dispatches the dedicated `judge` agent (`agents/judge.agent.md`) with only t
 its work order, which pins the consolidated ledger, the spec-context output, the round's evidence
 (PR declared scope and diff) and the prior-round judge verdicts. It then awaits its two verdict artifacts: the relevance verdict at
 `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/<roundId>/judge-verdict.json` and the spec-authority
-verdict at the sibling `spec-authority-verdict.json` (its only writes). The gate coordinator
+verdict at the sibling `spec-authority-verdict.json` (its only writes). When
+`emit-judge-work-order.mjs` returns `judgeSkipped` (`GATE-EXEC-JUDGE-PHASE`, ADR 0302), no judge is
+dispatched and no `judge-pass` runs. Otherwise the gate coordinator
 runs the deterministic
 bridge to derive the fixer's act list for Phase 4, always with the spec-authority flags, plus the
 durable-approval flags across re-entry:

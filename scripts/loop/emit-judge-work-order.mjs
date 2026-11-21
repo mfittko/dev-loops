@@ -41,6 +41,7 @@ ledger (consolidate-fanin --ledger-out), the structured spec and identity stamp
 prior-round judge verdicts. It writes the immutable work order under
 <tmp-root>/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/ and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, planPath }.
+On a well-formed empty ledger with no pinned Copilot body it writes nothing and prints { ok, judgeSkipped, scopeDrift, nextStep } (GATE-EXEC-JUDGE-PHASE, ADR 0302).
 The work order's two verdict outputRefs sit under that directory's <roundId>/ segment.
 --harness overrides the harness resolved from the environment (CLAUDECODE, CODEX_THREAD_ID, else pi); claude or pi omits the Codex-only setup paragraph from the work order, codex keeps it. A coordinator that dispatches a judge to a harness other than its own must pass --harness.
 A --prior-verdict named judge-verdict.json also pins the spec-authority-verdict.json beside it when that file exists.
@@ -229,7 +230,17 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   // The judge pass appends the pinned finding after the findings read, so its cluster id is the array index of the first appended finding (the read length; 0 for an empty read).
   const findingsRead = parseSource(findings);
   const copilotBodyClusterId = (Array.isArray(findingsRead) ? findingsRead : findingsRead?.findings ?? []).length;
+  // Read before the skip check so a bad --operator-focus-file refuses on both branches.
   const operatorFocus = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined);
+  // A well-formed empty ledger with no pinned Copilot body has nothing to dispose (GATE-EXEC-JUDGE-PHASE); write no plan, work order or index entry.
+  const ledgerFindings = Array.isArray(findingsRead) ? findingsRead : findingsRead?.findings;
+  if (Array.isArray(ledgerFindings) && ledgerFindings.length === 0 && !copilotBody) {
+    return {
+      judgeSkipped: { reason: "no_findings", specDigest },
+      scopeDrift: { verdict: "within_scope", derivedFrom: "spec_identity", rationale: "The round has no findings and the spec identity pins the spec digest, so no drift is recorded.", driftedAreas: [] },
+      nextStep: "Dispatch no judge, run no judge-pass, and write the findings log without --judge-verdict.",
+    };
+  }
   // Slice linkage arms from the sha-verified pr-body read. An empty body is the absence sentinel line and arms nothing.
   const prBodyText = prBody.bytes.toString("utf8").replace(/\n$/, "");
   const linkageIssues = sliceLinkageIssues(parseSource(spec).nonGoals, prBodyText === PR_BODY_ABSENT_SENTINEL ? "" : prBodyText, repo);
@@ -418,6 +429,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
       findingsFile: values["findings-file"], specFile: values["spec-file"], identityFile: values["identity-file"],
       priorVerdicts: values["prior-verdict"] ?? [], ...(values.harness !== undefined ? { harness: values.harness } : {}), ...(values["operator-focus-file"] ? { operatorFocusFile: values["operator-focus-file"] } : {}), ...(values.round !== undefined ? { round: /^[1-9][0-9]*$/.test(values.round) ? Number(values.round) : values.round } : {}), cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}), ...(fetchLivePrBody ? { fetchLivePrBody } : {}),
     });
+    if (plan.judgeSkipped) return emit({ ok: true, judgeSkipped: plan.judgeSkipped, scopeDrift: plan.scopeDrift, nextStep: plan.nextStep });
     const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath });
   } catch (err) {

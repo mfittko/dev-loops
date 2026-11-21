@@ -376,6 +376,18 @@ test("writeGateFindingsLog accepts a valid 16-hex fingerprint", async () => {
   }
 });
 
+test("writeGateFindingsLog stamps a zero-finding unjudged draft_gate write completed and counts it as a round", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-zero-completed-"));
+  try {
+    const headSha = "abc1234500000000000000000000000000000000";
+    const result = await writeGateFindingsLog({ repo: "a/b", pr: 1, gate: "draft_gate", headSha, verdict: "clean", findings: JSON.stringify([]), tmpRoot: dir });
+    assert.equal(JSON.parse(await readFile(result.path, "utf8")).roundIdentity.completed, true);
+    assert.equal(await countCompletedRounds({ repo: "a/b", pr: 1, gate: "draft_gate", headSha, tmpRoot: dir }, { repoRoot: process.cwd(), includeLiveCurrentHead: true }), 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("writeGateFindingsLog retains a finished clean same-head ledger with zero findings", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-retain-clean-"));
   try {
