@@ -2,7 +2,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { spawn } from "node:child_process";
 import { takeGhSlot } from "@dev-loops/core/github/gh-throttle";
-import { withSecondaryLimitBackoff } from "@dev-loops/core/github/gh";
+import { rateLimitedError, withSecondaryLimitBackoff } from "@dev-loops/core/github/gh";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, requireTokenValue } from "../_cli-primitives.mjs";
@@ -69,13 +69,21 @@ function rejectRemovedFlag(token) {
 }
 export async function watchCopilotRunUntilComplete(
   { repo, runId, timeoutMs = null },
-  { env = process.env, ghCommand = "gh" } = {},
+  { env = process.env, ghCommand = "gh", spawn: spawnImpl = spawnWatch, now = Date.now, sleep, takeSlot = takeGhSlot } = {},
 ) {
+  // One deadline for all attempts: a retry after the backoff gets the remaining budget, never a fresh timeoutMs.
+  const deadline = Number.isInteger(timeoutMs) && timeoutMs >= 0 ? now() + timeoutMs : null;
+  let attempts = 0;
   const attempt = async () => {
-    if (ghCommand === "gh") await takeGhSlot({ env });
-    return spawnWatch({ repo, runId, timeoutMs }, { env, ghCommand });
+    attempts += 1;
+    const remaining = deadline === null ? timeoutMs : deadline - now();
+    if (attempts > 1 && deadline !== null && remaining <= 0) {
+      throw rateLimitedError("gh command failed", "secondary rate limit; the watch budget was spent during the backoff");
+    }
+    if (ghCommand === "gh") await takeSlot({ env });
+    return spawnImpl({ repo, runId, timeoutMs: remaining }, { env, ghCommand });
   };
-  return ghCommand === "gh" ? withSecondaryLimitBackoff(attempt) : attempt();
+  return ghCommand === "gh" ? withSecondaryLimitBackoff(attempt, { sleep }) : attempt();
 }
 function spawnWatch({ repo, runId, timeoutMs }, { env, ghCommand }) {
   return new Promise((resolve, reject) => {

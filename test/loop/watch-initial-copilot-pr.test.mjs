@@ -743,3 +743,25 @@ test("watch-initial-copilot-pr warns on stderr for deprecated --timeout-ms", () 
   const err = captureStderr(() => parseWatchInitialCopilotPrCliArgs(["--repo", "owner/repo", "--issue", "59", "--timeout-ms", "3600000"]));
   assert.match(err, /--timeout-ms is deprecated; use --timeout 3600/);
 });
+
+test("watchCopilotRunUntilComplete retries with the remaining budget and throws RATE_LIMITED when it is spent", async () => {
+  const { watchCopilotRunUntilComplete } = await import("../../scripts/loop/watch-initial-copilot-pr.mjs");
+  let clock = 0;
+  const limited = () => Object.assign(new Error("failed"), { stderr: "You have exceeded a secondary rate limit" });
+  const run = (firstFailAt, backoff) => {
+    const budgets = [];
+    const spawn = async ({ timeoutMs }) => {
+      budgets.push(timeoutMs);
+      if (budgets.length === 1) { clock += firstFailAt; throw limited(); }
+      return { status: "completed" };
+    };
+    const sleep = async (ms) => { clock += ms; };
+    return { budgets, result: watchCopilotRunUntilComplete({ repo: "o/r", runId: 1, timeoutMs: 540_000 }, { env: { DEV_LOOPS_GH_STUB: "1" }, spawn, sleep, now: () => clock, takeSlot: async () => {} }) };
+  };
+  let out = run(100_000);
+  assert.deepEqual(await out.result, { status: "completed" });
+  assert.deepEqual(out.budgets, [540_000, 540_000 - 100_000 - 30_000]);
+  out = run(530_000);
+  await assert.rejects(() => out.result, { code: "RATE_LIMITED" });
+  assert.deepEqual(out.budgets, [540_000]);
+});

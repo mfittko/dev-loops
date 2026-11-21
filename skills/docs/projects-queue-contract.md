@@ -273,7 +273,7 @@ queue:
   # Maximum retry attempts per entry for recoverable failures.
   reDispatchMaxRetries: 1
 
-  # Minimum milliseconds between gh calls across all local dev-loops processes (0 disables).
+  # Minimum milliseconds between gh calls across the local dev-loops processes that share one main checkout (separate clones do not share pacing; 0 disables).
   ghMinIntervalMs: 500
 
   # Optional fallback column for non-success outcomes.

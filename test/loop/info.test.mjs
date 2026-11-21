@@ -646,3 +646,9 @@ test("info.mjs fails gracefully when repo cannot be detected", async () => {
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("info.mjs ghJson keeps the RATE_LIMITED code from the gh seam", async () => {
+  const { ghJson } = await import("../../scripts/loop/info.mjs");
+  const limited = Object.assign(new Error("gh command failed: secondary rate limit"), { code: "RATE_LIMITED", resetAt: null });
+  assert.throws(() => ghJson(["x"], undefined, () => { throw limited; }), (error) => error.code === "RATE_LIMITED" && error.cause === limited);
+});

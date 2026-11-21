@@ -157,9 +157,18 @@ export function parseAllowedRefsCsv(value, flag, parseError = null) {
 // runChild its tests already stub.
 // `timeoutMs` is optional and additive: when set, spawn kills the child at the bound, so the close handler settles with a signal exit.
 // Every default-runner `gh` call takes a gh-throttle slot first; an injected runChild stays unpaced.
-// `takeSlot` is a test seam. gh-throttle is imported lazily to avoid an import cycle.
-export async function runChild(command, args, env = process.env, stdinText = undefined, { timeoutMs, takeSlot } = {}) {
-  if (command === "gh") await (takeSlot ?? ((await import("../github/gh-throttle.mjs")).takeGhSlot))({ env });
+// A secondary rate limit backs off once, retakes a slot and retries; a second one throws RATE_LIMITED.
+// `takeSlot`, `backoffMs` and `sleep` are test seams. gh-throttle and gh are imported lazily to avoid an import cycle.
+export async function runChild(command, args, env = process.env, stdinText = undefined, { timeoutMs, takeSlot, backoffMs, sleep } = {}) {
+  const once = async () => {
+    if (command === "gh") await (takeSlot ?? ((await import("../github/gh-throttle.mjs")).takeGhSlot))({ env });
+    return spawnChild(command, args, env, stdinText, timeoutMs);
+  };
+  if (command !== "gh") return once();
+  return (await import("../github/gh.mjs")).withSecondaryLimitBackoff(once, { backoffMs, sleep });
+}
+
+function spawnChild(command, args, env, stdinText, timeoutMs) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { env, timeout: timeoutMs, killSignal: "SIGKILL", stdio: [stdinText === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
     let stdout = "";
@@ -203,8 +212,17 @@ export async function resolveBodyOrFile({ body, bodyFile, allowStdin = false, al
   return content;
 }
 
-export async function runCommand(command, args, { cwd = process.cwd(), env = process.env } = {}) {
-  if (command === "gh") await (await import("../github/gh-throttle.mjs")).takeGhSlot({ env });
+// Same gh pacing and one-retry secondary-limit backoff as runChild; `takeSlot` and `sleep` are test seams.
+export async function runCommand(command, args, { cwd = process.cwd(), env = process.env, takeSlot, backoffMs, sleep } = {}) {
+  const once = async () => {
+    if (command === "gh") await (takeSlot ?? (await import("../github/gh-throttle.mjs")).takeGhSlot)({ env });
+    return spawnCommand(command, args, cwd, env);
+  };
+  if (command !== "gh") return once();
+  return (await import("../github/gh.mjs")).withSecondaryLimitBackoff(once, { backoffMs, sleep });
+}
+
+function spawnCommand(command, args, cwd, env) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";

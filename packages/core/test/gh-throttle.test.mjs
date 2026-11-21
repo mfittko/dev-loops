@@ -210,6 +210,32 @@ describe("gh-throttle", () => {
     assert.equal(runs, 2);
   });
 
+  test("ghExecFileSync classifies a limit on stderr only: accepted and rejected forms", () => {
+    const run = (error) => {
+      let runs = 0;
+      const backoffs = [];
+      const deps = { execFile: () => { runs += 1; throw error; }, takeSlotSync: () => {}, backoff: (ms) => backoffs.push(ms), backoffMs: 7 };
+      let thrown;
+      try { ghExecFileSync("gh", ["x"], {}, deps); } catch (e) { thrown = e; }
+      return { runs, backoffs, thrown };
+    };
+    for (const stderr of ["You have exceeded a secondary rate limit. Please wait a few minutes before you try again.", "HTTP 403: secondary rate limit"]) {
+      const out = run(Object.assign(new Error("Command failed: gh x"), { stderr }));
+      assert.equal(out.runs, 2);
+      assert.equal(out.thrown.code, "RATE_LIMITED");
+    }
+    const rejected = [
+      Object.assign(new Error("Command failed: gh label create x --description secondary rate limit backoff"), { stderr: "label already exists" }),
+      Object.assign(new Error("Command failed: gh issue create --title secondary rate limit"), { stderr: "" }),
+    ];
+    for (const error of rejected) {
+      const out = run(error);
+      assert.equal(out.runs, 1);
+      assert.deepEqual(out.backoffs, []);
+      assert.equal(out.thrown, error);
+    }
+  });
+
   test("a config load failure warns exactly once per process", async () => {
     const warnings = [];
     const warn = (message) => warnings.push(message);

@@ -43,6 +43,11 @@ export function rateLimitedError(prefix, detail, cause) {
   return Object.assign(new Error(`${prefix}: ${String(detail).trim()}`), { code: "RATE_LIMITED", resetAt: null, cause });
 }
 
+/** Rewrap a failed sync gh call, keeping the typed `code` and `resetAt` (RATE_LIMITED, GH_THROTTLE_UNAVAILABLE) and the original error as `cause`. */
+export function ghCommandFailed(err) {
+  return Object.assign(new Error(`gh command failed: ${err instanceof Error ? err.message : String(err)}`), { code: err?.code, resetAt: err?.resetAt, cause: err });
+}
+
 /**
  * Run one gh child. Pacing lives in the default runChild (each attempt takes a
  * slot there). A secondary rate limit backs off once and retries. A second one
@@ -50,8 +55,17 @@ export function rateLimitedError(prefix, detail, cause) {
  * RATE_LIMITED with its own message prefix.
  */
 async function runWithBackoff(runChild, command, args, env, { backoffMs, sleep }) {
+  if (runChild === defaultRunChild) {
+    // The default runChild owns the one retry; map its RATE_LIMITED to the caller's own prefix.
+    try {
+      return await runChild(command, args, env, undefined, { backoffMs, sleep });
+    } catch (error) {
+      if (error?.code !== "RATE_LIMITED") throw error;
+      return { code: 1, stdout: "", stderr: error.message.replace(/^gh command failed: /, ""), rateLimited: true };
+    }
+  }
   // An injected runner (a caller with its own rate-limit handling, or a test stub) is not retried unless the caller passes a backoff seam.
-  if (runChild !== defaultRunChild && backoffMs === undefined && sleep === undefined) return runChild(command, args, env);
+  if (backoffMs === undefined && sleep === undefined) return runChild(command, args, env);
   backoffMs ??= SECONDARY_RATE_LIMIT_BACKOFF_MS;
   sleep ??= realSleep;
   const isSecondaryLimit = (result) => result.code !== 0 && isSecondaryRateLimitError(result.stderr);

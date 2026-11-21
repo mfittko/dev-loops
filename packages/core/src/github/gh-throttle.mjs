@@ -216,13 +216,14 @@ export function ghExecFileSync(command, args, options, { execFile = execFileSync
   try {
     return attempt();
   } catch (error) {
-    if (!isSecondaryRateLimitError(error) && !isSecondaryRateLimitError(String(error.stderr ?? ""))) throw error;
+    // stderr only: error.message carries the whole argv, so argument text must not read as a limit.
+    if (!isSecondaryRateLimitError(String(error.stderr ?? ""))) throw error;
   }
   backoff(backoffMs);
   try {
     return attempt();
   } catch (error) {
-    if (!isSecondaryRateLimitError(error) && !isSecondaryRateLimitError(String(error.stderr ?? ""))) throw error;
+    if (!isSecondaryRateLimitError(String(error.stderr ?? ""))) throw error;
     throw rateLimitedError("gh command failed", error.stderr || error.message, error);
   }
 }

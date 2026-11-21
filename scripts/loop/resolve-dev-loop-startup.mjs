@@ -16,6 +16,7 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { execFileSync } from "node:child_process";
 import { ghExecFileSync } from "@dev-loops/core/github/gh-throttle";
+import { ghCommandFailed } from "@dev-loops/core/github/gh";
 import {
   parseMainWorktreePath,
   parseAllWorktreePaths,
@@ -407,7 +408,7 @@ function ghJson(args, cwd, env = process.env) {
     });
     return JSON.parse(stdout);
   } catch (err) {
-    throw new Error(`gh command failed: ${err instanceof Error ? err.message : String(err)}`);
+    throw ghCommandFailed(err);
   }
 }
 // Bounds the best-effort `git fetch` below so a slow/offline remote can never
