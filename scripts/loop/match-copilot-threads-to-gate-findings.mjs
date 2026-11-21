@@ -13,6 +13,7 @@ import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: match-copilot-threads-to-gate-findings.mjs --threads <jsonl> --repo <owner/name> [--findings-root <dir>] [--repo-root <dir>]
 
@@ -31,6 +32,8 @@ the thread path in files[]. The export has no line, so line is never compared.
 Output (stdout, JSON):
   { "threads": [{ pr, path, matched, matchedAngles, class, shouldHaveCaughtAngles }],
     "summary": { total, copilotOnly, byClass, byAngle } }
+
+${JQ_OUTPUT_USAGE}
 `;
 
 const parseError = buildParseError(USAGE);
@@ -57,7 +60,7 @@ export function classifyThreadBody(body) {
 }
 
 export function parseArgsList(argv) {
-  const options = { help: false, threads: null, repo: null, findingsRoot: null, repoRoot: process.cwd() };
+  const options = { help: false, threads: null, repo: null, findingsRoot: null, repoRoot: process.cwd(), jqOutput: {} };
   const { tokens } = parseArgs({
     args: [...argv],
     options: {
@@ -66,6 +69,7 @@ export function parseArgsList(argv) {
       repo: { type: "string" },
       "findings-root": { type: "string" },
       "repo-root": { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
@@ -79,6 +83,7 @@ export function parseArgsList(argv) {
     if (token.name === "repo") { options.repo = requireTokenValue(token, parseError); continue; }
     if (token.name === "findings-root") { options.findingsRoot = requireTokenValue(token, parseError); continue; }
     if (token.name === "repo-root") { options.repoRoot = requireTokenValue(token, parseError); continue; }
+    if (token.name in JQ_OUTPUT_PARSE_OPTIONS) { options.jqOutput[token.name] = token.value ?? true; continue; }
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (!options.threads) throw parseError("--threads <jsonl> is required");
@@ -187,7 +192,8 @@ export async function runCli(argv = process.argv.slice(2)) {
   const threads = await readThreads(options.threads);
   const index = await readFindingIndex(options.findingsRoot);
   const result = matchThreads(threads, index);
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  const { jq, silent, fields } = options.jqOutput;
+  emitResult(result, { jq, silent, fields });
   return result;
 }
 
