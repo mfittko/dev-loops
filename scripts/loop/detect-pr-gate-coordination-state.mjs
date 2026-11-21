@@ -23,7 +23,7 @@ import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-co
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
-import { OUT_OF_BAND_WRITE } from "../github/_gate-artifact-seal.mjs";
+import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
@@ -1012,8 +1012,27 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
 // The trusted marker commits for every review-body entry of the handoff; no review-body entry means no read.
 const readHandoffReviewMarkers = (handoff, ctx, runtime) => readReviewMarkerCommits(handoff.dispositions.filter((entry) => entry.reviewId).map((entry) => entry.reviewId), ctx, runtime);
 
+// Gate-authored unresolved thread count (ADR 0088) from a raw thread payload; an unreadable payload or login fails closed (-1).
+async function countUnresolvedGateThreads(threadsPayload, runtime) {
+  try {
+    if (countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload) === 0) return 0;
+    return countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload, await resolveAuthenticatedLogin(runtime));
+  } catch {
+    return -1;
+  }
+}
+
+/** One live thread read: the generic and the gate-authored unresolved counts. */
+export async function fetchLiveThreadCounts(options, runtime = {}) {
+  const threadsPayload = await fetchGithubReviewThreadsPayload(options, runtime);
+  return {
+    unresolvedThreadCount: parseReviewThreads(threadsPayload).summary.unresolvedThreads,
+    unresolvedGateThreadCount: await countUnresolvedGateThreads(threadsPayload, runtime),
+  };
+}
+
 export async function loadPrGateCoordinationContext(options, runtime = {}) {
-  const prData = await fetchPrFactsWithSettledMergeable(options, runtime);
+  const prData =await fetchPrFactsWithSettledMergeable(options, runtime);
   const currentHeadSha = typeof prData?.headRefOid === "string" && prData.headRefOid.trim().length > 0
     ? prData.headRefOid.trim()
     : null;
@@ -1045,18 +1064,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // (buildGateCoordinationEvaluatorInput below) is what reconciles this
   // detector with detect-checkpoint-evidence.mjs: neither can report
   // mark_ready_for_review/clean while the other reports unresolved threads.
-  let unresolvedGateThreadCount;
-  try {
-    const markerOnlyCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload);
-    if (markerOnlyCount === 0) {
-      unresolvedGateThreadCount = 0;
-    } else {
-      const login = await resolveAuthenticatedLogin(runtime);
-      unresolvedGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload, login);
-    }
-  } catch {
-    unresolvedGateThreadCount = -1;
-  }
+  const unresolvedGateThreadCount = await countUnresolvedGateThreads(threadsPayload, runtime);
   // Injects the login-narrowed count computed just above so
   // detectCheckpointEvidence's own draftGateSatisfied fold (ADR 0088) agrees
   // with this detector without a second thread-payload fetch or a second
@@ -1274,6 +1282,63 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   };
 }
 
+/** A snapshot older than this is refetched; one gate round finishes well inside it. */
+export const PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS = 10 * 60 * 1000;
+
+// An injected runChild test double stays off the shared tmp root unless the test names its own `coordinationSnapshotRoot`.
+const coordinationSnapshotPath = (options, runtime) => {
+  const root = runtime.coordinationSnapshotRoot
+    ?? (runtime.runChild === undefined || runtime.runChild === defaultRunChild ? resolveGateArtifactTmpRoot(runtime.repoRoot ?? resolveRepoRoot(process.cwd())) : null);
+  return root && path.join(root, "gate-coordination", repoSlugFor(options.repo), `pr-${options.pr}`, "context-snapshot.json");
+};
+
+const deletionStampPath = (file) => `${file}.deleted`;
+
+/** Persists the loaded context sealed; `nowMs` is the fetch time and must be captured before the load. A write failure never fails the caller. */
+export async function writePrGateCoordinationSnapshot(options, runtime, context, nowMs = Date.now()) {
+  try {
+    const file = coordinationSnapshotPath(options, runtime);
+    if (!file) return;
+    await mkdir(path.dirname(file), { recursive: true });
+    // A delete at or after the fetch time means the loaded data predates a draft flip or a verdict post: do not resurrect it.
+    if (Number(await readFile(deletionStampPath(file), "utf8").catch(() => 0)) >= nowMs) return;
+    const snapshot = { repo: options.repo, pr: options.pr, headSha: context.currentHeadSha, lightweight: options.lightweight === true, fetchedAtMs: nowMs, context };
+    await writeSealed(file, JSON.stringify(snapshot));
+    // A delete that landed after the check above stamped before it removed, so the stamp now shows it: take the snapshot back.
+    if (Number(await readFile(deletionStampPath(file), "utf8").catch(() => 0)) >= nowMs) await rm(file, { force: true });
+  } catch { /* best effort */ }
+}
+
+export async function deletePrGateCoordinationSnapshot(options, runtime = {}) {
+  try {
+    const file = coordinationSnapshotPath(options, runtime);
+    if (!file) return;
+    await mkdir(path.dirname(file), { recursive: true });
+    // Stamp first: a writer that checks the stamp after this point skips, and one that wrote earlier sees the stamp on its re-read.
+    await writeFile(deletionStampPath(file), String(Date.now()));
+    await rm(file, { force: true });
+  } catch { /* best effort */ }
+}
+
+/**
+ * Returns `{ context, reused }`: the persisted context when it matches repo, PR, lightweight (unless `matchLightweight` is false), the exact full expected head and the age bound; otherwise a fresh load. Only the pre-flight writes snapshots.
+ */
+export async function loadPrGateCoordinationContextReusingSnapshot(options, runtime = {}, { expectedHeadSha, matchLightweight = true, nowMs = Date.now() } = {}) {
+  if (typeof expectedHeadSha === "string" && /^([0-9a-f]{40}|[0-9a-f]{64})$/i.test(expectedHeadSha)) {
+    try {
+      // A seal mismatch (out-of-band edit) throws and falls to the fresh load.
+      const snap = JSON.parse(await readSealed(coordinationSnapshotPath(options, runtime) ?? ""));
+      if (snap.repo === options.repo && snap.pr === options.pr && (!matchLightweight || snap.lightweight === (options.lightweight === true))
+        && typeof snap.headSha === "string" && snap.headSha.toLowerCase() === expectedHeadSha.toLowerCase()
+        && Number.isFinite(snap.fetchedAtMs) && nowMs >= snap.fetchedAtMs && nowMs - snap.fetchedAtMs < PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS && snap.context) {
+        return { context: snap.context, reused: true };
+      }
+    } catch { /* missing or unparsable: fetch fresh */ }
+  }
+  const context = await loadPrGateCoordinationContext(options, runtime);
+  return { context, reused: false };
+}
+
 // Composes the formal-request guard's round-cap exemption from both shapes
 // that must suppress it — the interpreter's own roundCapCleanEligible
 // (round_cap_clean_fallback) and the evaluator's independent ROUND_CAP_REACHED
@@ -1439,7 +1504,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // The config loads first: a config load error refuses before any gh read.
   const config = (await loadDevLoopConfigStrict({ repoRoot })).config ?? {};
   // ADR 0117 (issue 3139): an open self-hosting PR is answered by its own head's toolchain; another checkout refuses inside the loader, before any shared gate state is written.
+  const fetchedAtMs = Date.now();
   const context = await loadPrGateCoordinationContext(options, { ...runtime, guardToolchain: true });
+  await writePrGateCoordinationSnapshot(options, runtime, context, fetchedAtMs);
   const { toolchain } = context;
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");

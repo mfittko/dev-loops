@@ -260,7 +260,7 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       if (stale) throw new Error(`${stale} A clean draft_gate verdict is not recorded at a stale base.`);
     }
   }
-  const draftConversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
+  const draftConversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild, repoRoot });
   let gateResult;
   try {
     gateResult = await upsertCheckpointVerdict({
@@ -290,13 +290,13 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
   } catch (error) {
     if (draftConversion.alreadyDraft !== true) {
       try {
-        await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
+        await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild, repoRoot });
       } catch {
       }
     }
     throw withFanoutRefusalGuidance(error, { repo: options.repo, pr: options.pr, headSha, env });
   }
-  await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
+  await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild, repoRoot });
   return {
     ok: true,
     action: "reconciled",

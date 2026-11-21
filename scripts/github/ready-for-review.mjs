@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { deletePrGateCoordinationSnapshot } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchDraftGateEvidence } from "./_gate-finding-surface.mjs";
 import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -204,7 +205,7 @@ async function postSizeBudgetWaiverComment({ repo, pr, headSha, sizeBudget, reas
 // `skipCiPrecondition` is a runtime-only seam (no CLI flag on this script):
 // restore-ready.mjs calls readyForReview() directly with it set, so the CI
 // precondition can never be skipped through this script's own CLI surface.
-export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild: runChildImpl = runChild, syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire, verifyPolicyChangeApproval: verifyPolicyChangeApprovalFn = verifyPolicyChangeApproval, evaluateCommentDiscipline: evaluateCommentDisciplineFn = realEvaluateCommentDiscipline, skipCiPrecondition = false, resolveCapRoundFixed: resolveCapRoundFixedFn = realResolveCapRoundFixed } = {}) {
+export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild: runChildImpl = runChild, syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire, verifyPolicyChangeApproval: verifyPolicyChangeApprovalFn = verifyPolicyChangeApproval, evaluateCommentDiscipline: evaluateCommentDisciplineFn = realEvaluateCommentDiscipline, skipCiPrecondition = false, resolveCapRoundFixed: resolveCapRoundFixedFn = realResolveCapRoundFixed, coordinationSnapshotRoot } = {}) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const requireCi = draftGateConfig?.requireCi !== false && skipCiPrecondition !== true;
@@ -323,6 +324,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   }
   const readyResult = await runChildImpl(ghCommand, ["pr", "ready", String(options.pr), "--repo", options.repo], env);
   if (readyResult.code !== 0) throw new Error(`gh pr ready failed: ${readyResult.stderr?.trim() || `exit code ${readyResult.code}`}`);
+  await deletePrGateCoordinationSnapshot({ repo: options.repo, pr: options.pr }, { repoRoot, runChild: runChildImpl, coordinationSnapshotRoot });
   // #1069: couple the In-Progress board move to the ready transition. Best-effort
   // and NON-FATAL — a board failure must NEVER block or fail marking ready.
   let boardSync;
