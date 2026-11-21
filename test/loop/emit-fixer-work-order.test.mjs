@@ -4644,7 +4644,7 @@ test("an emit that reaches both baseRefName reads calls fetchPr once for them, a
     await assert.rejects(fx.emit({ ...base, fetchPr: async (args) => { calls += 1; return base.fetchPr(args); } }), (e) => e.refusal === "round_cap_reached");
     assert.equal(calls, 1);
   });
-  // Accepted seam: one memoized baseRefName read plus the live read.
+  // Pins unchanged behavior (also passes without the memo): accepted seam makes one baseRefName read plus the live read.
   await withFixture(async (fx) => {
     const { over } = await verdictCarryScenario(fx);
     const base = over();

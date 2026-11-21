@@ -310,9 +310,15 @@ export async function fetchPrFactsWithSettledMergeable(
     polls += 1;
     await sleep(pollDelayMs);
     const next = await fetchPrMergeable(options, { env, ghCommand, runChild });
-    prData = next?.headRefOid === prData?.headRefOid
-      ? { ...prData, mergeable: next.mergeable, mergeStateStatus: next.mergeStateStatus }
-      : await fetch(options, { env, ghCommand, runChild });
+    if (typeof next?.headRefOid === "string" && next.headRefOid !== "" && next.headRefOid === prData?.headRefOid) {
+      prData = { ...prData, mergeable: next.mergeable ?? prData.mergeable, mergeStateStatus: next.mergeStateStatus ?? prData.mergeStateStatus };
+    } else if (polls < maxPolls) {
+      // The head-change full fetch counts against the cap too.
+      polls += 1;
+      prData = await fetch(options, { env, ghCommand, runChild });
+    } else {
+      break;
+    }
   }
   return prData;
 }
