@@ -244,6 +244,8 @@ test("info.mjs --issue --json produces valid JSON with gh stubs", async () => {
 
 test("info.mjs --pr produces human-readable output with gh stubs", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "info-test-pr-"));
+  initGitFixture(tmpDir);
+  await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, queue: { ghMinIntervalMs: 0 } }));
   try {
     const repoSlug = "test-owner/test-repo";
     const prNumber = 99;
@@ -302,6 +304,8 @@ test("info.mjs --pr produces human-readable output with gh stubs", async () => {
 // `rules` answers GET repos/<repo>/rules/branches/main; null makes the call fail.
 async function runPrInfoWithRollup(mergeStateStatus, statusCheckRollup, rules = [], extraArgs = []) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "info-test-unstable-"));
+  initGitFixture(tmpDir);
+  await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, queue: { ghMinIntervalMs: 0 } }));
   const repoSlug = "test-owner/test-repo";
   const prNumber = 42;
   const ghPath = path.join(tmpDir, "gh");
@@ -641,4 +645,10 @@ test("info.mjs fails gracefully when repo cannot be detected", async () => {
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
+});
+
+test("info.mjs ghJson keeps the RATE_LIMITED code from the gh seam", async () => {
+  const { ghJson } = await import("../../scripts/loop/info.mjs");
+  const limited = Object.assign(new Error("gh command failed: secondary rate limit"), { code: "RATE_LIMITED", resetAt: null });
+  assert.throws(() => ghJson(["x"], undefined, () => { throw limited; }), (error) => error.code === "RATE_LIMITED" && error.cause === limited);
 });

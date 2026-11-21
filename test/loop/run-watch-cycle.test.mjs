@@ -111,7 +111,7 @@ test("watchWorkflowRun waits for close after a spawn error", async () => {
   const result = watchWorkflowRun(
     { repo: "owner/repo", runId: 42 },
     {
-      env: {},
+      env: { DEV_LOOPS_GH_STUB: "1" },
       ghCommand: "gh",
       spawnImpl: () => child,
     },
@@ -142,7 +142,7 @@ test("watchWorkflowRun terminates a timed-out child and waits for close", async 
   const result = watchWorkflowRun(
     { repo: "owner/repo", runId: 42, timeoutMs: 10 },
     {
-      env: {},
+      env: { DEV_LOOPS_GH_STUB: "1" },
       ghCommand: "gh",
       spawnImpl: () => child,
       setTimeoutImpl: (callback) => {
