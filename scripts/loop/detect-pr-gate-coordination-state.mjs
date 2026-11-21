@@ -276,6 +276,17 @@ async function fetchPrFacts({ repo, pr }, { env = process.env, ghCommand = "gh",
   return parseJsonText(result.stdout, { label: "gh pr view" });
 }
 
+// Only `mergeable` and `mergeStateStatus` change while GitHub settles, so the
+// re-polls read just those two plus `headRefOid`. A re-poll that sees a different
+// head falls back to one full fetch, so `mergeable` always belongs to the head returned.
+async function fetchPrMergeable({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  const result = await runChild(ghCommand, ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,mergeable,mergeStateStatus"], env);
+  if (result.code !== 0) {
+    throw new Error(`gh command failed: ${result.stderr.trim() || `exit code ${result.code}`}`);
+  }
+  return parseJsonText(result.stdout, { label: "gh pr view" });
+}
+
 // GitHub computes `mergeable` asynchronously, so a freshly-pushed head briefly
 // reads `UNKNOWN`. After the initial fetch, re-poll up to `maxPolls` more times
 // while the value stays UNKNOWN (so at most 1 + maxPolls total fetches) before
@@ -298,7 +309,10 @@ export async function fetchPrFactsWithSettledMergeable(
   while (String(prData?.mergeable || "").toUpperCase() === "UNKNOWN" && polls < maxPolls) {
     polls += 1;
     await sleep(pollDelayMs);
-    prData = await fetch(options, { env, ghCommand, runChild });
+    const next = await fetchPrMergeable(options, { env, ghCommand, runChild });
+    prData = next?.headRefOid === prData?.headRefOid
+      ? { ...prData, mergeable: next.mergeable, mergeStateStatus: next.mergeStateStatus }
+      : await fetch(options, { env, ghCommand, runChild });
   }
   return prData;
 }

@@ -24,6 +24,7 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { countUnresolvedGateAuthoredThreadsFromRawNodes, draftGatePostedHeads } from "./_gate-finding-surface.mjs";
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
+import { readPrViewOnce } from "./_pr-view-memo.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { isTrustedAssociation } from "@dev-loops/core/github/comment-trust";
@@ -1186,7 +1187,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
 export const carriedFanoutMarker = (candidate, carried) => (carried.convergedFromHeadSha
   ? { ...candidate, headSha: carried.carriedFrom, convergedFromHeadSha: candidate.headSha, carriedFrom: carried.carriedFrom }
   : { ...candidate, carriedFrom: carried.carriedFrom });
-async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd(), recordCarry = false } = {}) {
+async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd(), recordCarry = false, prViewMemo } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({
     repo: options.repo,
     pr: options.pr,
@@ -1313,10 +1314,10 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   );
   if (config != null && resolveRequireFanoutEvidence(config) && resolveLightMode(config) != null && anyInlineVerdict) {
     try {
-      const lightFacts = await runGhJson(
+      const lightFacts = await readPrViewOnce({ repo: options.repo, pr: options.pr, fields: "baseRefOid,labels" }, prViewMemo, () => runGhJson(
         ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "baseRefOid,labels"],
         { env, ghCommand, runChild, restFallback: () => restFetchPrView(options.repo, options.pr, env) },
-      );
+      ));
       baseRef = typeof lightFacts?.baseRefOid === "string" && lightFacts.baseRefOid.trim().length > 0
         ? lightFacts.baseRefOid.trim()
         : null;

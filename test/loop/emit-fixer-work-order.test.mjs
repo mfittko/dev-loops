@@ -4634,3 +4634,22 @@ test("Claude fixer dispatch payload carries the resolved model only when non-nul
   assertFixerDispatchPayload({ harness: "claude", payload: buildFixerDispatchPayload({ harness: "claude", plan: { ...plan, dispatchPrompt: buildDispatchPointer(unit) }, model: "sonnet" }), plan: unit, model: "sonnet" });
   assert.throws(() => assertFixerDispatchPayload({ harness: "claude", payload: buildFixerDispatchPayload({ harness: "claude", plan: { ...plan, dispatchPrompt: buildDispatchPointer(unit) } }), plan: unit, model: "sonnet" }), (err) => err.refusal === "dispatch_payload_mismatch");
 });
+
+test("an emit that reaches both baseRefName reads calls fetchPr once for them, and the mutation-authority read stays live", async () => {
+  // Cap round, seam unaccepted: the carry lookup and the cap-round walk both need baseRefName, then the emit refuses before the live read.
+  await withFixture(async (fx) => {
+    const { over } = await verdictCarryScenario(fx, { ownChangeAfterMerge: true });
+    const base = over();
+    let calls = 0;
+    await assert.rejects(fx.emit({ ...base, fetchPr: async (args) => { calls += 1; return base.fetchPr(args); } }), (e) => e.refusal === "round_cap_reached");
+    assert.equal(calls, 1);
+  });
+  // Accepted seam: one memoized baseRefName read plus the live read.
+  await withFixture(async (fx) => {
+    const { over } = await verdictCarryScenario(fx);
+    const base = over();
+    let calls = 0;
+    await fx.emit({ ...base, fetchPr: async (args) => { calls += 1; return base.fetchPr(args); } });
+    assert.equal(calls, 2);
+  });
+});

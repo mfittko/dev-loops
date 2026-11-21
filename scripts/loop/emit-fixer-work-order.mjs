@@ -44,6 +44,7 @@ import { selectActThreadBinding } from "../github/_fixer-act-thread-bindings.mjs
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { renderCliText } from "@dev-loops/core/loop/cli-command";
 import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
+import { readPrViewOnce } from "../github/_pr-view-memo.mjs";
 
 const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path> | --review-id <review node id> | --ci-file <path>) [--completion-only] [--delta-result <path>] [--allowed-path <repo-relative path>]... [--operator-focus-file <path>] [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
@@ -592,6 +593,9 @@ async function emitPlan({
   const paths = [...new Set((allowedPaths.length > 0 ? allowedPaths : ["."]).map(normalizeAllowedPath))].sort();
   const abs = (p) => path.resolve(cwd, p);
   const capture = await beginFixerEmission(dir);
+  // The two baseRefName reads share one gh read; the mutation-authority read below stays live.
+  const prViewMemo = new Map();
+  const memoFetchBase = () => readPrViewOnce({ repo, pr, fields: "headRefName,headRefOid,baseRefName" }, prViewMemo, () => fetchPr({ repo, pr }));
   try {
   const planPath = path.join(dir, PLAN_FILE);
   const originalBytes = await capture.read(planPath);
@@ -653,7 +657,7 @@ async function emitPlan({
       const closed = await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), includeRetainedCurrentHead: true, includeLiveCurrentHead: true, onUnreadable: () => { throw new Error("unreadable prior ledger"); } });
       if (closed.some((log) => String(log.headSha).trim().toLowerCase() === headSha)) return null;
       const originHead = closureFromHeadOf(closed);
-      const baseRefName = (await fetchPr({ repo, pr }))?.baseRefName;
+      const baseRefName = (await memoFetchBase())?.baseRefName;
       const accepted = originHead !== headSha && typeof baseRefName === "string" && baseRefName !== ""
         && verdictPosted(await fetchVerdictMarkers({ repo, pr, headSha: originHead, gate, runtime: { env, ghCommand, runChild } }))
         && await fixerEmitCarryAccepts({ originHead, headSha, baseRef: `origin/${baseRefName}`, repoRoot: cwd });
@@ -681,7 +685,7 @@ async function emitPlan({
         const fromHead = closureFromHeadOf(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), onUnreadable: () => { unreadable += 1; } }));
         // An unreadable ledger counts toward the cap but is dropped above, so the cap-round authority could be an earlier round: fail closed.
         if (unreadable > 0) throw new Error("unreadable prior ledger");
-        const baseRefName = (await fetchPr({ repo, pr }))?.baseRefName;
+        const baseRefName = (await memoFetchBase())?.baseRefName;
         // ADR 0218: the chain's last clearing candidate (the fixer commit that followed the cap round) counts as a base of the merge as well.
         let baseOnly = false;
         if (typeof baseRefName === "string" && baseRefName) {
