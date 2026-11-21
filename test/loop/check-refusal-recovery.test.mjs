@@ -93,5 +93,8 @@ test("the scan visits files in sorted name order", () => {
 
 test("the repo has no refusal path above the committed baseline", () => {
   const baseline = JSON.parse(readFileSync(new URL("../../docs/refusal-recovery-baseline.json", import.meta.url), "utf8"));
-  assert.deepEqual(checkAgainstBaseline(scanRefusals(), baseline), []);
+  const sites = scanRefusals();
+  assert.deepEqual(checkAgainstBaseline(sites, baseline), []);
+  // CI never rewrites the baseline, so a fallen count must be committed: the file stays exact.
+  assert.deepEqual(missingCounts(sites), baseline);
 });
