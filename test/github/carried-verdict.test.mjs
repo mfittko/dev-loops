@@ -308,3 +308,27 @@ test("a converged marker with a gate-tooling base delta after its fixer commit d
   const m = convergedMarker("a".repeat(40), fixer);
   assert.deepEqual(await carry(s, m, cur, { written: [] }), m);
 });
+
+// Issue 3346: the stale-base line is not a marker field, so the verdict stays clean and carries across a base-only merge.
+test("a verdict body with the stale-base line stays a clean contractComplete marker and carries across a clean base merge", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  s.git("update-ref", "refs/remotes/origin/main", "main");
+  const written = [];
+  const body = renderGateReviewCommentBody({ gate: GATE, headSha: origin, repo: REPO, verdict: "clean", findingsSummary: "none", nextAction: "mark ready for review", staleBaseNote: "origin/main moved during the round (1 newer commit(s)). Merge it." });
+  assert.match(body, /\*\*Base freshness:\*\* stale;/);
+  const runChild = async (_cmd, args) => {
+    if (args.some((a) => String(a).includes("issues/7/comments"))) {
+      return { code: 0, stdout: JSON.stringify([[{ id: 1, body, user: MAINTAINER, author_association: "MEMBER", created_at: "2026-01-01T00:00:00Z" }]]), stderr: "" };
+    }
+    if (args.includes("baseRefName")) return { code: 0, stdout: JSON.stringify({ baseRefName: "main" }), stderr: "" };
+    return { code: 1, stdout: "", stderr: "unavailable" };
+  };
+  const evidence = await fetchDraftGateEvidence({ repo: REPO, pr: 7, headSha: origin }, { env: { GH_TOKEN: "t" }, ghCommand: "gh", runChild, repoRoot: s.dir });
+  assert.equal(evidence.draftGateMarker.visible, true);
+  assert.equal(evidence.draftGateMarker.verdict, "clean");
+  assert.equal(evidence.draftGateMarker.contractComplete, true);
+  const carried = await carryGateMarker(evidence.draftGateMarker, { gate: GATE, currentHeadSha: cur, baseRef: "origin/main", repoRoot: s.dir, record: async (e) => { written.push(e); } });
+  assert.equal(carried.carriedFrom, origin);
+});
