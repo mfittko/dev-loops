@@ -376,3 +376,15 @@ test("coordinator.agent.md does NOT exist as a file", async () => {
     "coordinator.agent.md should not exist"
   );
 });
+
+test("REFINE-STATE-RECOVERY-ROWS: refiner owns the rule; grill, docs-grill, judge and the developer checklist apply it (#3425)", async () => {
+  assertRuleOwned("REFINE-STATE-RECOVERY-ROWS", "agents/refiner.agent.md");
+  const owned = extractOwnedText(await readRepo("agents/refiner.agent.md"), "REFINE-STATE-RECOVERY-ROWS");
+  assert.match(await readRepo("agents/refiner.agent.md"), /RECOVERY-COMMAND-REQUIRED/);
+  assertMatchesAll(owned, [/crash/, /rebuild at the same head/, /replacement by a later step/, /fail-closed refusal/, /`recovery`/, /--auto/, /3420/, /3421/], "REFINE-STATE-RECOVERY-ROWS");
+  const grill = await readRepo("skills/loop-grill/SKILL.md");
+  assertMatchesAll(grill, [/REFINE-STATE-RECOVERY-ROWS/, /Record each omission as a gap/, /With `--auto`, draft the missing rows/], "skills/loop-grill/SKILL.md");
+  assert.match(await readRepo("skills/docs/docs-grill-step.md"), /REFINE-STATE-RECOVERY-ROWS/);
+  assert.match(await readRepo("agents/judge.agent.md"), /REFINE-STATE-RECOVERY-ROWS[^]*Never classify it as scope drift/);
+  assert.match(await readRepo("packages/core/src/config/extension-defaults.yaml"), /"C4: [^"]*REFINE-STATE-RECOVERY-ROWS/);
+});

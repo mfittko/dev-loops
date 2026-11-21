@@ -102,6 +102,11 @@ Additional gaps discovered through semantic reading of the spec are also recorde
 <!-- rule: GRILL-COUNT-AC-UNIT-DISPATCH-MODE -->
 `GRILL-COUNT-AC-UNIT-DISPATCH-MODE`: An acceptance criterion that names a **count** (sentinel count, angle count, dispatch-unit count) MUST specify which unit the count refers to — `sentinel` vs `angle` vs `dispatch-unit` — and MUST be validated against BOTH per-angle dispatch and the shipped grouped-dispatch default, not just one. Grouped fan-out writes one sentinel per emitted dispatch unit, not per angle; the AC MUST call out that interaction. Detect an omitted unit or dispatch-mode interaction as a gap before synthesis, then record the outcome and validation evidence in the authoritative `## AC / DoD matrix` required by Step 4.
 
+### Recovery rows for new state or refusals
+
+<!-- rule-ref: REFINE-STATE-RECOVERY-ROWS -->
+`REFINE-STATE-RECOVERY-ROWS`, owned by the [refiner agent](../../agents/refiner.agent.md): detect a spec that adds persistent state (a lock, sentinel, plan, receipt, cache or marker file) without acceptance rows for recovery after a crash, after a rebuild at the same head and after replacement by a later step. Detect a spec that adds a fail-closed refusal without a named `recovery`. Record each omission as a gap before synthesis. With `--auto`, draft the missing rows into the `## AC / DoD matrix`.
+
 ### Self-gate path
 
 <!-- rule: GRILL-SELF-HOST-PATH -->
