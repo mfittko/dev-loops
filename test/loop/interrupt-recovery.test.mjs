@@ -147,9 +147,9 @@ test("known failure (issue 3416): a reviewer re-fanned after a context rebuild a
   assert.match(redo.stdout + redo.stderr, /DIFFERENT prefix hash/, "the refusal changed; re-check issue 3416");
 });
 
-// A fix pass killed after the plan is on disk leaves the carry-forward plan file for the next fan-in: the coordinator
-// must hand it over by path (a long inline plan trips the Bash hook).
-test("fan-in reads the carry-forward plan from a file", async () => {
+// A fix pass killed before the plan reaches disk leaves the next fan-in a plan path that does not exist: fan-in must
+// accept the flag and refuse the unreadable file. The happy-path file read is covered in consolidate-fanin.test.mjs.
+test("fan-in refuses an unreadable carry-forward plan file", async () => {
   const root = await makeRoot();
   const run = spawnSync("node", [CONSOLIDATE, "--findings-dir", "tmp", "--carry-forward-plan-file", path.join(root, "tmp", "plan.json")], { cwd: root, encoding: "utf8", env: env(root) });
   const out = run.stdout + run.stderr;

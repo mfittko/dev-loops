@@ -627,6 +627,18 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   if (!Array.isArray(units) || (units.length === 0 && !allCarried)) {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout dispatch plan resolves zero units (${pendingOnly ? "pendingGroups" : "groups"}) — nothing to dispatch` }, false);
   }
+  // A plan file is validated on every round that passes it, so a bad path fails before any reviewer is dispatched.
+  const planFile = resolveFlagValue(argv, "--carry-forward-plan-file");
+  let planFileProof;
+  if (planFile !== null) {
+    try {
+      requireAbsolutePlanFilePath(planFile);
+      planFileProof = JSON.parse(await readFile(planFile, "utf8"));
+      verifyCarryForwardPlanIdentity(planFileProof, { headSha, gate, repo, pr });
+    } catch (error) {
+      return finish({ ok: false, error: `${units.length === 0 ? "zero-unit carry proof" : "carry-forward plan file"} refused: ${error.message}`, recovery: "Pass --carry-forward-plan-file <keyed carry-forward-plan.json path> with the resolver's complete plan, or rebuild the context and dispatch every angle." }, false);
+    }
+  }
   let carryProof;
   if (units.length === 0) {
     try {
@@ -634,10 +646,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       if (angles.some((angle) => angleReviewSurface(angle).kind !== "kinds")) {
         throw new Error("zero-unit plan cannot carry mandatory, always-run, or unknown angles");
       }
-      const planFile = resolveFlagValue(argv, "--carry-forward-plan-file");
-      if (planFile !== null) requireAbsolutePlanFilePath(planFile);
-      const rawProof = JSON.parse(planFile !== null ? await readFile(planFile, "utf8") : resolveFlagValue(argv, "--carry-forward-plan") ?? "null");
-      if (planFile !== null) verifyCarryForwardPlanIdentity(rawProof, { headSha, gate, repo, pr });
+      const rawProof = planFile !== null ? planFileProof : JSON.parse(resolveFlagValue(argv, "--carry-forward-plan") ?? "null");
       carryProof = validateZeroUnitCarryProof(rawProof, angles);
       // A proof resolved from a head whose log was quarantined no longer counts (GATE-EXEC-FINDINGS-LOG-QUARANTINE):
       // fail closed so the caller rebuilds the context and dispatches every angle.

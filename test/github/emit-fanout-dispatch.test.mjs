@@ -1035,6 +1035,21 @@ test("--pending emits only the pendingGroups subset", async () => {
   });
 });
 
+test("--pending with pending units refuses a missing --carry-forward-plan-file before any unit is emitted (issue 3415)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", path.join(tmpDir, "does-not-exist.json")],
+      { cwd: tmpDir },
+    );
+    assert.notEqual(result.status, 0);
+    const out = result.stdout + result.stderr;
+    assert.match(out, /carry-forward plan file refused/);
+    assert.match(out, /recovery/);
+    assert.doesNotMatch(out, /"units"/);
+  });
+});
+
 // AC1 (issue 2175): end-to-end pipeline pin — write-gate-context.mjs's own
 // --carried-angles narrows fanout.pendingGroups (resolveFanoutDispatch), and
 // --pending here emits ONLY the changed-input angles' units into the
