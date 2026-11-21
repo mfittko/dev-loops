@@ -2867,7 +2867,23 @@ test("a pr_body act thread stays open with a body_read_unrecorded failure when n
   ));
 });
 
-test("a pr_body act thread stays open with a body_read_unrecorded failure when the only digest sits in a non-reviewed checkout, and the hint names no rebuild", async () => {
+test("a pr_body act thread stays open with a body_read_unrecorded failure when a same-head rebuild left a sticky baseline that differs from the pr-body read", async () => {
+  const findings = [prBodyFinding("first body edit")];
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: findings.map(prBodyThread) }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      await writePrBodyActFixture(repoRoot, findings, { recordedBody: BODY_NEW });
+      const contextFile = path.join(repoRoot, buildGateContextPath({ repo: REPO, pr: PR, gate: "draft_gate", headSha: nthHeadSha(1), tmpRoot: "tmp" }));
+      await writeFile(contextFile, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(BODY_NEW) }], prBodyBaselineSha256: prBodySha256(BODY_OLD) }), "utf8");
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.prBodyActClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.match(result.dispositionFailures[0].error, /body_read_unrecorded: the context at .* was rebuilt at the same head/);
+    },
+  ));
+});
+
+test("a pr_body act thread stays open with a body_read_unrecorded failure when the only digest sits in a non-reviewed checkout,and the hint names no rebuild", async () => {
   const findings = [prBodyFinding("first body edit")];
   const worktreeRoot = await mkdtemp(path.join(os.tmpdir(), "close-gate-findings-wt-"));
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(

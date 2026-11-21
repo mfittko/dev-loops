@@ -28,7 +28,7 @@ import { loadDevLoopConfig, resolveGateConfig, resolveTrackerProvider } from "@d
 import { GATE_CONFIG_KEY, isOpenActItem } from "@dev-loops/core/loop/gate-fanin";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
-import { prBodySha256, readReviewedBodySha256 } from "./write-gate-context.mjs";
+import { prBodySha256, readGateContext, readReviewedBodySha256 } from "./write-gate-context.mjs";
 
 const USAGE = `Usage: close-gate-findings.mjs --ledger <findings-log path> [--tmp-root <dir>]
 Run a closed gate round's THREAD DISPOSITION pass. This helper posts NO review of
@@ -122,7 +122,7 @@ Output (stdout, JSON):
     "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer, reject-close, evidence-only and PR-body act passes; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585); folded findings (#2263) never create a thread, so they never enter this count>,
     "foldedFiled": <#2263: folded (below gates.<gate>.inlineSeverityFloor) non-nit findings the judge disposed defer, newly listed in the deferral comment this pass, from the ledger directly (they carry no thread of their own); on a PR target no comment is posted and it counts the folded entries recorded in the verdict body's Details block under any group (Deferred, Rejected or Not judged; only a Deferred-group marker carries issue=<pr>); a nit is never filed>,
     "followUpIssueNumber"?: <the deferral target number (the linked spec issue the comment goes to, or the PR itself, which gets no comment); present when the round had a fileable thread target OR a fileable folded finding>,
-    "dispositionFailures"?: [ { "commentId": ..., "threadId": "...", "severity": "...", "angle": "...", "error": "..." } ] <present only when a target's reply could not be built/posted; that thread stays unresolved rather than deadlocking the batch (#1882)> }
+    "dispositionFailures"?: [ { "commentId": ..., "threadId": "...", "severity": "...", "angle": "...", "error": "..." } ] <present only when a target's reply could not be built/posted, or a PR-body act candidate's recorded or live PR body digest could not be read (body_read_unrecorded, body_read_failed); that thread stays unresolved rather than deadlocking the batch (#1882)> }
 
 ${JQ_OUTPUT_USAGE}
 Exit codes:
@@ -697,7 +697,11 @@ async function runEvidenceOnlyClosePass({ repo, pr, gate, headSha, round, thread
 async function readRecordedBodyDigest(options, verdictHead, repoRoot) {
   try {
     const digest = await readReviewedBodySha256(options, verdictHead, repoRoot);
-    return typeof digest === "string" && /^[0-9a-f]{64}$/.test(digest) ? digest : null;
+    if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) return null;
+    // A later same-head build rewrites the pr-body read with the edited body while the sticky baseline keeps the first body, so a differing baseline means the disposing round's body is unknown.
+    const baseline = (await readGateContext({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: verdictHead }, { repoRoot }).catch(() => null))?.prBodyBaselineSha256;
+    if (typeof baseline === "string" && baseline !== digest) throw new Error(`body_read_unrecorded: the context at ${verdictHead} was rebuilt at the same head (its sticky baseline ${baseline.slice(0, 12)} differs from its pr-body read ${digest.slice(0, 12)}), so the disposing round's body is unknown`);
+    return digest;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`${message.replace(/,? or fix the items with a commit/, "")}; rerun close-gate-findings from the reviewed worktree or escalate`);
