@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "bun:test";
 
-import { ghJson, ghGraphql, isRateLimitError, resolveOwner, withGraphqlRateLimitWait } from "../src/github/gh.mjs";
+import { ghJson, ghGraphql, isRateLimitError, isSecondaryRateLimitError, rateLimitedResult, resolveOwner, withGraphqlRateLimitWait } from "../src/github/gh.mjs";
 import { GRAPHQL_RATE_LIMIT_MAX_WAIT_MS } from "../src/loop/policy-constants.mjs";
 
 function stubRunChild(result) {
@@ -400,15 +400,14 @@ describe("withGraphqlRateLimitWait", () => {
   }
 });
 
-describe("gh pacing and secondary rate limit backoff", () => {
+describe("secondary rate limit backoff", () => {
   const limited = { code: 1, stdout: "", stderr: "You have exceeded a secondary rate limit\n" };
   const ok = { code: 0, stdout: '{"ok":true}', stderr: "" };
   function harness(results) {
-    const log = { slots: 0, runs: 0, sleeps: [] };
+    const log = { runs: 0, sleeps: [] };
     return {
       log,
       opts: {
-        throttle: async () => { log.slots += 1; },
         sleep: async (ms) => { log.sleeps.push(ms); },
         backoffMs: 7,
         runChild: async () => { log.runs += 1; return results.shift(); },
@@ -416,31 +415,27 @@ describe("gh pacing and secondary rate limit backoff", () => {
     };
   }
 
-  test("a stubbed runChild without a throttle never takes a slot", async () => {
-    const log = { runs: 0 };
-    const runChild = async () => { log.runs += 1; return limited; };
-    await assert.rejects(() => ghJson(["api", "x"], { runChild }), { code: "GH_API_ERROR" });
-    assert.equal(log.runs, 1);
+  test("isSecondaryRateLimitError matches the gh phrasing on a string or an Error only", () => {
+    assert.ok(isSecondaryRateLimitError("You have exceeded a secondary rate limit"));
+    assert.ok(isSecondaryRateLimitError(new Error("Secondary Rate Limit hit")));
+    assert.ok(!isSecondaryRateLimitError("API rate limit exceeded"));
+    assert.ok(!isSecondaryRateLimitError(undefined));
   });
 
-  test("ghJson takes one slot per call", async () => {
-    const { log, opts } = harness([ok]);
-    assert.deepEqual(await ghJson(["api", "x"], opts), { ok: true });
-    assert.equal(log.slots, 1);
-  });
-
-  test("a secondary rate limit backs off then succeeds through a fresh slot", async () => {
+  test("a secondary rate limit backs off then retries and succeeds", async () => {
     const { log, opts } = harness([limited, ok]);
     assert.deepEqual(await ghJson(["api", "x"], opts), { ok: true });
     assert.deepEqual(log.sleeps, [7]);
-    assert.equal(log.slots, 2);
+    assert.equal(log.runs, 2);
   });
 
-  test("a second secondary rate limit throws RATE_LIMITED that isRateLimitError still matches", async () => {
+  test("a second secondary rate limit throws RATE_LIMITED with a null resetAt that isRateLimitError matches", async () => {
     const { log, opts } = harness([limited, limited]);
     await assert.rejects(() => ghJson(["api", "x"], opts), (error) => {
       assert.equal(error.code, "RATE_LIMITED");
+      assert.equal(error.resetAt, null);
       assert.ok(isRateLimitError(error));
+      assert.deepEqual(rateLimitedResult(error), { ok: false, code: "RATE_LIMITED", error: error.message, resetAt: null });
       return true;
     });
     assert.equal(log.runs, 2);
@@ -457,6 +452,6 @@ describe("gh pacing and secondary rate limit backoff", () => {
     const { log, opts } = harness([limited, { code: 0, stdout: '{"data":{}}', stderr: "" }]);
     const { runChild, ...rest } = opts;
     assert.deepEqual(await ghGraphql("query{}", {}, {}, runChild, rest), { data: {} });
-    assert.equal(log.slots, 2);
+    assert.equal(log.runs, 2);
   });
 });

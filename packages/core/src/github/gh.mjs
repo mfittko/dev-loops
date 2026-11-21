@@ -28,29 +28,21 @@
  */
 
 import { runChild as defaultRunChild } from "../cli/primitives.mjs";
-import { takeGhSlot } from "./gh-throttle.mjs";
 import { parseJsonText } from "./review-threads.mjs";
 
 const SECONDARY_RATE_LIMIT_BACKOFF_MS = 30_000;
 
 /**
- * Run one gh child through the shared throttle. Pacing applies only to the real
- * default runChild or an injected `throttle`, so a stubbed runChild never touches
- * git or the lock. A secondary rate limit backs off once and retries through a
- * fresh slot; a second one throws RATE_LIMITED with the original gh message.
+ * Run one gh child. Pacing lives in the default runChild (each attempt takes a
+ * slot there). A secondary rate limit backs off once and retries; a second one
+ * throws RATE_LIMITED with the original gh message.
  */
-async function runPaced(runChild, command, args, env, { throttle, backoffMs = SECONDARY_RATE_LIMIT_BACKOFF_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
-  const pace = throttle ?? (runChild === defaultRunChild ? takeGhSlot : null);
-  if (!pace) return runChild(command, args, env);
-  const attempt = async () => {
-    await pace();
-    return runChild(command, args, env);
-  };
-  const isSecondaryLimit = (result) => result.code !== 0 && /secondary rate limit/i.test(result.stderr);
-  let result = await attempt();
+async function runWithBackoff(runChild, command, args, env, { backoffMs = SECONDARY_RATE_LIMIT_BACKOFF_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
+  const isSecondaryLimit = (result) => result.code !== 0 && isSecondaryRateLimitError(result.stderr);
+  let result = await runChild(command, args, env);
   if (!isSecondaryLimit(result)) return result;
   await sleep(backoffMs);
-  result = await attempt();
+  result = await runChild(command, args, env);
   if (isSecondaryLimit(result)) {
     throw Object.assign(new Error(`gh command failed: ${result.stderr.trim()}`), { code: "RATE_LIMITED", resetAt: null });
   }
@@ -71,8 +63,8 @@ async function runPaced(runChild, command, args, env, { throttle, backoffMs = SE
  *   when omitted it reads `gh command failed: <detail>` (the probe-ci-status
  *   shape). Either way the non-zero-exit error carries `code: "GH_API_ERROR"`.
  */
-export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRunChild, label, throttle, backoffMs, sleep } = {}) {
-  const result = await runPaced(runChild, ghCommand, args, env, { throttle, backoffMs, sleep });
+export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRunChild, label, backoffMs, sleep } = {}) {
+  const result = await runWithBackoff(runChild, ghCommand, args, env, { backoffMs, sleep });
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
     const prefix = label ? `${label} failed` : "gh command failed";
@@ -97,17 +89,17 @@ export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRu
  *   in the response is returned instead of thrown. This includes a non-zero
  *   `gh` exit whose stdout is JSON with an `errors` array.
  */
-export async function ghGraphql(query, vars, env, runChild = defaultRunChild, { allowErrors = false, throttle, backoffMs, sleep } = {}) {
+export async function ghGraphql(query, vars, env, runChild = defaultRunChild, { allowErrors = false, backoffMs, sleep } = {}) {
   const fieldArgs = [];
   for (const [key, value] of Object.entries(vars)) {
     fieldArgs.push("--field", `${key}=${value}`);
   }
-  const result = await runPaced(
+  const result = await runWithBackoff(
     runChild,
     "gh",
     ["api", "graphql", "--field", `query=${query}`, ...fieldArgs],
     env,
-    { throttle, backoffMs, sleep },
+    { backoffMs, sleep },
   );
   if (result.code !== 0) {
     // `gh api graphql` exits non-zero when the response carries GraphQL
@@ -191,6 +183,12 @@ export async function resolveOwner(login, env, runChild) {
 export function isRateLimitError(error) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   return /rate limit[^\n]{0,20}\bexceeded\b|\bexceeded\b[^\n]{0,20}rate limit/i.test(message);
+}
+
+// A secondary (abuse) rate limit message from gh, matched on raw stderr or an Error.
+export function isSecondaryRateLimitError(error) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /secondary rate limit/i.test(message);
 }
 
 // Sanity bound: a GraphQL reset further ahead than this is a bogus reading.

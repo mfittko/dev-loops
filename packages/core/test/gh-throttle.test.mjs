@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { existsSync, writeFileSync } from "node:fs";
+import { mkdtemp, mkdir, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, test } from "bun:test";
 
-import { acquireSlot, resetThrottleCache, resolveIntervalMs, resolveMainRoot } from "../src/github/gh-throttle.mjs";
+import { acquireSlot, resetThrottleCache, resolveIntervalMs, resolveMainRoot, takeGhSlot } from "../src/github/gh-throttle.mjs";
 
 let root;
 let clock;
@@ -26,12 +27,56 @@ describe("gh-throttle", () => {
   test("two concurrent callers start at least one interval apart", async () => {
     // The shared fake clock also advances during lock polling, so assert on the
     // reservations: two slots one interval apart end at t0 + 2 * interval or later.
-    const t0 = clock;
-    const caller = () => acquireSlot({ root, intervalMs: 500, now, sleep });
+    // Real clock: each caller records its wall time right after acquireSlot returns.
+    const starts = [];
+    const caller = async () => {
+      await acquireSlot({ root, intervalMs: 60 });
+      starts.push(Date.now());
+    };
     await Promise.all([caller(), caller()]);
-    const finalNext = Number(await readFile(slotFile(), "utf8"));
-    assert.ok(finalNext >= t0 + 1000, `next slot ${finalNext - t0}`);
-    assert.ok(clock >= finalNext - 500, "the second caller waited for its slot");
+    starts.sort((a, b) => a - b);
+    assert.equal(starts.length, 2);
+    assert.ok(starts[1] - starts[0] >= 55, `gap ${starts[1] - starts[0]}`);
+  });
+
+  test("release deletes only its own token: a lock another holder took is left in place", async () => {
+    await acquireSlot({
+      root,
+      intervalMs: 500,
+      sleep,
+      // now() runs inside the critical section: swap the lock for another holder's.
+      now: () => { if (existsSync(lockFile())) writeFileSync(lockFile(), "other-holder"); return clock; },
+    });
+    assert.equal(await readFile(lockFile(), "utf8"), "other-holder");
+  });
+
+  test("release removes the lock when the token still matches", async () => {
+    await acquireSlot({ root, intervalMs: 500, now, sleep });
+    await assert.rejects(() => readFile(lockFile()), { code: "ENOENT" });
+  });
+
+  test("a stolen stale lock leaves no aside file behind", async () => {
+    await mkdir(path.dirname(lockFile()), { recursive: true });
+    await writeFile(lockFile(), "dead-holder");
+    const old = new Date(clock - 60_000);
+    await utimes(lockFile(), old, old);
+    await acquireSlot({ root, intervalMs: 500, now, sleep });
+    assert.deepEqual((await readdir(path.dirname(lockFile()))).sort(), ["next-slot"]);
+  });
+
+  test("a lock that is fresh once moved aside is restored, not stolen", async () => {
+    await mkdir(path.dirname(lockFile()), { recursive: true });
+    await writeFile(lockFile(), "live-holder");
+    const base = clock;
+    // now() calls: deadline, stale check (stale), steal re-verify (fresh), then past the deadline.
+    const readings = [base, base + 60_000, base];
+    const racingNow = () => readings.length > 0 ? readings.shift() : base + 1000;
+    await assert.rejects(
+      () => acquireSlot({ root, intervalMs: 500, now: racingNow, sleep, lockTimeoutMs: 100 }),
+      { code: "GH_THROTTLE_UNAVAILABLE" },
+    );
+    assert.equal(await readFile(lockFile(), "utf8"), "live-holder");
+    assert.deepEqual((await readdir(path.dirname(lockFile()))).sort(), ["lock"]);
   });
 
   test("interval 0 skips the lock and the state dir", async () => {
@@ -80,7 +125,29 @@ describe("gh-throttle", () => {
 
   test("a failing root resolution throws GH_THROTTLE_UNAVAILABLE", () => {
     const execFile = () => { throw new Error("not a git repository"); };
-    assert.throws(() => resolveMainRoot({ execFile }), { code: "GH_THROTTLE_UNAVAILABLE" });
+    assert.throws(() => resolveMainRoot({ execFile }), { code: "GH_THROTTLE_UNAVAILABLE", message: /not a git repository/ });
+  });
+
+  test("the root resolution git call carries a timeout", () => {
+    let options;
+    resolveMainRoot({ execFile: (_cmd, _args, opts) => { options = opts; return "/repo/.git"; } });
+    assert.ok(options.timeout > 0);
+  });
+
+  test("takeGhSlot composes root and configured interval into a reserved slot", async () => {
+    await writeFile(path.join(root, ".devloops"), "version: 1\nqueue:\n  ghMinIntervalMs: 120\n");
+    await takeGhSlot({ execFile: () => `${path.join(root, ".git")}\n`, now, sleep });
+    assert.equal(Number(await readFile(slotFile(), "utf8")), clock + 120);
+  });
+
+  test("a config load failure warns exactly once per process", async () => {
+    const warnings = [];
+    const warn = (message) => warnings.push(message);
+    const loadConfig = async () => { throw new Error("boom"); };
+    assert.equal(await resolveIntervalMs(root, { warn, loadConfig }), 500);
+    await resolveIntervalMs(root, { warn, loadConfig });
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /config load failed/);
   });
 
   test("the main root is the parent of the git common dir and is cached", () => {
@@ -96,7 +163,7 @@ describe("gh-throttle", () => {
     assert.equal(await resolveIntervalMs(root), 120);
   });
 
-  test("a config load failure falls back to the default 500", async () => {
+  test("a root without a config file uses the default 500", async () => {
     assert.equal(await resolveIntervalMs(path.join(root, "does-not-exist")), 500);
   });
 });
