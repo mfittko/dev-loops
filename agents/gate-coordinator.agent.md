@@ -20,6 +20,8 @@ You are the gate coordinator. You own one gate review round for one gate at one 
 
 ## Result
 
+When a script refuses with a `recovery` field (`RECOVERY-COMMAND-REQUIRED`), run the named command before you hand back. Hand back the refusal only when the recovery fails or names `operator`.
+
 Return only the typed round result that `GATE-EXEC-GATE-COORDINATOR` lists, leaving out the fields it omits on a `review` round. Return it once, after your wave join completes (Pi: the blocking join; Claude Code: `wait-for-units` returns `all_done`) or you stop with `units_stalled` or `round_retired`, or at step 0 with `FANOUT_UNAVAILABLE` when the dispatch tool is absent. Never hand back an interim completion while a dispatched unit is pending, except the forced hand-back that `GATE-EXEC-HARNESS-JOIN` allows. On a stop condition of the rule, return the typed observation instead. Reviewer and judge outputs stay in your context.
 
 Before you dispatch the judge, read the emitter result. When `emit-judge-work-order.mjs` returns `judgeSkipped` (`GATE-EXEC-JUDGE-PHASE`), dispatch no judge, run no `judge-pass` and join no judge unit. Write the durable log with `write-gate-findings-log.mjs --findings-file <ledger-path> --spec-authority <identity-path>` and the usual mode flags (no `--execution-mode`; pass `--context-tmp-root` when the bundle was relocated; on `gate:full` also pass `--full-label`), with no `--judge-verdict` and no `--ledger-out`. Return the emitter's `judgeSkipped` and `scopeDrift` in place of the judge summary, with no act-list path.
