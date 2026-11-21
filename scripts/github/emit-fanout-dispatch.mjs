@@ -529,8 +529,8 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
   }
-  // gates.draft.requireCi false opts the draft gate out of the CI stop, as in gate coordination.
-  const ciRequired = gate !== "draft_gate" || resolveGateConfig(config, "draft").requireCi !== false;
+  // The gate's own requireCi false (gates.draft or gates.preApproval) opts it out of the CI stop, as in gate coordination.
+  const ciRequired = resolveGateConfig(config, gate === "draft_gate" ? "draft" : "preApproval").requireCi !== false;
   const waitCommand = `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${repo} --pr ${pr} --timeout 0`;
   if (ciRequired && gate === "draft_gate" && ciFileArg === null) {
     return finish({ ok: false, refusal: "ci_file_required", error: "GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: a draft_gate fan-out needs --ci-file, the wait-pr-checks result read immediately before it", recovery: `Run ${waitCommand}, save its JSON to a file, then re-run this fan-out with --ci-file <that file>` }, false);

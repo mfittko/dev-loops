@@ -2849,6 +2849,16 @@ test("emit-fanout-dispatch.mjs --ci-file with an empty value, a missing file or 
   });
 });
 
+test("emit-fanout-dispatch.mjs pre_approval_gate with gates.preApproval.requireCi false and a red --ci-file does not refuse ci_not_green (issue 3414)", async () => {
+  await withTmpDir(async (tmp) => {
+    await writeFile(path.join(tmp, ".devloops.json"), JSON.stringify({ version: 1, gates: { preApproval: { requireCi: false } } }));
+    const ciFile = path.join(tmp, "ci.json");
+    await writeFile(ciFile, JSON.stringify({ ok: true, status: "failure", settled: true, ciStatus: "failure", headSha: HEAD_SHA, failedChecks: [{ name: "build" }] }));
+    const result = runEmitCli(["--repo", REPO, "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD_SHA, "--tmp-root", tmp, "--ci-file", ciFile], { cwd: tmp, noGreenCi: true });
+    assert.notEqual(JSON.parse(result.stdout).refusal, "ci_not_green");
+  });
+});
+
 test("emit-fanout-dispatch.mjs draft_gate without --ci-file refuses with ci_file_required and a wait-pr-checks recovery, unless gates.draft.requireCi is false (issue 3414)", async () => {
   await withTmpDir(async (tmp) => {
     const args = ["--repo", REPO, "--pr", "7", "--gate", "draft_gate", "--head-sha", HEAD_SHA, "--tmp-root", tmp];
