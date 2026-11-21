@@ -149,11 +149,12 @@ test("known failure (issue 3416): a reviewer re-fanned after a context rebuild a
 
 // A fix pass killed after the plan is on disk leaves the carry-forward plan file for the next fan-in: the coordinator
 // must hand it over by path (a long inline plan trips the Bash hook).
-test("known failure (issue 3415): fan-in reads the carry-forward plan from a file", async () => {
+test("fan-in reads the carry-forward plan from a file", async () => {
   const root = await makeRoot();
-  const run = spawnSync("node", [CONSOLIDATE, "--findings-dir", "tmp", "--carry-forward-plan-file", "tmp/plan.json"], { cwd: root, encoding: "utf8", env: env(root) });
-  assert.notEqual(run.status, 0, "recovery now works: remove the 3415 known failure so the suite turns strict");
-  assert.match(run.stdout + run.stderr, /Unknown argument.*--carry-forward-plan-file/s, `fails for a different reason; re-check issue 3415: ${(run.stdout + run.stderr).trim().slice(0, 300)}`);
+  const run = spawnSync("node", [CONSOLIDATE, "--findings-dir", "tmp", "--carry-forward-plan-file", path.join(root, "tmp", "plan.json")], { cwd: root, encoding: "utf8", env: env(root) });
+  const out = run.stdout + run.stderr;
+  assert.doesNotMatch(out, /Unknown argument/, "the flag is accepted");
+  assert.match(out, /--carry-forward-plan-file could not be read/, out.trim().slice(0, 300));
 });
 
 // A fix pass whose CI turns red after the push is interrupted at the verifier step: the CI-fix emission that follows
