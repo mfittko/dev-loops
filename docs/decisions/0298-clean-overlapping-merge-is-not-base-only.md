@@ -10,7 +10,7 @@ Amends the base-only rule of [ADR 0197](./0197-closure-round-survives-a-base-onl
 
 ## Context
 
-PR 3350 deadlocked ([issue 3356](https://github.com/mfittko/dev-loops/issues/3356)). Its branch merged `origin/main` cleanly, and main and the PR had both changed some of the same files. The merge counted as base-only or as no PR-own change, so the delta lost the overlap files and the body-only post could not proceed.
+PR 3350 deadlocked ([issue 3356](https://github.com/mfittko/dev-loops/issues/3356)). Its branch merged `origin/main` cleanly, and main and the PR had both changed some of the same files. The two routes that clear a cap-round head disagreed about that merge. `isBaseOnlyMergeSince` said the merge is not base-only, so `gate extend-cap-round-chain` refused with `logic_commit_in_range`. The reviewer-only delta (`reviewerOnlyBase`) found no remerge path and reported no PR-own range. The cap-round chain at the merge head could not clear, and `loop gate-coordination` returned `report_blocked` (`round_cap_reached`, `no_clearing_record`).
 
 ## Decision
 
