@@ -623,7 +623,7 @@ async function runSecondary(runChild, { timeout = "300", random = () => 0 } = {}
   const stdout = makeStream();
   const stderr = makeStream();
   const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", timeout], {
-    stdout, stderr, env: {}, runChild, random, delayImpl: async (ms) => { delays.push(ms); clock += ms; }, now: () => clock,
+    stdout, stderr, env: {}, runChild, random, ensureOwnershipImpl: async () => ({ ok: true }), delayImpl: async (ms) => { delays.push(ms); clock += ms; }, now: () => clock,
   });
   return { code, delays, result: JSON.parse(stdout.text()), stderr: stderr.text() };
 }
@@ -702,7 +702,7 @@ test("wait-pr-checks --jq keeps the secondary RATE_LIMITED envelope with budget 
   const stdout = makeStream();
   const stderr = makeStream();
   await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "60", "--jq", ".status"], {
-    stdout, stderr, env: {}, runChild, delayImpl: async () => {}, now: () => 1_000_000_000_000,
+    stdout, stderr, env: {}, runChild, ensureOwnershipImpl: async () => ({ ok: true }), delayImpl: async () => {}, now: () => 1_000_000_000_000,
   });
   const envelope = JSON.parse(stderr.text().trim().split("\n")[0]);
   assert.equal(envelope.code, "RATE_LIMITED");
