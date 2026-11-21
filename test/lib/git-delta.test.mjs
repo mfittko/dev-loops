@@ -341,6 +341,19 @@ test("isBaseOnlyMergeSince: a merge that takes the base version of a PR-changed 
   }
 });
 
+test("isBaseOnlyMergeSince: a merge of a base that made the same change to a PR file is base-only", async () => {
+  const { root, prevHead } = await makeBaseMoveRepo();
+  try {
+    git(root, ["reset", "-q", "--hard", prevHead]);
+    await mainCommit(root, "docs/guide.md", "# Guide\n\nPR edit.\n");
+    git(root, ["merge", "-q", "--no-edit", "origin/main"]);
+    assert.equal(git(root, ["show", "HEAD:docs/guide.md"]), "# Guide\n\nPR edit.\n");
+    assert.equal(await baseOnly(root, prevHead), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("isBaseOnlyMergeSince: a non-ancestor fromHead and an unresolved mainRef are not base-only", async () => {
   const { root, prevHead } = await makeBaseMoveRepo();
   try {
