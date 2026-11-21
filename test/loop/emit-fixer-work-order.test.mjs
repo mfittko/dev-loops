@@ -4647,3 +4647,22 @@ test("full-phase step 3 hands back ci_pending or ci_unknown, never ci_failed, wh
     assert.match(step3, /exits 1 with an error, resolve no thread, run no verifier step, and hand back `ci_pending` \(`ci_unknown` when the checks cannot be read\)/);
   });
 });
+
+test("an emit that reaches both baseRefName reads calls fetchPr once for them, and the mutation-authority read stays live", async () => {
+  // Cap round, seam unaccepted: the carry lookup and the cap-round walk both need baseRefName, then the emit refuses before the live read.
+  await withFixture(async (fx) => {
+    const { over } = await verdictCarryScenario(fx, { ownChangeAfterMerge: true });
+    const base = over();
+    let calls = 0;
+    await assert.rejects(fx.emit({ ...base, fetchPr: async (args) => { calls += 1; return base.fetchPr(args); } }), (e) => e.refusal === "round_cap_reached");
+    assert.equal(calls, 1);
+  });
+  // Pins unchanged behavior (also passes without the memo): accepted seam makes one baseRefName read plus the live read.
+  await withFixture(async (fx) => {
+    const { over } = await verdictCarryScenario(fx);
+    const base = over();
+    let calls = 0;
+    await fx.emit({ ...base, fetchPr: async (args) => { calls += 1; return base.fetchPr(args); } });
+    assert.equal(calls, 2);
+  });
+});

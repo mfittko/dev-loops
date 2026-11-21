@@ -25,6 +25,7 @@ const ALLOWLIST = [
     "scripts/github/view-issue.mjs", "scripts/github/view-pr.mjs", "scripts/github/edit-issue.mjs", "scripts/github/edit-pr.mjs",
     "scripts/github/tick-verified-checkboxes.mjs", "scripts/github/pull-work-order.mjs", "scripts/github/_gh-rest-fallback.mjs",
     "scripts/github/_comment-trust-config.mjs", "scripts/github/_untrusted-skip-note.mjs",
+    "scripts/github/_pr-view-memo.mjs",
   ]],
   ["coordinator and fixer procedure (work orders, runner coordination, draft transition, freshness guards, slice linkage): not review outcome, and they change on most merges", [
     "scripts/loop/emit-fixer-work-order.mjs", "scripts/loop/_operator-focus.mjs", "scripts/loop/_pr-runner-coordination.mjs",

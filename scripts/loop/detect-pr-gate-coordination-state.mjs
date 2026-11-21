@@ -276,11 +276,24 @@ async function fetchPrFacts({ repo, pr }, { env = process.env, ghCommand = "gh",
   return parseJsonText(result.stdout, { label: "gh pr view" });
 }
 
+// Only `mergeable` and `mergeStateStatus` change while GitHub settles, so the
+// re-polls read just those two plus `headRefOid`. A re-poll that sees a different
+// head falls back to one full fetch, so `mergeable` always belongs to the head returned.
+async function fetchPrMergeable({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  const result = await runChild(ghCommand, ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,mergeable,mergeStateStatus"], env);
+  if (result.code !== 0) {
+    throw new Error(`gh command failed: ${result.stderr.trim() || `exit code ${result.code}`}`);
+  }
+  return parseJsonText(result.stdout, { label: "gh pr view" });
+}
+
 // GitHub computes `mergeable` asynchronously, so a freshly-pushed head briefly
 // reads `UNKNOWN`. After the initial fetch, re-poll up to `maxPolls` more times
 // while the value stays UNKNOWN (so at most 1 + maxPolls total fetches) before
 // deciding; never treat a transient UNKNOWN as a pass — the caller fails closed
-// to recheck if it never settles.
+// to recheck if it never settles. If the last allowed re-poll sees a new head, the
+// result is `{ headRefOid: <new>, headMoved: true, mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN", stale: true }`
+// with no other field; loadPrGateCoordinationContext fails closed on it.
 export async function fetchPrFactsWithSettledMergeable(
   options,
   {
@@ -290,15 +303,25 @@ export async function fetchPrFactsWithSettledMergeable(
     maxPolls = 3,
     pollDelayMs = 1500,
     sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-    fetch = fetchPrFacts,
   } = {},
 ) {
-  let prData = await fetch(options, { env, ghCommand, runChild });
+  let prData = await fetchPrFacts(options, { env, ghCommand, runChild });
   let polls = 0;
   while (String(prData?.mergeable || "").toUpperCase() === "UNKNOWN" && polls < maxPolls) {
     polls += 1;
     await sleep(pollDelayMs);
-    prData = await fetch(options, { env, ghCommand, runChild });
+    const next = await fetchPrMergeable(options, { env, ghCommand, runChild });
+    if (typeof next?.headRefOid === "string" && next.headRefOid !== "" && next.headRefOid === prData?.headRefOid) {
+      prData = { ...prData, mergeable: next.mergeable ?? prData.mergeable, mergeStateStatus: next.mergeStateStatus ?? prData.mergeStateStatus };
+    } else if (polls < maxPolls) {
+      // The head-change full fetch counts against the cap too.
+      polls += 1;
+      prData = await fetchPrFacts(options, { env, ghCommand, runChild });
+    } else {
+      // Cap edge: the last narrow re-poll saw a new head and no further gh call is allowed.
+      // Return only the new head with `stale: true`, so no superseded-head field reads as current.
+      return { headRefOid: next.headRefOid, headMoved: true, mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN", stale: true };
+    }
   }
   return prData;
 }
@@ -1033,6 +1056,8 @@ export async function fetchLiveThreadCounts(options, runtime = {}) {
 
 export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const prData =await fetchPrFactsWithSettledMergeable(options, runtime);
+  // A cap-edge result carries only the new head: no state or files, so the toolchain guard below would silently pass. Fail closed; the next run re-fetches.
+  if (prData?.stale) throw new Error(`PR head moved while mergeable was still UNKNOWN (new head ${prData.headRefOid}); rerun to re-fetch`);
   const currentHeadSha = typeof prData?.headRefOid === "string" && prData.headRefOid.trim().length > 0
     ? prData.headRefOid.trim()
     : null;

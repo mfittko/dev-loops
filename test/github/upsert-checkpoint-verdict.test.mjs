@@ -1017,6 +1017,7 @@ test("upsert-checkpoint-verdict reuses the coordination snapshot, re-reads the l
     assert.equal(result.code, 0, result.stderr);
     const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
     assert.match(ghArgs[0], /pr view 17 --repo owner\/repo --json headRefOid,isDraft,state,mergeable,mergeStateStatus,body,closingIssuesReferences,statusCheckRollup$/);
+    assert.equal(ghArgs.filter((a) => a.endsWith("--json headRefOid,isDraft,state,mergeable,mergeStateStatus,body,closingIssuesReferences,statusCheckRollup")).length, 1, "the live write-guard read runs once");
     assert.equal(ghArgs.some((a) => a.includes("--json number,state,isDraft")), false, "the coordination context is not refetched");
     assert.equal(ghArgs.some((a) => a.includes("issues/17/comments")), true, "the verdict comments are re-read live");
     assert.match(ghArgs.at(-1), /pulls\/17\/reviews/);
@@ -13319,4 +13320,44 @@ test("--post-sealed-cap-round refuses every flag the sealed ledger supplies at p
   for (const extra of [["--head-sha", "ab".repeat(20)], ["--verdict", "clean"], ["--findings-summary", "x"], ["--next-action", "y"], ["--findings-severity-counts", "{}"], ["--findings-ledger", "l.json"], ["--findings-json", "[]"], ["--findings-file", "f.json"], ["--execution-mode", "inline_single_agent"], ["--inline-reason", "r"], ["--converged-json", "c.json"]]) {
     assert.throws(() => parseUpsertCheckpointVerdictCliArgs([...base, ...extra]), /derives head, verdict, findings, next action and execution mode from the sealed ledger/, extra[0]);
   }
+});
+
+test("upsert-checkpoint-verdict makes one baseRefOid,labels read when the evidence scan, the fan-out enforcement and the size budget all need it", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(path.join(tempDir, ".devloops"), [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "localImplementation:",
+      "  lightMode:",
+      "    enabled: true",
+      "    maxFiles: 5",
+      "    maxLines: 50",
+      "",
+    ].join("\n"), "utf8");
+    const headSha = "abc1234000000000000000000000000000000000";
+    const inlineDraftComment = buildGateComment({ headSha });
+    inlineDraftComment.body += "\n**Execution mode:** inline_single_agent — tiny change";
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: false,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: PRE_APPROVAL_READY_REVIEWS,
+        issueComments: [inlineDraftComment],
+      }),
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"], stdout: "src/index.ts\n" },
+      { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":201,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-201"}\n' },
+    ], { repeatLastOnOverflow: true });
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", headSha,
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-summary", "no issues found", "--next-action", "await final human approval",
+      "--execution-mode", "inline_single_agent", "--inline-reason", "micro-PR, under threshold",
+    ], { env, cwd: tempDir, evaluatePrSizeBudget: async () => ({ outcome: "pass", t1SliceLoc: 0, waiver: { t1Valid: false, defaultValid: false } }) });
+    assert.equal(result.code, 0, result.stderr);
+    const reads = result.calls.filter((c) => c.command === "gh" && c.args.includes("baseRefOid,labels"));
+    assert.equal(reads.length, 1);
+  }, { prefix: "dev-loops-upsert-prview-memo-" });
 });

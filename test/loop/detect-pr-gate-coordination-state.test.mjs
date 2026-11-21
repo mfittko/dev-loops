@@ -177,32 +177,102 @@ test("parseGitStatusConflictFiles parses NUL-delimited porcelain output with det
   assert.deepEqual(parsed, ["config.test.mjs", "extension/README with spaces.md", " spaced-at-both-ends.txt "]);
 });
 
-test("fetchPrFactsWithSettledMergeable re-polls while mergeable is UNKNOWN, then returns the settled value (#980)", async () => {
-  const responses = [
-    { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
-    { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
-    { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" },
-  ];
-  let calls = 0;
-  const fetch = async () => responses[calls++];
-  const result = await fetchPrFactsWithSettledMergeable(
-    { repo: "owner/repo", pr: 1 },
-    { fetch, sleep: async () => {}, maxPolls: 5 },
-  );
-  assert.equal(calls, 3);
-  assert.equal(result.mergeable, "MERGEABLE");
+// A runChild gh stub that answers each `pr view` from a script and records the --json field list.
+function stubPrViewGh(responses) {
+  const fieldLists = [];
+  const runChild = async (_cmd, args) => {
+    fieldLists.push(args[args.indexOf("--json") + 1]);
+    return { code: 0, stdout: JSON.stringify(responses[fieldLists.length - 1]), stderr: "" };
+  };
+  return { fieldLists, runChild };
+}
+const FULL_FIELDS = "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files";
+const NARROW_FIELDS = "headRefOid,mergeable,mergeStateStatus";
+
+test("fetchPrFactsWithSettledMergeable re-polls with the narrow field list and keeps the first full payload", async () => {
+  const { fieldLists, runChild } = stubPrViewGh([
+    { headRefOid: "aaa", body: "b", files: [{ path: "x" }], mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
+    { headRefOid: "aaa", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" },
+  ]);
+  const result = await fetchPrFactsWithSettledMergeable({ repo: "owner/repo", pr: 1 }, { runChild, sleep: async () => {}, maxPolls: 5 });
+  assert.deepEqual(fieldLists, [FULL_FIELDS, NARROW_FIELDS]);
+  assert.deepEqual(result, { headRefOid: "aaa", body: "b", files: [{ path: "x" }], mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" });
+});
+
+test("fetchPrFactsWithSettledMergeable does one full fetch when a re-poll sees a different head", async () => {
+  const { fieldLists, runChild } = stubPrViewGh([
+    { headRefOid: "aaa", body: "old", mergeable: "UNKNOWN" },
+    { headRefOid: "bbb", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" },
+    { headRefOid: "bbb", body: "new", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" },
+  ]);
+  const result = await fetchPrFactsWithSettledMergeable({ repo: "owner/repo", pr: 1 }, { runChild, sleep: async () => {}, maxPolls: 5 });
+  assert.deepEqual(fieldLists, [FULL_FIELDS, NARROW_FIELDS, FULL_FIELDS]);
+  assert.equal(result.headRefOid, "bbb");
+  assert.equal(result.body, "new");
 });
 
 test("fetchPrFactsWithSettledMergeable stops re-polling at the cap and returns the still-UNKNOWN value (fail closed to recheck) (#980)", async () => {
-  let calls = 0;
-  const fetch = async () => { calls++; return { mergeable: "UNKNOWN" }; };
-  const result = await fetchPrFactsWithSettledMergeable(
-    { repo: "owner/repo", pr: 1 },
-    { fetch, sleep: async () => {}, maxPolls: 2 },
-  );
-  // initial fetch + 2 re-polls
-  assert.equal(calls, 3);
+  const unknown = { headRefOid: "aaa", mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
+  const { fieldLists, runChild } = stubPrViewGh([unknown, unknown, unknown, unknown, unknown]);
+  const result = await fetchPrFactsWithSettledMergeable({ repo: "owner/repo", pr: 1 }, { runChild, sleep: async () => {}, maxPolls: 2 });
+  // initial full fetch + 2 narrow re-polls
+  assert.deepEqual(fieldLists, [FULL_FIELDS, NARROW_FIELDS, NARROW_FIELDS]);
   assert.equal(result.mergeable, "UNKNOWN");
+});
+
+test("fetchPrFactsWithSettledMergeable returns the new head, headMoved and stale markers when the last re-poll sees a new head", async () => {
+  const { fieldLists, runChild } = stubPrViewGh([
+    { headRefOid: "aaa", body: "old", files: [{ path: "x" }], mergeable: "UNKNOWN" },
+    { headRefOid: "aaa", mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
+    { headRefOid: "aaa", mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
+    { headRefOid: "bbb", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" },
+  ]);
+  const result = await fetchPrFactsWithSettledMergeable({ repo: "owner/repo", pr: 1 }, { runChild, sleep: async () => {}, maxPolls: 3 });
+  assert.deepEqual(fieldLists, [FULL_FIELDS, NARROW_FIELDS, NARROW_FIELDS, NARROW_FIELDS]);
+  assert.deepEqual(result, { headRefOid: "bbb", headMoved: true, mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN", stale: true });
+});
+
+test("loadPrGateCoordinationContext fails closed on the cap-edge stale result before the toolchain guard", async () => {
+  const { runChild } = stubPrViewGh([
+    { headRefOid: "aaa", state: "OPEN", mergeable: "UNKNOWN" },
+    { headRefOid: "bbb", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" },
+  ]);
+  await assert.rejects(
+    loadPrGateCoordinationContext({ repo: "owner/repo", pr: 1 }, { runChild, sleep: async () => {}, maxPolls: 1, guardToolchain: true }),
+    /head moved while mergeable was still UNKNOWN \(new head bbb\)/,
+  );
+});
+
+test("fetchPrFactsWithSettledMergeable never exceeds 1 + maxPolls gh calls when the head keeps changing", async () => {
+  const unknown = (head) => ({ headRefOid: head, mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" });
+  for (const maxPolls of [1, 2, 3]) {
+    const { fieldLists, runChild } = stubPrViewGh(Array.from({ length: 20 }, (_, i) => unknown(`h${i}`)));
+    const result = await fetchPrFactsWithSettledMergeable({ repo: "owner/repo", pr: 1 }, { runChild, sleep: async () => {}, maxPolls });
+    assert.ok(fieldLists.length <= 1 + maxPolls, `maxPolls ${maxPolls}: ${fieldLists.length} calls`);
+    assert.equal(result.mergeable, "UNKNOWN");
+  }
+});
+
+test("fetchPrFactsWithSettledMergeable keeps UNKNOWN when the narrow payload lacks mergeable", async () => {
+  const { fieldLists, runChild } = stubPrViewGh([
+    { headRefOid: "aaa", mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
+    { headRefOid: "aaa" },
+  ]);
+  const result = await fetchPrFactsWithSettledMergeable({ repo: "owner/repo", pr: 1 }, { runChild, sleep: async () => {}, maxPolls: 1 });
+  assert.equal(fieldLists.length, 2);
+  assert.equal(result.mergeable, "UNKNOWN");
+  assert.equal(result.mergeStateStatus, "UNKNOWN");
+});
+
+test("fetchPrFactsWithSettledMergeable settles after UNKNOWN (full), UNKNOWN (narrow), MERGEABLE (narrow)", async () => {
+  const { fieldLists, runChild } = stubPrViewGh([
+    { headRefOid: "aaa", mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
+    { headRefOid: "aaa", mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" },
+    { headRefOid: "aaa", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" },
+  ]);
+  const result = await fetchPrFactsWithSettledMergeable({ repo: "owner/repo", pr: 1 }, { runChild, sleep: async () => {}, maxPolls: 3 });
+  assert.deepEqual(fieldLists, [FULL_FIELDS, NARROW_FIELDS, NARROW_FIELDS]);
+  assert.equal(result.mergeable, "MERGEABLE");
 });
 
 test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs with clean draft_gate on a different head (one-time boundary)", async () => {
