@@ -232,6 +232,15 @@ test("fetchPrFactsWithSettledMergeable returns the new head, headMoved and stale
   assert.deepEqual(result, { headRefOid: "bbb", headMoved: true, mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN", stale: true });
 });
 
+test("loadPrGateCoordinationContext fails closed on the cap-edge stale result before the toolchain guard", async () => {
+  const { runChild } = stubPrViewGh([{ headRefOid: "bbb", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" }]);
+  const fetch = async () => ({ headRefOid: "aaa", state: "OPEN", mergeable: "UNKNOWN" });
+  await assert.rejects(
+    loadPrGateCoordinationContext({ repo: "owner/repo", pr: 1 }, { runChild, fetch, sleep: async () => {}, maxPolls: 1, guardToolchain: true }),
+    /head moved while mergeable was still UNKNOWN \(new head bbb\)/,
+  );
+});
+
 test("fetchPrFactsWithSettledMergeable never exceeds 1 + maxPolls gh calls when the head keeps changing", async () => {
   const unknown = (head) => ({ headRefOid: head, mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" });
   for (const maxPolls of [1, 2, 3]) {

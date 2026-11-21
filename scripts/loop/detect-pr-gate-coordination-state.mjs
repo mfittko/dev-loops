@@ -292,8 +292,8 @@ async function fetchPrMergeable({ repo, pr }, { env = process.env, ghCommand = "
 // while the value stays UNKNOWN (so at most 1 + maxPolls total fetches) before
 // deciding; never treat a transient UNKNOWN as a pass — the caller fails closed
 // to recheck if it never settles. If the last allowed re-poll sees a new head, the
-// result is `{ headRefOid: <new>, headMoved: true, mergeable: "UNKNOWN", stale: true }`
-// with no other field.
+// result is `{ headRefOid: <new>, headMoved: true, mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN", stale: true }`
+// with no other field; loadPrGateCoordinationContext fails closed on it.
 export async function fetchPrFactsWithSettledMergeable(
   options,
   {
@@ -1057,6 +1057,8 @@ export async function fetchLiveThreadCounts(options, runtime = {}) {
 
 export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const prData =await fetchPrFactsWithSettledMergeable(options, runtime);
+  // A cap-edge result carries only the new head: no state or files, so the toolchain guard below would silently pass. Fail closed; the next run re-fetches.
+  if (prData?.stale) throw new Error(`PR head moved while mergeable was still UNKNOWN (new head ${prData.headRefOid}); rerun to re-fetch`);
   const currentHeadSha = typeof prData?.headRefOid === "string" && prData.headRefOid.trim().length > 0
     ? prData.headRefOid.trim()
     : null;
