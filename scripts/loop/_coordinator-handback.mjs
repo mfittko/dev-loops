@@ -17,7 +17,7 @@ export function preFanoutCiObservation(ci, headSha) {
   const red = ci?.ciStatus === "failure" && ci.headSha === headSha;
   return { observation: CI_NOT_GREEN_OBSERVATION, nextAction: red ? CI_ROUTE_NEXT_ACTION : "wait_for_ci", ciStatus: ci?.ciStatus ?? "unknown" };
 }
-const VERDICT_REFUSAL_RECOVERY = `Hand back verdictRefusal { reason: "ci_red", actListPath: <the round's judge-pass act list> } with nextAction "${CI_ROUTE_NEXT_ACTION}"; the fixer order then takes the act list and the CI failure together: dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo <owner/name> --pr <n> --head-sha <sha> --harness <claude|pi|codex> --phase full --ci-file <wait-pr-checks JSON> --act-list-file <actListPath> --gate <gate>.`;
+const VERDICT_REFUSAL_RECOVERY = `Hand back verdictRefusal { reason: "ci_red", actListPath: <the round's judge-pass act list> } with nextAction "${CI_ROUTE_NEXT_ACTION}"; the fixer order then takes the act list and the CI failure together: dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo <owner/name> --pr <n> --head-sha <sha> --harness <claude|pi|codex> --phase full --ci-file <wait-pr-checks JSON> --act-list-file <the round's judge-pass act list under tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<head>/> --gate <gate>.`;
 
 /** Returns {ok:true}, or {ok:false, refusal, message[, missing, recovery]} for a malformed or premature hand-back. */
 export function validateCoordinatorHandback(handback) {
