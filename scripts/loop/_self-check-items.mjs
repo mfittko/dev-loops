@@ -8,13 +8,20 @@ export const ANGLE_ID_PREFIX = "angle:";
 export const MAX_ANGLE_LINES = 8;
 export const ANGLE_LINE_MAX = 200;
 
-// Constraints applied while writing, never a review pass after.
-export const SELF_CHECK_ITEMS = Object.freeze([
-  { id: "tests", check: "While writing, add a test for each acceptance criterion and each failure path." },
-  { id: "edge-cases", check: "While writing, validate inputs: handle empty, null and missing inputs, and the failure path of each parser and each external read, each with a test." },
-  { id: "surface-text", check: "While writing, keep --help text, docs, contracts and the changelog in sync with the behavior." },
-  { id: "description", check: "While writing, keep the PR description matching the as-built code: the exact validation command, a stable pass/fail outcome and an In scope list of every changed file." },
-]);
+// The developer's last writing step before hand-back, not a separate review pass.
+export const FINAL_STEP_CHECKLIST_IDS = Object.freeze(["P2", "CS1", "CS2"]);
+
+/** The `developer-checklist` lines of every draft_gate angle, in config order, as { id, angle, check, finalStep? }; empty when the config does not load. */
+export async function resolveChecklistItems(root) {
+  try {
+    const { config } = await loadDevLoopConfig({ repoRoot: root });
+    return (config.gates?.draft?.angles ?? []).flatMap((entry) => (entry["developer-checklist"] ?? []).map((line) => {
+      const split = line.indexOf(": ");
+      const id = line.slice(0, split);
+      return { id, angle: entry.name, check: line.slice(split + 2), ...(FINAL_STEP_CHECKLIST_IDS.includes(id) ? { finalStep: true } : {}) };
+    }));
+  } catch { return []; }
+}
 
 /** One sentence of an angle prompt, capped: deterministic condensation of the prompt the gate reviewers get. */
 export function condenseAnglePrompt(prompt, angle) {
@@ -34,11 +41,11 @@ export async function resolveSelfCheckAngles(root, paths) {
   } catch { return []; }
 }
 
-/** Every constraint id required for the changed paths of `base...HEAD` in `cwd`: the resolved angle ids plus the generic ids. */
+/** Every constraint id required for the changed paths of `base...HEAD` in `cwd`: the resolved angle ids plus the config checklist ids. */
 export async function requiredSelfCheckIds(cwd, base) {
   let paths = [];
   try {
     paths = execFileSync("git", ["diff", "--name-only", `${base}...HEAD`], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: gitEnvNoDirOverrides() }).split("\n").filter(Boolean);
-  } catch { /* no diff, generic ids only */ }
-  return [...(await resolveSelfCheckAngles(cwd, paths)).map((a) => a.id), ...SELF_CHECK_ITEMS.map((i) => i.id)];
+  } catch { /* no diff, checklist ids only */ }
+  return [...(await resolveSelfCheckAngles(cwd, paths)).map((a) => a.id), ...(await resolveChecklistItems(cwd)).map((i) => i.id)];
 }

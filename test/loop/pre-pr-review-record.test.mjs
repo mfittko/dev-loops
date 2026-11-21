@@ -356,10 +356,10 @@ test("record mode refuses with pre_pr_self_check_missing for a missing flag, fil
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("the required self-check ids are the resolved draft_gate angle ids plus the generic ids, and a missing angle id refuses", async () => {
+test("the required self-check ids are the resolved draft_gate angle ids plus the 14 checklist ids, and a missing angle or checklist id refuses", async () => {
   const angleIds = IDS.filter((id) => id.startsWith("angle:"));
   assert.ok(angleIds.length > 0, "the default config resolves at least one draft_gate angle");
-  assert.deepEqual(IDS.filter((id) => !id.startsWith("angle:")), ["tests", "edge-cases", "surface-text", "description"]);
+  assert.deepEqual(IDS.filter((id) => !id.startsWith("angle:")), ["C1", "C2", "C3", "K1", "CS1", "CS2", "I1", "I2", "T1", "PK1", "S1", "P1", "P2", "K2"]);
   const dir = fixtureRepo();
   try {
     git(dir, "checkout", "-q", "-b", "feature");
@@ -368,6 +368,11 @@ test("the required self-check ids are the resolved draft_gate angle ids plus the
     const code = await runCli(["--verdict", "clean", "--disposition", "none", "--base", "main", "--no-linked-issue", "--self-check-file", selfCheckFile(dir, IDS.filter((id) => id !== angleIds[0]).map((id) => ({ id, status: "done", evidence: "e" })))], { cwd: dir, stdout: { write() {} }, stderr: { write: (s) => { err += s; } } });
     assert.equal(code, 1);
     assert.match(JSON.parse(err).message ?? err, new RegExp(angleIds[0]));
+    assert.equal(JSON.parse(err).code, "pre_pr_self_check_missing");
+    err = "";
+    const code2 = await runCli(["--verdict", "clean", "--disposition", "none", "--base", "main", "--no-linked-issue", "--self-check-file", selfCheckFile(dir, IDS.filter((id) => id !== "T1").map((id) => ({ id, status: "done", evidence: "e" })))], { cwd: dir, stdout: { write() {} }, stderr: { write: (s) => { err += s; } } });
+    assert.equal(code2, 1);
+    assert.match(JSON.parse(err).message ?? err, /T1/);
     assert.equal(JSON.parse(err).code, "pre_pr_self_check_missing");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

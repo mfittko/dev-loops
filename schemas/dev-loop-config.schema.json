@@ -404,6 +404,15 @@
                             "unknown"
                           ]
                         }
+                      },
+                      "developer-checklist": {
+                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID (PRE-PR-DEVELOPER-SELF-CHECK).",
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Z]+\\d+: \\S"
+                        }
                       }
                     },
                     "required": [
@@ -648,6 +657,15 @@
                             "unknown"
                           ]
                         }
+                      },
+                      "developer-checklist": {
+                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID (PRE-PR-DEVELOPER-SELF-CHECK).",
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Z]+\\d+: \\S"
+                        }
                       }
                     },
                     "required": [
@@ -886,6 +904,15 @@
                             "asset",
                             "unknown"
                           ]
+                        }
+                      },
+                      "developer-checklist": {
+                        "description": "Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID (PRE-PR-DEVELOPER-SELF-CHECK).",
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[A-Z]+\\d+: \\S"
                         }
                       }
                     },

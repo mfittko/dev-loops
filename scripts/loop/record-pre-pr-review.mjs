@@ -31,8 +31,8 @@ Sweep flags:
 Self-check (record mode, PRE-PR-DEVELOPER-SELF-CHECK):
   --self-check-file <path>  Required. JSON array of { "id", "status": "done"|"na", "evidence": "<non-empty>" }
                        covering every constraint id of the developer brief selfCheck: one "angle:<name>" per
-                       draft_gate angle resolved for the base...HEAD changed paths, plus tests, edge-cases,
-                       surface-text and description. The evidence states what was done while writing (test names,
+                       draft_gate angle resolved for the base...HEAD changed paths, plus each
+                       developer-checklist id (C1..PK1). The evidence states what was done while writing (test names,
                        synced files). A missing file, missing id or empty evidence refuses with
                        pre_pr_self_check_missing; the entries are stored in the record.
 Output (stdout, JSON): { "ok": true, "head", "verdict", "disposition", "file" }

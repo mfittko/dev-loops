@@ -228,6 +228,7 @@ const GateAngleEntry = z.preprocess(
     readsPrBody: z.boolean().optional().describe("Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it."),
     categories: z.array(z.enum(CHANGE_CATEGORY_NAMES)).min(1).optional().describe("Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed."),
     kinds: z.array(z.enum(FILE_KIND_NAMES)).min(1).optional().describe("File kinds (code/config/test/ci/docs/asset/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed."),
+    "developer-checklist": z.array(z.string().regex(/^[A-Z]+\d+: \S/u)).min(1).optional().describe("Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items and the pre-PR record requires evidence per ID (PRE-PR-DEVELOPER-SELF-CHECK)."),
   }),
 );
 
@@ -1245,6 +1246,8 @@ function normalizeAngleEntry(a) {
       ? a.kinds.filter((k) => typeof k === "string" && k.trim().length > 0).map((k) => k.trim())
       : [];
     if (kinds.length > 0) entry.kinds = kinds;
+    const checklist = Array.isArray(a["developer-checklist"]) ? a["developer-checklist"].filter((l) => typeof l === "string" && l.length > 0) : [];
+    if (checklist.length > 0) entry["developer-checklist"] = checklist;
     return entry;
   }
   return null;

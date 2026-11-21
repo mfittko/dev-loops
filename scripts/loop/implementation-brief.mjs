@@ -32,7 +32,7 @@ import {
 import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 import { collectCopilotClasses, collectFindingClasses, defaultCopilotFile } from "./gate-finding-classes.mjs";
-import { SELF_CHECK_ITEMS, resolveSelfCheckAngles } from "./_self-check-items.mjs";
+import { resolveChecklistItems, resolveSelfCheckAngles } from "./_self-check-items.mjs";
 import { CONTRACT_DOC_RE, DEVLOOPS_CONFIG_PATHS, GATE_CONFIG_PATH } from "./check-adr-tripwire.mjs";
 import { citedAdrNumbers, indexDecisionRecords, inForceAmenders, loadKnownRuleIds, stripFencedCode } from "./spec-lint.mjs";
 
@@ -58,7 +58,7 @@ Output (stdout, JSON):
     "helperInventory": { "modules": [{ "path", "exports": ["<name>"] }], "overflowModules": ["<path>"] },
     "importers": null | { "<touched source module>": { "files": ["<path>"], "importersTruncated"?: true } },
     "selfCheck": { "angles": [{ "id", "angle", "constraint" }], "classes": [{ "angle", "count", "share", "examples": ["<one summary>"] }],
-      "copilotClasses": [{ "class", "count", "share", "examples": ["<one body>"] }], "items": [{ "id", "check" }] },
+      "copilotClasses": [{ "class", "count", "share", "examples": ["<one body>"] }], "items": [{ "id", "angle", "check", "finalStep"?: true }] },
     "requiredReads": ["skills/docs/structural-quality.md", "changes/README.md"],
     "findings": [{ "kind", "reason" }] }
 
@@ -108,7 +108,9 @@ paths (at most 8; "constraint" is the first sentence of the angle prompt the gat
 most 200 characters; empty when the config does not load). "classes" is the top 3 act-finding angles
 of past first draft_gate rounds and "copilotClasses" the top 3 keyword buckets of the local Copilot
 thread export (offline; one example of at most 160 characters each; empty without logs or export).
-"items" is the fixed generic list (tests, edge-cases, surface-text, description). Record one
+"items" is the developer checklist, one { "id", "angle", "check" } per developer-checklist line of
+the draft_gate angles in config order (C1..PK1; empty when the config does not load). Items with
+"finalStep": true (P2, CS1, CS2) are your last writing step before hand-back. Record one
 { "id", "status": "done"|"na", "evidence" } per angle id and item id with record-pre-pr-review
 --self-check-file.
 
@@ -451,7 +453,7 @@ async function selfCheck(root, touchedPaths, copilotFile) {
     if (repo) classes = one(collectFindingClasses({ repo, tmpRoot, top: 3 }).classes);
     copilotClasses = one(collectCopilotClasses({ file: copilotFile ?? defaultCopilotFile(tmpRoot), top: 3 }).copilotClasses);
   } catch { /* no logs */ }
-  return { angles, classes, copilotClasses, items: SELF_CHECK_ITEMS.map((i) => ({ ...i })) };
+  return { angles, classes, copilotClasses, items: await resolveChecklistItems(root) };
 }
 
 /**
