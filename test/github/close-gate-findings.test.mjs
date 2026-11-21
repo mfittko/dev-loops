@@ -2867,6 +2867,20 @@ test("a pr_body act thread ignores a malformed ledger prBodySha256 and stays ope
   ));
 });
 
+test("a pr_body act thread drops a malformed current-ledger prBodySha256 and stays open with a body_read_unrecorded failure", async () => {
+  const findings = [prBodyFinding("first body edit")];
+  await withLedgerFile({ ...makeLedger({ gate: "draft_gate", findings }), prBodySha256: "not-a-digest" }, (ledgerPath) => withGhStub(
+    [...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: findings.map(prBodyThread) })],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      await writePrBodyActFixture(repoRoot, findings, { recordedBody: BODY_NEW });
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.prBodyActClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.match(result.dispositionFailures?.[0]?.error ?? "", /^body_read_unrecorded/);
+    },
+  ));
+});
+
 test("a pr_body act thread stays open with a body_read_unrecorded failure when no pr-body digest is recorded", async () => {
   const findings = [prBodyFinding("first body edit")];
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
