@@ -278,7 +278,7 @@ export function resolveApprovalState({ version, operator, comments, releaseRef }
 }
 
 // Release scripts import nothing from @dev-loops/core (import-closure test), so the shared gh throttle
-// is reached by running its slot child by path. A failed slot fails closed.
+// is reached by running its slot child by path. A failed slot fails closed. The 60_000 timeout mirrors SYNC_SLOT_TIMEOUT_MS (gh-throttle.mjs), which the closure rule keeps this script from importing.
 const GH_SLOT_SCRIPT = fileURLToPath(new URL("../../packages/core/src/github/gh-throttle-slot.mjs", import.meta.url));
 function ghExecFileSync(command, args, options) {
   if (command === "gh") {

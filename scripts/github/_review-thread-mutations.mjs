@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { takeGhSlot } from "@dev-loops/core/github/gh-throttle";
+import { withSecondaryLimitBackoff } from "@dev-loops/core/github/gh";
 import { isCopilotLogin, parseReviewThreads, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { gateDeltaRecordPath, listGateDeltaRecords } from "../loop/_gate-delta-record.mjs";
@@ -146,8 +147,14 @@ export async function assertFixedRepliesNotDeltaBlocked(replies, target, deps) {
   }
 }
 
-export async function runChildWithInput(command, args, env, stdinText) {
-  if (command === "gh") await takeGhSlot();
+export function runChildWithInput(command, args, env, stdinText) {
+  const attempt = async () => {
+    if (command === "gh") await takeGhSlot({ env });
+    return spawnChild(command, args, env, stdinText);
+  };
+  return command === "gh" ? withSecondaryLimitBackoff(attempt) : attempt();
+}
+function spawnChild(command, args, env, stdinText) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       env,

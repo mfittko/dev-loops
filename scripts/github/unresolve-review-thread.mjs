@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
 import { takeGhSlot } from "@dev-loops/core/github/gh-throttle";
+import { withSecondaryLimitBackoff } from "@dev-loops/core/github/gh";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { promisify } from "node:util";
@@ -37,9 +38,11 @@ export class UnresolveRefusal extends Error {
   }
 }
 
-async function ghRun(args) {
-  await takeGhSlot();
-  return (await execFileAsync("gh", args, { env: process.env })).stdout;
+function ghRun(args) {
+  return withSecondaryLimitBackoff(async () => {
+    await takeGhSlot({ env: process.env });
+    return (await execFileAsync("gh", args, { env: process.env })).stdout;
+  });
 }
 
 async function gql(run, query, id) {

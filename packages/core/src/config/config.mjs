@@ -720,7 +720,7 @@ const QueueConfig = z.strictObject({
   maxParallel: z.number().int().min(1).max(10).default(3).describe("Maximum queue items worked in parallel."),
   maxAutoFiledIssues: z.number().int().min(0).max(100).default(10).describe("Cap on auto-filed issues per run."),
   reDispatchMaxRetries: z.number().int().min(0).max(10).default(1).describe("Retries when re-dispatching a failed queue item."),
-  ghMinIntervalMs: z.number().int().min(0).max(60000).default(500).describe("Minimum milliseconds between gh calls across all local dev-loops processes; 0 disables."),
+  ghMinIntervalMs: z.number().int().min(0).max(10000).default(500).describe("Minimum milliseconds between gh calls across the local dev-loops processes that share one main checkout (separate clones do not share pacing; a process outside a git checkout fails closed with GH_THROTTLE_UNAVAILABLE); 0 disables."),
   archiveOlderThanDays: z.number().int().positive().describe("Archive done board items older than this many days.").optional(),
   statusColumns: z
     .strictObject({

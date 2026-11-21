@@ -7,7 +7,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, test } from "bun:test";
 
 import { resetThrottleCache, ghExecFileSync } from "@dev-loops/core/github/gh-throttle";
+import { EventEmitter } from "node:events";
 import { runChildWithInput } from "../../scripts/github/_review-thread-mutations.mjs";
+import { watchWorkflowRun } from "../../scripts/loop/run-watch-cycle.mjs";
 import { unresolveReviewThread } from "../../scripts/github/unresolve-review-thread.mjs";
 
 // Each direct `gh` call site class must take a slot: the shared next-slot file appears under the repo root.
@@ -23,8 +25,8 @@ beforeEach(async () => {
   await writeFile(path.join(bin, "gh"), "#!/bin/sh\necho '{}'\n");
   chmodSync(path.join(bin, "gh"), 0o755);
   await writeFile(path.join(root, ".devloops.json"), JSON.stringify({ version: 1, queue: { ghMinIntervalMs: 50 } }));
-  saved = { GIT_DIR: process.env.GIT_DIR, PATH: process.env.PATH, NODE_ENV: process.env.NODE_ENV };
-  process.env.NODE_ENV = "production"; // test mode is unpaced by design
+  saved = { GIT_DIR: process.env.GIT_DIR, PATH: process.env.PATH, DEV_LOOPS_GH_STUB: process.env.DEV_LOOPS_GH_STUB };
+  delete process.env.DEV_LOOPS_GH_STUB;
   process.env.GIT_DIR = path.join(root, ".git");
   process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
   resetThrottleCache();
@@ -53,5 +55,32 @@ describe("direct gh call sites take a throttle slot", () => {
   test("sync execFileSync site", () => {
     ghExecFileSync("gh", ["api", "x"], { encoding: "utf8" });
     assert.ok(existsSync(slotFile()));
+  });
+
+  test("watchWorkflowRun (gh run watch) site", async () => {
+    const spawnImpl = () => {
+      const child = new EventEmitter();
+      child.stderr = new EventEmitter();
+      setImmediate(() => child.emit("close", 0));
+      return child;
+    };
+    await watchWorkflowRun({ repo: "o/r", runId: 1 }, { env: process.env, ghCommand: "gh", spawnImpl });
+    assert.ok(existsSync(slotFile()));
+  });
+
+  test("a call env that attests a gh stub takes no slot at an async site", async () => {
+    await runChildWithInput("gh", ["api", "x"], { ...process.env, DEV_LOOPS_GH_STUB: "1" });
+    assert.ok(!existsSync(slotFile()));
+  });
+
+  test("NODE_ENV=test without the stub is paced at a direct site", async () => {
+    const saved = process.env.NODE_ENV;
+    process.env.NODE_ENV = "test";
+    try {
+      await runChildWithInput("gh", ["api", "x"], process.env);
+      assert.ok(existsSync(slotFile()));
+    } finally {
+      process.env.NODE_ENV = saved;
+    }
   });
 });

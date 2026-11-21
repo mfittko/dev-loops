@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "bun:test";
 
-import { ghJson, ghGraphql, isRateLimitError, isSecondaryRateLimitError, rateLimitedResult, resolveOwner, withGraphqlRateLimitWait } from "../src/github/gh.mjs";
+import { ghJson, ghGraphql, isRateLimitError, isSecondaryRateLimitError, rateLimitedResult, resolveOwner, withGraphqlRateLimitWait, withSecondaryLimitBackoff } from "../src/github/gh.mjs";
 import { GRAPHQL_RATE_LIMIT_MAX_WAIT_MS } from "../src/loop/policy-constants.mjs";
 
 function stubRunChild(result) {
@@ -439,6 +439,43 @@ describe("secondary rate limit backoff", () => {
       return true;
     });
     assert.equal(log.runs, 2);
+  });
+
+  test("RATE_LIMITED keeps the ghJson label prefix and the ghGraphql prefix", async () => {
+    await assert.rejects(() => ghJson(["api", "x"], { ...harness([limited, limited]).opts, label: "fetch ci logs" }), (error) => {
+      assert.equal(error.code, "RATE_LIMITED");
+      assert.match(error.message, /^fetch ci logs failed: /);
+      return true;
+    });
+    const { runChild, ...rest } = harness([limited, limited]).opts;
+    await assert.rejects(() => ghGraphql("query{}", {}, {}, runChild, rest), (error) => {
+      assert.equal(error.code, "RATE_LIMITED");
+      assert.match(error.message, /^gh api graphql failed: /);
+      return true;
+    });
+  });
+
+  test("an injected runChild with no backoff seam gets no retry on a secondary limit", async () => {
+    let runs = 0;
+    const runChild = async () => { runs += 1; return limited; };
+    await assert.rejects(() => ghJson(["api", "x"], { runChild }), { code: "GH_API_ERROR" });
+    assert.equal(runs, 1);
+  });
+
+  test("withSecondaryLimitBackoff retries a thrown or resolved secondary limit once, then throws RATE_LIMITED", async () => {
+    const sleeps = [];
+    const opts = { backoffMs: 7, sleep: async (ms) => { sleeps.push(ms); } };
+    const thrown = () => Object.assign(new Error("Command failed"), { stderr: "You have exceeded a secondary rate limit" });
+    let runs = 0;
+    assert.equal(await withSecondaryLimitBackoff(async () => { runs += 1; if (runs === 1) throw thrown(); return "ok"; }, opts), "ok");
+    assert.deepEqual(sleeps, [7]);
+    runs = 0;
+    await assert.rejects(() => withSecondaryLimitBackoff(async () => { runs += 1; throw thrown(); }, opts), { code: "RATE_LIMITED" });
+    assert.equal(runs, 2);
+    runs = 0;
+    await assert.rejects(() => withSecondaryLimitBackoff(async () => { runs += 1; return limited; }, opts), { code: "RATE_LIMITED" });
+    assert.equal(runs, 2);
+    await assert.rejects(() => withSecondaryLimitBackoff(async () => { throw new Error("not found"); }, opts), { message: "not found" });
   });
 
   test("a non-rate-limit failure is untouched and not retried", async () => {

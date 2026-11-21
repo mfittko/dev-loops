@@ -1,17 +1,23 @@
 /**
- * Machine-wide pacing for `gh` calls. Every dev-loops process on this machine
- * shares one `next-slot` file (epoch ms of the next allowed call) under the main
- * checkout's `tmp/gh-throttle/`, guarded by an exclusive-create lock file. A
- * caller reserves a slot under the lock, releases it, then sleeps until its slot.
- * The limiter never fails open: a lock that cannot be taken in time throws
- * `GH_THROTTLE_UNAVAILABLE`, and an unreadable state file is an error.
+ * Per-main-checkout pacing for `gh` calls. Every dev-loops process that resolves
+ * the same main checkout (the parent of its cwd's git common dir) shares one
+ * `next-slot` file (epoch ms of the next allowed call) under that checkout's
+ * `tmp/gh-throttle/`, guarded by an exclusive-create lock file. Separate clones
+ * do not share pacing. A caller reserves a slot under the lock, releases it, then
+ * sleeps until its slot. The limiter never fails open: a lock that cannot be taken
+ * in time, an unreadable state file, or a cwd outside a git checkout throws
+ * `GH_THROTTLE_UNAVAILABLE`. Only a gh attested as a stub (`DEV_LOOPS_GH_STUB`)
+ * is unpaced.
  */
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { link, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { SECONDARY_RATE_LIMIT_BACKOFF_MS, isSecondaryRateLimitError, rateLimitedError } from "./gh.mjs";
+import { GH_STUB_ATTESTATION_ENV } from "./test-mode-write-guard.mjs";
 
 export const DEFAULT_GH_MIN_INTERVAL_MS = 500;
 const LOCK_TIMEOUT_MS = 10_000;
@@ -64,34 +70,47 @@ export function resetThrottleCache() {
   cachedIntervalMs = undefined;
 }
 
-/** Steal a stale lock: atomic rename to a unique name so only one stealer wins, then re-verify. */
-async function stealStaleLock(lockPath, { now, staleLockMs }) {
-  const aside = `${lockPath}.stale.${randomUUID()}`;
+const pidAlive = (pid) => {
   try {
-    await rename(lockPath, aside);
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+};
+
+/**
+ * Steal a stale lock. Stale means an old mtime and a holder pid (the token prefix) that is gone.
+ * The steal unlinks only when the token is unchanged, so a fresh holder's lock is never removed.
+ * A lock replaced between the final read and the unlink is a residual race that costs only a pacing violation.
+ */
+async function stealStaleLock(lockPath, { now, staleLockMs }) {
+  let token;
+  let mtimeMs;
+  try {
+    token = await readFile(lockPath, "utf8");
+    mtimeMs = (await stat(lockPath)).mtimeMs;
   } catch (error) {
     if (error.code === "ENOENT") return;
-    throw unavailable(`cannot steal the stale lock: ${error.message}`, error);
+    throw unavailable(`cannot inspect the lock: ${error.message}`, error);
   }
-  // The file moved aside may be a fresh holder's lock that replaced the stale one; restore it.
-  if (now() - (await stat(aside)).mtimeMs <= staleLockMs) await link(aside, lockPath).catch(() => {});
-  await unlink(aside).catch(() => {});
+  if (now() - mtimeMs <= staleLockMs) return;
+  const pid = Number.parseInt(token, 10);
+  if (Number.isInteger(pid) && pid > 0 && pidAlive(pid)) return;
+  if ((await readFile(lockPath, "utf8").catch(() => null)) !== token) return;
+  await unlink(lockPath).catch(() => {});
 }
 
 async function withLock(lockPath, { now, sleep, lockTimeoutMs, staleLockMs, lockPollMs }, fn) {
   const deadline = now() + lockTimeoutMs;
-  const token = randomUUID();
+  const token = `${process.pid}:${randomUUID()}`;
   for (;;) {
     let handle;
     try {
       handle = await open(lockPath, "wx");
     } catch (error) {
       if (error.code !== "EEXIST") throw unavailable(`cannot create the lock: ${error.message}`, error);
-      try {
-        if (now() - (await stat(lockPath)).mtimeMs > staleLockMs) await stealStaleLock(lockPath, { now, staleLockMs });
-      } catch (statError) {
-        if (statError.code !== "ENOENT") throw unavailable(`cannot inspect the lock: ${statError.message}`, statError);
-      }
+      await stealStaleLock(lockPath, { now, staleLockMs });
       if (now() >= deadline) throw unavailable(`lock ${lockPath} not acquired within ${lockTimeoutMs}ms`);
       await sleep(lockPollMs);
       continue;
@@ -134,14 +153,19 @@ export async function acquireSlot({
     let next = 0;
     try {
       const parsed = Number(String(await readFile(slotPath, "utf8")).trim());
-      if (Number.isFinite(parsed)) next = parsed;
+      // A value beyond any legitimate queue (a backward clock step or a corrupt write) is no reservation.
+      if (Number.isFinite(parsed) && parsed <= now() + intervalMs + lockTimeoutMs) next = parsed;
     } catch (error) {
       if (error.code !== "ENOENT") throw unavailable(`cannot read ${slotPath}: ${error.message}`, error);
     }
     const reserved = Math.max(now(), next);
+    const tmpPath = `${slotPath}.${randomUUID()}.tmp`;
     try {
-      await writeFile(slotPath, String(reserved + intervalMs));
+      // Temp file plus rename: a concurrent reader never sees a half-written (empty) slot file.
+      await writeFile(tmpPath, String(reserved + intervalMs));
+      await rename(tmpPath, slotPath);
     } catch (error) {
+      await unlink(tmpPath).catch(() => {});
       throw unavailable(`cannot write ${slotPath}: ${error.message}`, error);
     }
     return reserved;
@@ -150,10 +174,10 @@ export async function acquireSlot({
   if (wait > 0) await sleep(wait);
 }
 
-/** Default slot taker for the real `gh` path: resolves root and interval lazily. */
-/** No pacing for a gh attested as a stub (`DEV_LOOPS_GH_STUB`, set by the writeGhStub helper) or in test mode (`NODE_ENV=test`): neither sends traffic. */
-export const isUnpaced = (env) => Boolean(env?.DEV_LOOPS_GH_STUB || process.env.DEV_LOOPS_GH_STUB || process.env.NODE_ENV === "test");
+/** No pacing for a gh attested as a stub (`GH_STUB_ATTESTATION_ENV`, set by the writeGhStub helper): a stub sends no traffic. Test mode alone is paced. */
+export const isUnpaced = (env) => Boolean(env?.[GH_STUB_ATTESTATION_ENV] || process.env[GH_STUB_ATTESTATION_ENV]);
 
+/** Default slot taker for the real `gh` path: resolves root and interval lazily. */
 export async function takeGhSlot(opts = {}) {
   if (!opts.root && isUnpaced(opts.env)) return;
   const root = opts.root ?? resolveMainRoot(opts.execFile ? { execFile: opts.execFile } : undefined);
@@ -161,20 +185,42 @@ export async function takeGhSlot(opts = {}) {
   await acquireSlot({ ...opts, root, intervalMs });
 }
 
-const SYNC_SLOT_TIMEOUT_MS = 60_000;
+// The config schema caps queue.ghMinIntervalMs at 10000, so this covers several queued slots.
+export const SYNC_SLOT_TIMEOUT_MS = 60_000;
 const SLOT_SCRIPT = fileURLToPath(new URL("./gh-throttle-slot.mjs", import.meta.url));
 
-/** Sync slot taker for `execFileSync` call sites: runs the slot child and blocks until it exits. */
-export function takeGhSlotSync({ execFile = execFileSync } = {}) {
+/** Sync slot taker for `execFileSync` call sites: runs the slot child (in the gh call's env and cwd) and blocks until it exits. */
+export function takeGhSlotSync({ execFile = execFileSync, env, cwd } = {}) {
   try {
-    execFile(process.execPath, [SLOT_SCRIPT], { stdio: ["ignore", "ignore", "pipe"], timeout: SYNC_SLOT_TIMEOUT_MS });
+    execFile(process.execPath, [SLOT_SCRIPT], { stdio: ["ignore", "ignore", "pipe"], timeout: SYNC_SLOT_TIMEOUT_MS, env, cwd });
   } catch (error) {
     throw unavailable(`sync slot failed: ${String(error.stderr ?? error.message).trim()}`, error);
   }
 }
 
-/** `execFileSync` that takes a slot first when the command is `gh`. */
-export function ghExecFileSync(command, args, options) {
-  if (command === "gh" && !isUnpaced(options?.env)) takeGhSlotSync();
-  return execFileSync(command, args, options);
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/**
+ * `execFileSync` that takes a slot first when the command is `gh`. A secondary
+ * rate limit backs off once and retries, and a second one throws `RATE_LIMITED`.
+ * The last argument is a test seam.
+ */
+export function ghExecFileSync(command, args, options, { execFile = execFileSync, takeSlotSync = takeGhSlotSync, backoff = sleepSync, backoffMs = SECONDARY_RATE_LIMIT_BACKOFF_MS } = {}) {
+  const attempt = () => {
+    if (command === "gh" && !isUnpaced(options?.env)) takeSlotSync({ env: options?.env, cwd: options?.cwd });
+    return execFile(command, args, options);
+  };
+  if (command !== "gh") return attempt();
+  try {
+    return attempt();
+  } catch (error) {
+    if (!isSecondaryRateLimitError(error) && !isSecondaryRateLimitError(String(error.stderr ?? ""))) throw error;
+  }
+  backoff(backoffMs);
+  try {
+    return attempt();
+  } catch (error) {
+    if (!isSecondaryRateLimitError(error) && !isSecondaryRateLimitError(String(error.stderr ?? ""))) throw error;
+    throw rateLimitedError("gh command failed", error.stderr || error.message, error);
+  }
 }

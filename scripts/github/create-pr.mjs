@@ -432,7 +432,7 @@ export function spawnCreatePr(ghArgs, { ghCommand = "gh", env = process.env } = 
   // the live executor). In test mode this fails closed unless gh is stubbed at
   // the process boundary (writeGhStub sets DEV_LOOPS_GH_STUB).
   assertGithubWriteStubbedInTestMode(undefined, "pr create", { env });
-  return (ghCommand === "gh" ? takeGhSlot() : Promise.resolve()).then(() => new Promise((resolve, reject) => {
+  return (ghCommand === "gh" ? takeGhSlot({ env }) : Promise.resolve()).then(() => new Promise((resolve, reject) => {
     // `gh pr create` never reads stdin (body comes from --body/--body-file), so
     // the captured path ignores it rather than inheriting: inheriting a
     // never-closing stdin (e.g. an in-process test runner) would hang any child

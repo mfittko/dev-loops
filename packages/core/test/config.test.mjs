@@ -929,9 +929,10 @@ describe("BUILT_IN_DEFAULTS", () => {
     assert.equal(FileConfigSchema.parse({ version: 1, queue: {} }).queue.ghMinIntervalMs, 500);
   });
 
-  test("queue.ghMinIntervalMs accepts 0 and rejects values outside 0..60000", () => {
+  test("queue.ghMinIntervalMs accepts 0 and 10000 and rejects values outside 0..10000 (the sync slot timeout must cover queued slots)", () => {
     assert.ok(FileConfigSchema.safeParse({ version: 1, queue: { ghMinIntervalMs: 0 } }).success);
-    assert.ok(!FileConfigSchema.safeParse({ version: 1, queue: { ghMinIntervalMs: 60001 } }).success);
+    assert.ok(FileConfigSchema.safeParse({ version: 1, queue: { ghMinIntervalMs: 10000 } }).success);
+    assert.ok(!FileConfigSchema.safeParse({ version: 1, queue: { ghMinIntervalMs: 10001 } }).success);
     assert.ok(!FileConfigSchema.safeParse({ version: 1, queue: { ghMinIntervalMs: -1 } }).success);
   });
 
