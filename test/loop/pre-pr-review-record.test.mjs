@@ -346,7 +346,9 @@ test("record mode refuses with pre_pr_self_check_missing for a missing flag, fil
     await refuse([]);
     await refuse(["--self-check-file", path.join(dir, "nope.json")]);
     await refuse(["--self-check-file", selfCheckFile(dir, "{not json")]);
-    await refuse(["--self-check-file", selfCheckFile(dir, { id: "tests" })]);
+    await refuse(["--self-check-file", selfCheckFile(dir, [{ id: "tests", status: "done", evidence: "e" }])]);
+    await refuse(["--self-check-file", selfCheckFile(dir, [...IDS.map((id) => ({ id, status: "done", evidence: "e" })), { id: "angle:nope", status: "done", evidence: "e" }])]);
+    await refuse(["--self-check-file", selfCheckFile(dir, [...IDS, IDS[0]].map((id) => ({ id, status: "done", evidence: "e" })))]);
     await refuse(["--self-check-file", selfCheckFile(dir, IDS.slice(1).map((id) => ({ id, status: "na", evidence: "e" })))]);
     await refuse(["--self-check-file", selfCheckFile(dir, IDS.map((id) => ({ id, status: "done", evidence: "  " })))]);
     await refuse(["--self-check-file", selfCheckFile(dir, IDS.map((id) => ({ id, status: "maybe", evidence: "e" })))]);
@@ -374,5 +376,32 @@ test("the required self-check ids are the resolved draft_gate angle ids plus the
     assert.equal(code2, 1);
     assert.match(JSON.parse(err).message ?? err, /T1/);
     assert.equal(JSON.parse(err).code, "pre_pr_self_check_missing");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("record mode derives the required ids from the repo-root config when run from a subdirectory, and fails closed on a config load error", async () => {
+  const dir = fixtureRepo();
+  try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    const config = (angles) => writeFileSync(path.join(dir, ".devloops"), JSON.stringify({ version: 1, gates: { draft: { angles } } }));
+    config([{ name: "extra", "developer-checklist": ["Z1: check it"] }]);
+    commit(dir, "src/b.mjs", "export const b = 1;\n");
+    const sub = path.join(dir, "src");
+    const base = ["--verdict", "clean", "--disposition", "none", "--base", "main", "--no-linked-issue"];
+    const attempt = async (entries) => {
+      let err = "";
+      const code = await runCli([...base, "--self-check-file", selfCheckFile(dir, entries)], { cwd: sub, stdout: { write() {} }, stderr: { write: (s) => { err += s; } } });
+      return { code, err: err ? JSON.parse(err) : null };
+    };
+    const ids = await requiredSelfCheckIds(dir, "main");
+    assert.ok(ids.includes("Z1") && ids.includes("C1"));
+    assert.equal((await attempt(ids.map((id) => ({ id, status: "done", evidence: "e" })))).code, 0);
+    const wrong = await attempt(IDS.map((id) => ({ id, status: "done", evidence: "e" })));
+    assert.equal(wrong.code, 1);
+    assert.equal(wrong.err.code, "pre_pr_self_check_missing");
+    writeFileSync(path.join(dir, ".devloops"), "{not json");
+    const broken = await attempt([]);
+    assert.equal(broken.code, 1);
+    assert.equal(broken.err.code, "pre_pr_self_check_missing");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

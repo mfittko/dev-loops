@@ -1213,3 +1213,15 @@ test("the selfCheck digest stays bounded with a large Copilot export, and the ex
   const missing = await buildImplementationBrief({ body: MATRIX, repoRoot: root, copilotFile: path.join(root, "nope.jsonl") });
   assert.deepEqual(missing.selfCheck.copilotClasses, []);
 });
+
+test("selfCheck.classes caps at 3 gate classes with one example each when the tmp root holds findings logs for 5 angles", async () => {
+  const root = await fixtureRepo();
+  runGitFixture(root, ["remote", "add", "origin", "https://github.com/o/r.git"]);
+  const dir = path.join(root, "tmp", "gate-findings", "o-r", "pr-1");
+  await mkdir(dir, { recursive: true });
+  const findings = ["a1", "a2", "a3", "a4", "a5"].flatMap((angle, i) => Array.from({ length: 5 - i }, () => ({ angle, judgeDisposition: "act", summary: `${angle} summary` })));
+  await writeFile(path.join(dir, "draft_gate-aaaaaaa.json"), JSON.stringify({ loggedAt: "2026-01-01T00:00:00Z", findings }));
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root });
+  assert.deepEqual(brief.selfCheck.classes.map((c) => c.angle), ["a1", "a2", "a3"]);
+  assert.ok(brief.selfCheck.classes.every((c) => c.examples.length === 1));
+});

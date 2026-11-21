@@ -109,9 +109,9 @@ most 200 characters; empty when the config does not load). "classes" is the top 
 of past first draft_gate rounds and "copilotClasses" the top 3 keyword buckets of the local Copilot
 thread export (offline; one example of at most 160 characters each; empty without logs or export).
 "items" is the developer checklist, one { "id", "angle", "check" } per developer-checklist line of
-the draft_gate angles in config order (C1..PK1; empty when the config does not load). Items with
+the draft_gate angles in config order (14 ids from C1 to K2; empty when the config does not load). Items with
 "finalStep": true (P2, CS1, CS2) are your last writing step before hand-back. Record one
-{ "id", "status": "done"|"na", "evidence" } per angle id and item id with record-pre-pr-review
+{ "id", "status": "done"|"na", "evidence" } per angle id and item id with loop pre-pr-review
 --self-check-file.
 
 ${JQ_OUTPUT_USAGE}
@@ -459,7 +459,8 @@ async function selfCheck(root, touchedPaths, copilotFile) {
 /**
  * Build the brief for one spec body. All inputs are files: `paths` is the
  * declared touch set (`--paths`), `repoRoot` is the only checkout reference, so
- * two checkouts of the same tree produce byte-identical output.
+ * two checkouts of the same tree produce byte-identical output, except `selfCheck.classes`
+ * and `selfCheck.copilotClasses`, which read the tmp-root findings logs and the Copilot export.
  */
 export async function buildImplementationBrief({ body = "", repoRoot = process.cwd(), paths = [], copilotFile } = {}) {
   const root = path.resolve(repoRoot);

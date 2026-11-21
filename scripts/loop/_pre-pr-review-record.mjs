@@ -39,7 +39,7 @@ export const PRE_PR_SELF_CHECK_STATUSES = Object.freeze(["done", "na"]);
  * Read and validate a self-check file (PRE-PR-DEVELOPER-SELF-CHECK): a JSON array of
  * { id, status: "done"|"na", evidence } that covers every id in `requiredIds`.
  * Throws an error with code `pre_pr_self_check_missing` for a missing or unreadable file,
- * a wrong shape, a missing id or an empty evidence. Returns the entries.
+ * a wrong shape, an unknown or duplicate id, a missing id or an empty evidence. Returns the entries.
  */
 export function readSelfCheckFile(file, requiredIds) {
   const fail = (detail) => Object.assign(new Error(`${PRE_PR_SELF_CHECK_MISSING}: ${detail} (PRE-PR-DEVELOPER-SELF-CHECK)`), { code: PRE_PR_SELF_CHECK_MISSING });
@@ -50,6 +50,12 @@ export function readSelfCheckFile(file, requiredIds) {
   for (const e of entries) {
     if (typeof e?.id !== "string" || !PRE_PR_SELF_CHECK_STATUSES.includes(e.status)) throw fail(`each entry needs an id and a status of ${PRE_PR_SELF_CHECK_STATUSES.join(" or ")}`);
     if (typeof e.evidence !== "string" || !e.evidence.trim()) throw fail(`item ${e.id} has empty evidence`);
+  }
+  const seen = new Set();
+  for (const { id } of entries) {
+    if (!requiredIds.includes(id)) throw fail(`unknown self-check id ${id}`);
+    if (seen.has(id)) throw fail(`duplicate self-check id ${id}`);
+    seen.add(id);
   }
   const missing = requiredIds.filter((id) => !entries.some((e) => e.id === id));
   if (missing.length) throw fail(`missing self-check item(s): ${missing.join(", ")}`);

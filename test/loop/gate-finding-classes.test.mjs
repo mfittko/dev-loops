@@ -90,3 +90,13 @@ test("the CLI adds copilotClasses from --copilot-file or the default export, and
   assert.deepEqual(JSON.parse(out).copilotClasses, []);
   assert.equal(await main(["--repo", "o/r", "--tmp-root", root, "--copilot-file"], io), 1);
 });
+
+test("a non-directory pr-N entry is counted as skipped and does not fail the run", () => {
+  const root = tmpRoot();
+  writeLog(root, 1, "aaaaaaa", "2026-01-01T00:00:00Z", [f("tests")]);
+  writeFileSync(path.join(root, "gate-findings", "o-r", "pr-2"), "not a directory");
+  const r = collectFindingClasses({ repo: "o/r", tmpRoot: root });
+  assert.equal(r.skipped, 1);
+  assert.equal(r.changes, 1);
+  assert.deepEqual(r.classes.map((c) => c.angle), ["tests"]);
+});

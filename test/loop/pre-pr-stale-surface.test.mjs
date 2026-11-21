@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { test } from "bun:test";
+import { afterAll, test } from "bun:test";
 
 import { unaddressedStaleSurfaceHits } from "../../packages/core/src/loop/pre-push-delta-review.mjs";
 import { validatePrePrReview } from "../../scripts/loop/_pre-pr-review-record.mjs";
@@ -45,7 +45,9 @@ async function run(dir, argv, extra = {}) {
   return { code, out: out ? JSON.parse(out) : null, err: err ? JSON.parse(err.trim().split("\n").pop()) : null };
 }
 
-const selfCheckPath = path.join(os.tmpdir(), "issue-3395-self-check.json");
+const selfCheckDir = mkdtempSync(path.join(os.tmpdir(), "issue-3395-self-check-"));
+afterAll(() => rmSync(selfCheckDir, { recursive: true, force: true }));
+const selfCheckPath = path.join(selfCheckDir, "self-check.json");
 const IDS = await (async () => { const dir = staleRepo(); try { return await requiredSelfCheckIds(dir, "main"); } finally { rmSync(dir, { recursive: true, force: true }); } })();
 writeFileSync(selfCheckPath, JSON.stringify(IDS.map((id) => ({ id, status: "done", evidence: "e" }))));
 const record = ["--verdict", "clean", "--disposition", "none", "--base", "main", "--no-linked-issue", "--self-check-file", selfCheckPath];

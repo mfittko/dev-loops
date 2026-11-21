@@ -9,7 +9,7 @@ import { requiredSelfCheckIds } from "./_self-check-items.mjs";
 import { PRE_PR_STALE_SURFACE_UNADDRESSED, readSkipsFile, requireStaleSurfaceAddressed, scanPrePrStaleSurface } from "./_pre-pr-stale-surface.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
-const USAGE = `Usage: record-pre-pr-review.mjs --verdict <${PRE_PR_REVIEW_VERDICTS.join("|")}> --disposition <${PRE_PR_REVIEW_DISPOSITIONS.join("|")}> [sweep flags]
+const USAGE = `Usage: record-pre-pr-review.mjs --verdict <${PRE_PR_REVIEW_VERDICTS.join("|")}> --disposition <${PRE_PR_REVIEW_DISPOSITIONS.join("|")}> --self-check-file <file> [sweep flags]
        record-pre-pr-review.mjs --scan [sweep flags]
 Sanctioned writer of the pre-PR review record (PRE-PR-BEFORE-FIRST-PUSH). Run it after the
 pre-PR review and its fixes are committed. It reads the head from git (no head argument) and
@@ -32,7 +32,7 @@ Self-check (record mode, PRE-PR-DEVELOPER-SELF-CHECK):
   --self-check-file <path>  Required. JSON array of { "id", "status": "done"|"na", "evidence": "<non-empty>" }
                        covering every constraint id of the developer brief selfCheck: one "angle:<name>" per
                        draft_gate angle resolved for the base...HEAD changed paths, plus each
-                       developer-checklist id (C1..PK1). The evidence states what was done while writing (test names,
+                       developer-checklist id (14 ids from C1 to K2, in config order). The evidence states what was done while writing (test names,
                        synced files). A missing file, missing id or empty evidence refuses with
                        pre_pr_self_check_missing; the entries are stored in the record.
 Output (stdout, JSON): { "ok": true, "head", "verdict", "disposition", "file" }
@@ -63,7 +63,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     const scan = await scanPrePrStaleSurface({ cwd, base, bodyFile: values["body-file"], issue, ...(readIssueBody ? { readIssueBody } : {}) });
     if (values.scan) return emitResult(scan, output);
     requireStaleSurfaceAddressed(scan, readSkipsFile(values["skips-file"]));
-    const selfCheck = readSelfCheckFile(values["self-check-file"], await requiredSelfCheckIds(cwd, base));
+    const selfCheck = readSelfCheckFile(values["self-check-file"], await requiredSelfCheckIds(resolveRepoRoot(cwd), base));
     const { record, file } = writePrePrReviewRecord({ cwd, verdict: values.verdict, disposition: values.disposition, selfCheck });
     return emitResult({ ok: true, head: record.head, verdict: record.verdict, disposition: record.disposition, file }, output);
   } catch (error) {

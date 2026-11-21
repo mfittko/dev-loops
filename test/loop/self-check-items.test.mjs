@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { ANGLE_LINE_MAX, condenseAnglePrompt, resolveSelfCheckAngles } from "../../scripts/loop/_self-check-items.mjs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { ANGLE_LINE_MAX, condenseAnglePrompt, requiredSelfCheckIds, resolveChecklistItems, resolveSelfCheckAngles } from "../../scripts/loop/_self-check-items.mjs";
 
 test("condenseAnglePrompt keeps the first sentence, caps it, and falls back for an empty prompt", () => {
   assert.equal(condenseAnglePrompt("Check tests.  Then more\ntext.", "a"), "Check tests.");
@@ -14,4 +17,14 @@ test("resolveSelfCheckAngles falls back to the shipped defaults, capped at 8 lin
   const angles = await resolveSelfCheckAngles("/nonexistent-issue-3395-root", ["a.mjs"]);
   assert.ok(angles.length > 0 && angles.length <= 8);
   assert.ok(angles.every((a) => a.id === `angle:${a.angle}` && a.constraint.length <= ANGLE_LINE_MAX));
+});
+
+test("strict resolvers throw pre_pr_self_check_missing on a config load error", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "issue-3395-strict-"));
+  try {
+    writeFileSync(path.join(dir, ".devloops"), "{not json");
+    await assert.rejects(resolveChecklistItems(dir, { strict: true }), { code: "pre_pr_self_check_missing" });
+    await assert.rejects(resolveSelfCheckAngles(dir, ["a.mjs"], { strict: true }), { code: "pre_pr_self_check_missing" });
+    await assert.rejects(requiredSelfCheckIds(dir, "main"), { code: "pre_pr_self_check_missing" });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

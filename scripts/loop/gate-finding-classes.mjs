@@ -77,7 +77,9 @@ export function collectFindingClasses({ repo, tmpRoot, top = 3 }) {
   for (const pr of prs) {
     const dir = path.join(prsDir, pr);
     const rounds = [];
-    for (const name of readdirSync(dir).filter((n) => /^draft_gate-.+\.json$/u.test(n))) {
+    let names = [];
+    try { names = readdirSync(dir).filter((n) => /^draft_gate-.+\.json$/u.test(n)); } catch { skipped += 1; continue; }
+    for (const name of names) {
       const file = path.join(dir, name);
       try {
         const log = JSON.parse(readFileSync(file, "utf8"));
