@@ -53,7 +53,11 @@ export function ensureDeps(worktreePath, installDeps = defaultInstallDeps) {
     } catch (err) {
       warn(`deps fingerprint failed (continuing): ${err?.message ?? err}`);
     }
-    rmSync(path.join(worktreePath, DEPS_STAMP), { force: true }); // only a completed install may leave a stamp
+    try {
+      rmSync(path.join(worktreePath, DEPS_STAMP), { force: true }); // only a completed install may leave a stamp
+    } catch (err) {
+      warn(`stale deps stamp not removed (continuing): ${err?.message ?? err}`); // the stamp write below then fails and reports stampWritten false
+    }
     let result;
     try {
       result = installDeps(worktreePath) ?? { ok: false, reason: "installDeps returned nothing" };
