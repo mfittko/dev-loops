@@ -578,7 +578,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       copilotConvergence,
       ...(partial ? { baseMergeCarry: baseMerge.decision, rerunPaths: baseMerge.rerunPaths } : {}),
       // AC2: the delta review of a conflict-resolution merge covers these resolution files only.
-      ...(partial && baseMerge.decision === "resolution_delta" ? { resolutionDeltaPaths: baseMerge.resolutionPaths } : {}),
+      ...(partial && baseMerge.decision === "resolution_delta" ? { resolutionDeltaPaths: baseMerge.resolutionPaths, resolutionDeltaMerges: baseMerge.resolutionMerges ?? [] } : {}),
       ...(plan.specAuthority !== undefined ? { specAuthority: plan.specAuthority } : {}),
     };
     // Persist the keyed plan artifact BEFORE emitting to stdout, so the proof

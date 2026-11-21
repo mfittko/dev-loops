@@ -1496,6 +1496,7 @@ for (const [name, conflict, decision] of [["same-file line shift", false, "parti
       assert.deepEqual(result.mustRerun.map((m) => m.angle), ["correctness"]);
       assert.deepEqual(result.carried.map((c) => c.angle), ["docs"]);
       assert.deepEqual(result.resolutionDeltaPaths, conflict ? ["src/foo.mjs"] : undefined);
+      assert.equal(conflict ? result.resolutionDeltaMerges?.length : result.resolutionDeltaMerges, conflict ? 1 : undefined);
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }

@@ -143,6 +143,20 @@ test("git: base edit above the PR hunk (same file, line shift) partial-carries",
   assert.equal(validateBaseMergeCarryEvidence({ ...ev, decision: "carry_verdict" }).ok, false);
 });
 
+test("git: a PR hunk edit plus a clean same-file base merge is a full re-gate with unequal hunk digests", async () => {
+  const s = setup();
+  s.put("base.txt", `${LINES.slice(0, -7)}PR\n`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits bottom of base.txt");
+  const prev = s.head();
+  s.put("base.txt", `${LINES.slice(0, -7)}PR2\n`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits its own hunk again");
+  s.git("checkout", "-q", "main"); s.put("base.txt", `TOP1\nTOP2\n${LINES}`); s.git("add", "-A"); s.git("commit", "-qm", "main inserts at top");
+  s.git("checkout", "-q", "pr"); s.git("merge", "-q", "--no-edit", "main");
+  const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
+  assert.equal(ev.decision, "full_regate", ev.reason);
+  assert.equal(typeof ev.prHunkDigests["base.txt"].before, "string");
+  assert.equal(typeof ev.prHunkDigests["base.txt"].after, "string");
+  assert.notEqual(ev.prHunkDigests["base.txt"].before, ev.prHunkDigests["base.txt"].after);
+});
+
 test("git: conflicting base edit inside the PR hunk runs the resolution delta", async () => {
   const s = setup();
   s.put("base.txt", `${LINES.slice(0, -7)}PR\n`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits bottom");
@@ -154,8 +168,10 @@ test("git: conflicting base edit inside the PR hunk runs the resolution delta", 
   const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
   assert.equal(ev.decision, "resolution_delta", ev.reason);
   assert.deepEqual(ev.resolutionPaths, ["base.txt"]);
+  assert.deepEqual(ev.resolutionMerges, [s.head()]);
   assert.deepEqual(ev.rerunPaths, ["base.txt"]);
   assert.equal(validateBaseMergeCarryEvidence(ev).ok, true);
+  assert.equal(validateBaseMergeCarryEvidence({ ...ev, resolutionMerges: ["nope"] }).ok, false);
 });
 
 const X_AFTER = [`src/x.mjs\t100644\t${"2".repeat(40)}`];

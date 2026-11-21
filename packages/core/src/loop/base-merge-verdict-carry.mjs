@@ -56,7 +56,8 @@ const FULL_SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 const entryPath = (e) => e.split("\t").slice(0, -2).join("\t");
 const isPathList = (v) => Array.isArray(v) && v.every((p) => typeof p === "string" && p.length > 0);
 // A carry needs real facts: a nonempty array of nonempty strings (numbers, booleans, empty strings and empty lists refuse).
-const isFactList = (v) => Array.isArray(v) && v.length > 0 && isPathList(v);
+const isShaList = (v) => Array.isArray(v) && v.every((s) => typeof s === "string" && FULL_SHA_RE.test(s));
+const isFactList =(v) => Array.isArray(v) && v.length > 0 && isPathList(v);
 
 /**
  * @param {object} input
@@ -67,12 +68,13 @@ const isFactList = (v) => Array.isArray(v) && v.length > 0 && isPathList(v);
  * @param {string[]} input.baseDeltaPaths paths the base delta (merge-base A..B) touched
  * @param {boolean} [input.conflictResolutionHunks] true when the merge resolved conflicts
  * @param {string[]} [input.resolutionPaths] files the combined (--cc) diff of those merges touched
+ * @param {string[]} [input.resolutionMerges] full SHAs of the merges whose combined (--cc) diff is non-empty
  * @param {Object<string, {before: string|null, after: string|null}>} [input.prHunkDigests] per changed PR path, the
  *   sha256 of the PR's own -U0 hunk bodies at each head (null when no sound digest exists, e.g. binary)
  * @param {string} [input.detectionError] set when computing any input failed
  */
 export function classifyBaseMergeCarry(input = {}, { ignoreGateTooling = false } = {}) {
-  const { sourceHead, newHead, prBlobsBefore, prBlobsAfter, baseDeltaPaths, conflictResolutionHunks = false, resolutionPaths = [], prHunkDigests = {}, detectionError } = input;
+  const { sourceHead, newHead, prBlobsBefore, prBlobsAfter, baseDeltaPaths, conflictResolutionHunks = false, resolutionPaths = [], resolutionMerges = [], prHunkDigests = {}, detectionError } = input;
   const evidence = {
     sourceHead: sourceHead ?? null,
     newHead: newHead ?? null,
@@ -91,6 +93,7 @@ export function classifyBaseMergeCarry(input = {}, { ignoreGateTooling = false }
   const done = (decision, reason) => ({
     ...evidence, decision, reason,
     ...(Array.isArray(resolutionPaths) && resolutionPaths.length > 0 ? { resolutionPaths } : {}),
+    ...(Array.isArray(resolutionMerges) && resolutionMerges.length > 0 ? { resolutionMerges } : {}),
     ...(prHunkDigests && typeof prHunkDigests === "object" && Object.keys(prHunkDigests).length > 0 ? { prHunkDigests } : {}),
     ...(rerunPaths.length > 0 ? { rerunPaths } : {}),
   });
@@ -100,7 +103,7 @@ export function classifyBaseMergeCarry(input = {}, { ignoreGateTooling = false }
     return done("fallback_full", "sourceHead/newHead must be distinct full SHAs");
   }
   if (!isFactList(prBlobsBefore) || !isFactList(prBlobsAfter)) return done("fallback_full", "blob facts missing or malformed");
-  if (!isPathList(baseDeltaPaths) || !isPathList(resolutionPaths) || typeof conflictResolutionHunks !== "boolean" || !prHunkDigests || typeof prHunkDigests !== "object") {
+  if (!isPathList(baseDeltaPaths) || !isPathList(resolutionPaths) || !isShaList(resolutionMerges) || typeof conflictResolutionHunks !== "boolean" || !prHunkDigests || typeof prHunkDigests !== "object") {
     return done("fallback_full", "malformed path lists");
   }
   // Derived from the blob facts, never trusted as an input: the PR paths at either head.
@@ -163,7 +166,8 @@ export function validateBaseMergeCarryEvidence(evidence, { expectedSourceHead, e
   if (expectedNewHead !== undefined && evidence.newHead !== expectedNewHead) return { ok: false, reason: "newHead mismatch" };
   if (evidence.decision === "fallback_full") return { ok: true, reason: "" }; // never carries
   for (const k of ["resolutionPaths", "rerunPaths"]) if (k in evidence && !isPathList(evidence[k])) return { ok: false, reason: `malformed ${k}` };
-  const re = classifyBaseMergeCarry(evidence, { ignoreGateTooling });
+  if ("resolutionMerges" in evidence && !isShaList(evidence.resolutionMerges)) return { ok: false, reason: "malformed resolutionMerges" };
+  const re = classifyBaseMergeCarry(evidence,{ ignoreGateTooling });
   if (re.decision !== evidence.decision) return { ok: false, reason: `decision recomputes to ${re.decision}` };
   for (const k of ["prDiffPaths", "pathIntersection", "gateToolingPaths", "rerunPaths", "reason"]) {
     const fallback = k === "rerunPaths" ? [] : undefined;

@@ -95,6 +95,7 @@ export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRo
     // Check every merge commit on the PR branch line (--first-parent) in prevHead..headSha; merges that arrived from the base side are not the PR's own.
     let conflictResolutionHunks = false;
     const resolutionPaths = new Set();
+    const resolutionMerges = [];
     // Object.fromEntries below: a plain {} would turn a file named __proto__ into a prototype, not an own key.
     const digestEntries = [];
     const merges = lines(await git(runGit, repoRoot, ["rev-list", "--merges", "--first-parent", `${prevHead}..${headSha}`]));
@@ -113,6 +114,7 @@ export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRo
           const patch = (await bareGit(["-c", "core.quotePath=false", "diff-tree", "--cc", "--no-ext-diff", "--no-color", "--format=", merge])).toString("latin1");
           if (patch.trim() === "") continue;
           conflictResolutionHunks = true;
+          resolutionMerges.push(merge);
           for (const line of patch.split("\n")) {
             if (!line.startsWith("diff --cc ")) continue;
             // A quoted path (control character or quote in the name) has no sound plain form: fail closed.
@@ -129,7 +131,7 @@ export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRo
     }
     return classifyBaseMergeCarry({
       sourceHead: prevHead, newHead: headSha, prBlobsBefore, prBlobsAfter,
-      baseDeltaPaths, conflictResolutionHunks, resolutionPaths: [...resolutionPaths].sort(), prHunkDigests: Object.fromEntries(digestEntries),
+      baseDeltaPaths, conflictResolutionHunks, resolutionPaths: [...resolutionPaths].sort(), resolutionMerges, prHunkDigests: Object.fromEntries(digestEntries),
     }, { ignoreGateTooling });
   } catch (error) {
     return classifyBaseMergeCarry({ sourceHead: prevHead, newHead: headSha, detectionError: error instanceof Error ? error.message : String(error) });

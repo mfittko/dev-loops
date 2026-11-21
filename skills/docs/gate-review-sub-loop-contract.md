@@ -1277,7 +1277,7 @@ After applying fixes and advancing the head SHA:
 <!-- rule: GATE-EXEC-ANGLE-CARRY-FORWARD --> `GATE-EXEC-ANGLE-CARRY-FORWARD`: On every head bump A→B,
 run the carry-forward decision procedure by default. Carry a prior `clean` or
 `findings_present` angle ONLY when the delta provably leaves its review surface
-untouched and every guard below passes. Without proof, `carryForward` remains false.
+untouched and every guard below passes. A validated `partial_carry` or `resolution_delta` record from `GATE-EXEC-BASE-MERGE-VERDICT-CARRY` replaces the delta with its `rerunPaths`. Without proof, `carryForward` remains false.
 Dispatch the current resolved set minus proven carries; touched, mandatory/always-run
 and ambiguously attributed angles re-run. No prior head, an ineligible prior-log verdict
 or any whole-plan refusal means full re-dispatch. Context-builder and consolidation
