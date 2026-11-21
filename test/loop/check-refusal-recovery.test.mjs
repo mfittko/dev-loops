@@ -121,3 +121,8 @@ test("the CLI prints usage on --help and refuses unknown arguments before any wr
     assert.equal(r.status, 1, bad);
   }
 });
+
+test("scans the shared formatCliError catch-all in scripts/lib", () => {
+  const sites = scanRefusals(fileURLToPath(new URL("../..", import.meta.url)));
+  assert.ok(sites.some((s) => s.file === "scripts/lib/format-cli-error.mjs"));
+});

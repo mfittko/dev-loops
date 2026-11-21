@@ -78,6 +78,8 @@
   "scripts/loop/validation-record.mjs": 1,
   "scripts/loop/visual-grill-capture.mjs": 12,
   "scripts/loop/wait-for-gate-units.mjs": 1,
+  "scripts/lib/format-cli-error.mjs": 1,
+  "scripts/lib/jq-output.mjs": 4,
   "cli/index.mjs": 1,
   "packages/core/src/config/judge-track.mjs": 7,
   "packages/core/src/debt/remediation-to-issue.mjs": 2,

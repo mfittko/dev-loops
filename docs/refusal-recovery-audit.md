@@ -1,7 +1,7 @@
 # Refusal recovery audit (issue 3420)
 
 Rule: `RECOVERY-COMMAND-REQUIRED` in the [contract style guide](../skills/docs/contract-style-guide.md).
-Scope: every `ok: false` refusal object in `scripts/github`, `scripts/loop`, `cli`, `lib` and `packages/core/src`. A throw that reaches a shared `ok: false` catch-all counts as that one catch-all site; issue 3424 owns per-refusal recovery for those funnels.
+Scope: every `ok: false` refusal object in `scripts/github`, `scripts/loop`, `scripts/lib`, `cli`, `lib` and `packages/core/src`. A throw that reaches a shared `ok: false` catch-all counts as that one catch-all site (`scripts/lib/format-cli-error.mjs` is scanned); issue 3424 owns per-refusal recovery for those funnels.
 Check: `scripts/loop/check-refusal-recovery.mjs` fails on any file whose count of sites without `recovery` rises above `docs/refusal-recovery-baseline.json`, and on any file with such sites and no baseline entry. CI also fails on any count that differs from the committed baseline; a local run rewrites a fallen count, and you commit the rewrite. Regenerate the baseline with `--write-baseline` and this table with `--write-audit`.
 
 ## Seed: refusal patterns behind issues 3411, 3414 to 3419
@@ -249,6 +249,11 @@ One row per refusal site (line numbers drift; the baseline counts per file). The
 | `scripts/loop/visual-grill-capture.mjs:333` | MISSING |
 | `scripts/loop/visual-grill-capture.mjs:358` | MISSING |
 | `scripts/loop/wait-for-gate-units.mjs:255` | MISSING |
+| `scripts/lib/format-cli-error.mjs:20` | MISSING |
+| `scripts/lib/jq-output.mjs:58` | MISSING |
+| `scripts/lib/jq-output.mjs:387` | MISSING |
+| `scripts/lib/jq-output.mjs:449` | MISSING |
+| `scripts/lib/jq-output.mjs:655` | MISSING |
 | `cli/index.mjs:494` | MISSING |
 | `packages/core/src/config/judge-track.mjs:18` | MISSING |
 | `packages/core/src/config/judge-track.mjs:19` | MISSING |

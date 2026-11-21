@@ -3,12 +3,12 @@
  * check-refusal-recovery
  *
  * RECOVERY-COMMAND-REQUIRED: every `ok: false` refusal object in scripts/github,
- * scripts/loop, cli, lib and packages/core/src must carry a `recovery` field.
+ * scripts/loop, scripts/lib, cli, lib and packages/core/src must carry a `recovery` field.
  * Existing sites without one are tolerated through the per-file baseline in
  * docs/refusal-recovery-baseline.json. The baseline is a ratchet: a file whose count of
  * sites without `recovery` rises fails the check; the local run rewrites a fallen count, and CI fails until it is committed.
  *
- * Usage: check-refusal-recovery.mjs [--audit | --write-baseline | --write-audit | --help]
+ * Usage: check-refusal-recovery.mjs [--write-baseline | --write-audit | --help]
  * shortcut: a `/` starts a regex when the previous token is an operator, open bracket or keyword; upgrade to a parser if a false hit appears.
  */
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -16,7 +16,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(fileURLToPath(import.meta.url), "..", "..", "..");
-const DIRS = ["scripts/github", "scripts/loop", "cli", "lib", "packages/core/src"];
+const DIRS = ["scripts/github", "scripts/loop", "scripts/lib", "cli", "lib", "packages/core/src"];
 const BASELINE = "docs/refusal-recovery-baseline.json";
 const AUDIT = "docs/refusal-recovery-audit.md";
 export const AUDIT_TABLE_HEADER = "| Refusal site | recovery |";
@@ -206,21 +206,19 @@ function auditTable(sites) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const USAGE = "Usage: check-refusal-recovery.mjs [--audit | --write-baseline | --write-audit | --help]";
+  const USAGE = "Usage: check-refusal-recovery.mjs [--write-baseline | --write-audit | --help]";
   const args = process.argv.slice(2);
   if (args.includes("--help")) {
     console.log(USAGE);
     process.exit(0);
   }
-  const unknown = args.filter((a) => !["--audit", "--write-baseline", "--write-audit"].includes(a));
+  const unknown = args.filter((a) => !["--write-baseline", "--write-audit"].includes(a));
   if (unknown.length) {
     console.error(`unknown argument(s): ${unknown.join(" ")}\n${USAGE}`);
     process.exit(1);
   }
   const sites = scanRefusals();
-  if (process.argv.includes("--audit")) {
-    console.log(auditTable(sites));
-  } else if (process.argv.includes("--write-baseline")) {
+  if (process.argv.includes("--write-baseline")) {
     writeFileSync(join(root, BASELINE), `${JSON.stringify(missingCounts(sites), null, 2)}\n`);
   } else if (process.argv.includes("--write-audit")) {
     const next = spliceAudit(readFileSync(join(root, AUDIT), "utf8"), auditTable(sites));
