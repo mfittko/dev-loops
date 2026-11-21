@@ -113,7 +113,8 @@ test("ghSync records a success, and records then rethrows a failure", async () =
 });
 
 const DIRECT_GH_SPAWN = /(?:spawn|spawnSync|execFile|execFileSync|execFileAsync)\(\s*(?:"gh"|ghCommand)\b|ghCommand[^\n]*\b(?:exec|runChild)\s*=\s*execFileSync\b/u;
-const ALLOWED_SPAWNERS = new Set(["packages/core/src/github/gh-call-log.mjs", "packages/core/src/cli/primitives.mjs"]);
+// verify-release-approval runs under bare node before any install, so it cannot import core and stays unrecorded.
+const ALLOWED_SPAWNERS = new Set(["packages/core/src/github/gh-call-log.mjs", "packages/core/src/cli/primitives.mjs", "scripts/release/verify-release-approval.mjs"]);
 
 function sourceFiles(dir) {
   return readdirSync(path.join(REPO_ROOT, dir)).flatMap((name) => {

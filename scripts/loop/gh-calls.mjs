@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { summarizeGhCallLog } from "@dev-loops/core/github/gh-call-log";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
   dev-loops loop gh-calls [--log <path>]
@@ -11,16 +12,18 @@ Optional:
   --log <path>  Log file (default: <main checkout>/tmp/gh-calls.jsonl, or DEVLOOPS_GH_CALL_LOG)
   --help, -h    Show this help
 
+${JQ_OUTPUT_USAGE}
+
 Exit codes:
   0  Success
   1  Argument error or runtime failure`.trim();
 
 const parseError = buildParseError(USAGE);
 
-export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout } = {}) {
+export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
   let values;
   try {
-    ({ values } = parseArgs({ args: [...argv], options: { help: { type: "boolean", short: "h" }, log: { type: "string" } }, allowPositionals: false }));
+    ({ values } = parseArgs({ args: [...argv], options: { help: { type: "boolean", short: "h" }, log: { type: "string" }, ...JQ_OUTPUT_PARSE_OPTIONS }, allowPositionals: false }));
   } catch (err) {
     throw parseError(err instanceof Error ? err.message : String(err));
   }
@@ -28,7 +31,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     stdout.write(`${USAGE}\n`);
     return;
   }
-  stdout.write(`${JSON.stringify({ ok: true, ...summarizeGhCallLog(values.log) }, null, 2)}\n`);
+  process.exitCode = emitResult({ ok: true, ...summarizeGhCallLog(values.log) }, { jq: values.jq, silent: values.silent, stdout, stderr });
 }
 
 if (isDirectCliRun(import.meta.url)) {
