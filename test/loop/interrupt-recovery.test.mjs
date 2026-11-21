@@ -11,7 +11,7 @@ import path from "node:path";
 import { afterAll, describe, test } from "bun:test";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
-import { repoSlugFor } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { buildGateContextPath, buildGateFaninLedgerPath, buildGateReviewsDir, repoSlugFor } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { emitFixerWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { addLocalOrigin, runGitFixture, runIdFreeEnv } from "../_helpers.mjs";
@@ -20,6 +20,7 @@ const CHILD = path.resolve("test/loop/_interrupt-child.mjs");
 const COORDINATION = path.resolve("scripts/loop/detect-pr-gate-coordination-state.mjs");
 const CONSOLIDATE = path.resolve("scripts/loop/consolidate-fanin.mjs");
 const GATE_HEAD = "abcdef0123456789abcdef0123456789abcdef01"; // the head _interrupt-child.mjs writes its gate artifacts under
+const GATE_KEY = { repo: "owner/repo", pr: 266, gate: "draft_gate", headSha: GATE_HEAD };
 const EMITTER_STEPS = { round: ["context", "sentinel", "artifact-tmp", "artifact", "fanin"], fixer: ["lock", "plan-tmp", "plan", "release"] };
 
 // `${unit}:${killedAfter}` -> [open issue, the refusal that keeps this recovery failing]. Remove an entry when its issue closes.
@@ -74,17 +75,15 @@ async function snapshot(root) {
     return "";
   };
   const out = [];
-  const slug = repoSlugFor("owner/repo");
-  const dirs = ["tmp", `tmp/gate-context/${slug}/pr-266`, `tmp/gate-reviews/${slug}/pr-266/draft_gate-${GATE_HEAD}`, `tmp/gate-fixer/${slug}/pr-266`];
+  const key = { ...GATE_KEY, tmpRoot: path.join(root, "tmp") }; // the key _interrupt-child.mjs writes its round artifacts under
+  const rel = (p) => path.relative(root, p);
+  const dirs = [...new Set(["tmp", rel(path.dirname(buildGateContextPath(key))), rel(buildGateReviewsDir(key)), rel(path.dirname(buildGateFaninLedgerPath(key))), `tmp/gate-fixer/${repoSlugFor("owner/repo")}/pr-266`])];
   for (const dir of dirs) {
     if (!existsSync(path.join(root, dir))) continue;
     for (const n of await walk(path.join(root, dir))) out.push(`${dir}/${n.replace(/\.tmp-f[0-9]+-[0-9a-f]{8}$/, ".tmp-<id>")}${await content(path.join(root, dir, n), n)}`.replace(/[0-9a-f]{40}/g, "<head>"));
   }
   return out;
 }
-
-// Issue 3420 adds a `recovery` field to refusals; surface it when present, never require it.
-const recoveryHint = (stdout) => { try { const hint = JSON.parse(stdout).recovery; return hint ? ` [recovery: ${JSON.stringify(hint)}]` : ""; } catch { return ""; } };
 
 // The step's recovery: a fresh worker redoes the unit (a reviewer with the sanctioned --same-head-retry). A kill after the
 // last step leaves a finished unit, so that case only checks the finished state equals the baseline; it runs no recovery.
@@ -109,6 +108,10 @@ describe("interrupt a stubbed draft_gate round and fix pass after each step", as
     assert.equal(done.status, 0, done.stderr);
     baselines[unit] = { coordination: coordinate(root).stdout, state: await snapshot(root) };
   }
+  test("the round baseline snapshot holds the per-angle artifact and the fan-in ledger", () => {
+    assert.ok(baselines.round.state.some((e) => e.includes("/coverage.json ")), "coverage.json missing from the round snapshot");
+    assert.ok(baselines.round.state.some((e) => e.includes(".fanin-ledger.json ")), "fan-in ledger missing from the round snapshot");
+  });
   test("the coordination comparison is sensitive: the finished fixer plan changes the coordinator output", async () => {
     assert.notEqual(baselines.fixer.coordination, coordinate(await makeRoot()).stdout);
   });
@@ -121,7 +124,7 @@ describe("interrupt a stubbed draft_gate round and fix pass after each step", as
       test(`${unit}: killed after ${step} recovers to the uninterrupted state${known ? ` (known failure, issue ${known})` : ""}`, async () => {
         const run = await recoverAfter(unit, step);
         const reasons = [];
-        if (run.redo.status !== 0) reasons.push(`recovery exited ${run.redo.status}: ${(run.redo.stdout + run.redo.stderr).trim().slice(0, 300)}${recoveryHint(run.redo.stdout)}`);
+        if (run.redo.status !== 0) reasons.push(`recovery exited ${run.redo.status}: ${(run.redo.stdout + run.redo.stderr).trim().slice(0, 300)}`);
         if (JSON.stringify(run.state) !== JSON.stringify(baselines[unit].state)) reasons.push(`state ${JSON.stringify(run.state)} differs from ${JSON.stringify(baselines[unit].state)}`);
         if (run.coordination !== baselines[unit].coordination) reasons.push("gate-coordination output differs from the uninterrupted run");
         if (known) {
