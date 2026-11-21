@@ -2,8 +2,9 @@
  * The pre-PR review record (PRE-PR-BEFORE-FIRST-PUSH): local evidence at
  * `<main-tmp-root>/pre-pr-review/<head>.json`, written only by
  * `dev-loops loop pre-pr-review` and checked by `pr create`. The writer reads the
- * head from git. The `integrity` field is a digest of the other fields, so a
- * hand-built file without it fails validation.
+ * head from git. The `integrity` field is a digest of head, verdict and disposition,
+ * so a hand-built file without it fails validation. `selfCheck` is self-reported and
+ * not integrity-bound (ADR 0304).
  */
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -16,7 +17,7 @@ import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } fro
 export const PRE_PR_REVIEW_VERDICTS = Object.freeze(["clean", "findings_fixed"]);
 export const PRE_PR_REVIEW_DISPOSITIONS = Object.freeze(["none", "all_applied", "rationale_recorded"]);
 export const PRE_PR_REVIEW_MISSING = "pre_pr_review_missing";
-export const RECORD_COMMAND = "dev-loops loop pre-pr-review --verdict <clean|findings_fixed> --disposition <none|all_applied|rationale_recorded> (--body-file <file> --issue <n> | --no-linked-issue)";
+export const RECORD_COMMAND = "dev-loops loop pre-pr-review --verdict <clean|findings_fixed> --disposition <none|all_applied|rationale_recorded> (--body-file <file> --issue <n> | --no-linked-issue) --self-check-file <file>";
 
 const git = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: gitEnvNoDirOverrides() }).trim();
 const recordDir = (cwd) => path.join(resolveGateArtifactTmpRoot(cwd), "pre-pr-review");
@@ -32,12 +33,43 @@ function parseValid(file) {
   return null;
 }
 
+export const PRE_PR_SELF_CHECK_MISSING = "pre_pr_self_check_missing";
+export const PRE_PR_SELF_CHECK_STATUSES = Object.freeze(["done", "na"]);
+
+/**
+ * Read and validate a self-check file (PRE-PR-DEVELOPER-SELF-CHECK): a JSON array of
+ * { id, status: "done"|"na", evidence } that covers every id in `requiredIds`.
+ * Throws an error with code `pre_pr_self_check_missing` for a missing or unreadable file,
+ * a wrong shape, an unknown or duplicate id, a missing id or an empty evidence. Returns the entries.
+ */
+export function readSelfCheckFile(file, requiredIds) {
+  const fail = (detail) => Object.assign(new Error(`${PRE_PR_SELF_CHECK_MISSING}: ${detail} (PRE-PR-DEVELOPER-SELF-CHECK)`), { code: PRE_PR_SELF_CHECK_MISSING });
+  if (!file) throw fail("record mode requires --self-check-file <path>");
+  let entries;
+  try { entries = JSON.parse(readFileSync(file, "utf8")); } catch (error) { throw fail(`cannot read --self-check-file ${file}: ${error.message}`); }
+  if (!Array.isArray(entries)) throw fail("the self-check file must be a JSON array");
+  for (const e of entries) {
+    if (typeof e?.id !== "string" || !PRE_PR_SELF_CHECK_STATUSES.includes(e.status)) throw fail(`each entry needs an id and a status of ${PRE_PR_SELF_CHECK_STATUSES.join(" or ")}`);
+    if (typeof e.evidence !== "string" || !e.evidence.trim()) throw fail(`item ${e.id} has empty evidence`);
+  }
+  const seen = new Set();
+  for (const { id } of entries) {
+    if (!requiredIds.includes(id)) throw fail(`unknown self-check id ${id}`);
+    if (seen.has(id)) throw fail(`duplicate self-check id ${id}`);
+    seen.add(id);
+  }
+  const missing = requiredIds.filter((id) => !entries.some((e) => e.id === id));
+  if (missing.length) throw fail(`missing self-check item(s): ${missing.join(", ")}`);
+  return entries.map(({ id, status, evidence }) => ({ id, status, evidence }));
+}
+
 /** Write the record for the current git HEAD of `cwd`. Returns the record and its path. */
-export function writePrePrReviewRecord({ cwd = process.cwd(), verdict, disposition }) {
+export function writePrePrReviewRecord({ cwd = process.cwd(), verdict, disposition, selfCheck, expectedHead }) {
   if (!PRE_PR_REVIEW_VERDICTS.includes(verdict)) throw new Error(`--verdict must be one of ${PRE_PR_REVIEW_VERDICTS.join(", ")}`);
   if (!PRE_PR_REVIEW_DISPOSITIONS.includes(disposition)) throw new Error(`--disposition must be one of ${PRE_PR_REVIEW_DISPOSITIONS.join(", ")}`);
   const head = git(cwd, ["rev-parse", "HEAD"]);
-  const record = { head, verdict, disposition, integrity: integrityOf({ head, verdict, disposition }) };
+  if (expectedHead && head !== expectedHead) throw Object.assign(new Error(`${PRE_PR_SELF_CHECK_MISSING}: HEAD moved from ${expectedHead} to ${head} while the self-check ids were derived (PRE-PR-DEVELOPER-SELF-CHECK)`), { code: PRE_PR_SELF_CHECK_MISSING });
+  const record = { head, verdict, disposition, ...(selfCheck ? { selfCheck } : {}), integrity: integrityOf({ head, verdict, disposition }) };
   const file = path.join(recordDir(cwd), `${head}.json`);
   mkdirSync(path.dirname(file), { recursive: true });
   const temp = `${file}.tmp-${process.pid}`;

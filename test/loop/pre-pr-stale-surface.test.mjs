@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { test } from "bun:test";
+import { afterAll, test } from "bun:test";
 
 import { unaddressedStaleSurfaceHits } from "../../packages/core/src/loop/pre-push-delta-review.mjs";
 import { validatePrePrReview } from "../../scripts/loop/_pre-pr-review-record.mjs";
 import { runCli } from "../../scripts/loop/record-pre-pr-review.mjs";
+import { requiredSelfCheckIds } from "../../scripts/loop/_self-check-items.mjs";
 import { runGitFixture } from "../_helpers.mjs";
 
 const git = (cwd, ...args) => runGitFixture(cwd, args);
@@ -44,7 +45,12 @@ async function run(dir, argv, extra = {}) {
   return { code, out: out ? JSON.parse(out) : null, err: err ? JSON.parse(err.trim().split("\n").pop()) : null };
 }
 
-const record = ["--verdict", "clean", "--disposition", "none", "--base", "main", "--no-linked-issue"];
+const selfCheckDir = mkdtempSync(path.join(os.tmpdir(), "issue-3395-self-check-"));
+afterAll(() => rmSync(selfCheckDir, { recursive: true, force: true }));
+const selfCheckPath = path.join(selfCheckDir, "self-check.json");
+const IDS = await (async () => { const dir = staleRepo(); try { return await requiredSelfCheckIds(dir, "main"); } finally { rmSync(dir, { recursive: true, force: true }); } })();
+writeFileSync(selfCheckPath, JSON.stringify(IDS.map((id) => ({ id, status: "done", evidence: "e" }))));
+const record = ["--verdict", "clean", "--disposition", "none", "--base", "main", "--no-linked-issue", "--self-check-file", selfCheckPath];
 const withRepo = (fn) => async () => {
   const dir = staleRepo();
   try { await fn(dir); } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -118,7 +124,7 @@ test("the PR body is compared with the linked issue: a widened issue yields hits
   writeFileSync(body, PR_OLD);
   const stale = (await scan()).staleSurfaceHits.filter((h) => h.kind === "pr-body").map((h) => h.site).sort();
   assert.deepEqual(stale, ["issue-body/acceptance-criteria:2", "issue-body/definition-of-done:2", "issue-body/in-scope:2", "pr-body/in-scope:2"]);
-  const refused = await run(dir, [...record.slice(0, -1), "--body-file", body, "--issue", "7"], { readIssueBody });
+  const refused = await run(dir, [...record.filter((a) => a !== "--no-linked-issue"), "--body-file", body, "--issue", "7"], { readIssueBody });
   assert.equal(refused.err.code, "pre_pr_stale_surface_unaddressed");
   assert.match(refused.err.error, /pr-body\/in-scope:2/);
   writeFileSync(body, PR_NEW);
