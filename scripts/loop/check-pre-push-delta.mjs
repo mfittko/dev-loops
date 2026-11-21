@@ -518,8 +518,8 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
     && subject.branch === order.mutationAuthority.branch && subject.phase === "commit_only"
     && typeof subject.planPath === "string" && realpathSync(subject.planPath) === planPath, "wrong original pull subject");
   const renderedHash = materializationHash(readFileSync(expectedPrompt));
-  refuse(renderedHash === plan.materializationHash && renderedHash === unit.materializationHash
-    && renderedHash === pull.receipt.materializationHash, "materialization differs from actual bytes, renderer, plan or receipt");
+  // The emit-time plan hash and the pull-time receipt hash bind the bytes; a re-render would refuse any fix that edits the renderer.
+  refuse(renderedHash === plan.materializationHash && renderedHash === pull.receipt.materializationHash, "materialization differs from actual bytes, plan or receipt");
   const sourcePath = options.threadsFile ?? options.actList;
   const actRead = order.requiredReads?.find((read) => read.kind === order.source);
   const actBytes = readFileSync(sourcePath);

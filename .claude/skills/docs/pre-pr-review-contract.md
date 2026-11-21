@@ -252,7 +252,7 @@ normalization is only a validation view. Input, `resultShape`, result and decisi
 identical `coverageProtocol: "pulled_commit_only_v1"`, raw semantic `siteCoverageDigest`,
 exact `handbackBytesDigest` and `origin: {workOrderRef, workOrderDigest, executionIdentity}`.
 The reviewer copies that tuple unchanged. Input and result recording authenticate the
-canonical current plan/output, original pull, renderer/materialization bytes, ACT source,
+canonical current plan/output, original pull, emitted materialization bytes (against the plan and pull receipt hashes, with no re-render), ACT source,
 branch, baseline and candidate. Result recording recomputes the expected tuple; any
 missing, partial or altered binding refuses before the invocation-three fallback.
 A matching stale result retains ordinary bounded-out behavior. Membership-only callers
