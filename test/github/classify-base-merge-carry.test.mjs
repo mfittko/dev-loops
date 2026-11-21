@@ -613,3 +613,17 @@ test("git: more than one merge base (criss-cross) falls back to full", async () 
   assert.equal(ev.decision, "fallback_full");
   assert.match(ev.reason, /merge base/);
 });
+
+test("git: a conflict resolved in a file whose name holds a double quote re-gates fully", async () => {
+  const s = setup();
+  const name = 'a"b.txt';
+  s.put(name, `PR\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits quoted file");
+  const prev = s.head();
+  s.git("checkout", "-q", "main"); s.put(name, `MAIN\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "main edits quoted file");
+  s.git("checkout", "-q", "pr");
+  try { s.git("merge", "--no-edit", "main"); } catch { /* conflict expected */ }
+  s.put(name, `PR\nMAIN\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "resolve");
+  const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
+  assert.equal(ev.decision, "fallback_full", ev.reason);
+  assert.match(ev.reason, /quoted path/);
+});

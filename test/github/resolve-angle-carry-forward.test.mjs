@@ -1446,7 +1446,7 @@ test("buildCarryForwardPlan: duplicate rerun names are idempotent; case mismatch
 });
 
 // Issue 3284: a same-file base merge or a resolved conflict reaches the plan through computeBaseMergeCarry.
-async function sameFileBaseMergeRepo({ conflict, ownEdit = false }) {
+async function sameFileBaseMergeRepo({ conflict, ownEdit = false, ownFooEdit = false }) {
   const lines = Array.from({ length: 30 }, (_, i) => `line${i}\n`).join("");
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-samefile-"));
   git(repoRoot, ["init", "-q", "-b", "main"]);
@@ -1471,6 +1471,12 @@ async function sameFileBaseMergeRepo({ conflict, ownEdit = false }) {
     git(repoRoot, ["add", "-A"]);
     git(repoRoot, ["commit", "-q", "-m", "PR own edit after the reviewed head"]);
   }
+  // A PR-own edit to the resolution file itself (top of the file), after the reviewed head.
+  if (ownFooEdit) {
+    await writeFile(path.join(repoRoot, "src/foo.mjs"), `OWN\n${lines.slice(0, -7)}PR\n`, "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "PR own edit to foo after the reviewed head"]);
+  }
   git(repoRoot, ["checkout", "-q", "main"]);
   await writeFile(path.join(repoRoot, "src/foo.mjs"), conflict ? `${lines.slice(0, -7)}MAIN\n` : `TOP\n${lines}`, "utf8");
   git(repoRoot, ["add", "-A"]);
@@ -1479,7 +1485,7 @@ async function sameFileBaseMergeRepo({ conflict, ownEdit = false }) {
   git(repoRoot, ["checkout", "-q", "pr"]);
   if (conflict) {
     try { git(repoRoot, ["merge", "--no-edit", "origin/main"]); } catch { /* conflict expected */ }
-    await writeFile(path.join(repoRoot, "src/foo.mjs"), `${lines.slice(0, -7)}PR\nMAIN\n`, "utf8");
+    await writeFile(path.join(repoRoot, "src/foo.mjs"), `${ownFooEdit ? "OWN\n" : ""}${lines.slice(0, -7)}PR\nMAIN\n`, "utf8");
     git(repoRoot, ["add", "-A"]);
     git(repoRoot, ["commit", "-q", "-m", "resolve"]);
   } else {
@@ -1519,6 +1525,18 @@ test("CLI plans a resolution_delta window with a PR-own edit: the edited file is
     assert.deepEqual(result.rerunPaths, ["src/foo.mjs", "src/z.mjs"]);
     assert.deepEqual(result.resolutionDeltaPaths, ["src/foo.mjs"]);
     assert.deepEqual(result.resolutionDeltaFullPaths, ["src/z.mjs"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI plans a resolution_delta window where a PR-own edit and the conflict share one file: the file gets a full PR-hunk review", async () => {
+  const { repoRoot, prevHead, headSha } = await sameFileBaseMergeRepo({ conflict: true, ownFooEdit: true });
+  try {
+    const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot });
+    assert.equal(result.baseMergeCarry, "resolution_delta");
+    assert.deepEqual(result.resolutionDeltaPaths, []);
+    assert.deepEqual(result.resolutionDeltaFullPaths, ["src/foo.mjs"]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

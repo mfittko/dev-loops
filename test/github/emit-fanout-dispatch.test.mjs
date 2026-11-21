@@ -147,6 +147,14 @@ test("re-gate emit refuses without a carry-forward plan artifact, proceeds once 
     assert.ok(suffix.includes(`git diff-tree --cc --no-ext-diff -p ${"c".repeat(40)}`));
     assert.match(suffix, /Findings outside those hunks are out of scope for the resolution files\./);
     assert.match(suffix, /review the PR hunks of these re-run files in full \("src\/z\.mjs"\)/);
+
+    // A resolution file with a PR-own edit is listed only for full review: no resolution-hunk limit applies to it.
+    await writeFile(planPath, JSON.stringify({ ok: true, repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: priorHead, carried: [], mustRerun: [], resolutionDeltaPaths: [], resolutionDeltaFullPaths: ["src/foo.mjs"], resolutionDeltaMerges: ["c".repeat(40)] }), "utf8");
+    const ownEdit = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(ownEdit.status, 0, ownEdit.stderr || ownEdit.stdout);
+    const ownUnit = JSON.parse(ownEdit.stdout).units[0];
+    const ownSuffix = await readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.angle-suffix-${ownUnit.scope}.txt`), "utf8");
+    assert.doesNotMatch(ownSuffix, /out of scope for the resolution files/);
   });
 });
 

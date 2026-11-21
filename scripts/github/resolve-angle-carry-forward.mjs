@@ -552,6 +552,14 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     const baseMerge = await computeBaseMergeCarry({ prevHead: options.prevHead, headSha: options.headSha, baseRef: mainRef, repoRoot });
     const partial = (baseMerge.decision === "partial_carry" || baseMerge.decision === "resolution_delta")
       && validateBaseMergeCarryEvidence(baseMerge, { expectedSourceHead: options.prevHead, expectedNewHead: options.headSha }).ok;
+    // A resolution file that a PR-own commit also edited in the window needs a full PR-hunk review: the --cc hunks hide that edit.
+    let resolutionScopePaths = [];
+    if (partial && baseMerge.decision === "resolution_delta") {
+      const own = await runGit(["log", "--first-parent", "--no-merges", "-z", "--name-only", "--format=", `${options.prevHead}..${options.headSha}`], { repoRoot });
+      if (own.code !== 0) throw new Error(`git log failed while listing PR-own edits: ${own.stderr.trim() || `exit ${own.code}`}`);
+      const ownEdited = new Set(own.stdout.split("\0").filter(Boolean));
+      resolutionScopePaths = baseMerge.resolutionPaths.filter((p) => !ownEdited.has(p));
+    }
     const rawPlan = buildCarryForwardPlan({
       log, changedFiles: partial ? baseMerge.rerunPaths : changedFiles, incrementalFiles, alwaysRerun,
       deltaComplete: partial || reduced, rules, rerunAngles: options.rerunAngles,
@@ -579,7 +587,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       copilotConvergence,
       ...(partial ? { baseMergeCarry: baseMerge.decision, rerunPaths: baseMerge.rerunPaths } : {}),
       // AC2: the delta review of a conflict-resolution merge covers these resolution files only.
-      ...(partial && baseMerge.decision === "resolution_delta" ? { resolutionDeltaPaths: baseMerge.resolutionPaths, resolutionDeltaFullPaths: baseMerge.rerunPaths.filter((p) => !baseMerge.resolutionPaths.includes(p)), resolutionDeltaMerges: baseMerge.resolutionMerges ?? [] } : {}),
+      ...(partial && baseMerge.decision === "resolution_delta" ? { resolutionDeltaPaths: resolutionScopePaths, resolutionDeltaFullPaths: baseMerge.rerunPaths.filter((p) => !resolutionScopePaths.includes(p)), resolutionDeltaMerges: baseMerge.resolutionMerges ?? [] } : {}),
       ...(plan.specAuthority !== undefined ? { specAuthority: plan.specAuthority } : {}),
     };
     // Persist the keyed plan artifact BEFORE emitting to stdout, so the proof
