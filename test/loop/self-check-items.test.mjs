@@ -71,3 +71,24 @@ test("resolveChecklistItems skips the checklist of an angle a consumer layer dis
 test("requiredSelfCheckIds refuses with pre_pr_self_check_missing when git diff fails for an unresolvable base", async () => {
   await assert.rejects(requiredSelfCheckIds(process.cwd(), "no-such-ref-issue-3395"), { code: "pre_pr_self_check_missing", message: /git diff/u });
 });
+
+test("requiredSelfCheckIds counts both sides of a rename, matching the ids of the old and new paths", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "issue-3395-rename-"));
+  const git = (...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: dir, stdio: "ignore" });
+  try {
+    git("init", "-q", "-b", "main");
+    mkdirSync(path.join(dir, "docs"));
+    writeFileSync(path.join(dir, "docs", "x.md"), "same content\n".repeat(20));
+    git("add", "."); git("commit", "-q", "-m", "base");
+    mkdirSync(path.join(dir, "src"));
+    git("mv", "docs/x.md", "src/x.mjs"); git("commit", "-q", "-m", "rename");
+    const paths = ["docs/x.md", "src/x.mjs"];
+    const expected = [...(await resolveSelfCheckAngles(dir, paths)).map((a) => a.id), ...(await resolveChecklistItems(dir, paths)).map((i) => i.id)];
+    assert.deepEqual(await requiredSelfCheckIds(dir, "HEAD~1"), expected);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("requiredSelfCheckIds refuses a dash-leading base or head before running git", async () => {
+  await assert.rejects(requiredSelfCheckIds(process.cwd(), "--output=/tmp/x"), { code: "pre_pr_self_check_missing", message: /starts with a dash/u });
+  await assert.rejects(requiredSelfCheckIds(process.cwd(), "HEAD", "-p"), { code: "pre_pr_self_check_missing", message: /starts with a dash/u });
+});
