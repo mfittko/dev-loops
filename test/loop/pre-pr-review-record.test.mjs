@@ -6,6 +6,7 @@ import { test } from "bun:test";
 
 import { validatePrePrReview, writePrePrReviewRecord } from "../../scripts/loop/_pre-pr-review-record.mjs";
 import { runCli } from "../../scripts/loop/record-pre-pr-review.mjs";
+import { requiredSelfCheckIds } from "../../scripts/loop/_self-check-items.mjs";
 import { main as createPr } from "../../scripts/github/create-pr.mjs";
 import { compileClassifyRules } from "@dev-loops/core/analysis/diff-analyzer";
 import { runGitFixture, runNode } from "../_helpers.mjs";
@@ -110,7 +111,7 @@ test("the CLI writes the record from git HEAD and takes no head argument", async
     git(dir, "checkout", "-q", "-b", "feature");
     commit(dir, "src/b.mjs", "export const b = 1;\n");
     let out = "";
-    const code = await runCli(["--verdict", "findings_fixed", "--disposition", "all_applied", "--base", "main", "--no-linked-issue"], { cwd: dir, stdout: { write: (s) => { out += s; } }, stderr: { write() {} } });
+    const code = await runCli(["--verdict", "findings_fixed", "--disposition", "all_applied", "--base", "main", "--no-linked-issue", "--self-check-file", selfCheckFile(dir)], { cwd: dir, stdout: { write: (s) => { out += s; } }, stderr: { write() {} } });
     assert.equal(code, 0);
     const result = JSON.parse(out);
     assert.equal(result.head, git(dir, "rev-parse", "HEAD"));
@@ -315,3 +316,112 @@ test("a docs/phases-only branch validates from a subdirectory with diff.relative
   commit(dir, "src/a.mjs", "export const a = 2;\n");
   assert.equal((await validatePrePrReview({ cwd: path.join(dir, "docs"), ...feature })).ok, false);
 }));
+
+// PRE-PR-DEVELOPER-SELF-CHECK
+const IDS = await (async () => {
+  const dir = fixtureRepo();
+  try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    commit(dir, "src/b.mjs", "export const b = 1;\n");
+    return await requiredSelfCheckIds(dir, "main");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+})();
+function selfCheckFile(dir, entries = IDS.map((id) => ({ id, status: "done", evidence: `${id} evidence` }))) {
+  const file = path.join(dir, "self-check.json");
+  writeFileSync(file, typeof entries === "string" ? entries : JSON.stringify(entries));
+  return file;
+}
+
+test("record mode refuses with pre_pr_self_check_missing for a missing flag, file, id or empty evidence, and stores a valid self-check", async () => {
+  const dir = fixtureRepo();
+  try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    commit(dir, "src/b.mjs", "export const b = 1;\n");
+    const base = ["--verdict", "clean", "--disposition", "none", "--base", "main", "--no-linked-issue"];
+    const refuse = async (extra) => {
+      let err = "";
+      assert.equal(await runCli([...base, ...extra], { cwd: dir, stdout: { write() {} }, stderr: { write: (s) => { err += s; } } }), 1);
+      assert.equal(JSON.parse(err).code, "pre_pr_self_check_missing");
+    };
+    await refuse([]);
+    await refuse(["--self-check-file", path.join(dir, "nope.json")]);
+    await refuse(["--self-check-file", selfCheckFile(dir, "{not json")]);
+    await refuse(["--self-check-file", selfCheckFile(dir, "{}")]);
+    await refuse(["--self-check-file", selfCheckFile(dir, [{ id: "tests", status: "done", evidence: "e" }])]);
+    await refuse(["--self-check-file", selfCheckFile(dir, [...IDS.map((id) => ({ id, status: "done", evidence: "e" })), { id: "angle:nope", status: "done", evidence: "e" }])]);
+    await refuse(["--self-check-file", selfCheckFile(dir, [...IDS, IDS[0]].map((id) => ({ id, status: "done", evidence: "e" })))]);
+    await refuse(["--self-check-file", selfCheckFile(dir, IDS.slice(1).map((id) => ({ id, status: "na", evidence: "e" })))]);
+    await refuse(["--self-check-file", selfCheckFile(dir, IDS.map((id) => ({ id, status: "done", evidence: "  " })))]);
+    await refuse(["--self-check-file", selfCheckFile(dir, IDS.map((id) => ({ id, status: "maybe", evidence: "e" })))]);
+    let out = "";
+    assert.equal(await runCli([...base, "--self-check-file", selfCheckFile(dir)], { cwd: dir, stdout: { write: (s) => { out += s; } }, stderr: { write() {} } }), 0);
+    assert.deepEqual(JSON.parse(readFileSync(JSON.parse(out).file, "utf8")).selfCheck.map((e) => e.id), IDS);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the required self-check ids are the resolved draft_gate angle ids plus the checklist ids of the selected angles, and a missing angle or checklist id refuses", async () => {
+  const angleIds = IDS.filter((id) => id.startsWith("angle:"));
+  assert.ok(angleIds.length > 0, "the default config resolves at least one draft_gate angle");
+  assert.deepEqual(IDS.filter((id) => !id.startsWith("angle:")), ["C1", "C2", "C3", "K1", "CS1", "CS2", "I1", "I2", "S1", "P1", "P2", "K2"]);
+  const dir = fixtureRepo();
+  try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    commit(dir, "src/b.mjs", "export const b = 1;\n");
+    let err = "";
+    const code = await runCli(["--verdict", "clean", "--disposition", "none", "--base", "main", "--no-linked-issue", "--self-check-file", selfCheckFile(dir, IDS.filter((id) => id !== angleIds[0]).map((id) => ({ id, status: "done", evidence: "e" })))], { cwd: dir, stdout: { write() {} }, stderr: { write: (s) => { err += s; } } });
+    assert.equal(code, 1);
+    assert.match(JSON.parse(err).message ?? err, new RegExp(angleIds[0]));
+    assert.equal(JSON.parse(err).code, "pre_pr_self_check_missing");
+    err = "";
+    const code2 = await runCli(["--verdict", "clean", "--disposition", "none", "--base", "main", "--no-linked-issue", "--self-check-file", selfCheckFile(dir, IDS.filter((id) => id !== "K2").map((id) => ({ id, status: "done", evidence: "e" })))], { cwd: dir, stdout: { write() {} }, stderr: { write: (s) => { err += s; } } });
+    assert.equal(code2, 1);
+    assert.match(JSON.parse(err).message ?? err, /K2/);
+    assert.equal(JSON.parse(err).code, "pre_pr_self_check_missing");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("record mode derives the required ids from the repo-root config when run from a subdirectory, and fails closed on a config load error", async () => {
+  const dir = fixtureRepo();
+  try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    const config = (angles) => writeFileSync(path.join(dir, ".devloops"), JSON.stringify({ version: 1, gates: { draft: { angles } } }));
+    config([{ name: "correctness", "developer-checklist": ["Z1: check it"] }]);
+    commit(dir, "src/b.mjs", "export const b = 1;\n");
+    const sub = path.join(dir, "src");
+    const base = ["--verdict", "clean", "--disposition", "none", "--base", "main", "--no-linked-issue"];
+    const attempt = async (entries) => {
+      let err = "";
+      const code = await runCli([...base, "--self-check-file", selfCheckFile(dir, entries)], { cwd: sub, stdout: { write() {} }, stderr: { write: (s) => { err += s; } } });
+      return { code, err: err ? JSON.parse(err) : null };
+    };
+    const ids = await requiredSelfCheckIds(dir, "main");
+    assert.ok(ids.includes("Z1") && ids.includes("C1"));
+    assert.equal((await attempt(ids.map((id) => ({ id, status: "done", evidence: "e" })))).code, 0);
+    const wrong = await attempt(IDS.map((id) => ({ id, status: "done", evidence: "e" })));
+    assert.equal(wrong.code, 1);
+    assert.equal(wrong.err.code, "pre_pr_self_check_missing");
+    writeFileSync(path.join(dir, ".devloops"), "{not json");
+    const broken = await attempt([]);
+    assert.equal(broken.code, 1);
+    assert.equal(broken.err.code, "pre_pr_self_check_missing");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("record mode refuses when HEAD moves between the id derivation and the write,", async () => {
+  const dir = fixtureRepo();
+  try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    commit(dir, "src/b.mjs", "export const b = 1;\n");
+    const base = ["--verdict", "clean", "--disposition", "none", "--no-linked-issue"];
+    const attempt = async (extra, io = {}) => {
+      let err = "";
+      const ids = await requiredSelfCheckIds(dir, "main");
+      const code = await runCli([...base, ...extra, "--self-check-file", selfCheckFile(dir, ids.map((id) => ({ id, status: "done", evidence: "e" })))], { cwd: dir, stdout: { write() {} }, stderr: { write: (s) => { err += s; } }, ...io });
+      return { code, err: err ? JSON.parse(err) : null };
+    };
+    const moved = await attempt(["--base", "main"], { resolveHead: (cwd) => { const head = git(cwd, "rev-parse", "HEAD").trim(); commit(dir, "src/c.mjs", "export const c = 1;\n"); return head; } });
+    assert.equal(moved.code, 1);
+    assert.equal(moved.err.code, "pre_pr_self_check_missing");
+    assert.match(JSON.stringify(moved.err), /HEAD moved/u);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

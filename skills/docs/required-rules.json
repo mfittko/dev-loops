@@ -866,6 +866,10 @@
       "enforcement": "runtime"
     },
     {
+      "id": "PRE-PR-DEVELOPER-SELF-CHECK",
+      "enforcement": "runtime"
+    },
+    {
       "id": "PRE-PUSH-DELTA-EXIT-BOUND",
       "enforcement": "doc"
     },
