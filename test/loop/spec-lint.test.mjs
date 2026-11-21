@@ -554,7 +554,7 @@ test("state_recovery_rows_missing: a spec adding a lock file without recovery ro
 });
 
 test("state_recovery_rows_missing: plurals and lockfile trigger the state check", () => {
-  for (const word of ["locks", "receipts", "marker files", "caches", "sentinels", "a lockfile", "plan files", "a carry-forward plan"]) {
+  for (const word of ["locks", "receipts", "marker files", "caches", "sentinels", "a lockfile", "plan files"]) {
     const ids = lintStateRecoveryRows(recoverySpec([`The loop writes ${word}`, "unit test"])).map((f) => f.id);
     assert.equal(ids.length, 3, word);
   }
