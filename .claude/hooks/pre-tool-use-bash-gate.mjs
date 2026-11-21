@@ -308,7 +308,7 @@ try {
   if (inManagedContext) {
     emitDeny(`OPS-NO-INLINE-INTERPRETER: the inline-interpreter classifier failed (${error?.message ?? error}), so the gate cannot read this command. Use the editor tools (Write/Edit under Claude Code, write/edit under Pi).`);
   }
-  emitAllow();
+  decision = { decision: "allow" }; // outside a managed repo the guards pass through; the single emitAllow below ends the hook
 }
 // The decider decides first. Only the decider's raw write denies (the body-write rule and the generic subagent external write deny) are replaced by the comment reason;
 // a registered rule such as COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY keeps its own remedy.
