@@ -1839,6 +1839,44 @@ test("parseConsolidateFaninCliArgs refuses both plan flags and an unreadable pla
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan-file", "/nonexistent/plan.json"]),
     /could not be read.*Recovery:/,
   );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", carryForwardPlanJson(["docs"]), "--carry-forward-plan", carryForwardPlanJson(["docs"])]),
+    (err) => /given more than once/.test(err.message) && !/mutually exclusive/.test(err.message),
+  );
+});
+
+test("parseConsolidateFaninCliArgs refuses a repeated --carry-forward-plan-file as given more than once", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "carry-plan-dup-"));
+  try {
+    const planFile = path.join(dir, "plan.json");
+    await writeFile(planFile, carryForwardPlanJson(["docs"]), "utf8");
+    assert.throws(
+      () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan-file", planFile, "--carry-forward-plan-file", planFile]),
+      (err) => /given more than once/.test(err.message) && !/mutually exclusive/.test(err.message),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseConsolidateFaninCliArgs names a recovery for an empty or malformed --carry-forward-plan-file", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "carry-plan-bad-"));
+  try {
+    const empty = path.join(dir, "empty.json");
+    await writeFile(empty, "", "utf8");
+    assert.throws(
+      () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan-file", empty]),
+      /must be JSON.*Recovery:.*resolve-angle-carry-forward\.mjs/,
+    );
+    const wrongShape = path.join(dir, "shape.json");
+    await writeFile(wrongShape, '{"nope":1}', "utf8");
+    assert.throws(
+      () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan-file", wrongShape]),
+      /"carried" array.*Recovery:.*resolve-angle-carry-forward\.mjs/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("parseConsolidateFaninCliArgs rejects unparseable/non-array/empty-string --carried-angles", () => {
@@ -1996,11 +2034,11 @@ test("parseConsolidateFaninCliArgs rejects --carried-angles / --carry-forward-pl
   const plan = carryForwardPlanJson(["docs"]);
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--gate", "draft_gate", "--carried-angles", '["docs"]']),
-    /--carried-angles requires --carry-forward-plan/,
+    /--carried-angles requires --carry-forward-plan-file \(or --carry-forward-plan\)/,
   );
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--gate", "draft_gate", "--carry-forward-plan", plan]),
-    /--carry-forward-plan was given without --carried-angles/,
+    /--carry-forward-plan-file \(or --carry-forward-plan\) was given without --carried-angles/,
   );
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carried-angles", '["docs"]', "--carry-forward-plan", plan]),
@@ -2476,7 +2514,7 @@ test("consolidateGateFanin fails closed when --carried-angles is given without -
       );
       await assert.rejects(
         () => consolidateGateFanin({ findingsDir: dir, gate: "draft_gate", carriedAngles: ["correctness"] }),
-        /--carried-angles requires --carry-forward-plan/,
+        /--carried-angles requires --carry-forward-plan-file \(or --carry-forward-plan\)/,
       );
     },
   );

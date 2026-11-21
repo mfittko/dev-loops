@@ -93,7 +93,7 @@ Optional:
   --carry-forward-plan <json>  Resolver output (or its carried array). Required
                                for a zero-unit pending round; persisted with the
                                keyed plan for fan-in and provenance verification.
-  --carry-forward-plan-file <path>  Same shape, read from a file (the keyed
+  --carry-forward-plan-file <absolute path>  Same shape, read from a file (the keyed
                                <gate>-<headSha>.carry-forward-plan.json). Keeps
                                finding text off the command line. Passing both
                                plan flags is refused.

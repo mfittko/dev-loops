@@ -163,7 +163,7 @@ Optional:
                                  --carry-forward-plan's own "carried" list — refusing to manufacture
                                  GitHub-visible "reviewed at this head" evidence for an angle nothing
                                  actually proved was carried.
-  --carry-forward-plan-file <path>  the same plan read from a file (the keyed <gate>-<headSha>.carry-forward-plan.json),
+  --carry-forward-plan-file <absolute path>  the same plan read from a file (the keyed <gate>-<headSha>.carry-forward-plan.json),
                                  so carried finding text stays off the command line; mutually exclusive with --carry-forward-plan
   --carry-forward-plan <json>    resolve-angle-carry-forward.mjs's own JSON result, any object with its
                                  "carried" field, or a bare JSON array of carried entries:
@@ -636,7 +636,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     strict: false,
     tokens: true,
   });
-  let planFlagSeen = false;
+  let planFlagSeen = null;
   for (const token of tokens) {
     if (token.kind === "positional") {
       throw parseError(`Unknown argument: ${token.value}`);
@@ -699,11 +699,16 @@ export function parseConsolidateFaninCliArgs(argv) {
       continue;
     }
     if (token.name === "carry-forward-plan" || token.name === "carry-forward-plan-file") {
-      if (planFlagSeen) {
-        throw parseError("--carry-forward-plan and --carry-forward-plan-file are mutually exclusive. Recovery: pass only --carry-forward-plan-file <keyed carry-forward-plan.json path>");
+      if (planFlagSeen !== null) {
+        throw parseError(planFlagSeen === token.name
+          ? `--${token.name} was given more than once. Recovery: pass it once, preferably --carry-forward-plan-file <absolute keyed carry-forward-plan.json path>`
+          : "--carry-forward-plan and --carry-forward-plan-file are mutually exclusive. Recovery: pass only --carry-forward-plan-file <absolute keyed carry-forward-plan.json path>");
       }
-      planFlagSeen = true;
+      planFlagSeen = token.name;
       let raw = requireTokenValue(token, parseError);
+      const planFileRecovery = token.name === "carry-forward-plan-file"
+        ? ". Recovery: re-run resolve-angle-carry-forward.mjs at this head to rewrite the keyed <gate>-<headSha>.carry-forward-plan.json, then pass its absolute path"
+        : "";
       if (token.name === "carry-forward-plan-file") {
         try {
           raw = readFileSync(raw, "utf8");
@@ -715,12 +720,12 @@ export function parseConsolidateFaninCliArgs(argv) {
       try {
         parsed = JSON.parse(raw);
       } catch {
-        throw parseError(`--${token.name} must be JSON`);
+        throw parseError(`--${token.name} must be JSON${planFileRecovery}`);
       }
       try {
         options.carryForwardPlan = validateCarryForwardPlanShape(parsed);
       } catch (err) {
-        throw parseError(err instanceof Error ? err.message : String(err));
+        throw parseError(`${err instanceof Error ? err.message : String(err)}${planFileRecovery}`);
       }
       continue;
     }
@@ -808,10 +813,10 @@ export function parseConsolidateFaninCliArgs(argv) {
   // configured mandatory angles can be rejected) — fail closed here, at parse
   // time, rather than deep inside consolidateGateFanin.
   if (options.carriedAngles !== undefined && options.carryForwardPlan === undefined) {
-    throw parseError("--carried-angles requires --carry-forward-plan (resolve-angle-carry-forward.mjs's own result) as proof — refusing to mint a carried entry from a bare name with no cross-check");
+    throw parseError("--carried-angles requires --carry-forward-plan-file (or --carry-forward-plan) (resolve-angle-carry-forward.mjs's own result) as proof — refusing to mint a carried entry from a bare name with no cross-check");
   }
   if (options.carryForwardPlan !== undefined && options.carriedAngles === undefined) {
-    throw parseError("--carry-forward-plan was given without --carried-angles — nothing to check it against");
+    throw parseError("--carry-forward-plan-file (or --carry-forward-plan) was given without --carried-angles — nothing to check it against");
   }
   if (options.carriedAngles !== undefined && options.gate === undefined) {
     throw parseError("--carried-angles requires --gate — the gate's configured mandatory angles must be checked before any angle is carried");
@@ -1397,7 +1402,7 @@ export async function consolidateGateFanin(options) {
     }
     const planCarried = Array.isArray(options.carryForwardPlan) ? options.carryForwardPlan : null;
     if (!planCarried) {
-      throw new Error("--carried-angles requires --carry-forward-plan (resolve-angle-carry-forward.mjs's own result) as proof — refusing to mint a carried entry from a bare name with no cross-check (fail-closed)");
+      throw new Error("--carried-angles requires --carry-forward-plan-file (or --carry-forward-plan) (resolve-angle-carry-forward.mjs's own result) as proof — refusing to mint a carried entry from a bare name with no cross-check (fail-closed)");
     }
     // Re-validate entry shape here too, not just presence of the array — a
     // programmatic caller of consolidateGateFanin bypasses
