@@ -301,7 +301,7 @@ export function lintContractDocsInMatrix(body) {
 }
 
 const STATE_RE = /\b(?:lock(?:file)?|sentinel|receipt|cache|marker file|plan)s?\b/i;
-const REFUSAL_RE = /\b(?:fail-closed|fails? closed)\b/i;
+const REFUSAL_RE = /\bfail(?:s|ed|ing)?[- ]closed\b/i;
 const RECOVERY_ROW_RES = [
   ["crash", /\bcrash/i],
   ["rebuild at the same head", /\bsame[- ]head\b/i],

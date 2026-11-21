@@ -560,12 +560,12 @@ test("state_recovery_rows_missing: plurals and lockfile trigger the state check"
   }
 });
 
-test("state_recovery_rows_missing: fail-closed, fails closed and fail closed trigger the named-recovery check", () => {
-  for (const phrase of ["fail-closed", "fails closed", "fail closed"]) {
+test("state_recovery_rows_missing: every fail(s/ed/ing) closed form triggers the named-recovery check", () => {
+  for (const phrase of ["fail-closed", "fail closed", "fails closed", "failed closed", "failing closed", "fails-closed"]) {
     const ids = lintStateRecoveryRows(recoverySpec([`The writer ${phrase} on a stale head`, "unit test"])).map((f) => f.id);
     assert.deepEqual(ids, ["named recovery"], phrase);
   }
-  for (const phrase of ["fail open", "closed", "failsafe"]) {
+  for (const phrase of ["fail open", "closed", "failsafe"]) { // empty row: see the separate test below
     assert.deepEqual(lintStateRecoveryRows(recoverySpec([`The writer is ${phrase} on a stale head`, "unit test"])), [], phrase);
   }
 });
@@ -605,4 +605,8 @@ test("state_recovery_rows_missing: lintSpec and the CLI report the finding", asy
   const stdout = buffer();
   await main(["--body-file", bodyFile, "--repo-root", root], { stdout: stdout.stream, stderr: buffer().stream });
   assert.equal((stdout.read().match(/state_recovery_rows_missing/g) ?? []).length, 3);
+});
+
+test("state_recovery_rows_missing: an empty row yields no finding", () => {
+  assert.deepEqual(lintStateRecoveryRows(recoverySpec(["", "unit test"])), []);
 });
