@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
+import { refreshDepsIfChanged } from "./ensure-worktree.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: resolve-pr-conflicts.mjs [--base <branch>] [--repo-root <dir>] [--no-verify] [--push] [--json]
@@ -380,6 +381,9 @@ export async function resolvePrConflicts(options, { env = process.env, runVerifi
 }
 
 async function afterResolve(result, options, { cwd, env, runVerification }) {
+  // The merge may have pulled in a new dependency; install before verification or a later commit hook runs against stale node_modules.
+  const deps = refreshDepsIfChanged(cwd);
+  if (deps.ran) result.deps = deps;
   if (options.verify) {
     const verify = await runVerification("bun", ["run", "test:docs"], { cwd, env });
     if (verify.code !== 0) {

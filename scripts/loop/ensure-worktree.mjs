@@ -37,7 +37,8 @@
  * A git create failure is a hard error (exit 1); provisioning is fail-soft.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
@@ -620,8 +621,32 @@ function defaultInstallDeps(cwd) {
   return r.status === 0 ? { ok: true } : { ok: false, exitCode: r.status, reason: (r.stderr ?? "").trim().split("\n").slice(-3).join(" | ") };
 }
 
+// Fingerprint of everything that decides node_modules: the lockfile and each workspace package.json.
+function depsFingerprint(worktreePath) {
+  const files = [path.join(worktreePath, "bun.lock"), path.join(worktreePath, "package.json")];
+  const packagesDir = path.join(worktreePath, "packages");
+  if (existsSync(packagesDir)) {
+    for (const name of readdirSync(packagesDir).sort()) files.push(path.join(packagesDir, name, "package.json"));
+  }
+  const hash = createHash("sha256");
+  for (const file of files) if (existsSync(file)) hash.update(file).update(readFileSync(file));
+  return hash.digest("hex");
+}
+
+const DEPS_STAMP = path.join("node_modules", ".dev-loops-deps-stamp");
+
+// Runs the install only when the lockfile or a workspace package.json differs from the stamp written by the last
+// successful install here. A missing stamp counts as changed, so a worktree that predates the stamp installs once.
+export function refreshDepsIfChanged(worktreePath, installDeps = defaultInstallDeps) {
+  if (!existsSync(path.join(worktreePath, "bun.lock"))) return { ok: true, ran: false, reason: "no bun.lock" };
+  const stampPath = path.join(worktreePath, DEPS_STAMP);
+  if (existsSync(stampPath) && readFileSync(stampPath, "utf8") === depsFingerprint(worktreePath)) return { ok: true, ran: false, reason: "deps unchanged" };
+  return ensureDeps(worktreePath, installDeps);
+}
+
 function ensureDeps(worktreePath, installDeps) {
   if (!existsSync(path.join(worktreePath, "bun.lock"))) return { ok: true, ran: false, reason: "no bun.lock" };
+  const fingerprint = depsFingerprint(worktreePath);
   let result;
   try {
     result = installDeps(worktreePath);
@@ -629,6 +654,10 @@ function ensureDeps(worktreePath, installDeps) {
     result = { ok: false, reason: err?.message ?? String(err) };
   }
   if (!result.ok) process.stderr.write(`[ensure-worktree] WARN bun install --frozen-lockfile failed (continuing): ${result.reason ?? ""}\n`);
+  else {
+    mkdirSync(path.join(worktreePath, "node_modules"), { recursive: true });
+    writeFileSync(path.join(worktreePath, DEPS_STAMP), fingerprint);
+  }
   return { ran: true, ...result };
 }
 
@@ -708,6 +737,7 @@ export async function ensureWorktree(
     }
     // Reuse: still (re-)provision — provisioning is idempotent, on BOTH the
     // detached and local-branch reuse outcomes below.
+    const deps = refreshDepsIfChanged(target, installDeps);
     const summary = await provision({ worktreePath: target, repoRoot: root });
     const dirty = dirtyAfterProvision(gitCommand, target);
     if (!existing.branch) {
@@ -723,6 +753,7 @@ export async function ensureWorktree(
         reused: true,
         branchOrigin: "reused-detached",
         ...dirty,
+        ...(deps.ran ? { deps } : {}),
         provision: summary,
         guard: installGuard(gitCommand, root, base),
         commitMsgGuard: installCommitMsgGuardForRoot(gitCommand, root),
@@ -742,6 +773,7 @@ export async function ensureWorktree(
       branchOrigin: "reused-local",
       ...(diverged ? { diverged } : {}),
       ...dirty,
+      ...(deps.ran ? { deps } : {}),
       ...(fetchDegraded ? { fetchDegraded: true } : {}),
       provision: summary,
       guard: installGuard(gitCommand, root, base),

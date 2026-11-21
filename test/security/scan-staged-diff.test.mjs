@@ -94,3 +94,16 @@ test("runCli: an internal scanner error (not a git repo) rejects", async () => {
     await rm(nonRepoDir, { recursive: true, force: true });
   }
 });
+
+test("runCli: a scanner ERR_MODULE_NOT_FOUND names the missing package and the install command for the worktree", async () => {
+  const dir = await initRepo();
+  try {
+    const missing = Object.assign(new Error("Cannot find package '@secretlint/core' imported from /x/secret-scan.mjs"), { code: "ERR_MODULE_NOT_FOUND" });
+    await assert.rejects(
+      runCli([], { stdout: { write: () => {} }, stderr: { write: () => {} }, cwd: dir, scanDiff: () => { throw missing; } }),
+      (error) => error.message.includes("@secretlint/core") && error.message.includes("bun install --frozen-lockfile") && error.message.includes(dir),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

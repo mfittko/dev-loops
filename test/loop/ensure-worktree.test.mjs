@@ -1536,3 +1536,22 @@ test("ensure: dirty_after_provision ignores an inherited GIT_DIR", async () => {
     repo.cleanup();
   }
 });
+
+test("ensure: a reused worktree reinstalls when the lockfile changed since the last install, and not otherwise", async () => {
+  const repo = makeRepo();
+  try {
+    commitBunLock(repo);
+    const created = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, { installDeps: () => ({ ok: true }) });
+    const unchanged = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, { installDeps: () => assert.fail("must not install when deps are unchanged") });
+    assert.equal(unchanged.deps, undefined);
+    writeFileSync(path.join(created.path, "bun.lock"), `${BUN_LOCK}\n// new dep\n`);
+    const calls = [];
+    const reused = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, { installDeps: (cwd) => { calls.push(cwd); return { ok: true }; } });
+    assert.deepEqual(calls, [created.path]);
+    assert.deepEqual(reused.deps, { ran: true, ok: true });
+    const again = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, { installDeps: () => assert.fail("stamp must be refreshed after the install") });
+    assert.equal(again.deps, undefined);
+  } finally {
+    repo.cleanup();
+  }
+});

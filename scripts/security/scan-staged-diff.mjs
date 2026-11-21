@@ -11,7 +11,6 @@
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue, runCommand } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
-import { scanDiffText } from "@dev-loops/core/security/secret-scan";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: scan-staged-diff.mjs
@@ -43,12 +42,25 @@ export function parseScanStagedDiffCliArgs(argv) {
   return options;
 }
 
-export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, cwd = process.cwd(), env = process.env, gitCommand = "git" } = {}) {
+// Loaded lazily so a missing scanner dependency surfaces as a named refusal instead of an unhandled import failure.
+async function defaultScanDiff(diffText) {
+  const { scanDiffText } = await import("@dev-loops/core/security/secret-scan");
+  return scanDiffText(diffText);
+}
+
+export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, cwd = process.cwd(), env = process.env, gitCommand = "git", scanDiff = defaultScanDiff } = {}) {
   const options = parseScanStagedDiffCliArgs(argv);
   if (options.help) { stdout.write(`${USAGE}\n`); return { ok: true, help: true }; }
 
   const { stdout: diffText } = await runCommand(gitCommand, ["diff", "--cached", "--no-color", "-U1000000"], { cwd, env });
-  const result = await scanDiffText(diffText);
+  let result;
+  try {
+    result = await scanDiff(diffText);
+  } catch (error) {
+    if (error?.code !== "ERR_MODULE_NOT_FOUND") throw error;
+    const pkg = /Cannot find (?:package|module) '([^']+)'/.exec(error.message)?.[1] ?? "unknown";
+    throw new Error(`secret scanner cannot load its dependency ${pkg} (ERR_MODULE_NOT_FOUND): this worktree's node_modules is stale. Run \`bun install --frozen-lockfile\` with cwd ${cwd} and retry.`);
+  }
   const payload = result.ok
     ? { ok: true, hits: [] }
     : { ok: false, error: "secret_scan_hit", hits: result.findings };
