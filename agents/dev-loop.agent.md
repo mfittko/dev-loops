@@ -199,6 +199,8 @@ A worker, reviewer, judge or fixer dispatches no children and receives no join r
 
 ## Output
 
+When a script refuses with a `recovery` field (`RECOVERY-COMMAND-REQUIRED`), run the named command once, then re-run the refused step once. Hand back the refusal when the recovery fails, names `operator`, or the same refusal recurs after the re-run.
+
 Use the concise status format defined by the skill.
 
 Keep user-facing summaries operational: what artifact/state was inspected, which internal strategy is routed, next recommended action, and whether authorization is needed before taking it.
