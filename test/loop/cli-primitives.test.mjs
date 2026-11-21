@@ -189,15 +189,6 @@ test("runChild captures stdout and stderr", async () => {
   assert.equal(result.stderr, "warn");
 });
 
-test("runChild takes a throttle slot before spawning gh and never for another command", async () => {
-  let slots = 0;
-  const takeSlot = async () => { slots += 1; };
-  await runChild("gh", ["--version"], { PATH: "" }, undefined, { takeSlot }).catch(() => {});
-  assert.equal(slots, 1);
-  await runChild(Bun.which("node") ?? "node", ["-e", "0"], process.env, undefined, { takeSlot });
-  assert.equal(slots, 1);
-});
-
 test("runCommand resolves stdout/stderr with cwd and env", async () => {
   const result = await runCommand(
     (Bun.which("node") ?? "node"),

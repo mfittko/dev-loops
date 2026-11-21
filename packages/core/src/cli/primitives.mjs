@@ -158,14 +158,14 @@ export function parseAllowedRefsCsv(value, flag, parseError = null) {
 // `timeoutMs` is optional and additive: when set, spawn kills the child at the bound, so the close handler settles with a signal exit.
 // Every default-runner `gh` call takes a gh-throttle slot first; an injected runChild stays unpaced.
 // A secondary rate limit backs off once, retakes a slot and retries; a second one throws RATE_LIMITED.
-// `takeSlot`, `backoffMs` and `sleep` are test seams. gh-throttle and gh are imported lazily to avoid an import cycle.
-export async function runChild(command, args, env = process.env, stdinText = undefined, { timeoutMs, takeSlot, backoffMs, sleep } = {}) {
+// `sleep` is a test seam. gh-throttle and gh are imported lazily to avoid an import cycle.
+export async function runChild(command, args, env = process.env, stdinText = undefined, { timeoutMs, sleep } = {}) {
   const once = async () => {
-    if (command === "gh") await (takeSlot ?? ((await import("../github/gh-throttle.mjs")).takeGhSlot))({ env });
+    if (command === "gh") await (await import("../github/gh-throttle.mjs")).takeGhSlot({ env });
     return spawnChild(command, args, env, stdinText, timeoutMs);
   };
   if (command !== "gh") return once();
-  return (await import("../github/gh.mjs")).withSecondaryLimitBackoff(once, { backoffMs, sleep });
+  return (await import("../github/gh.mjs")).withSecondaryLimitBackoff(once, { sleep });
 }
 
 function spawnChild(command, args, env, stdinText, timeoutMs) {

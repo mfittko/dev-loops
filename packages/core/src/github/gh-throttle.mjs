@@ -91,7 +91,7 @@ const pidAlive = (pid) => {
  * The steal unlinks only when the token is unchanged, so a fresh holder's lock is never removed.
  * A lock replaced between the final read and the unlink is a residual race that costs only a pacing violation.
  */
-async function stealStaleLock(lockPath, { now, staleLockMs, hardStaleLockMs }) {
+async function stealStaleLock(lockPath, { now, staleLockMs }) {
   let token;
   let mtimeMs;
   try {
@@ -103,12 +103,12 @@ async function stealStaleLock(lockPath, { now, staleLockMs, hardStaleLockMs }) {
   }
   if (now() - mtimeMs <= staleLockMs) return;
   const pid = Number.parseInt(token, 10);
-  if (now() - mtimeMs <= hardStaleLockMs && Number.isInteger(pid) && pid > 0 && pidAlive(pid)) return;
+  if (now() - mtimeMs <= HARD_STALE_LOCK_MS && Number.isInteger(pid) && pid > 0 && pidAlive(pid)) return;
   if ((await readFile(lockPath, "utf8").catch(() => null)) !== token) return;
   await unlink(lockPath).catch(() => {});
 }
 
-async function withLock(lockPath, { now, sleep, lockTimeoutMs, staleLockMs, hardStaleLockMs, lockPollMs }, fn) {
+async function withLock(lockPath, { now, sleep, lockTimeoutMs, staleLockMs }, fn) {
   const deadline = now() + lockTimeoutMs;
   const token = `${process.pid}:${randomUUID()}`;
   for (;;) {
@@ -117,9 +117,9 @@ async function withLock(lockPath, { now, sleep, lockTimeoutMs, staleLockMs, hard
       handle = await open(lockPath, "wx");
     } catch (error) {
       if (error.code !== "EEXIST") throw unavailable(`cannot create the lock: ${error.message}`, error);
-      await stealStaleLock(lockPath, { now, staleLockMs, hardStaleLockMs });
+      await stealStaleLock(lockPath, { now, staleLockMs });
       if (now() >= deadline) throw unavailable(`lock ${lockPath} not acquired within ${lockTimeoutMs}ms`);
-      await sleep(lockPollMs);
+      await sleep(LOCK_POLL_MS);
       continue;
     }
     try {
@@ -146,8 +146,6 @@ export async function acquireSlot({
   sleep = realSleep,
   lockTimeoutMs = LOCK_TIMEOUT_MS,
   staleLockMs = STALE_LOCK_MS,
-  hardStaleLockMs = HARD_STALE_LOCK_MS,
-  lockPollMs = LOCK_POLL_MS,
 }) {
   if (intervalMs === 0) return;
   const dir = path.join(root, "tmp", "gh-throttle");
@@ -157,7 +155,7 @@ export async function acquireSlot({
   } catch (error) {
     throw unavailable(`cannot create ${dir}: ${error.message}`, error);
   }
-  const start = await withLock(path.join(dir, "lock"), { now, sleep, lockTimeoutMs, staleLockMs, hardStaleLockMs, lockPollMs }, async () => {
+  const start = await withLock(path.join(dir, "lock"), { now, sleep, lockTimeoutMs, staleLockMs }, async () => {
     let next = 0;
     try {
       const parsed = Number(String(await readFile(slotPath, "utf8")).trim());
@@ -187,9 +185,9 @@ export const isUnpaced = (env) => Boolean(env?.[GH_STUB_ATTESTATION_ENV] || proc
 
 /** Default slot taker for the real `gh` path: resolves root and interval lazily. */
 export async function takeGhSlot(opts = {}) {
-  if (!opts.root && isUnpaced(opts.env)) return;
-  const root = opts.root ?? resolveMainRoot({ ...(opts.execFile && { execFile: opts.execFile }), cwd: opts.cwd });
-  const intervalMs = opts.intervalMs ?? await resolveIntervalMs(root, { warn: opts.warn });
+  if (isUnpaced(opts.env)) return;
+  const root = resolveMainRoot({ ...(opts.execFile && { execFile: opts.execFile }), cwd: opts.cwd });
+  const intervalMs = opts.intervalMs ?? await resolveIntervalMs(root);
   await acquireSlot({ ...opts, root, intervalMs });
 }
 

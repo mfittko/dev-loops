@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll, beforeEach, describe, test } from "bun:test";
 
 import { runChild, runCommand } from "../src/cli/primitives.mjs";
-import { ghCommandFailed, ghJson, ghGraphql, isRateLimitError, isSecondaryRateLimitError, rateLimitedResult, resolveOwner, withGraphqlRateLimitWait, withSecondaryLimitBackoff } from "../src/github/gh.mjs";
+import { ghCommandFailed, ghJson, ghGraphql, isRateLimitError, isSecondaryRateLimitError, rateLimitedResult, resolveOwner, SECONDARY_RATE_LIMIT_BACKOFF_MS, withGraphqlRateLimitWait, withSecondaryLimitBackoff } from "../src/github/gh.mjs";
 import { GRAPHQL_RATE_LIMIT_MAX_WAIT_MS } from "../src/loop/policy-constants.mjs";
 
 function stubRunChild(result) {
@@ -429,7 +429,7 @@ describe("secondary rate limit backoff", () => {
     return {
       log,
       env: { PATH: `${dir}:/bin:/usr/bin`, DEV_LOOPS_GH_STUB: "1" },
-      opts: { sleep: async (ms) => { log.sleeps.push(ms); }, backoffMs: 7 },
+      opts: { sleep: async (ms) => { log.sleeps.push(ms); } },
     };
   }
 
@@ -443,7 +443,7 @@ describe("secondary rate limit backoff", () => {
   test("a secondary rate limit backs off then retries and succeeds", async () => {
     const { log, env, opts } = harness([limited, ok]);
     assert.deepEqual(await ghJson(["api", "x"], { ...opts, env }), { ok: true });
-    assert.deepEqual(log.sleeps, [7]);
+    assert.deepEqual(log.sleeps, [SECONDARY_RATE_LIMIT_BACKOFF_MS]);
     assert.equal(log.runs(), 2);
   });
 
