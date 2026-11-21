@@ -9,11 +9,29 @@ import { ghJson } from "@dev-loops/core/github/gh";
 import { extractSection } from "@dev-loops/core/loop/markdown-sections";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
+// Only "Child of #" is line-anchored, because it misfires on ordinary prose; other casings match only as a standalone ref line. The other labels state parentage anywhere on a line.
+// The prefix allows blockquote, heading, bullet (with task box), numbered item and table cell markers.
+const LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t>]*)?(?:#{1,6}[ \t]+|[-*+][ \t]+(?:\[[ xX]\][ \t]+)?|\d+[.)][ \t]+|\|(?:[^|\n]*\|)*[ \t]*)?(?:\*\*)?`;
+const linkageRe = (label) => new RegExp(`${LINE_PREFIX}${label}.*$`, "mu");
+const wholeLineRe = (label) => new RegExp(`^.*${label}.*$`, "imu");
+
 export const FORBIDDEN_PROSE_PATTERNS = [
-  /Child of #/iu,
-  /Parent:\s*#/iu,
-  /Depends on:\s*#/iu,
-  /sub-issue of #/iu,
+  {
+    re: linkageRe(String.raw`(?:Child of #|[Cc][Hh][Ii][Ll][Dd] [Oo][Ff] #(?=\d+(?:\*\*)?[ \t.|]*$))`),
+    hint: "Link the parent through the GitHub sub-issue API and remove the line.",
+  },
+  {
+    re: wholeLineRe(String.raw`Parent:(?:\*\*)?[ \t]*#`),
+    hint: "Link the parent through the GitHub sub-issue API and remove the line.",
+  },
+  {
+    re: wholeLineRe(String.raw`Depends on:(?:\*\*)?[ \t]*#`),
+    hint: "Express order through sub-issue tree order and remove the line.",
+  },
+  {
+    re: wholeLineRe("sub-issue of #"),
+    hint: "Link the parent through the GitHub sub-issue API and remove the line.",
+  },
 ];
 
 export const DEFAULT_USAGE_SUFFIX = `
