@@ -16,8 +16,8 @@ import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/g
 import { ghJson } from "@dev-loops/core/github/gh";
 import { CAP_ROUND_REFUSAL } from "@dev-loops/core/loop/pr-gate-coordination";
 import { extractClosingIssueNumbers } from "@dev-loops/core/github/closing-ref-guard";
-import { detectAcDodMatrix, stripFencesAndCodeSpans } from "@dev-loops/core/loop/issue-refinement-artifact";
-import { computeSpecDigest, requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
+import { detectAcDodMatrix, readNonGoalItems, stripFencesAndCodeSpans } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { computeSpecDigest, normalizeCriterionText, requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { evaluateAdrTripwire as realEvaluateAdrTripwire } from "../loop/check-adr-tripwire.mjs";
 import { buildStandingWaiverLine, replaceStandingWaiverLine } from "../loop/adr-waiver-markers.mjs";
@@ -52,7 +52,10 @@ create-pr.mjs refuse a hand-written one. It applies the waiver only when:
   - the current head has a clean draft_gate or pre_approval_gate verdict, or the
     cap-round-fixed proof (GATE-EXEC-ROUND-CAP-WAIVER-PROOF, the predicate
     ready-for-review.mjs uses), whose recorded specDigest equals the specDigest of
-    the linked issue's current body.
+    the linked issue's current body. A differing digest is also accepted when the
+    issue's edit history holds the body that digest was computed from and the two
+    bodies differ only by backticked skills/docs/*-contract.md paths added to
+    existing matrix rows (ADR 0301); any other difference refuses spec_digest_mismatch.
 Otherwise it refuses with a typed reason and leaves the body unchanged. It never
 waives an extension-defaults.yaml trigger, a rule-modality reversal or removal,
 an unresolvable scan, a standingAuthorizations change, or any other approval.
@@ -134,6 +137,39 @@ export function pathsMissingFromMatrix(paths, issueBody) {
   return { matrixInvalid: false, missing };
 }
 
+const DOC_TOKEN = "`skills/docs/[A-Za-z0-9._-]*-contract\\.md`";
+const MATRIX_DOC_TOKEN_RE = new RegExp(`[ ,;]*${DOC_TOKEN}`, "gu");
+const MATRIX_DOC_TOKEN_FIND_RE = new RegExp(DOC_TOKEN, "gu");
+
+/**
+ * ADR 0301: true when `currentBody` differs from `priorBody` only by backticked skills/docs/*-contract.md
+ * paths added to existing AC / DoD matrix rows. Row count, non-goals and all other row text must be equal.
+ */
+export function isMatrixPathOnlySpecChange(priorBody, currentBody) {
+  const prior = detectAcDodMatrix(priorBody);
+  const current = detectAcDodMatrix(currentBody);
+  if (!prior.valid || !current.valid || prior.rows.length !== current.rows.length) return false;
+  const norm = (items) => items.map(normalizeCriterionText).join("\n");
+  if (norm(readNonGoalItems(priorBody)) !== norm(readNonGoalItems(currentBody))) return false;
+  const bare = (text) => normalizeCriterionText(text.replace(MATRIX_DOC_TOKEN_RE, ""));
+  // The digested spec (criteria, done items, non-goals) must match too, not only the matrix rows.
+  const specText = (body) => JSON.stringify(requireSpecFromBody(body), (_k, v) => (typeof v === "string" ? bare(v) : v));
+  try { if (specText(priorBody) !== specText(currentBody)) return false; } catch { return false; }
+  return prior.rows.every((row, i) => {
+    const next = current.rows[i];
+    const nextText = `${next.criterion}\n${next.evidence}`;
+    const kept = (`${row.criterion}\n${row.evidence}`.match(MATRIX_DOC_TOKEN_FIND_RE) ?? []).every((t) => nextText.includes(t));
+    return kept && bare(row.criterion) === bare(next.criterion) && bare(row.evidence) === bare(next.evidence);
+  });
+}
+
+/** Issue body revisions (full bodies, newest first) from the GitHub edit history. */
+async function defaultFetchIssueBodyHistory({ repo, issue }, { env, ghCommand, runChild }) {
+  const { owner, name } = parseRepoSlug(repo);
+  const data = await ghJson(["api", "graphql", "-f", "query=query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){issue(number:$i){userContentEdits(first:100){nodes{diff}}}}}", "-F", `o=${owner}`, "-F", `n=${name}`, "-F", `i=${issue}`], { env, ghCommand, runChild });
+  return (data?.data?.repository?.issue?.userContentEdits?.nodes ?? []).map((node) => node?.diff).filter((d) => typeof d === "string");
+}
+
 export async function waiveAdrTripwire(options, {
   env = process.env,
   ghCommand = "gh",
@@ -146,6 +182,7 @@ export async function waiveAdrTripwire(options, {
   fetchBaseBranch = defaultFetchOrigin,
   fetchPr = defaultFetchPr,
   fetchIssueBody = realFetchIssueBody,
+  fetchIssueBodyHistory = defaultFetchIssueBodyHistory,
   evaluateAdrTripwire = realEvaluateAdrTripwire,
   fetchDraftGateEvidence = realFetchDraftGateEvidence,
   readRecordedSpecDigest = defaultReadRecordedSpecDigest,
@@ -272,11 +309,23 @@ export async function waiveAdrTripwire(options, {
   } catch (error) {
     return refuse("spec_unreadable", `cannot derive the spec digest of issue #${issue}: ${error instanceof Error ? error.message : String(error)}`);
   }
+  // ADR 0301: a history fetch failure keeps the refusal (fail closed).
+  const matrixPathOnlyEditSince = async (recordedDigest) => {
+    try {
+      for (const prior of await fetchIssueBodyHistory({ repo, issue }, gh)) {
+        let digest;
+        try { digest = computeSpecDigest(requireSpecFromBody(prior)); } catch { continue; }
+        if (digest === recordedDigest) return isMatrixPathOnlySpecChange(prior, issueBody);
+      }
+    } catch { /* fail closed */ }
+    return false;
+  };
   let digestRefusal = null;
   let matched = false;
   for (const { name, head, read } of sources) {
     const recorded = await read();
     if (recorded === currentSpecDigest) { matched = true; break; }
+    if (recorded !== null && await matrixPathOnlyEditSince(recorded)) { matched = true; break; }
     // A recorded-but-stale digest outranks an unrecorded one in the refusal.
     if (recorded !== null) digestRefusal = refuse("spec_digest_mismatch", `the ${name} recorded specDigest ${recorded}, but issue #${issue} now yields ${currentSpecDigest}`);
     else digestRefusal ??= refuse("spec_digest_unrecorded", `the ${name} for head ${(head ?? headSha).slice(0, 7)} recorded no specDigest`);

@@ -289,6 +289,34 @@ test("refuses when the recorded specDigest differs from the issue's current dige
   await assertRefusal({ fetchIssueBody: async () => "no spec here" }, "issue_matrix_invalid");
 });
 
+// ADR 0301: the prior body lacks the backticked contract path that ISSUE_BODY adds to a matrix row.
+const PRIOR_BODY = ISSUE_BODY.replace(`\`${CONTRACT}\` carries`, "carries");
+const PRIOR_DIGEST = computeSpecDigest(requireSpecFromBody(PRIOR_BODY));
+const historyOf = (...bodies) => ({ readRecordedSpecDigest: async () => PRIOR_DIGEST, fetchIssueBodyHistory: async () => bodies });
+
+test("a matrix-path-only edit found in the issue edit history keeps the proof valid", async () => {
+  assert.notEqual(PRIOR_DIGEST, DIGEST);
+  const { edits, run } = harness(historyOf(ISSUE_BODY, PRIOR_BODY));
+  const result = await run();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(edits.length, 1);
+});
+
+test("any other issue edit since the recorded digest still refuses spec_digest_mismatch", async () => {
+  const changed = (from, to) => PRIOR_BODY.replaceAll(from, to);
+  const cases = {
+    "changed criterion text": changed("states the rule.", "states the new rule."),
+    "added row": changed("\n\n## Non-goals", "\n| A second criterion states another rule. | `skills/docs/y-contract.md` carries the second rule text. |\n\n## Non-goals"),
+    "changed non-goal": changed("Nothing else changes.", "Something else changes."),
+  };
+  for (const prior of Object.values(cases)) {
+    const digest = computeSpecDigest(requireSpecFromBody(prior));
+    await assertRefusal({ readRecordedSpecDigest: async () => digest, fetchIssueBodyHistory: async () => [prior] }, "spec_digest_mismatch");
+  }
+  await assertRefusal(historyOf(), "spec_digest_mismatch");
+  await assertRefusal({ ...historyOf(PRIOR_BODY), fetchIssueBodyHistory: async () => { throw new Error("graphql failed"); } }, "spec_digest_mismatch");
+});
+
 test("post-ready path: a clean pre_approval_gate at head with a matching digest writes the line", async () => {
   const reads = [];
   const { edits, run } = harness({

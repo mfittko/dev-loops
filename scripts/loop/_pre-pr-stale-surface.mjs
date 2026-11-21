@@ -11,6 +11,8 @@ import { staleSurfaceTruncatedHit, unaddressedStaleSurfaceHits } from "@dev-loop
 import { fetchIssueBody } from "./detect-issue-refinement-artifact.mjs";
 import { gitStaleSurfaceHits } from "./check-pre-push-delta.mjs";
 import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
+import { pathsMissingFromMatrix } from "../github/waive-adr-tripwire.mjs";
+import { CONTRACT_DOC_RE } from "./check-adr-tripwire.mjs";
 
 export const PRE_PR_STALE_SURFACE_UNADDRESSED = "pre_pr_stale_surface_unaddressed";
 
@@ -35,6 +37,13 @@ export async function scanPrePrStaleSurface({ cwd, base, bodyFile, issue, staleS
   if (bodyFile) {
     const issueBody = await readIssueBody({ cwd, issue });
     staleSurfaceHits.push(...diffPrBodyAgainstIssue({ prBody: readFileSync(bodyFile, "utf8"), issueBody }));
+    // ADR 0301: a touched contract doc the matrix does not name fails the waiver later; flag it before the first gate round.
+    const contractDocs = git(cwd, ["diff", "--name-only", baseline, head]).split("\n").filter((p) => CONTRACT_DOC_RE.test(p));
+    const { matrixInvalid, missing } = pathsMissingFromMatrix(contractDocs, issueBody);
+    // An invalid matrix is already one issue-body/issue-matrix hit from the comparison above.
+    if (!matrixInvalid) {
+      for (const p of missing) staleSurfaceHits.push({ kind: "pr-body", side: "issue", needle: `${p} is changed but no row of the issue's AC / DoD matrix names it in backticks`, file: "issue-body/issue-matrix", line: 0, site: `issue-body/issue-matrix:${p}` });
+    }
   }
   return { ok: true, head, base, staleSurfaceHits, staleSurfaceTruncated: found.truncated === true, truncatedNeedles: found.truncatedNeedles ?? [] };
 }

@@ -153,3 +153,17 @@ test("--issue accepts only a positive integer, never a URL, #N or zero", withRep
     assert.equal((await run(dir, ["--scan", "--base", "main", "--body-file", "b.md", "--issue", bad], { readIssueBody })).code, 1, bad);
   }
 }));
+
+test("a changed contract doc that no matrix row names is a stale-surface hit; a named one is not (ADR 0301)", withRepo(async (dir) => {
+  write(dir, "skills/docs/x-contract.md", "Rule.\n");
+  write(dir, "skills/docs/y-contract.md", "Rule.\n");
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", "docs");
+  const body = path.join(dir, "..", `body-${path.basename(dir)}.md`);
+  writeFileSync(body, PR_NEW);
+  const issue = ISSUE.replace("D2 test pins widened case", "D2 test pins widened case in `skills/docs/y-contract.md`");
+  const scan = async () => (await run(dir, ["--scan", "--base", "main", "--body-file", body, "--issue", "7"], { readIssueBody: async () => issue })).out;
+  const sites = (out) => out.staleSurfaceHits.map((h) => h.site).filter((s) => s.startsWith("issue-body/issue-matrix"));
+  assert.deepEqual(sites(await scan()), ["issue-body/issue-matrix:skills/docs/x-contract.md"]);
+  rmSync(body);
+}));
