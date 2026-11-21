@@ -199,13 +199,14 @@ export function decideUnresolveOwnerDeny({ command, role }) {
   return null;
 }
 
-/** Whether the raw command text names `merge-pr`, in any form (`--check` included), once quote and backslash characters are stripped (Bash drops them: `merge-""pr`, `merge\-pr`). */
-export const commandMentionsMergePr = (command) => typeof command === "string" && command.replace(/\$?["']|\\/g, "").search(/merge-pr\b/) !== -1;
+/** Whether the raw command text names `merge-pr`, in any form (`--check` included) except a merge-pr test-file path (`merge-pr<suffix>.test.mjs`), once quote and backslash characters are stripped (Bash drops them: `merge-""pr`, `merge\-pr`). */
+export const commandMentionsMergePr = (command) => typeof command === "string" && command.replace(/\$?["']|\\/g, "").search(/merge-pr\b(?![\w.-]*\.test\.mjs\b)/) !== -1;
 
 /**
  * Merge ownership (issue 2500): `merge-pr.mjs` is orchestrator-owned, so a subagent Bash command whose raw text contains `merge-pr` is denied, `--check` included.
+ * A merge-pr test-file path (`merge-pr<suffix>.test.mjs`) is exempt, so every run of the merge script stays denied (docs/decisions/0297-subagent-may-run-merge-test-files.md).
  * The top-level session (role null) keeps the script. Keys on the role name alone, like the unresolve allowlist.
- * ponytail: ceiling: a name assembled by variable or command substitution (`m=merge; ...$m-pr`) is not caught; the orchestrator is the only actor allowed to run the script.
+ * ponytail: ceiling: a name assembled by variable or command substitution (`m=merge; ...$m-pr`), or a substitution or expansion applied to an exempt test path (`f=.../merge-pr.test.mjs; node ${f/.test/}`), is not caught; the orchestrator is the only actor allowed to run the script.
  * @param {{command: string, role: string|null|undefined}} params
  * @returns {{ruleId: null, reason: string}|null}
  */
