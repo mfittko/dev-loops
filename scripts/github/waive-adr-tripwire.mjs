@@ -30,6 +30,7 @@ import { buildLogPath } from "./_gate-artifact-paths.mjs";
 import { readSealed } from "./_gate-artifact-seal.mjs";
 import { editPr as realEditPr } from "./edit-pr.mjs";
 import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
+import { cleanCapVerdictUnposted } from "./write-gate-context.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 function noProofRefusal({ repo, pr, headSha }) {
@@ -333,6 +334,10 @@ export async function waiveAdrTripwire(options, {
       capRound = await resolveCapRoundFixed({ repo, pr, headSha, baseRefName: prState.baseRefName }, { repoRoot });
     } catch (error) {
       return refuse("cap_round_unresolved", `${error instanceof Error ? error.message : String(error)}. ${CAP_ROUND_REFUSAL.cap_round_unresolved}`);
+    }
+    // A clean cap round proven only by its local ledger is no evidence CI can read (same refusal as ready-for-review.mjs).
+    if (capRound && cleanCapVerdictUnposted(capRound, gate?.draftGatePostedHeads ?? [])) {
+      return refuse("clean_cap_verdict_unposted", CAP_ROUND_REFUSAL.clean_cap_verdict_unposted);
     }
     if (capRound) sources.push({ name: "cap-round-fixed proof", read: async () => (typeof capRound.log?.specAuthority?.specDigest === "string" ? capRound.log.specAuthority.specDigest : null) });
   }

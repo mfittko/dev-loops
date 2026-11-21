@@ -1575,7 +1575,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
       });
   // ADR 0208: a PR whose cap round is fixed never runs draft_gate again; fail closed when the evidence is unreadable.
   // A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
-  const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact(context, { repoRoot, resolve: runtime.resolveCapRoundFixed ?? resolveCapRoundFixed });
+  const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact(context, { repoRoot, resolve: runtime.resolveCapRoundFixed ?? resolveCapRoundFixed, trustRuntime: { env: runtime.env, ghCommand: runtime.ghCommand, runChild: runtime.runChild } });
   const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
     && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot, includeLiveCurrentHead: true }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
   const draftOpenActList = context.prData?.isDraft === true && !draftCapRoundFixed
