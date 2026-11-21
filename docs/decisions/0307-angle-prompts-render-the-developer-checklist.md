@@ -10,7 +10,7 @@ Extends: 0304 ([record](./0304-developer-pre-pr-self-check.md)). ADR 0304 states
 
 Copilot threads show classes of defect that both the developer and the draft_gate fan-out missed. Issue 3395 gave the developer a `developer-checklist` per angle in `gates.draft.angles`. The gate angle prompts held separate text, so the developer and the gate could drift apart.
 
-A matcher class gets a new checklist line when it holds at least 10% of the Copilot threads in the issue baseline (11 of 110). Three classes pass: edge-case-input-validation (39) maps to A2, docs-help-description (22) maps to A5 and the pr-description heading line, and tests (18) maps to no new A line. The tests class is listed on issue 3396 with the existing `coverage` angle as its proposed home. The `other` class is the rest of A1, A3, A4, A6, A7 and A8.
+A matcher class gets a new checklist line when it holds at least 10% of the Copilot threads in the issue baseline (11 of 110). Three classes pass: edge-case-input-validation (39) maps to A2, docs-help-description (22) maps to A5 and the pr-description heading line, and tests (18) maps to no new A line. The counts 39, 22 and 18 are the issue-body keyword counts over all 110 threads, not matcher output. The tests class is listed on issue 3396 ([listing](https://github.com/mfittko/dev-loops/issues/3396#issuecomment-7066998705)) with the existing `coverage` angle as its proposed home. The `other` class is the rest of A1, A3, A4, A6, A7 and A8.
 
 ## Decision
 
