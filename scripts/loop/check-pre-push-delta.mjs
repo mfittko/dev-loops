@@ -73,7 +73,7 @@ import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --result-path <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--repo <owner/name> --pr <n>] [--worktree <dir>]   (fixer handbackCheck run)
-       check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
+       check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> --fixer-plan <path> --site-coverage <path> [--repo <owner/name> --pr <n>] [--worktree <dir>]
        check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list; with no unresolved thread the --fixer-plan's operator focus round is the one act item)
        check-pre-push-delta.mjs --reviewer-only --repo <owner/name> --pr <n> --baseline <sha> --pr-head <sha> --findings-log <cap-round log> --spec-identity <id> --result-path <path> [--worktree <dir>]   (code-range clearing, act list derived from the ledger)
        check-pre-push-delta.mjs --reviewer-only --repo <owner/name> --pr <n> --baseline <sha> --pr-head <sha> --findings-log <cap-round log> --result <path> --invocation <1-3> [--worktree <dir>]
@@ -83,8 +83,8 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --act-list <path>       The judge-pass --out act list the fix resolves. An act item that names no file or carries remedyKind pr_body (a PR-body item) leaves the act set and is printed as bodyItems, a top-level field of the input-run output that is present only when at least one act item was dropped; edit the PR body through scripts/github/edit-pr.mjs and the next gate round verifies it. An act list of only such items refuses delta_body_only_act_set, except on the --reviewer-only route, where it yields an empty code act set and prints bodyItems
   --threads-file <path>   Thread route, in place of --act-list: successful list-review-threads --unresolved-only
                           output, or a github-sourced capture-review-threads --unresolved --bodies file, for --repo/--pr. Each unresolved thread is one act item; its ref is the threadId.
-  --repo <owner/name>     Required with --threads-file and --reviewer-only
-  --pr <n>                Required with --threads-file and --reviewer-only
+  --repo <owner/name>     Required with --threads-file and --reviewer-only; optional on the ACT --result and --handback runs, where it sets the PR body target (pass it with --pr)
+  --pr <n>                Required with --threads-file and --reviewer-only; optional on the ACT --result and --handback runs, where it sets the PR body target (pass it with --repo)
   --baseline <sha>        reviewBaselineHead: the head the gate round reviewed (hex SHA)
   --pr-head <sha>         The PR head just read from GitHub; the check fails closed when it differs from --baseline (with --reviewer-only it must equal the worktree HEAD and differ from --baseline)
   --spec-identity <id>    Current spec identity passed to the reviewer (required without --result)
@@ -126,7 +126,7 @@ Result JSON (--result, DeltaPrePushReviewResult):
     "widenedReads": [{ "path": "...", "reason": "..." }],   (objects, not strings; [] when none)
     "outcome": "locally_clear|needs_fix|bounded_out" }
 
-  Residue with no site (issue 3364): with --repo and --pr the --result run seals bodySha256 (the live PR body digest) in the record, and the --handback run clears that residue when the live body digest differs, or when the act item's site coverage record carries a sitelessSkipReason (noSitesReason does not clear it); the coordinator input run (with --fixer-plan) falls back to the plan target when no --repo/--pr is given; an unreadable body keeps it open.
+  Residue with no site (issue 3364): when the run knows the PR target (--repo and --pr, or the authenticated --fixer-plan target) the --result run seals bodySha256 (the live PR body digest) and that target in the record, and the --handback run clears that residue when its own target equals the sealed target and the live body digest differs, or when the act item's site coverage record carries a sitelessSkipReason (noSitesReason does not clear it); the coordinator input run (with --fixer-plan) falls back to the plan target when no --repo/--pr is given; an unreadable body keeps it open.
 
   ACT results additionally require this binding from input.resultShape:
     { "coverageProtocol": "pulled_commit_only_v1",
@@ -194,6 +194,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
   } else if (Boolean(values["act-list"]) === Boolean(values["threads-file"])) throw parseError("pass exactly one of --act-list <path> and --threads-file <path>");
   if (values["threads-file"] && values["findings-log"]) throw parseError("--findings-log is refused with --threads-file: PRE-PUSH-DELTA-INPUT gives the thread route the act items' angles only");
   if ((values["threads-file"] || reviewerOnly) && !(values.repo && /^[1-9]\d*$/.test(values.pr ?? ""))) throw parseError(`--${reviewerOnly ? "reviewer-only" : "threads-file"} requires --repo <owner/name> and --pr <n>`);
+  if ((values.repo !== undefined || values.pr !== undefined) && !(values.repo && /^[1-9]\d*$/.test(values.pr ?? ""))) throw parseError("--repo <owner/name> and --pr <positive integer> are passed together");
   if (!values.baseline) throw parseError("--baseline <sha> is required");
   const baseline = values.baseline.trim().toLowerCase();
   if (!HEAD_SHA_RE.test(baseline)) throw parseError("--baseline must be a hex commit SHA (7-64 hex characters)");
@@ -642,7 +643,8 @@ async function assertNoOpenWorkAtCandidate(prior, { handbackHead, siteCoverage, 
   const bodyChanged = async () => {
     if (bodyEdited !== undefined) return bodyEdited;
     bodyEdited = false;
-    if (typeof prior.bodySha256 !== "string" || !target) return bodyEdited;
+    // The digest counts only against the PR it was sealed from: a record without a sealed target, or a handback naming another PR, keeps the residue open.
+    if (typeof prior.bodySha256 !== "string" || !target || prior.bodyTarget?.repo !== target.repo || prior.bodyTarget?.pr !== Number(target.pr)) return bodyEdited;
     try {
       const state = await fetchPr(target, { env: process.env, ghCommand: "gh" });
       bodyEdited = typeof state?.body === "string" && prBodySha256(state.body) !== prior.bodySha256;
@@ -654,7 +656,7 @@ async function assertNoOpenWorkAtCandidate(prior, { handbackHead, siteCoverage, 
     if (isLifecycleFinding(f) || (f.residueOf && !skipped(f) && !(typeof f.site !== "string" && await bodyChanged()))) open.push(f);
   }
   const sitelessFps = open.filter((f) => typeof f.site !== "string").map((f) => { const item = actItems.find((a) => a.ref === f.residueOf); return item ? (item.fingerprint ?? item.ref) : f.residueOf; });
-  const sitelessHint = sitelessFps.length ? `; for a residue with no site edit the PR body (pass --repo and --pr) or record a sitelessSkipReason in the siteCoverage entry for ${[...new Set(sitelessFps)].join(", ")}${typeof prior.bodySha256 === "string" ? "" : "; the sealed record has no bodySha256, so re-run the --result step with --repo and --pr first"}` : "";
+  const sitelessHint = sitelessFps.length ? `; for a residue with no site edit the PR body (pass --repo and --pr) or record a sitelessSkipReason in the siteCoverage entry for ${[...new Set(sitelessFps)].join(", ")}${typeof prior.bodySha256 === "string" ? "" : "; the sealed record has no bodySha256, and a --result re-run with --repo and --pr seals the current body, so when the body is already fixed record a sitelessSkipReason or edit the body again after the re-run"}` : "";
   if (open.length) throw new Error(`the handback is at ${handbackHead}, the candidate the sealed delta record reviewed, and ${open.length} open task(s) remain: ${open.map((f) => JSON.stringify(f.summary)).join("; ")}. Commit the fix on top of ${handbackHead} and hand back that new commit${open.every((f) => !isLifecycleFinding(f)) ? ` (or record a skip reason for each residue site${sitelessHint})` : ""}`);
 }
 
@@ -854,15 +856,15 @@ export async function runCli(
       if (priorRecord?.outcome === "locally_clear" && !decision.locallyClear) throw new Error(`reviewer-only: the locally_clear record for baseline ${baselineHead} is not replaced by a non-clearing result and is never overwritten. ${chainEndRemedy()}`);
     }
     // A residue with no site is a PR-body item: seal the live body digest so the handback can see a later body edit (issue 3364). An unreadable body records no digest and the handback stays refused.
-    let bodySha256;
+    let bodySha256, sealedTarget;
     const bodyTarget = options.repo && options.pr ? { repo: options.repo, pr: options.pr } : authenticatedTarget;
     if (bodyTarget && deltaFixerFindings(result).some((f) => f.residueOf && typeof f.site !== "string")) {
-      try { const state = await fetchPr(bodyTarget, { env: process.env, ghCommand: "gh" }); if (typeof state?.body === "string") bodySha256 = prBodySha256(state.body); } catch { /* fail closed */ }
+      try { const state = await fetchPr(bodyTarget, { env: process.env, ghCommand: "gh" }); if (typeof state?.body === "string") { bodySha256 = prBodySha256(state.body); sealedTarget = { repo: bodyTarget.repo, pr: Number(bodyTarget.pr) }; } } catch { /* fail closed */ }
     }
     // Local evidence for the emitter and the fixed-reply guard; never a gate verdict.
     const write = () => writeGateDeltaRecord({
       tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree),
-      sequence, candidateHead: currentHead, invocation: options.invocation, decision, result, lifecycleFindings, bodySha256,
+      sequence, candidateHead: currentHead, invocation: options.invocation, decision, result, lifecycleFindings, bodySha256, bodyTarget: sealedTarget,
     });
     // The reviewer-only route read its prior record before the fetch, the scans and the changelog check: write only when the record is still the snapshot every check above judged.
     if (options.reviewerOnly) {

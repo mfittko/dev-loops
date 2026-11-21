@@ -178,7 +178,7 @@ function normalizeSiteCoverage(entry, label, ruleIds) {
 
 /**
  * Site coverage keyed by act-item fingerprint. It covers threadless act items and rides
- * the `commit_only` handback, where no thread entry exists: `{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }`.
+ * the `commit_only` handback, where no thread entry exists: `{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason?, sitelessSkipReason? }`.
  */
 function normalizeSiteCoverageRecords(raw, ruleIds) {
   if (raw === undefined) return [];
@@ -252,7 +252,7 @@ export function recordedSkipReason(siteCoverage, fingerprint, site) {
  *
  * @param {object} raw
  * @param {{ ruleIds?: Set<string> }} [options] ruleIds: the known rule ids that `ruleCitations` are checked against
- * @returns {{ headSha: string, dispositions: Array<{ threadId: string, fingerprint: string|null, fixingCommitSha: string, disposition: string, validation: string|null, sites?: object[], returnedSites?: string[], ruleCitations?: string[], noSitesReason?: string }>, siteCoverage?: Array<{ fingerprint: string, returnedSites: string[], sites: object[], ruleCitations?: string[], noSitesReason?: string }> }}
+ * @returns {{ headSha: string, dispositions: Array<{ threadId: string, fingerprint: string|null, fixingCommitSha: string, disposition: string, validation: string|null, sites?: object[], returnedSites?: string[], ruleCitations?: string[], noSitesReason?: string, sitelessSkipReason?: string }>, siteCoverage?: Array<{ fingerprint: string, returnedSites: string[], sites: object[], ruleCitations?: string[], noSitesReason?: string, sitelessSkipReason?: string }> }}
  */
 export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
   if (!raw || typeof raw !== "object") {
