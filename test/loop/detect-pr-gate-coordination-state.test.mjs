@@ -4879,7 +4879,7 @@ describe("GATE-EXEC-BASE-REFRESH coordination", () => {
     assert.equal(calls, 0);
     assert.equal(result.baseFreshness, undefined);
   });
-  // ADR 0295: a clean draft_gate verdict posted with the stale-base line must not route to ready without a base merge.
+  // ADR 0299: a clean draft_gate verdict posted with the stale-base line must not route to ready without a base merge.
   it("stale head at mark_ready_for_review routes to resolve_merge_conflicts", async () => {
     const baseline = await runBaseFreshnessFixture({ withCleanDraftGate: true, checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }) });
     assert.equal(baseline.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);

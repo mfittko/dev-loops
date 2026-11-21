@@ -1,4 +1,4 @@
-# 0295. A clean verdict posts with a stale-base line when only the base moved, and coordination guards the ready routes
+# 0299. A clean verdict posts with a stale-base line when only the base moved, and coordination guards the ready routes
 
 ## Status
 

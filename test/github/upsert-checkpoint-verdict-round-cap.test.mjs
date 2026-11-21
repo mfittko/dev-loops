@@ -515,7 +515,7 @@ test("a clean cap-round post checks base freshness against the current PR head, 
   }, { prefix: "dev-loops-round-cap-base-fresh-" });
 });
 
-// ADR 0295: a base_current context at the cap-round head never lifts the refusal for a cap-round catch-up post.
+// ADR 0299: a base_current context at the cap-round head never lifts the refusal for a cap-round catch-up post.
 test("a stale cap-round catch-up post refuses even when a base_current context exists at the cap-round head", async () => {
   await withTempDir(async (tempDir) => {
     const ctx = path.join(repoRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: CAP_HEAD }));
