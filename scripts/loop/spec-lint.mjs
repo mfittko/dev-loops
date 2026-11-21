@@ -52,7 +52,8 @@ size_band_above_soft_loc (softLoc < wloc < waiverLoc; split assessment required 
 size_band_below_min_loc (wloc < minLoc; merge assessment required in the results comment), both informational and disposable there;
 "checks.sizeForecast.band" is the resolved planning band,
 simplest_design_missing (DESIGN-SIMPLEST-FIRST; a body with a "## Size forecast" section and no "## Simplest design" section),
-contract_doc_not_in_matrix (a contract doc in a forecast files= list that no row of a valid AC / DoD matrix names in backticks, or a contract doc owning a rule ID cited in a matrix row and named by no row; a body without a valid matrix is not flagged).
+contract_doc_not_in_matrix (a contract doc in a forecast files= list that no row of a valid AC / DoD matrix names in backticks, or a contract doc owning a rule ID cited in a matrix row and named by no row; a body without a valid matrix is not flagged),
+state_recovery_rows_missing (REFINE-STATE-RECOVERY-ROWS; a criterion adding persistent state or a fail-closed refusal with no crash, same-head rebuild, replacement or named recovery row).
 ADR citation forms: "ADR NNNN", "ADR-<digits>" and docs/decisions/NNNN-*.md links.
 
 ${JQ_OUTPUT_USAGE}
@@ -299,6 +300,27 @@ export function lintContractDocsInMatrix(body) {
     .map((doc) => ({ kind: "contract_doc_not_in_matrix", id: doc, detail: { reason: `contract doc \`${doc}\` is in the Size forecast files but no AC / DoD matrix row names it in backticks` } }));
 }
 
+const STATE_RE = /\b(?:lock(?:file)?|sentinel|receipt|cache|marker file|plan file)s?\b/i;
+const REFUSAL_RE = /\bfail(?:s|ed|ing)?[- ]closed\b/i;
+const RECOVERY_ROW_RES = [
+  ["crash", /\bcrash/i],
+  ["rebuild at the same head", /\bsame[- ]head\b/i],
+  ["replacement by a later step", /\breplac(?:e[sd]?|ing|ements?)\b/i],
+];
+
+/** REFINE-STATE-RECOVERY-ROWS: matrix rows adding persistent state or a fail-closed refusal need the recovery rows or a named `recovery`. */
+export function lintStateRecoveryRows(body) {
+  const matrix = detectAcDodMatrix(body);
+  if (!matrix.found || !matrix.valid) return [];
+  const criteria = matrix.rows.map((row) => row.criterion);
+  const text = criteria.join("\n");
+  const missing = [
+    ...(criteria.some((c) => STATE_RE.test(c)) ? RECOVERY_ROW_RES.filter(([, re]) => !re.test(text)).map(([name]) => name) : []),
+    ...(criteria.some((c) => REFUSAL_RE.test(c)) && !/\brecovery\b/i.test(text) ? ["named recovery"] : []),
+  ];
+  return missing.map((name) => ({ kind: "state_recovery_rows_missing", id: name, detail: { reason: `the matrix adds persistent state or a fail-closed refusal but no row covers: ${name} (REFINE-STATE-RECOVERY-ROWS)` } }));
+}
+
 /** A rule ID cited in a matrix row whose owner is a contract doc needs that doc named, backticked, in a matrix row. */
 export async function lintRuleOwnerDocsInMatrix(body, repoRoot) {
   const matrix = detectAcDodMatrix(body);
@@ -341,6 +363,7 @@ export async function lintSpec({ body, repoRoot }) {
   checks.sizeForecast = { status: "ran", band: { minLoc, softLoc, waiverLoc, absoluteHardLoc } };
   findings.push(...lintSimplestDesign(body));
   findings.push(...lintContractDocsInMatrix(body));
+  findings.push(...lintStateRecoveryRows(body));
   const forecastDocs = new Set(findings.filter((f) => f.kind === "contract_doc_not_in_matrix").map((f) => f.id));
   findings.push(...(await lintRuleOwnerDocsInMatrix(body, repoRoot)).filter((f) => !forecastDocs.has(f.id)));
   const decisionsDir = path.join(repoRoot, "docs", "decisions");
