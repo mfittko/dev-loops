@@ -6,9 +6,9 @@
  * scripts/loop, cli, lib and packages/core/src must carry a `recovery` field.
  * Existing sites without one are tolerated through the per-file baseline in
  * docs/refusal-recovery-baseline.json. The baseline is a ratchet: a file whose count of
- * sites without `recovery` rises fails the check; a count that falls rewrites the baseline.
+ * sites without `recovery` rises fails the check; the local run rewrites a fallen count, and CI fails until it is committed.
  *
- * Usage: check-refusal-recovery.mjs [--audit | --write-baseline | --write-audit]
+ * Usage: check-refusal-recovery.mjs [--audit | --write-baseline | --write-audit | --help]
  * shortcut: a `/` starts a regex when the previous token is an operator, open bracket or keyword; upgrade to a parser if a false hit appears.
  */
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -182,8 +182,12 @@ export function missingCounts(sites) {
 /** Ratchet: errors only for a file whose count rose above its baseline (or has no entry). A fall is not an error. */
 export function checkAgainstBaseline(sites, baseline) {
   const errors = [];
+  for (const [f, b] of Object.entries(baseline)) {
+    if (!Number.isInteger(b) || b < 0) errors.push(`${f}: baseline value ${JSON.stringify(b)} is not a non-negative integer`);
+  }
   for (const [f, n] of Object.entries(missingCounts(sites))) {
     const b = baseline[f];
+    if (b !== undefined && !(Number.isInteger(b) && b >= 0)) continue;
     if (b === undefined) errors.push(`${f}: ${n} refusal site(s) without \`recovery\` and no baseline entry`);
     else if (n > b) errors.push(`${f}: ${n} refusal site(s) without \`recovery\`, baseline caps it at ${b}; add \`recovery\` to the new site`);
   }
@@ -202,6 +206,17 @@ function auditTable(sites) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const USAGE = "Usage: check-refusal-recovery.mjs [--audit | --write-baseline | --write-audit | --help]";
+  const args = process.argv.slice(2);
+  if (args.includes("--help")) {
+    console.log(USAGE);
+    process.exit(0);
+  }
+  const unknown = args.filter((a) => !["--audit", "--write-baseline", "--write-audit"].includes(a));
+  if (unknown.length) {
+    console.error(`unknown argument(s): ${unknown.join(" ")}\n${USAGE}`);
+    process.exit(1);
+  }
   const sites = scanRefusals();
   if (process.argv.includes("--audit")) {
     console.log(auditTable(sites));

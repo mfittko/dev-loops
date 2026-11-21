@@ -1,6 +1,8 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AUDIT_TABLE_HEADER, checkAgainstBaseline, missingCounts, scanRefusals, spliceAudit } from "../../scripts/loop/check-refusal-recovery.mjs";
@@ -97,4 +99,25 @@ test("the repo has no refusal path above the committed baseline", () => {
   assert.deepEqual(checkAgainstBaseline(sites, baseline), []);
   // CI never rewrites the baseline, so a fallen count must be committed: the file stays exact.
   assert.deepEqual(missingCounts(sites), baseline);
+});
+
+test("checkAgainstBaseline rejects a baseline value that is not a non-negative integer", () => {
+  const sites = [{ file: "scripts/loop/x.mjs", line: 1 }];
+  for (const bad of ["abc", -1, 1.5, null]) {
+    assert.equal(checkAgainstBaseline(sites, { "scripts/loop/x.mjs": bad }).length > 0, true, JSON.stringify(bad));
+  }
+  for (const good of [0, 3]) {
+    assert.equal(checkAgainstBaseline(sites, { "scripts/loop/x.mjs": good }).some((e) => e.includes("not a non-negative integer")), false);
+  }
+});
+
+test("the CLI prints usage on --help and refuses unknown arguments before any write", () => {
+  const script = fileURLToPath(new URL("../../scripts/loop/check-refusal-recovery.mjs", import.meta.url));
+  const help = spawnSync(process.execPath, [script, "--help"], { encoding: "utf8" });
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /Usage:/);
+  for (const bad of ["--audits", "--write", "-h2", "audit"]) {
+    const r = spawnSync(process.execPath, [script, bad], { encoding: "utf8" });
+    assert.equal(r.status, 1, bad);
+  }
 });
