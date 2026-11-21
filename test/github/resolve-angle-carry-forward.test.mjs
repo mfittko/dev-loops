@@ -1446,7 +1446,7 @@ test("buildCarryForwardPlan: duplicate rerun names are idempotent; case mismatch
 });
 
 // Issue 3284: a same-file base merge or a resolved conflict reaches the plan through computeBaseMergeCarry.
-async function sameFileBaseMergeRepo({ conflict }) {
+async function sameFileBaseMergeRepo({ conflict, ownEdit = false }) {
   const lines = Array.from({ length: 30 }, (_, i) => `line${i}\n`).join("");
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-samefile-"));
   git(repoRoot, ["init", "-q", "-b", "main"]);
@@ -1461,9 +1461,16 @@ async function sameFileBaseMergeRepo({ conflict }) {
   git(repoRoot, ["commit", "-q", "-m", "fork"]);
   git(repoRoot, ["checkout", "-q", "-b", "pr"]);
   await writeFile(path.join(repoRoot, "src/foo.mjs"), `${lines.slice(0, -7)}PR\n`, "utf8");
+  // The file is already in the PR diff at the reviewed head, so both heads yield a sound hunk digest.
+  if (ownEdit) await writeFile(path.join(repoRoot, "src/z.mjs"), "export const z = 0;\n", "utf8");
   git(repoRoot, ["add", "-A"]);
   git(repoRoot, ["commit", "-q", "-m", "PR round 1 (reviewed)"]);
   const prevHead = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+  if (ownEdit) {
+    await writeFile(path.join(repoRoot, "src/z.mjs"), "export const z = 1;\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "PR own edit after the reviewed head"]);
+  }
   git(repoRoot, ["checkout", "-q", "main"]);
   await writeFile(path.join(repoRoot, "src/foo.mjs"), conflict ? `${lines.slice(0, -7)}MAIN\n` : `TOP\n${lines}`, "utf8");
   git(repoRoot, ["add", "-A"]);
@@ -1497,8 +1504,22 @@ for (const [name, conflict, decision] of [["same-file line shift", false, "parti
       assert.deepEqual(result.carried.map((c) => c.angle), ["docs"]);
       assert.deepEqual(result.resolutionDeltaPaths, conflict ? ["src/foo.mjs"] : undefined);
       assert.equal(conflict ? result.resolutionDeltaMerges?.length : result.resolutionDeltaMerges, conflict ? 1 : undefined);
+      assert.deepEqual(result.resolutionDeltaFullPaths, conflict ? [] : undefined);
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }
   });
 }
+
+test("CLI plans a resolution_delta window with a PR-own edit: the edited file is listed for full review, not as a resolution file", async () => {
+  const { repoRoot, prevHead, headSha } = await sameFileBaseMergeRepo({ conflict: true, ownEdit: true });
+  try {
+    const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot });
+    assert.equal(result.baseMergeCarry, "resolution_delta");
+    assert.deepEqual(result.rerunPaths, ["src/foo.mjs", "src/z.mjs"]);
+    assert.deepEqual(result.resolutionDeltaPaths, ["src/foo.mjs"]);
+    assert.deepEqual(result.resolutionDeltaFullPaths, ["src/z.mjs"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});

@@ -138,14 +138,15 @@ test("re-gate emit refuses without a carry-forward plan artifact, proceeds once 
     assert.ok(payload.count > 0);
 
     // main() reads plan.resolutionDeltaPaths and writes the Resolution scope into each angle suffix (#3284).
-    await writeFile(planPath, JSON.stringify({ ok: true, repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: priorHead, carried: [], mustRerun: [], resolutionDeltaPaths: ["src/resolved.mjs"], resolutionDeltaMerges: ["c".repeat(40)] }), "utf8");
+    await writeFile(planPath, JSON.stringify({ ok: true, repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: priorHead, carried: [], mustRerun: [], resolutionDeltaPaths: ["src/resolved.mjs"], resolutionDeltaFullPaths: ["src/z.mjs"], resolutionDeltaMerges: ["c".repeat(40)] }), "utf8");
     const scoped = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
     assert.equal(scoped.status, 0, scoped.stderr || scoped.stdout);
     const scopedUnit = JSON.parse(scoped.stdout).units[0];
     const suffix = await readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.angle-suffix-${scopedUnit.scope}.txt`), "utf8");
     assert.match(suffix, /Resolution scope: .*\("src\/resolved\.mjs"\)/);
     assert.ok(suffix.includes(`git diff-tree --cc --no-ext-diff -p ${"c".repeat(40)}`));
-    assert.match(suffix, /Findings outside those hunks are out of scope/);
+    assert.match(suffix, /Findings outside those hunks are out of scope for the resolution files\./);
+    assert.match(suffix, /review the PR hunks of these re-run files in full \("src\/z\.mjs"\)/);
   });
 });
 
@@ -1878,6 +1879,9 @@ test("buildAngleNamingSuffix delivers the resolution_delta resolution paths to t
   assert.doesNotMatch(none, /Resolution scope/);
   const scoped = buildAngleNamingSuffix(unit, "draft-gate-coverage", [], [], undefined, null, undefined, ["src/foo.mjs"]);
   assert.match(scoped, /Resolution scope: .*\("src\/foo\.mjs"\)/);
+  assert.doesNotMatch(scoped, /in full/);
+  const withFull = buildAngleNamingSuffix(unit, "draft-gate-coverage", [], [], undefined, null, undefined, ["src/foo.mjs"], ["a".repeat(40)], ["src/z.mjs"]);
+  assert.match(withFull, /review the PR hunks of these re-run files in full \("src\/z\.mjs"\)/);
 });
 
 test("buildAngleNamingSuffix requires the file-write tool for single-angle and grouped units and keeps the blocked invocation (#2510)", () => {
