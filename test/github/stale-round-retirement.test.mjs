@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { retireStaleRound } from "../../scripts/github/_stale-round-retirement.mjs";
-import { buildGateFaninLedgerPath, buildGateReviewsDir } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 
 const HEAD = "d".repeat(40);
 const KEY = { repo: "owner/repo", pr: 7, gate: "draft_gate", headSha: HEAD };
@@ -50,6 +50,24 @@ test("another gate's round and a head with no round are untouched", async () => 
   await withRound(async (tmpRoot) => {
     assert.equal((await retireStaleRound({ ...KEY, gate: "pre_approval_gate", tmpRoot })).retiredRound, null);
     assert.equal((await retireStaleRound({ ...KEY, headSha: "e".repeat(40), tmpRoot })).retiredRound, null);
+    assert.equal(existsSync(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`)), true);
+  });
+});
+
+test("a findings log at the head also marks a posted verdict and is refused", async () => {
+  await withRound(async (tmpRoot) => {
+    const log = buildLogPath({ ...KEY, tmpRoot });
+    await mkdir(path.dirname(log), { recursive: true });
+    await writeFile(log, "{}");
+    const result = await retireStaleRound({ ...KEY, tmpRoot });
+    assert.match(result.refusal.error, /a verdict is already recorded/);
+    assert.equal(existsSync(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`)), true);
+  });
+});
+
+test("an abbreviated head is never retired automatically", async () => {
+  await withRound(async (tmpRoot) => {
+    assert.deepEqual(await retireStaleRound({ ...KEY, headSha: HEAD.slice(0, 12), tmpRoot }), { retiredRound: null });
     assert.equal(existsSync(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`)), true);
   });
 });
