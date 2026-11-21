@@ -302,6 +302,17 @@ test("a matrix-path-only edit found in the issue edit history keeps the proof va
   assert.equal(edits.length, 1);
 });
 
+test("a connector word plus a path (the issue 3366 edit) keeps the proof valid; a non-connector word refuses", async () => {
+  const withWords = (words) => PRIOR_BODY.replace("carries", `${words} \`${CONTRACT}\` carries`);
+  const inPrior = withWords("in");
+  const inBody = ISSUE_BODY.replace(`\`${CONTRACT}\` carries`, `in \`${CONTRACT}\` carries`);
+  const digest = computeSpecDigest(requireSpecFromBody(inPrior));
+  const accepted = await harness({ readRecordedSpecDigest: async () => digest, fetchIssueBody: async () => inBody, fetchIssueBodyHistory: async () => [inPrior] }).run();
+  assert.equal(accepted.ok, true, JSON.stringify(accepted));
+  const notBody = ISSUE_BODY.replace(`\`${CONTRACT}\` carries`, `not \`${CONTRACT}\` carries`);
+  await assertRefusal({ readRecordedSpecDigest: async () => PRIOR_DIGEST, fetchIssueBody: async () => notBody, fetchIssueBodyHistory: async () => [PRIOR_BODY] }, "spec_digest_mismatch");
+});
+
 test("any other issue edit since the recorded digest still refuses spec_digest_mismatch", async () => {
   const changed = (from, to) => PRIOR_BODY.replaceAll(from, to);
   const cases = {

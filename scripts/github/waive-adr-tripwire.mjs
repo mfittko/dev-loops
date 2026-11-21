@@ -54,7 +54,7 @@ create-pr.mjs refuse a hand-written one. It applies the waiver only when:
     ready-for-review.mjs uses), whose recorded specDigest equals the specDigest of
     the linked issue's current body. A differing digest is also accepted when the
     issue's edit history holds the body that digest was computed from and the two
-    bodies differ only by backticked skills/docs/*-contract.md paths added to
+    bodies differ only by backticked skills/docs/*-contract.md paths and the words in, and, see added to
     existing matrix rows (ADR 0301); any other difference refuses spec_digest_mismatch.
 Otherwise it refuses with a typed reason and leaves the body unchanged. It never
 waives an extension-defaults.yaml trigger, a rule-modality reversal or removal,
@@ -138,12 +138,24 @@ export function pathsMissingFromMatrix(paths, issueBody) {
 }
 
 const DOC_TOKEN = "`skills/docs/[A-Za-z0-9._-]*-contract\\.md`";
-const MATRIX_DOC_TOKEN_RE = new RegExp(`[ ,;]*${DOC_TOKEN}`, "gu");
 const MATRIX_DOC_TOKEN_FIND_RE = new RegExp(DOC_TOKEN, "gu");
+const EXTRA_WORD_RE = new RegExp(`^(?:\\(?${DOC_TOKEN}[),;.]*|in|and|see|[^\\p{L}\\p{N}]+)$`, "u");
+
+/** True when `cur` is `prior` plus extra words that are each a backticked skills/docs/*-contract.md path, `in`, `and`, `see` or punctuation-only. */
+function onlyAddsPathWords(prior, cur) {
+  const words = (t) => normalizeCriterionText(t).split(/\s+/u).filter(Boolean);
+  const want = words(prior);
+  let i = 0;
+  for (const w of words(cur)) {
+    if (i < want.length && w === want[i]) i++;
+    else if (!EXTRA_WORD_RE.test(w)) return false;
+  }
+  return i === want.length;
+}
 
 /**
  * ADR 0301: true when `currentBody` differs from `priorBody` only by backticked skills/docs/*-contract.md
- * paths added to existing AC / DoD matrix rows. Row count, non-goals and all other row text must be equal.
+ * paths, with the connectors `in`, `and`, `see`, added to existing AC / DoD matrix rows. Row count and non-goals must be equal.
  */
 export function isMatrixPathOnlySpecChange(priorBody, currentBody) {
   const prior = detectAcDodMatrix(priorBody);
@@ -151,15 +163,18 @@ export function isMatrixPathOnlySpecChange(priorBody, currentBody) {
   if (!prior.valid || !current.valid || prior.rows.length !== current.rows.length) return false;
   const norm = (items) => items.map(normalizeCriterionText).join("\n");
   if (norm(readNonGoalItems(priorBody)) !== norm(readNonGoalItems(currentBody))) return false;
-  const bare = (text) => normalizeCriterionText(text.replace(MATRIX_DOC_TOKEN_RE, ""));
   // The digested spec (criteria, done items, non-goals) must match too, not only the matrix rows.
-  const specText = (body) => JSON.stringify(requireSpecFromBody(body), (_k, v) => (typeof v === "string" ? bare(v) : v));
-  try { if (specText(priorBody) !== specText(currentBody)) return false; } catch { return false; }
+  const specStrings = (body) => { const out = []; JSON.stringify(requireSpecFromBody(body), (_k, v) => { if (typeof v === "string") out.push(v); return v; }); return out; };
+  try {
+    const a = specStrings(priorBody);
+    const b = specStrings(currentBody);
+    if (a.length !== b.length || !a.every((t, i) => onlyAddsPathWords(t, b[i]))) return false;
+  } catch { return false; }
   return prior.rows.every((row, i) => {
     const next = current.rows[i];
     const nextText = `${next.criterion}\n${next.evidence}`;
     const kept = (`${row.criterion}\n${row.evidence}`.match(MATRIX_DOC_TOKEN_FIND_RE) ?? []).every((t) => nextText.includes(t));
-    return kept && bare(row.criterion) === bare(next.criterion) && bare(row.evidence) === bare(next.evidence);
+    return kept && onlyAddsPathWords(row.criterion, next.criterion) && onlyAddsPathWords(row.evidence, next.evidence);
   });
 }
 
