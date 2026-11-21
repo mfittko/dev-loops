@@ -54,8 +54,8 @@ create-pr.mjs refuse a hand-written one. It applies the waiver only when:
     ready-for-review.mjs uses), whose recorded specDigest equals the specDigest of
     the linked issue's current body. A differing digest is also accepted when the
     issue's edit history holds the body that digest was computed from and the two
-    bodies differ only by backticked skills/docs/*-contract.md paths and the words in, and, see added to
-    existing matrix rows (ADR 0301); any other difference refuses spec_digest_mismatch.
+    bodies differ only by added backticked skills/docs/*-contract.md paths, the words in, and, see
+    directly next to an added path, and the punctuation ( ) , ; . : in existing matrix rows (ADR 0301); any other difference refuses spec_digest_mismatch.
 Otherwise it refuses with a typed reason and leaves the body unchanged. It never
 waives an extension-defaults.yaml trigger, a rule-modality reversal or removal,
 an unresolvable scan, a standingAuthorizations change, or any other approval.
@@ -138,19 +138,27 @@ export function pathsMissingFromMatrix(paths, issueBody) {
 }
 
 const DOC_TOKEN = "`skills/docs/[A-Za-z0-9._-]*-contract\\.md`";
-const MATRIX_DOC_TOKEN_FIND_RE = new RegExp(DOC_TOKEN, "gu");
-const EXTRA_WORD_RE = new RegExp(`^(?:\\(?${DOC_TOKEN}[),;.]*|in|and|see|[^\\p{L}\\p{N}]+)$`, "u");
+const PATH_WORD_RE = new RegExp(`^\\(?${DOC_TOKEN}[),;.:]*$`, "u");
+const PUNCT_WORD_RE = /^[(),;.:]+$/u;
+const CONNECTOR_RE = /^(?:in|and|see)$/u;
 
-/** True when `cur` is `prior` plus extra words that are each a backticked skills/docs/*-contract.md path, `in`, `and`, `see` or punctuation-only. */
+/** True when `cur` is `prior` plus extra words: backticked skills/docs/*-contract.md paths, the connectors `in`, `and`, `see` directly next to an added path, and `( ) , ; . :` words. */
 function onlyAddsPathWords(prior, cur) {
   const words = (t) => normalizeCriterionText(t).split(/\s+/u).filter(Boolean);
   const want = words(prior);
+  const have = words(cur);
   let i = 0;
-  for (const w of words(cur)) {
+  const extra = new Set();
+  have.forEach((w, k) => {
     if (i < want.length && w === want[i]) i++;
-    else if (!EXTRA_WORD_RE.test(w)) return false;
-  }
-  return i === want.length;
+    else extra.add(k);
+  });
+  if (i !== want.length) return false;
+  return [...extra].every((k) => {
+    const w = have[k];
+    if (PATH_WORD_RE.test(w) || PUNCT_WORD_RE.test(w)) return true;
+    return CONNECTOR_RE.test(w) && [k - 1, k + 1].some((n) => extra.has(n) && PATH_WORD_RE.test(have[n]));
+  });
 }
 
 /**
@@ -170,18 +178,14 @@ export function isMatrixPathOnlySpecChange(priorBody, currentBody) {
     const b = specStrings(currentBody);
     if (a.length !== b.length || !a.every((t, i) => onlyAddsPathWords(t, b[i]))) return false;
   } catch { return false; }
-  return prior.rows.every((row, i) => {
-    const next = current.rows[i];
-    const nextText = `${next.criterion}\n${next.evidence}`;
-    const kept = (`${row.criterion}\n${row.evidence}`.match(MATRIX_DOC_TOKEN_FIND_RE) ?? []).every((t) => nextText.includes(t));
-    return kept && onlyAddsPathWords(row.criterion, next.criterion) && onlyAddsPathWords(row.evidence, next.evidence);
-  });
+  return true;
 }
 
 /** Issue body revisions (full bodies, newest first) from the GitHub edit history. */
 async function defaultFetchIssueBodyHistory({ repo, issue }, { env, ghCommand, runChild }) {
   const { owner, name } = parseRepoSlug(repo);
-  const data = await ghJson(["api", "graphql", "-f", "query=query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){issue(number:$i){userContentEdits(first:100){nodes{diff}}}}}", "-F", `o=${owner}`, "-F", `n=${name}`, "-F", `i=${issue}`], { env, ghCommand, runChild });
+  // shortcut: reads only the first 100 revisions; paginate if a real issue exceeds that.
+  const data = await ghJson(["api", "graphql", "-f", "query=query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){issue(number:$i){userContentEdits(first:100){nodes{diff}}}}}", "-f", `o=${owner}`, "-f", `n=${name}`, "-F", `i=${issue}`], { env, ghCommand, runChild });
   return (data?.data?.repository?.issue?.userContentEdits?.nodes ?? []).map((node) => node?.diff).filter((d) => typeof d === "string");
 }
 
@@ -330,19 +334,20 @@ export async function waiveAdrTripwire(options, {
       for (const prior of await fetchIssueBodyHistory({ repo, issue }, gh)) {
         let digest;
         try { digest = computeSpecDigest(requireSpecFromBody(prior)); } catch { continue; }
-        if (digest === recordedDigest) return isMatrixPathOnlySpecChange(prior, issueBody);
+        if (digest === recordedDigest) return isMatrixPathOnlySpecChange(prior, issueBody) ? "ok" : "edit_goes_beyond";
       }
     } catch { /* fail closed */ }
-    return false;
+    return "no_prior_revision";
   };
   let digestRefusal = null;
   let matched = false;
   for (const { name, head, read } of sources) {
     const recorded = await read();
     if (recorded === currentSpecDigest) { matched = true; break; }
-    if (recorded !== null && await matrixPathOnlyEditSince(recorded)) { matched = true; break; }
+    const since = recorded !== null ? await matrixPathOnlyEditSince(recorded) : null;
+    if (since === "ok") { matched = true; break; }
     // A recorded-but-stale digest outranks an unrecorded one in the refusal.
-    if (recorded !== null) digestRefusal = refuse("spec_digest_mismatch", `the ${name} recorded specDigest ${recorded}, but issue #${issue} now yields ${currentSpecDigest}`);
+    if (recorded !== null) digestRefusal = refuse("spec_digest_mismatch", `the ${name} recorded specDigest ${recorded}, but issue #${issue} now yields ${currentSpecDigest} (${since === "edit_goes_beyond" ? "the edit goes beyond added matrix contract-doc paths" : "no prior issue body revision has that digest"})`);
     else digestRefusal ??= refuse("spec_digest_unrecorded", `the ${name} for head ${(head ?? headSha).slice(0, 7)} recorded no specDigest`);
   }
   if (!matched) return digestRefusal;

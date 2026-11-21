@@ -13,7 +13,7 @@ Amends the standing-waiver digest rule in the [decision record contract](../../s
 ## Decision
 
 1. The waiver keeps the exact digest comparison. When the recorded digest differs from the current one, it reads the issue body edit history (GraphQL `userContentEdits`) and finds the prior body whose spec digest equals the recorded digest.
-2. It accepts the proof only when the prior and current bodies both have a valid matrix with equal row counts, equal non-goals and equal spec text, and when each matrix cell holds the prior cell words in order plus only backticked `skills/docs/*-contract.md` paths, the connectors `in`, `and` and `see`, and punctuation-only words, with every prior path still present. The check is the pure function `isMatrixPathOnlySpecChange`.
+2. It accepts the proof only when the prior and current bodies both have a valid matrix with equal row counts, equal non-goals and equal spec text, and when each matrix cell holds the prior cell words in order plus only backticked `skills/docs/*-contract.md` paths, the connectors `in`, `and` and `see` directly next to an added path, and the punctuation `( ) , ; . :`, with every prior path still present. The check is the pure function `isMatrixPathOnlySpecChange`.
 3. A missing prior body, a history fetch failure or any other difference refuses `spec_digest_mismatch`. The check fails closed.
 4. The pre-PR stale-surface scan reports a hit, site `issue-body/issue-matrix:<path>`, for each `skills/docs/*-contract.md` file changed in `base...HEAD` that no matrix row names. The gap is fixed before the first gate round.
 

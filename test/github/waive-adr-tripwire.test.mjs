@@ -313,16 +313,24 @@ test("a connector word plus a path (the issue 3366 edit) keeps the proof valid; 
   await assertRefusal({ readRecordedSpecDigest: async () => PRIOR_DIGEST, fetchIssueBody: async () => notBody, fetchIssueBodyHistory: async () => [PRIOR_BODY] }, "spec_digest_mismatch");
 });
 
+test("a connector without an adjacent added path, or a hidden word in an HTML comment, refuses", async () => {
+  const refuseBody = (body) => assertRefusal({ readRecordedSpecDigest: async () => PRIOR_DIGEST, fetchIssueBody: async () => body, fetchIssueBodyHistory: async () => [PRIOR_BODY] }, "spec_digest_mismatch");
+  await assertRefusal({ readRecordedSpecDigest: async () => DIGEST, fetchIssueBody: async () => ISSUE_BODY.replaceAll("states the rule.", "and states the rule."), fetchIssueBodyHistory: async () => [ISSUE_BODY] }, "spec_digest_mismatch");
+  await refuseBody(ISSUE_BODY.replace(`\`${CONTRACT}\` carries`, `does <!-- not --> \`${CONTRACT}\` carries`));
+});
+
 test("any other issue edit since the recorded digest still refuses spec_digest_mismatch", async () => {
   const changed = (from, to) => PRIOR_BODY.replaceAll(from, to);
+  const addedRow = ISSUE_BODY.replace("\n\n## Non-goals", "\n| A second criterion states another rule. | `skills/docs/y-contract.md` carries the second rule text. |\n\n## Non-goals");
+  assert.notEqual(addedRow, ISSUE_BODY);
   const cases = {
-    "changed criterion text": changed("states the rule.", "states the new rule."),
-    "added row": changed("\n\n## Non-goals", "\n| A second criterion states another rule. | `skills/docs/y-contract.md` carries the second rule text. |\n\n## Non-goals"),
-    "changed non-goal": changed("Nothing else changes.", "Something else changes."),
+    "changed criterion text": { prior: changed("states the rule.", "states the new rule.") },
+    "added row": { prior: PRIOR_BODY, current: addedRow },
+    "changed non-goal": { prior: changed("Nothing else changes.", "Something else changes.") },
   };
-  for (const prior of Object.values(cases)) {
+  for (const { prior, current } of Object.values(cases)) {
     const digest = computeSpecDigest(requireSpecFromBody(prior));
-    await assertRefusal({ readRecordedSpecDigest: async () => digest, fetchIssueBodyHistory: async () => [prior] }, "spec_digest_mismatch");
+    await assertRefusal({ readRecordedSpecDigest: async () => digest, ...(current ? { fetchIssueBody: async () => current } : {}), fetchIssueBodyHistory: async () => [prior] }, "spec_digest_mismatch");
   }
   await assertRefusal(historyOf(), "spec_digest_mismatch");
   await assertRefusal({ ...historyOf(PRIOR_BODY), fetchIssueBodyHistory: async () => { throw new Error("graphql failed"); } }, "spec_digest_mismatch");

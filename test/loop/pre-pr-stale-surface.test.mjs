@@ -167,3 +167,19 @@ test("a changed contract doc that no matrix row names is a stale-surface hit; a 
   assert.deepEqual(sites(await scan()), ["issue-body/issue-matrix:skills/docs/x-contract.md"]);
   rmSync(body);
 }));
+
+test("a contract doc renamed out of the surface is reported by its original path (ADR 0301)", withRepo(async (dir) => {
+  git(dir, "checkout", "-q", "main");
+  write(dir, "skills/docs/r-contract.md", "Rule one.\nRule two.\nRule three.\n");
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", "add r");
+  git(dir, "checkout", "-q", "feature");
+  git(dir, "merge", "-q", "--no-edit", "main");
+  git(dir, "mv", "skills/docs/r-contract.md", "skills/docs/r-renamed.md");
+  git(dir, "commit", "-q", "-m", "rename out");
+  const body = path.join(dir, "..", `body-${path.basename(dir)}.md`);
+  writeFileSync(body, PR_NEW);
+  const out = (await run(dir, ["--scan", "--base", "main", "--body-file", body, "--issue", "7"], { readIssueBody: async () => ISSUE })).out;
+  assert.ok(out.staleSurfaceHits.some((h) => h.site === "issue-body/issue-matrix:skills/docs/r-contract.md"));
+  rmSync(body);
+}));

@@ -12,7 +12,7 @@ import { fetchIssueBody } from "./detect-issue-refinement-artifact.mjs";
 import { gitStaleSurfaceHits } from "./check-pre-push-delta.mjs";
 import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
 import { pathsMissingFromMatrix } from "../github/waive-adr-tripwire.mjs";
-import { CONTRACT_DOC_RE } from "./check-adr-tripwire.mjs";
+import { CONTRACT_DOC_RE, parseNameStatus } from "./check-adr-tripwire.mjs";
 
 export const PRE_PR_STALE_SURFACE_UNADDRESSED = "pre_pr_stale_surface_unaddressed";
 
@@ -38,7 +38,10 @@ export async function scanPrePrStaleSurface({ cwd, base, bodyFile, issue, staleS
     const issueBody = await readIssueBody({ cwd, issue });
     staleSurfaceHits.push(...diffPrBodyAgainstIssue({ prBody: readFileSync(bodyFile, "utf8"), issueBody }));
     // ADR 0301: a touched contract doc the matrix does not name fails the waiver later; flag it before the first gate round.
-    const contractDocs = git(cwd, ["diff", "--name-only", baseline, head]).split("\n").filter((p) => CONTRACT_DOC_RE.test(p));
+    // Pick the path the tripwire reports: a rename out of the surface names the original path.
+    const contractDocs = parseNameStatus(git(cwd, ["diff", "--name-status", baseline, head]))
+      .map((f) => (f.origPath && CONTRACT_DOC_RE.test(f.origPath) ? f.origPath : f.path))
+      .filter((p) => CONTRACT_DOC_RE.test(p));
     const { matrixInvalid, missing } = pathsMissingFromMatrix(contractDocs, issueBody);
     // An invalid matrix is already one issue-body/issue-matrix hit from the comparison above.
     if (!matrixInvalid) {
