@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ANGLE_LINE_MAX, condenseAnglePrompt, requiredSelfCheckIds, resolveChecklistItems, resolveSelfCheckAngles } from "../../scripts/loop/_self-check-items.mjs";
