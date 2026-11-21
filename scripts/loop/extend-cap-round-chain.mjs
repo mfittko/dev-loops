@@ -18,7 +18,7 @@ import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
 import { ghJson } from "@dev-loops/core/github/gh";
-import { CAP_ROUND_REFUSAL } from "@dev-loops/core/loop/pr-gate-coordination";
+import { CAP_ROUND_REFUSAL, replacementPrOperatorRecovery } from "@dev-loops/core/loop/pr-gate-coordination";
 import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -68,7 +68,7 @@ export function parseExtendCapRoundChainCliArgs(argv) {
   return options;
 }
 
-// RECOVERY-COMMAND-REQUIRED: `recovery` is the one command to run next; a refusal without a unique one leaves it undefined.
+// RECOVERY-COMMAND-REQUIRED: `recovery` is the one command to run next, or `operator: <action>` when only the operator may act.
 const refuse = (reason, detail, recovery) => ({ ok: false, refused: true, reason, detail, recovery });
 // The command that reruns this tool for the PR once its refusal cause is fixed.
 const rerun = (repo, pr) => `${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}`;
@@ -85,7 +85,7 @@ export async function extendCapRoundChain(options, {
   const repoRoot = resolveRepoRoot(cwd);
   // The ledger and the record are read from this checkout, keyed by the --repo slug: it must be --repo.
   const originSlug = detectOriginSlug(repoRoot);
-  if (!originSlug || !repoSlugEquals(originSlug, options.repo)) return refuse("repo_mismatch", `the checkout origin (${originSlug ?? "unresolved"}) is not ${options.repo}; rerun with --repo ${originSlug ?? "<origin slug>"} from a clone of ${options.repo}`, originSlug ? rerun(originSlug, pr) : undefined);
+  if (!originSlug || !repoSlugEquals(originSlug, options.repo)) return refuse("repo_mismatch", `the checkout origin (${originSlug ?? "unresolved"}) is not ${options.repo}; rerun with --repo ${originSlug ?? "<origin slug>"} from a clone of ${options.repo}`, originSlug ? rerun(originSlug, pr) : `operator: run from a clone whose origin is ${options.repo}, then rerun`);
   // Every later path (ledger directory, proof, messages) uses the origin slug, so a case variant of --repo cannot miss the ledger on a case-sensitive filesystem.
   const repo = originSlug;
   const state = await fetchPr({ repo, pr }, { env, ghCommand, runChild });
@@ -94,9 +94,9 @@ export async function extendCapRoundChain(options, {
   if (!/^[0-9a-f]{40}$/u.test(prHead) || !baseRefName) return refuse("pr_state_unreadable", `cannot read PR #${pr} head and base; check \`gh auth status\` and rerun with --repo ${repo} --pr ${pr}`, "gh auth status");
   const head = git(cwd, ["rev-parse", "HEAD"]).toLowerCase();
   if (head !== prHead) {
-    // A local commit ahead of the PR head is unpushed: `gh pr checkout` would not fix it and the branch name is unknown here, so no recovery command is named.
-    const ahead = (() => { try { git(cwd, ["merge-base", "--is-ancestor", prHead, head]); return true; } catch { return false; } })();
-    return refuse("head_mismatch", `the worktree HEAD ${head.slice(0, 7)} is not the PR head ${prHead.slice(0, 7)}; check out and push the PR head, then rerun`, ahead ? undefined : `gh pr checkout ${pr} --repo ${repo}`);
+    // `gh pr checkout` fast-forwards only a worktree HEAD that the PR head contains (or fetches an absent PR head). An ahead or diverged worktree holds local commits: the operator pushes or reconciles them.
+    const checkoutFixes = (() => { try { git(cwd, ["merge-base", "--is-ancestor", head, prHead]); return true; } catch (error) { return error?.status === 128; } })();
+    return refuse("head_mismatch", `the worktree HEAD ${head.slice(0, 7)} is not the PR head ${prHead.slice(0, 7)}; check out and push the PR head, then rerun`, checkoutFixes ? `gh pr checkout ${pr} --repo ${repo}` : "operator: push the local commits to the PR branch, or reset the worktree to the PR head if they are unwanted, then rerun");
   }
 
   // The proof, the chain-end discovery and the range all read origin/<base>: fetch it fresh (bounded, prompt-free) first or refuse.
@@ -190,14 +190,14 @@ export async function extendCapRoundChain(options, {
     const capHead = cap?.log?.headSha;
     const present = (sha) => { try { git(repoRoot, ["cat-file", "-e", `${sha}^{commit}`]); return true; } catch { return false; } };
     const proveOrphan = () => { try { git(repoRoot, ["merge-base", "--is-ancestor", capHead, head]); return false; } catch (error) { return error?.status === 1 && present(capHead) && present(head); } };
-    if (capHead && capHead.toLowerCase() !== head && proveOrphan()) return refuse("baseline_orphaned", CAP_ROUND_REFUSAL.baseline_orphaned, `${CLI} pr create --head <new-branch> --allow-replacement-pr ${pr}`);
+    if (capHead && capHead.toLowerCase() !== head && proveOrphan()) return refuse("baseline_orphaned", CAP_ROUND_REFUSAL.baseline_orphaned, replacementPrOperatorRecovery(pr));
     if (capHead && !present(capHead)) return refuse("no_cap_round_chain", `the cap-round head ${capHead.slice(0, 7)} is not in this clone, so no chain can be read. A cap-round head missing from this clone is outside the PR head's fetched history. Run \`git rev-parse --is-shallow-repository\`: if it prints true, run \`git fetch --unshallow\`, otherwise run \`git fetch origin ${capHead}\`. Then rerun \`${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}\`. If the commit is still absent, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, `git fetch origin ${capHead}`);
     // Issue 3437: without a resolved cap round (fewer closed draft_gate rounds than the cap, or an unreadable ledger) no chain exists to extend, and the next draft_gate round is not refused (round > cap): gate-coordination routes to that round or to the ledger repair, never back to this command.
     const coordination = `${CLI} loop gate-coordination --repo ${repo} --pr ${pr}`;
     if (!cap) return refuse("no_cap_round_chain", `PR #${pr} has no resolved draft_gate cap round (fewer rounds than maxReviewRounds are closed, or the findings ledger is unreadable), so there is no cap-round chain to extend and no extension is needed. Run ${coordination}: it routes to the next draft_gate round, or to the repair of an unreadable ledger.`, coordination);
     // A sealed record at the cap-round head that does not cover the cap round's act set is never overwritten: a reviewer-only run at that head refuses and names this command, so only a replacement PR breaks the cycle.
     const sealedCap = capHeadValid ? sealedClearing(capHeadSha) : null;
-    const replacement = `${CLI} pr create --head <new-branch> --allow-replacement-pr ${pr}`;
+    const replacement = replacementPrOperatorRecovery(pr);
     if (sealedCap) return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}: the sealed record at the cap-round head ${capHeadSha.slice(0, 7)} does not cover the cap round's act set or its candidate is off the PR head's history, and it is never overwritten, so a reviewer-only run at that head refuses. Restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, replacement);
     const delta = `${CLI} loop pre-push-delta --reviewer-only --repo ${repo} --pr ${pr} --baseline ${cap.log.headSha} --pr-head ${head} --findings-log ${capLog} --spec-identity <id> --result-path <result-file>`;
     return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}. Run ${delta} (then --result <result-file> --invocation <1-3>) until it is locally_clear, then rerun this command, or restart on a replacement PR. If the PR head already carries a clean current-head draft_gate verdict, no extension is needed. ${coordination} routes this refusal back to this command, so only the pre-push delta or the replacement-PR restart breaks the cycle: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, delta);

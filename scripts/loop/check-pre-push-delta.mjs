@@ -72,6 +72,7 @@ import { createGitClient, main as validateChangelog } from "../docs/validate-cha
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
+import { replacementPrOperatorRecovery } from "@dev-loops/core/loop/pr-gate-coordination";
 
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --result-path <path> --fixer-plan <path> --site-coverage <path> [--repo <owner/name> --pr <n>] [--worktree <dir>]
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--repo <owner/name> --pr <n>] [--worktree <dir>]   (fixer handbackCheck run)
@@ -558,8 +559,8 @@ const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit i
 const chainEndRecovery = ({ repo, pr }) => renderCliText(`dev-loops gate extend-cap-round-chain --repo ${repo} --pr ${pr}`);
 const chainEndRemedy = () => renderCliText(`The cap round's act items are already cleared: run dev-loops gate extend-cap-round-chain --repo <owner/name> --pr <n> (its refusal names the reviewer-only delta and the baseline to use, the cleared candidate and not this baseline)`);
 const replacementRemedy = () => renderCliText("node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number> while this PR is still open");
-// RECOVERY-COMMAND-REQUIRED: the same restart as one runnable command, with the real PR number and no prose.
-const replacementRecovery = ({ pr }) => renderCliText(`node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr ${pr}`);
+// RECOVERY-COMMAND-REQUIRED: the replacement-PR restart is an operator decision (ADR 0255): the shared operator form names the full procedure.
+const replacementRecovery = ({ pr }) => renderCliText(replacementPrOperatorRecovery(pr));
 
 // ADR 0255 (decision 6, amended by ADR 0261): why a prior record at the baseline is protected from the reviewer-only run, or null. The same act set re-runs. A non-clearing record
 // (the fixer's needs_fix) is taken over whatever its ref set or candidate: it is never clearing evidence, and the takeover continues its invocation count. Only a locally_clear

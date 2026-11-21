@@ -369,7 +369,7 @@ export function parseJsonText(text) {
   }
 }
 
-// Renders the one shared { ok: false, error, hint? } envelope every
+// Renders the one shared { ok: false, error, hint?, recovery? } envelope every
 // JSON-emitting gate CLI's main() catch block prints to stderr. `usage` is
 // accepted only as a PRESENCE check for a fallback usage string (a caller
 // passing its own `USAGE` constant when the error itself might not already

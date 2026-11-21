@@ -1501,7 +1501,7 @@ test("GATE-EXEC-ROUND-CAP: a medium act list reaches the fixer below and at the 
 });
 
 // Issue 3437 (PR 3433 shape): the emitter, extend-cap-round-chain and gate-coordination read one cap resolver, so they agree on whether a head is in the cap round.
-test("issue 3437: 3 closed rounds at cap 4 are not the cap round for the emitter or extend-cap-round-chain; 4 closed rounds are the cap round for both", async () => {
+test("issue 3437: 3 closed rounds at cap 4: no cap round resolves, so the emitter skips the missing-ledger refusal for the unposted round and extend-cap-round-chain finds no chain; 4 closed rounds are the cap round for both", async () => {
   await withFixture(async ({ root, wt, head, files, emit }) => {
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
     await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
@@ -1523,6 +1523,29 @@ test("issue 3437: 3 closed rounds at cap 4 are not the cap round for the emitter
     assert.doesNotMatch((await extend()).detail ?? "", /no resolved draft_gate cap round/);
   });
 });
+
+// Issue 3437 round 2: the missing-ledger guard stays fail-closed for a posted blocked verdict and for an unreadable prior ledger.
+for (const [name, setup] of [
+  ["a missing cap-round ledger with a posted blocked verdict", { blocked: true }],
+  ["an unreadable prior ledger", { unreadable: true }],
+]) {
+  test(`issue 3437: at the cap round ${name} refuses round_cap_reached`, async () => {
+    await withFixture(async ({ root, wt, head, files, emit }) => {
+      await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
+      await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
+      const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
+      await mkdir(dir, { recursive: true });
+      const ledger = (sha, body) => writeFile(path.join(dir, `draft_gate-${sha.repeat(40)}.json`), body ?? JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha.repeat(40), verdict: "findings_present", findings: [] }));
+      await ledger("d");
+      await ledger("e");
+      await ledger("f", setup.unreadable ? "{ not json" : undefined);
+      // Control: with readable ledgers and a clean posted verdict the round being posted still emits.
+      if (setup.blocked) assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+      const blockedAt = async ({ headSha }) => summarizeGateReviewCommentMarkers(verdictReviews(head, ["draft_gate"]).map((r) => ({ ...r, body: r.body.replace("Verdict: clean", "Verdict: blocked") })), { headSha });
+      await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined, ...(setup.blocked ? { fetchVerdictMarkers: blockedAt } : {}) }), (e) => e.refusal === "round_cap_reached" && /failing closed at the cap round/.test(e.message));
+    });
+  });
+}
 
 for (const [severity, refuses] of [["critical", false], ["HIGH", false], ["medium", false], ["low", false], ["nice-to-have", false], ["", true]]) test(`GATE-EXEC-SOFT-CAP: a cap-round act item with severity ${JSON.stringify(severity)} ${refuses === true ? "is refused as malformed" : refuses ? "passes the matcher and is refused by " + refuses : "emits a fixer order"}`, async () => {
   await withFixture(async ({ root, wt, head, files, emit }) => {

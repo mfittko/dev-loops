@@ -11,7 +11,7 @@
 // test/docs/format-cli-error.test.mjs (parity against the core export), the
 // same drift-guard pattern direct-run.mjs uses.
 //
-// Renders the one shared { ok: false, error, hint? } envelope every
+// Renders the one shared { ok: false, error, hint?, recovery? } envelope every
 // JSON-emitting gate CLI's main() catch block prints to stderr. `usage` is a
 // PRESENCE check only: when the error carries a usage string (or a caller
 // passes one), a one-line `hint` points at --help rather than inlining the

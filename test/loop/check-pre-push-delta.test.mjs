@@ -18,6 +18,8 @@ import { runDocsValidators } from "../../scripts/docs/docs-validators.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { gateDeltaRecordPath, isLifecycleFinding, readGateDeltaRecord, readSealedGateDeltaRecord, writeGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { decidePiToolCall } from "../../extension/readonly-role-gate.ts";
+import { replacementPrOperatorRecovery } from "@dev-loops/core/loop/pr-gate-coordination";
+import { renderCliText } from "@dev-loops/core/loop/cli-command";
 
 setDefaultTimeout(30000); // most cases seed a real git repo and run the CLI; the 5 s default fails under load
 
@@ -1615,7 +1617,7 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
         // Issue 3437 ac:3: the recovery is the one runnable command of the printed remedy, with the real PR number; an unsealed record names the rm step and carries none.
         if (unsealed || message === "bounded_out") assert.equal(error.recovery, undefined, "no recovery contradicts the printed remedy");
         else if (/extend-cap-round-chain/.test(String(remedy))) assert.match(error.recovery, /gate extend-cap-round-chain --repo owner\/repo --pr 70$/u);
-        else assert.match(error.recovery, /pr create --head <new-branch> --allow-replacement-pr 70$/u, "the off-history and other-refs recovery is a pure command, not the prose remedy");
+        else assert.equal(error.recovery, renderCliText(replacementPrOperatorRecovery(70)), "the off-history and other-refs recovery is the shared operator form");
         return true;
       });
       assert.equal(fs.readFileSync(recordPath, "utf8"), before, "the record is never overwritten");
