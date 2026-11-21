@@ -2936,17 +2936,17 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     const loaded = await loadPrGateCoordinationContextReusingSnapshot(coordinationOptions, gh, { expectedHeadSha: options.headSha });
     coordinationContext = loaded.context;
     if (loaded.reused) {
-      // Read live: head, draft and PR state, PR body, closing issue references, both thread counts, draft_gate evidence, verdict comments and the refinement artifact.
+      // Read live: head, draft and PR state, mergeable and mergeStateStatus, PR body, closing issue references, both thread counts, draft_gate evidence, verdict comments and the refinement artifact.
       // Taken from the snapshot: CI status, the Copilot request and convergence fields, the loop interpretation and disposition, the post-convergence suppression flag, and the base ref. A same-head CI re-run or a body-only Copilot review after the pre-flight is not seen until the 10-minute bound or a head change.
       // Any live difference from the snapshot loads the whole context fresh.
       const snapshotHead = String(coordinationContext.currentHeadSha ?? "").toLowerCase();
       const prev = coordinationContext.prData ?? {};
-      const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,isDraft,state,body,closingIssuesReferences"], { env, ghCommand, runChild });
+      const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,isDraft,state,mergeable,mergeStateStatus,body,closingIssuesReferences"], { env, ghCommand, runChild });
       const upper = (value) => String(value ?? "").toUpperCase();
       const issueNumbers = (refs) => (Array.isArray(refs) ? refs : []).map((ref) => Number(ref?.number)).sort((a, b) => a - b).join(",");
       let freshEvidence = null;
       if (String(live?.headRefOid ?? "").toLowerCase() === snapshotHead && Boolean(live?.isDraft) === Boolean(prev.isDraft)
-        && upper(live?.state) === upper(prev.state) && (live?.body ?? "") === (prev.body ?? "")
+        && upper(live?.state) === upper(prev.state) && upper(live?.mergeable) === upper(prev.mergeable) && upper(live?.mergeStateStatus) === upper(prev.mergeStateStatus) && (live?.body ?? "") === (prev.body ?? "")
         && issueNumbers(live?.closingIssuesReferences) === issueNumbers(prev.closingIssuesReferences)) {
         const counts = await fetchLiveThreadCounts(coordinationOptions, gh);
         if (counts.unresolvedThreadCount === coordinationContext.snapshot?.unresolvedThreadCount && counts.unresolvedGateThreadCount === coordinationContext.unresolvedGateThreadCount) {
