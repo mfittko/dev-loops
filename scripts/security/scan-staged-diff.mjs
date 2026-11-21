@@ -58,8 +58,9 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     result = await scanDiff(diffText);
   } catch (error) {
     if (error?.code !== "ERR_MODULE_NOT_FOUND") throw error;
-    const pkg = /Cannot find (?:package|module) '([^']+)'/.exec(error.message)?.[1] ?? "unknown";
-    throw new Error(`secret scanner cannot load its dependency ${pkg} (ERR_MODULE_NOT_FOUND): this worktree's node_modules is stale. Run \`bun install --frozen-lockfile\` with cwd ${cwd} and retry.`);
+    const pkg = /Cannot find (?:package|module) ['"]([^'"]+)['"]/.exec(error.message)?.[1];
+    if (!pkg || pkg.startsWith(".") || pkg.startsWith("/") || pkg.startsWith("file:")) throw error;
+    throw new Error(`secret scanner cannot load its dependency ${pkg} (ERR_MODULE_NOT_FOUND): this worktree's node_modules is stale. Run \`bun install --frozen-lockfile\` with cwd ${cwd} and retry.`, { cause: error });
   }
   const payload = result.ok
     ? { ok: true, hits: [] }

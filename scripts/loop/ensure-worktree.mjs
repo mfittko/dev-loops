@@ -25,10 +25,12 @@
  * - Provisioning is invoked via the imported provisionWorktree core (shared
  *   with provision-worktree.mjs's CLI) — not shelled out. It fails soft: a
  *   provision warning never aborts the worktree.
- * - On create only, `bun install --frozen-lockfile` runs inside the worktree
- *   first (WORKTREE-DEPS-ISOLATED), then provisioning. Fail-soft: the result's
- *   `deps` field reports it; a failed or skipped install never fails the worktree.
- *   A reused worktree is not touched.
+ * - On create, `bun install --frozen-lockfile` runs inside the worktree
+ *   first (WORKTREE-DEPS-ISOLATED), then provisioning. On reuse it reruns only
+ *   when the fingerprint of bun.lock, the root package.json and the workspace
+ *   package.json files differs from node_modules/.dev-loops-deps-stamp.
+ *   Fail-soft: the result's `deps` field reports it; a failed or skipped
+ *   install never fails the worktree.
  *
  * Prints a JSON result to stdout:
  *   { ok, path, created|reused, base?, branchOrigin, diverged?,
@@ -36,9 +38,7 @@
  * See the full USAGE block below for the field-by-field contract.
  * A git create failure is a hard error (exit 1); provisioning is fail-soft.
  */
-import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
@@ -48,6 +48,7 @@ import { parse as parseYaml } from "yaml";
 import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
 import { normalizeToBareBranch, resolveBaseBranch } from "@dev-loops/core/config";
 import { provisionWorktree } from "./provision-worktree.mjs";
+import { defaultInstallDeps, ensureDeps, refreshDepsIfChanged } from "./_worktree-deps.mjs";
 import { GUARDED_HOOKS, installDefaultBranchGuard } from "@dev-loops/core/loop/default-branch-guard";
 import { installCommitMsgGuard } from "@dev-loops/core/loop/commit-msg-guard";
 import { canonicalize } from "./_worktree-path.mjs";
@@ -100,8 +101,10 @@ Output (stdout, JSON):
                      // remote, ...) — branch resolution above still ran,
                      // just against whatever was already fetched
     "deps"?: { "ok": bool, "ran": bool, "reason"?, "exitCode"? },
-                     // create only: the fail-soft bun install --frozen-lockfile
-                     // result (ran:false when no bun.lock)
+                     // the fail-soft bun install --frozen-lockfile result
+                     // (ran:false when no bun.lock). On reuse it is present
+                     // only when the install ran. stampWritten:false means
+                     // the deps stamp could not be written
     "provision": { "actions": [...], "summary": {...} },
     "warning"?: { "code": "dirty_after_provision", "paths": [...] },
                      // present, on both create and reuse, only when
@@ -610,55 +613,6 @@ function installCommitMsgGuardForRoot(gitCommand, root) {
     process.stderr.write(`[ensure-worktree] WARN commit-msg guard not installed: ${detail}\n`);
     return { ok: false, installed: false, refreshed: false, skipped: true, reason: detail, requireClaudeSession: false };
   }
-}
-
-// Fail-soft `bun install --frozen-lockfile` in a worktree without its own node_modules so it never
-// resolves packages from the main checkout's stale node_modules.
-function defaultInstallDeps(cwd) {
-  const r = spawnSync(process.env.BUN_BIN || "bun", ["install", "--frozen-lockfile"], { cwd, timeout: 300000, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  if (r.error) return { ok: false, reason: r.error.message };
-  if (r.status === null && r.signal) return { ok: false, reason: `bun install terminated by ${r.signal}` };
-  return r.status === 0 ? { ok: true } : { ok: false, exitCode: r.status, reason: (r.stderr ?? "").trim().split("\n").slice(-3).join(" | ") };
-}
-
-// Fingerprint of everything that decides node_modules: the lockfile and each workspace package.json.
-function depsFingerprint(worktreePath) {
-  const files = [path.join(worktreePath, "bun.lock"), path.join(worktreePath, "package.json")];
-  const packagesDir = path.join(worktreePath, "packages");
-  if (existsSync(packagesDir)) {
-    for (const name of readdirSync(packagesDir).sort()) files.push(path.join(packagesDir, name, "package.json"));
-  }
-  const hash = createHash("sha256");
-  for (const file of files) if (existsSync(file)) hash.update(file).update(readFileSync(file));
-  return hash.digest("hex");
-}
-
-const DEPS_STAMP = path.join("node_modules", ".dev-loops-deps-stamp");
-
-// Runs the install only when the lockfile or a workspace package.json differs from the stamp written by the last
-// successful install here. A missing stamp counts as changed, so a worktree that predates the stamp installs once.
-export function refreshDepsIfChanged(worktreePath, installDeps = defaultInstallDeps) {
-  if (!existsSync(path.join(worktreePath, "bun.lock"))) return { ok: true, ran: false, reason: "no bun.lock" };
-  const stampPath = path.join(worktreePath, DEPS_STAMP);
-  if (existsSync(stampPath) && readFileSync(stampPath, "utf8") === depsFingerprint(worktreePath)) return { ok: true, ran: false, reason: "deps unchanged" };
-  return ensureDeps(worktreePath, installDeps);
-}
-
-function ensureDeps(worktreePath, installDeps) {
-  if (!existsSync(path.join(worktreePath, "bun.lock"))) return { ok: true, ran: false, reason: "no bun.lock" };
-  const fingerprint = depsFingerprint(worktreePath);
-  let result;
-  try {
-    result = installDeps(worktreePath);
-  } catch (err) {
-    result = { ok: false, reason: err?.message ?? String(err) };
-  }
-  if (!result.ok) process.stderr.write(`[ensure-worktree] WARN bun install --frozen-lockfile failed (continuing): ${result.reason ?? ""}\n`);
-  else {
-    mkdirSync(path.join(worktreePath, "node_modules"), { recursive: true });
-    writeFileSync(path.join(worktreePath, DEPS_STAMP), fingerprint);
-  }
-  return { ran: true, ...result };
 }
 
 // A provisioned worktree must be clean; list untracked/modified paths so a dirty-tree prerequisite is reported, not discovered later.

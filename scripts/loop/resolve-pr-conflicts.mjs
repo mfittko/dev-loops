@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
-import { refreshDepsIfChanged } from "./ensure-worktree.mjs";
+import { defaultInstallDeps, refreshDepsIfChanged } from "./_worktree-deps.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: resolve-pr-conflicts.mjs [--base <branch>] [--repo-root <dir>] [--no-verify] [--push] [--json]
@@ -291,7 +291,7 @@ async function abortMerge({ cwd, env }) {
   await run("git", ["merge", "--abort"], { cwd, env });
 }
 
-export async function resolvePrConflicts(options, { env = process.env, runVerification = run } = {}) {
+export async function resolvePrConflicts(options, { env = process.env, runVerification = run, installDeps = defaultInstallDeps } = {}) {
   const cwd = options.repoRoot;
 
   // Resolve base branch: explicit flag, else `gh pr view`, else "main".
@@ -326,7 +326,7 @@ export async function resolvePrConflicts(options, { env = process.env, runVerifi
   const merge = await run("git", [...identity, "-c", "merge.conflictStyle=diff3", "merge", "--no-edit", `origin/${base}`], { cwd, env });
   if (merge.code === 0) {
     const result = { ok: true, action: "clean_merge", base, resolvedFiles: [], pushed: false };
-    await afterResolve(result, options, { cwd, env, runVerification });
+    await afterResolve(result, options, { cwd, env, runVerification, installDeps });
     return result;
   }
 
@@ -376,13 +376,19 @@ export async function resolvePrConflicts(options, { env = process.env, runVerifi
   }
 
   const result = { ok: true, action: "resolved", base, resolvedFiles: [SAFE_RESOLVABLE_PATH], pushed: false };
-  await afterResolve(result, options, { cwd, env, runVerification });
+  await afterResolve(result, options, { cwd, env, runVerification, installDeps });
   return result;
 }
 
-async function afterResolve(result, options, { cwd, env, runVerification }) {
+async function afterResolve(result, options, { cwd, env, runVerification, installDeps }) {
   // The merge may have pulled in a new dependency; install before verification or a later commit hook runs against stale node_modules.
-  const deps = refreshDepsIfChanged(cwd);
+  let root = cwd;
+  try {
+    root = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || cwd;
+  } catch {
+    // not a git checkout: keep cwd
+  }
+  const deps = refreshDepsIfChanged(root, installDeps);
   if (deps.ran) result.deps = deps;
   if (options.verify) {
     const verify = await runVerification("bun", ["run", "test:docs"], { cwd, env });

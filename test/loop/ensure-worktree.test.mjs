@@ -1437,7 +1437,7 @@ test("ensure: no bun.lock skips the install", async () => {
   }
 });
 
-test("ensure: reuse does not install and reports no deps", async () => {
+test("ensure: reuse with unchanged deps does not install and reports no deps", async () => {
   const repo = makeRepo();
   try {
     commitBunLock(repo);
@@ -1445,6 +1445,24 @@ test("ensure: reuse does not install and reports no deps", async () => {
     const reused = await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps: () => assert.fail("must not install on reuse") });
     assert.equal(reused.reused, true);
     assert.equal(reused.deps, undefined);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: a filesystem error in the deps stamp never throws and reports stampWritten false", async () => {
+  const repo = makeRepo();
+  try {
+    commitBunLock(repo);
+    const created = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, { installDeps: () => ({ ok: true }) });
+    // A directory at the stamp path makes the stamp read fail with EISDIR and the rewrite fail too.
+    const stamp = path.join(created.path, "node_modules", ".dev-loops-deps-stamp");
+    rmSync(stamp, { force: true });
+    mkdirSync(stamp, { recursive: true });
+    const reused = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, { installDeps: () => ({ ok: true }) });
+    assert.equal(reused.reused, true);
+    assert.equal(reused.deps.ran, true);
+    assert.equal(reused.deps.stampWritten, false);
   } finally {
     repo.cleanup();
   }
