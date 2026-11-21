@@ -65,10 +65,10 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     if (!values.scan && !values.issue && !values["no-linked-issue"]) throw parseError("record mode requires --body-file with --issue, or --no-linked-issue when the PR body is the spec");
     const output = { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr };
     const base = values.base ?? await defaultBase(cwd);
-    const scan = await scanPrePrStaleSurface({ cwd, base, bodyFile: values["body-file"], issue, ...(readIssueBody ? { readIssueBody } : {}) });
+    const head = resolveHead(cwd); // one read: the scan, the self-check and the record all name this head
+    const scan = await scanPrePrStaleSurface({ cwd, base, head, bodyFile: values["body-file"], issue, ...(readIssueBody ? { readIssueBody } : {}) });
     if (values.scan) return emitResult(scan, output);
     requireStaleSurfaceAddressed(scan, readSkipsFile(values["skips-file"]));
-    const head = resolveHead(cwd);
     const selfCheck = readSelfCheckFile(values["self-check-file"], await requiredSelfCheckIds(resolveRepoRoot(cwd), base, head));
     const { record, file } = writePrePrReviewRecord({ cwd, verdict: values.verdict, disposition: values.disposition, selfCheck, expectedHead: head });
     return emitResult({ ok: true, head: record.head, verdict: record.verdict, disposition: record.disposition, file }, output);
