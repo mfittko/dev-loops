@@ -18,6 +18,7 @@ ADR 0150 binds the Delta input, result and closure runs to the pulled fixer unit
 ## Consequences
 
 - A fix that edits the fixer renderer completes the Delta review, the result run and the push.
-- Watchpoint: the check no longer proves that the prompt bytes equal a render of `plan.workOrder`. A prompt, plan hash and receipt hash forged together now pass this check. Only the pull script writes the receipt, under the main checkout tmp root, so this narrowing is accepted.
-- Watchpoint: an edit to a plan field that the semantic digest excludes (for example `workOrder.executionRules.contract`) no longer refuses at the Delta check while the prompt bytes stay unchanged.
+- `authenticateCoverage` also checks that the prompt ends with the complete Work order JSON block rendered from `plan.workOrder`. This binds the fields the semantic digest drops (`sha256`, `bytes`, `outputRefs`, `promptPath`, `handbackCheck`) to the prompt bytes. It mirrors `authenticateOriginalPlan` in `scripts/github/_fixer-emission-evidence.mjs`, and both call one helper. The refusal text reads `materialization differs from the plan's work order`.
+- Watchpoint: the check no longer proves that the prose before the Work order JSON block equals a render of `plan.workOrder`. A prompt, plan hash and receipt hash forged together with a matching suffix pass this check. Only the pull script writes the receipt, under the main checkout tmp root, so this narrowing is accepted.
+- Watchpoint: a fix that changes the suffix format (the heading or the JSON serialization) refuses here, as `authenticateOriginalPlan` refuses it at completion.
 - A re-pull of the same unit after a renderer edit still refuses `local_materialization_integrity_failure`.
