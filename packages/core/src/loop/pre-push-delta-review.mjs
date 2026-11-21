@@ -433,7 +433,10 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], valid
     if (f?.residueOf != null && !expectedRefs.has(f.residueOf)) errors.push(`newFindings[${i}].residueOf ${JSON.stringify(f.residueOf)} is not in the act set`);
     if (!membershipOnly && nonEmpty(f?.skipReason) && expectedRefs.has(f.residueOf)) {
       const actItem = sequence.actItems.find((item) => item.ref === f.residueOf);
-      const recorded = recordedSkipReason(validationCoverage, actItem.fingerprint ?? actItem.ref, typeof f.site === "string" ? f.site : null);
+      const fp = actItem.fingerprint ?? actItem.ref;
+      // A blank site is siteless, as deltaFixerFindings seals it for the handback.
+      const site = typeof f.site === "string" && f.site.trim() ? f.site : null;
+      const recorded = recordedSkipReason(validationCoverage, fp, site);
       if (recorded !== f.skipReason.trim()) {
         errors.push(`PRE-PUSH-DELTA-RESIDUE: newFindings[${i}].skipReason must equal the reason recorded for site ${JSON.stringify(f.site)} of act item ${f.residueOf}: ${JSON.stringify(recorded)}`);
       }

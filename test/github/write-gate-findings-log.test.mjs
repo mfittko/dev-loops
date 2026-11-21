@@ -308,6 +308,20 @@ test("parseWriteGateFindingsLogCliArgs rejects invalid verdict", () => {
   }, /verdict/);
 });
 
+test("writeGateFindingsLog records the context's pr-body digest in the ledger and omits it when no context exists", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const args = { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha, verdict: "clean", findings: "[]", tmpRoot };
+    assert.equal((await writeGateFindingsLog(args, { repoRoot })).log.prBodySha256, undefined);
+    const contextDir = path.join(tmpRoot, "gate-context", "owner-repo", "pr-42");
+    await mkdir(contextDir, { recursive: true });
+    const digest = "c".repeat(64);
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.json`), JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: digest }] }), "utf8");
+    assert.equal((await writeGateFindingsLog(args, { repoRoot })).log.prBodySha256, digest);
+  });
+});
+
 test("parseWriteGateFindingsLogCliArgs rejects invalid head SHA", () => {
   assert.throws(() => {
     parseWriteGateFindingsLogCliArgs([
@@ -3705,7 +3719,7 @@ test("writeGateFindingsLog appends the pinned Copilot body cluster and records i
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-body-"));
   try {
     const headSha = "abc1234567890abcdef000000000000000000000";
-    const body = JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "Refs list drops entries", recommendation: "parse both forms" }] });
+    const body = JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "Refs list drops entries", recommendation: "parse both forms", reviewId: "PRR_body" }] });
     await writeFile(path.join(tmpDir, "body.json"), body);
     const { createHash } = await import("node:crypto");
     const workOrder = { copilotBodyClusterId: 1, requiredReads: [{ kind: "copilot-body-feedback", path: path.join(tmpDir, "body.json"), sha256: createHash("sha256").update(body).digest("hex") }] };
@@ -3720,6 +3734,7 @@ test("writeGateFindingsLog appends the pinned Copilot body cluster and records i
     });
     const written = JSON.parse(await readFile(result.path, "utf8")).findings.find((f) => f.angle === "copilot-body");
     assert.equal(written.judgeDisposition, "act");
+    assert.equal(written.reviewId, "PRR_body", "the ledger keeps the review id the judge-bound record binds to");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

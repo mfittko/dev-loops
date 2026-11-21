@@ -75,7 +75,7 @@ fetchDegraded?, provision: { actions, summary }, deps?, warning?, guard }`. `bas
 create; `provision` is the full `provisionWorktree()` result; `fetchDegraded: true`
 means at least one candidate remote's fetch failed, so branch resolution used the
 refs already present. Provisioning is fail-soft; a `git worktree add` failure is
-a hard error. A newly created worktree first runs `bun install --frozen-lockfile` inside it when a `bun.lock` exists and reports `deps: { ok, ran, reason?, exitCode? }`; a failed install never fails the worktree (`WORKTREE-DEPS-ISOLATED`). A reused worktree is not touched and reports no `deps`. `warning: { code: "dirty_after_provision", paths }` appears when `git status --porcelain` is non-empty after provisioning, which on reuse includes pre-existing uncommitted changes; list those paths before starting work.
+a hard error. A newly created worktree first runs `bun install --frozen-lockfile` inside it when a `bun.lock` exists and reports `deps: { ok, ran, reason?, exitCode?, stampWritten? }`; a failed install never fails the worktree (`WORKTREE-DEPS-ISOLATED`). A reused worktree reruns the install when the fingerprint of `bun.lock`, the root `package.json` and `packages/*/package.json` differs from `node_modules/.dev-loops-deps-stamp`, and reports `deps` only when the install ran. `resolve-pr-conflicts` applies the same check after a base merge and reports `deps` on its result when the install ran. `stampWritten: false` means the stamp could not be written. `warning: { code: "dirty_after_provision", paths }` appears when `git status --porcelain` is non-empty after provisioning, which on reuse includes pre-existing uncommitted changes; list those paths before starting work.
 
 `guard` is the default-branch guard's install result for the primary checkout
 (`{ ok, installed, refreshed, skipped, defaultBranches?, droppedExplicitBranches?, reason? }`),
@@ -119,7 +119,7 @@ worktree:
   — provisioning never aborts init. Idempotent on worktree reuse.
 - **Opt-in:** empty/absent by default; no baked-in file list.
 - In a dev-loops checkout (`package.json` name `dev-loops` plus `agents/`), provisioning also renders `.pi/agents` from the worktree's own `agents/` and reports a `mode: "render"` action that the summary does not count. It skips the render, with a `mode: "skip"` action, when the branch still tracks `.pi/agents` (decision record 0173).
-- **Not for `node_modules`:** `ensure-worktree` installs them in a newly created worktree via `bun install --frozen-lockfile` (`WORKTREE-DEPS-ISOLATED`).
+- **Not for `node_modules`:** `ensure-worktree` installs them via `bun install --frozen-lockfile` in a newly created worktree, and in a reused worktree when the dependency fingerprint changed (`WORKTREE-DEPS-ISOLATED`).
 
 Run manually with:
 
@@ -364,7 +364,7 @@ branch's commits.
 `WORKTREE-DEPS-ISOLATED`: A worktree's dependencies MUST NOT be assumed present
 or valid from the main checkout's `node_modules`; run the repository-pinned
 Bun 1.4.1 command `bun install --frozen-lockfile` inside the worktree whenever
-it needs dependencies (`ensure-worktree` does this for a newly created worktree, fail-soft and reported as `deps`; a reused worktree is not touched). If the frozen install reports manifest/`bun.lock` drift,
+it needs dependencies (`ensure-worktree` does this for a newly created worktree and for a reused worktree whose dependency fingerprint changed, and `resolve-pr-conflicts` does it after a base merge, all fail-soft and reported as `deps`). If the frozen install reports manifest/`bun.lock` drift,
 fix and commit the lockfile deliberately rather than weakening the frozen mode.
 `scripts/run-bun-test.mjs` refuses to start a test run (before spawning) when
 `@dev-loops/core` does not resolve, walking up from the checkout root like node,

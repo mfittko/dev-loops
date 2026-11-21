@@ -5063,3 +5063,31 @@ test("the raw copilotRequestNotObservable flag never bypasses an observable Copi
     assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE, label);
   }
 });
+
+test("#3373: the reply_resolve_review_threads reason names the close-gate-findings rerun for a judge-act pr_body thread, on the clean-marker and cap-round-fixed branches", () => {
+  const base = {
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "success",
+    unresolvedGateThreadCount: 1,
+  };
+  const cleanMarker = evaluatePrGateCoordination({
+    ...base,
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+  });
+  const capFixed = evaluatePrGateCoordination({
+    ...base,
+    draftCapRoundFixed: true,
+    draftGate: gate({ visible: true, headSha: "def5678", verdict: "findings_present" }),
+  });
+  for (const result of [cleanMarker, capFixed]) {
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
+    assert.match(result.reason, /judge-act thread with remedyKind pr_body is closed by a close-gate-findings rerun after the PR-body edit/);
+    assert.match(result.reason, /judge-disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied — closed by a close-gate-findings rerun/);
+  }
+  assert.match(capFixed.reason, /cap round's fixer pass landed/);
+});

@@ -58,7 +58,7 @@ import { capRoundExit, foldDraftGateSatisfied, isCleanDraftVerdict } from "@dev-
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContextReusingSnapshot } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
-import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
@@ -4574,3 +4574,38 @@ if (isDirectCliRun(import.meta.url)) {
   loadCommentTrustConfigOrExit(undefined, () => parseWriteGateContextCliArgs(process.argv.slice(2)).help);
   await main();
 }
+
+// The writer's --tmp-root of a ledger at <root>/gate-findings/<slug>/pr-N/<file>; undefined for any other layout (default root).
+export function ledgerTmpRoot(ledgerPath) {
+  if (!ledgerPath) return undefined;
+  const parts = path.resolve(ledgerPath).split(path.sep);
+  return parts.length > 4 && parts.at(-4) === "gate-findings" && /^pr-\d+$/.test(parts.at(-2)) ? parts.slice(0, -4).join(path.sep) || path.sep : undefined;
+}
+
+// The pr-body digest the context at the given head recorded. write-gate-context.mjs writes the context under the reviewed worktree's tmp/,
+// while the ledger sits under the main checkout's tmp/, so every checkout's tmp/ and --context-tmp-root come first and the ledger root is the fallback.
+export async function readReviewedBodySha256(options, headSha, repoRoot) {
+  const id = { repo: options.repo, pr: options.pr, gate: options.gate, headSha };
+  // Every root is read: a same-head earlier round under another root can hold an older digest, so disagreeing digests refuse.
+  const found = new Map();
+  // The round's own context sits in the reviewed worktree (the first checkout); a digest found only elsewhere is an earlier round's and never stands alone.
+  let reviewedWorktreeHasContext = false;
+  for (const [t, tmpRoot] of [options.contextTmpRoot, undefined, ledgerTmpRoot(options.findingsLedger)].entries()) {
+    for (const [i, root] of resolveLedgerCheckouts(repoRoot).entries()) {
+      const file = path.resolve(root, buildGateContextPath({ ...id, tmpRoot: tmpRoot || "tmp" }));
+      // A strict read: only a missing context is absent. A truncated or unreadable one refuses, so a stale same-head digest cannot stand alone.
+      const context = await readGateContext({ ...id, tmpRoot }, { repoRoot: root }).catch((err) => {
+        throw new Error(`body_read_unrecorded: the context ${file} cannot be read (${err instanceof Error ? err.message : String(err)}); remove or repair it, or fix the items with a commit`);
+      });
+      const sha = Array.isArray(context?.requiredReads) ? context.requiredReads.find((r) => r?.kind === "pr-body")?.sha256 : null;
+      if (typeof sha === "string" && sha) {
+        found.set(file, sha);
+        if (i === 0 && t < 2) reviewedWorktreeHasContext = true;
+      }
+    }
+  }
+  if (found.size && !reviewedWorktreeHasContext) throw new Error(`body_read_unrecorded: the reviewed worktree holds no context at ${headSha}, so the reviewed body is unknown; the only digests found belong to other checkouts (${[...found.keys()].join(", ")}). Rerun from the reviewed worktree or fix the items with a commit`);
+  if (new Set(found.values()).size > 1) throw new Error(`body_read_unrecorded: the contexts at ${headSha} record different pr-body digests, so the reviewed body is ambiguous; remove the stale context of the earlier same-head round or fix the items with a commit. Contexts: ${[...found].map(([file, sha]) => `${file} (${sha})`).join(", ")}`);
+  return [...found.values()][0] ?? null;
+}
+

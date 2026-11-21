@@ -2316,7 +2316,7 @@ test("complete THREAD runs the emitted --construct, normal and --check against a
 
 test("commit_only rendering matches the approved base renderer byte for byte and full differs only in the task region", async () => {
   const checkout = fileURLToPath(new URL("../../", import.meta.url));
-  const source = execFileSync("git", ["-C", checkout, "show", "c1ce5892ecda03e0516d87b88c7d1d83bc379eae:scripts/loop/emit-fixer-work-order.mjs"], { encoding: "utf8", env: gitFreeEnv() });
+  const source = execFileSync("git", ["-C", checkout, "show", "c1ce5892ecda03e0516d87b88c7d1d83bc379eae:scripts/loop/emit-fixer-work-order.mjs"], { encoding: "utf8", env: gitFreeEnv() }).replaceAll("ruleCitations?, noSitesReason? }", "ruleCitations?, noSitesReason?, sitelessSkipReason? }"); // issue 3364 widens the record shape on purpose
   const start = source.indexOf("export function renderWorkOrder(");
   const end = source.indexOf("\n// The commit_only phase", start);
   const { runInNewContext } = await import("node:vm");
@@ -3056,7 +3056,7 @@ test("commit_only work order carries a siteCoverage skeleton built from the act 
     assert.match(query.noSitesReason, /^FILL:/);
     assert.match(await readFile(promptPath, "utf8"), /Start from the `siteCoverage` skeleton/);
     assert.match(await readFile(promptPath, "utf8"), /run the work order's `handbackCheck` command/);
-    assert.equal(workOrder.handbackCheck, `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(workOrder.requiredReads.find((r) => r.kind === "act-list").path)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])}`);
+    assert.equal(workOrder.handbackCheck, `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(workOrder.requiredReads.find((r) => r.kind === "act-list").path)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])} --repo ${workOrder.mutationAuthority.repo} --pr ${workOrder.mutationAuthority.pr}`);
     const threads = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     assert.equal(threads.workOrder.siteCoverage, undefined);
     const threadsPrompt = await readFile(threads.promptPath, "utf8");
@@ -4461,6 +4461,21 @@ test("issue 2447: a needs_fix record at the candidate that is HEAD lists its fin
     const prompt = await readFile(again.promptPath, "utf8");
     assert.match(prompt, /commit[^.]*on top of/);
     assert.doesNotMatch(prompt, /skip it when you made no commit/);
+  });
+});
+
+test("issue 3364: the commit_only task names the siteless-residue route only when a residue has no site", async () => {
+  await withFixture(async (fx) => {
+    await refusedDeltaFixture(fx, "needs_fix");
+    await openRecord(fx, [{ ...RESIDUE, site: undefined }]);
+    const siteless = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.match(await readFile(siteless.promptPath, "utf8"), /residue with no site is a PR-body item[^.]*sitelessSkipReason/);
+  });
+  await withFixture(async (fx) => {
+    await refusedDeltaFixture(fx, "needs_fix");
+    await openRecord(fx, [RESIDUE]);
+    const sited = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.doesNotMatch(await readFile(sited.promptPath, "utf8"), /PR-body item/);
   });
 });
 

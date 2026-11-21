@@ -69,7 +69,7 @@ import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import { countPrOwnCommits as realCountPrOwnCommits } from "../loop/check-pre-push-delta.mjs";
 import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
-import { buildValidationResultsPath, countCompletedRounds, buildGateContextPath, isCleanCapRound, prBodySha256, readGateContext, resolveCapRound, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
+import { buildValidationResultsPath, countCompletedRounds, isCleanCapRound, ledgerTmpRoot, prBodySha256, readGateContext, readReviewedBodySha256, resolveCapRound, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
@@ -147,37 +147,18 @@ const REMOVED_FLAGS = new Set([
   "--force",
   "--force-reason",
 ]);
-// The writer's --tmp-root of a ledger at <root>/gate-findings/<slug>/pr-N/<file>; undefined for any other layout (default root).
-function ledgerTmpRoot(ledgerPath) {
-  const parts = path.resolve(ledgerPath).split(path.sep);
-  return parts.length > 4 && parts.at(-4) === "gate-findings" && /^pr-\d+$/.test(parts.at(-2)) ? parts.slice(0, -4).join(path.sep) || path.sep : undefined;
-}
-
-// The pr-body digest the cap round's context recorded. write-gate-context.mjs writes the context under the reviewed worktree's tmp/,
-// while the ledger sits under the main checkout's tmp/, so every checkout's tmp/ and --context-tmp-root come first and the ledger root is the fallback.
-async function readReviewedBodySha256(options, headSha, repoRoot) {
+// GATE-EXEC-BASE-REFRESH proof that only the base moved: every same-head round's write-gate-context refuses at a stale base, so a base_current context for this gate and head proves the head held the base when that context was written.
+// Only the reviewed worktree (the first checkout) counts: a context in another checkout belongs to an earlier same-head round (as in readReviewedBodySha256).
+// A missing or unreadable context, or one for another base, is no proof (fail closed).
+async function roundStartedAtCurrentBase(options, headSha, repoRoot, base) {
   const id = { repo: options.repo, pr: options.pr, gate: options.gate, headSha };
-  // Every root is read: a same-head earlier round under another root can hold an older digest, so disagreeing digests refuse.
-  const found = new Map();
-  // The cap round's own context sits in the reviewed worktree (the first checkout); a digest found only elsewhere is an earlier round's and never stands alone.
-  let reviewedWorktreeHasContext = false;
-  for (const [t, tmpRoot] of [options.contextTmpRoot, undefined, ledgerTmpRoot(options.findingsLedger)].entries()) {
-    for (const [i, root] of resolveLedgerCheckouts(repoRoot).entries()) {
-      const file = path.resolve(root, buildGateContextPath({ ...id, tmpRoot: tmpRoot || "tmp" }));
-      // A strict read: only a missing context is absent. A truncated or unreadable one refuses, so a stale same-head digest cannot stand alone.
-      const context = await readGateContext({ ...id, tmpRoot }, { repoRoot: root }).catch((err) => {
-        throw new Error(`body_read_unrecorded: the context ${file} cannot be read (${err instanceof Error ? err.message : String(err)}); remove or repair it, or fix the items with a commit`);
-      });
-      const sha = Array.isArray(context?.requiredReads) ? context.requiredReads.find((r) => r?.kind === "pr-body")?.sha256 : null;
-      if (typeof sha === "string" && sha) {
-        found.set(file, sha);
-        if (i === 0 && t < 2) reviewedWorktreeHasContext = true;
-      }
-    }
+  const [reviewedWorktree] = resolveLedgerCheckouts(repoRoot);
+  // The ledger root (the main checkout's tmp/) is another checkout's context, so only --context-tmp-root and the default root count.
+  for (const tmpRoot of [options.contextTmpRoot, undefined]) {
+    const context = await readGateContext({ ...id, tmpRoot }, { repoRoot: reviewedWorktree }).catch(() => null);
+    if (context?.baseFreshness?.status === "base_current" && context.baseFreshness.base === base) return true;
   }
-  if (found.size && !reviewedWorktreeHasContext) throw new Error(`body_read_unrecorded: the reviewed worktree holds no context at ${headSha}, so the cap round's reviewed body is unknown; the only digests found belong to other checkouts (${[...found.keys()].join(", ")}). Rebuild the cap round's context or fix the items with a commit`);
-  if (new Set(found.values()).size > 1) throw new Error(`body_read_unrecorded: the contexts at ${headSha} record different pr-body digests, so the cap round's reviewed body is ambiguous; remove the stale context of the earlier same-head round or fix the items with a commit. Contexts: ${[...found].map(([file, sha]) => `${file} (${sha})`).join(", ")}`);
-  return [...found.values()][0] ?? null;
+  return false;
 }
 
 const roundCapReachedError =(round, cap) => new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs and no fixer follows. After the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`; pre_approval_gate judges what remains. When every open act item is a PR-body item, edit the PR body and run \`--converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`);
@@ -1725,7 +1706,7 @@ export function assertJudgeSpecSourceMatchesLedger(options, ledgerFindings) {
 // `nonLocatableFindings` also drives an invisible fingerprint+disposition
 // marker per finding, load-bearing for GATE-EXEC-FINDING-THREADS's
 // cross-round suppression/deferral tracking.
-export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, converged, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, closureFromHead, pr, judgeSpecSource, judgeUnavailableReason }) {
+export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, converged, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, closureFromHead, pr, judgeSpecSource, judgeUnavailableReason, staleBaseNote }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1746,6 +1727,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     // Neither label matches a parsed field, so the parse contract is unchanged.
     ...(reviewVerdict ? [`**Review verdict:** ${reviewVerdict}`] : []),
     ...(gate === "draft_gate" && normalizeFullHeadSha(closureFromHead ?? "") ? [`closure round: diff from ${normalizeFullHeadSha(closureFromHead)}`] : []),
+    ...(staleBaseNote ? [`**Base freshness:** stale; ${staleBaseNote}`] : []),
     ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockerCounts(gateBlockers)}`] : []),
     ...(judgeSpecSource ? [judgeSpecSource === "unavailable" ? JUDGE_UNAVAILABLE_LINES[judgeUnavailableReason] : JUDGE_SPEC_LINES[judgeSpecSource]] : []),
     ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),
@@ -2920,12 +2902,19 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   };
   // GATE-EXEC-BASE-REFRESH (issue 2885): a clean draft_gate or pre_approval_gate never records at a head that lacks origin/<base>.
   // An injected runChild test double skips the fetch unless the test injects the checker too.
+  let staleBaseNote = null;
   const refuseStaleBase = async (verdict = options.verdict) => {
     const checkFreshness = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
     const prBase = coordinationContext?.prData?.baseRefName;
     if (verdict === "clean" && !isReviewGate && checkFreshness && typeof prBase === "string" && prBase.trim()) {
       // A converged or cap-round catch-up post records at the reviewed head; the base check belongs to the current PR head (the fixer commit, or a base merge after it).
-      const stale = await staleBaseReason({ base: prBase.trim(), head: convergedInput || capRoundHead ? evidence.currentHeadSha : canonicalHeadSha, cwd: repoRoot, env, check: checkFreshness });
+      let seen;
+      const stale = await staleBaseReason({ base: prBase.trim(), head: convergedInput || capRoundHead ? evidence.currentHeadSha : canonicalHeadSha, cwd: repoRoot, env, check: async (input) => (seen = await checkFreshness(input)) });
+      // Only the base moved during the round: post the verdict with a visible note; the base-merge carry decides whether it stands at the new head.
+      if (stale && !convergedInput && !capRoundHead && await roundStartedAtCurrentBase(options, canonicalHeadSha, repoRoot, prBase.trim())) {
+        staleBaseNote = `origin/${prBase.trim()} moved during the round (${seen.newerCommits.length} newer commit(s)). Merge it via scripts/loop/resolve-pr-conflicts.mjs; the base-merge carry decides whether this verdict stands at the new head.`;
+        return;
+      }
       if (stale) throw new Error(`${stale} A clean ${options.gate} verdict is not recorded at a stale base.`);
     }
   };
@@ -3901,6 +3890,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     ...options,
     headSha: canonicalHeadSha,
     converged: convergedMarker,
+    staleBaseNote,
     findingsSummary: effectiveFindingsSummary,
     structuredFindings,
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,

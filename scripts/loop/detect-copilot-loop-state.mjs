@@ -268,7 +268,7 @@ function normalizeMergeEnum(value) {
   return normalized.length > 0 ? normalized : null;
 }
 
-export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride, localValidationHeadSha, draftGateResetAtMs, checkpointDir }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride, localValidationHeadSha, draftGateResetAtMs, checkpointDir }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd } = {}) {
   const prData = await fetchPrView({ repo, pr }, { env, ghCommand, runChild });
   if (prData === null) {
     return normalizeSnapshot({ prExists: false });
@@ -349,7 +349,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
   // trusted copilot-body-disposition record clears the body finding.
   const bodyFeedback = await resolveCurrentHeadBodyFeedback(
     { repo, pr, headSha: prHeadSha, reviewSummary, reviewThreads },
-    { env, ghCommand, runChild },
+    { env, ghCommand, runChild, cwd },
   );
   const snapshot = buildSnapshotFromPrFacts({
     prData,
@@ -418,7 +418,7 @@ export async function runCli(
         repo: options.repo,
         pr: options.pr,
       },
-      { env, ghCommand, runChild },
+      { env, ghCommand, runChild, cwd: repoRoot },
     );
     interpretationInput = snapshot;
   }
