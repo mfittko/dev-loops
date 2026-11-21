@@ -136,6 +136,14 @@ test("re-gate emit refuses without a carry-forward plan artifact, proceeds once 
     assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
     const payload = JSON.parse(await readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.emit-plan.json`), "utf8"));
     assert.ok(payload.count > 0);
+
+    // main() reads plan.resolutionDeltaPaths and writes the Resolution scope into each angle suffix (#3284).
+    await writeFile(planPath, JSON.stringify({ ok: true, repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: priorHead, carried: [], mustRerun: [], resolutionDeltaPaths: ["src/resolved.mjs"] }), "utf8");
+    const scoped = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(scoped.status, 0, scoped.stderr || scoped.stdout);
+    const scopedUnit = JSON.parse(scoped.stdout).units[0];
+    const suffix = await readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.angle-suffix-${scopedUnit.scope}.txt`), "utf8");
+    assert.match(suffix, /Resolution scope: .*\("src\/resolved\.mjs"\)/);
   });
 });
 
