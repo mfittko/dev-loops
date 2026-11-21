@@ -287,9 +287,11 @@ test("ensure: a DETACHED-HEAD worktree at the path is reused as-is, never fabric
   const repo = makeRepo();
   try {
     const target = path.join(repo.root, "tmp/worktrees/dev-loops/issue-4002");
+    commitBunLock(repo);
     repo.git("worktree", "add", "--detach", target, "main");
 
-    const res = await ensureWorktree({ repoRoot: repo.root, issue: 4002 });
+    let installs = 0;
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 4002 }, { installDeps: () => { installs += 1; return { ok: true }; } });
     assert.equal(res.ok, true);
     assert.equal(res.created, false);
     assert.equal(res.reused, true);
@@ -299,6 +301,9 @@ test("ensure: a DETACHED-HEAD worktree at the path is reused as-is, never fabric
     // MUST-FIX regression (issue #1869): commitMsgGuard must be present on
     // the reused-detached return site too, not just create/reused-local.
     assert.equal(res.commitMsgGuard.ok, true);
+    // The reused-detached return site reports the dep refresh after a lockfile change.
+    assert.equal(res.deps.ran, true);
+    assert.equal(installs, 1);
   } finally {
     repo.cleanup();
   }
