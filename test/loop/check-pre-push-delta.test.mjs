@@ -1431,6 +1431,42 @@ test("AC1: an overlap that main changed identically to the PR is a base-only car
   } finally { cleanup(repo); }
 });
 
+function renameRepo(mainEdits) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-rename-"));
+  initGitFixture(dir, { branch: "main", commit: null });
+  const git = (...args) => runGitFixture(dir, args);
+  git("config", "commit.gpgsign", "false");
+  const body = (n) => `${n}\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n`;
+  fs.writeFileSync(path.join(dir, "old.mjs"), body("top")); fs.writeFileSync(path.join(dir, "b.mjs"), "b0\n");
+  git("add", "."); git("commit", "-qm", "base");
+  git("checkout", "-qb", "pr");
+  fs.writeFileSync(path.join(dir, "a.mjs"), "a\n"); git("add", "."); git("commit", "-qm", "feat: a");
+  git("mv", "old.mjs", "new.mjs"); git("commit", "-qm", "rename old");
+  const baseline = git("rev-parse", "HEAD");
+  git("checkout", "-q", "main");
+  fs.writeFileSync(path.join(dir, mainEdits), mainEdits === "old.mjs" ? body("main-top") : "b1\n"); git("commit", "-qam", "main edit");
+  git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
+  git("checkout", "-q", "pr");
+  git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
+  return { dir, baseline, head: git("rev-parse", "HEAD"), tmpRoot: resolveGateArtifactTmpRoot(dir) };
+}
+
+test("AC1: a PR rename of a file that main edited puts the rename destination in the overlap and does not refuse", async () => {
+  const repo = renameRepo("old.mjs");
+  try {
+    const run = await reviewerOnlyRun(repo, {});
+    assert.match(fs.readFileSync(run.input.patchPath, "utf8"), /new\.mjs/, "main's edit that landed in the renamed file is reviewed");
+    assert.equal(run.decision.outcome, "locally_clear");
+  } finally { cleanup(repo); }
+});
+
+test("AC1: a PR rename with a main edit of an unrelated file adds no overlap", async () => {
+  const repo = renameRepo("b.mjs");
+  try {
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam), /no PR-own commit/);
+  } finally { cleanup(repo); }
+});
+
 test("AC1: a criss-cross history with two merge bases does not fail the overlap route", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-crisscross-"));
   initGitFixture(dir, { branch: "main", commit: null });
