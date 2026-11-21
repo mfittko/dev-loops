@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
+import { unaddressedStaleSurfaceHits } from "../../packages/core/src/loop/pre-push-delta-review.mjs";
 import { validatePrePrReview } from "../../scripts/loop/_pre-pr-review-record.mjs";
 import { runCli } from "../../scripts/loop/record-pre-pr-review.mjs";
 import { runGitFixture } from "../_helpers.mjs";
@@ -153,3 +154,41 @@ test("--issue accepts only a positive integer, never a URL, #N or zero", withRep
     assert.equal((await run(dir, ["--scan", "--base", "main", "--body-file", "b.md", "--issue", bad], { readIssueBody })).code, 1, bad);
   }
 }));
+
+test("a changed contract doc that no matrix row names is a stale-surface hit; a named one is not (ADR 0301)", withRepo(async (dir) => {
+  write(dir, "skills/docs/x-contract.md", "Rule.\n");
+  write(dir, "skills/docs/y-contract.md", "Rule.\n");
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", "docs");
+  const body = path.join(dir, "..", `body-${path.basename(dir)}.md`);
+  writeFileSync(body, PR_NEW);
+  const issue = ISSUE.replace("D2 test pins widened case", "D2 test pins widened case in `skills/docs/y-contract.md`");
+  const scan = async () => (await run(dir, ["--scan", "--base", "main", "--body-file", body, "--issue", "7"], { readIssueBody: async () => issue })).out;
+  const sites = (out) => out.staleSurfaceHits.map((h) => h.site).filter((s) => s.startsWith("issue-body/issue-matrix"));
+  assert.deepEqual(sites(await scan()), ["issue-body/issue-matrix:skills/docs/x-contract.md"]);
+  rmSync(body);
+}));
+
+test("a contract doc renamed out of the surface is reported by its original path (ADR 0301)", withRepo(async (dir) => {
+  git(dir, "checkout", "-q", "main");
+  write(dir, "skills/docs/r-contract.md", "Rule one.\nRule two.\nRule three.\n");
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", "add r");
+  git(dir, "checkout", "-q", "feature");
+  git(dir, "merge", "-q", "--no-edit", "main");
+  git(dir, "mv", "skills/docs/r-contract.md", "skills/docs/r-renamed.md");
+  git(dir, "commit", "-q", "-m", "rename out");
+  const body = path.join(dir, "..", `body-${path.basename(dir)}.md`);
+  writeFileSync(body, PR_NEW);
+  const out = (await run(dir, ["--scan", "--base", "main", "--body-file", body, "--issue", "7"], { readIssueBody: async () => ISSUE })).out;
+  assert.ok(out.staleSurfaceHits.some((h) => h.site === "issue-body/issue-matrix:skills/docs/r-contract.md"));
+  rmSync(body);
+}));
+
+test("a skip of the reported matrix site addresses its hit and a skip of another matrix path does not", () => {
+  const site = "issue-body/issue-matrix:skills/docs/x-contract.md";
+  const hits = [{ file: site, line: 0, site }];
+  const skip = (s) => [{ sites: [{ site: s, status: "skipped", reason: "r" }] }];
+  assert.deepEqual(unaddressedStaleSurfaceHits(hits, { siteCoverage: skip(site) }), []);
+  assert.equal(unaddressedStaleSurfaceHits(hits, { siteCoverage: skip("issue-body/issue-matrix:skills/docs/y-contract.md") }).length, 1);
+});
