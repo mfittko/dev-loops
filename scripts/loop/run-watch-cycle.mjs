@@ -5,7 +5,7 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION } from "@dev-loops/core/loop/public-dev-loop-routing";
-import { watchCopilotReview } from "../github/probe-copilot-review.mjs";
+import { recordCopilotWaitTimeout, watchCopilotReview } from "../github/probe-copilot-review.mjs";
 import { watchCiStatus } from "../github/probe-ci-status.mjs";
 import { runHandoff } from "./copilot-pr-handoff.mjs";
 import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
@@ -332,7 +332,7 @@ async function gateWatcherExclusivity(
   { repo, pr, head, waitKind, env, cwd },
   { recordWatchClaimImpl = defaultRecordWatchClaim, nowMs = Date.now(), staleAfterMs } = {},
 ) {
-  const runId = resolveRunId(env);
+  const runId = resolveRunId(env, { cwd });
   if (runId === null) {
     if (resolveRuntimeHarness(env) === "codex") {
       return { engaged: true, ok: false, reason: "unverified_codex_context", target: `${repo}#${pr}`, waitKind };
@@ -516,9 +516,12 @@ export async function runWatchCycle(
     recordWatchClaimImpl = defaultRecordWatchClaim,
     detectSessionActivity = false,
     spawnImpl = spawn,
+    cwd = process.cwd(),
+    checkpointDir,
+    now = Date.now,
   } = {},
 ) {
-  const leaseCwd = resolveRepoRoot(process.cwd());
+  const leaseCwd = resolveRepoRoot(cwd);
   const nowMs = Date.now();
   const exclusivityStaleAfterMs = resolveStaleRunnerMaxAgeMs({}, env);
   const gateExclusivity = (waitKind, head) => gateWatcherExclusivity(
@@ -712,7 +715,12 @@ export async function runWatchCycle(
     ...handoff.watchArgs,
     timeoutMs: persistentWatchTimeoutMs,
   };
-  const watch = await watchCopilotReviewImpl(watchOptions, { env, ghCommand, runChild: countedRunChild });
+  const watchStartedAt = now();
+  let watch = await watchCopilotReviewImpl(watchOptions, { env, ghCommand, runChild: countedRunChild });
+  // The sanctioned wait path records its timeout too, so request_not_observable can reach its threshold.
+  if (watch.status === "timeout") {
+    watch = await recordCopilotWaitTimeout(watch, { options: watchOptions, startedAt: watchStartedAt, clock: now, env, ghCommand, checkpointDir });
+  }
   result.watchArgs = watchOptions;
   result.watchStatus = watch.status;
   result.watch = watch;

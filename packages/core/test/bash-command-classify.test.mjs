@@ -43,6 +43,7 @@ import {
   commandIsSleepPollLoop,
   commandIsFileMarkerPollLoop,
   commandContainsInlineInterpreter,
+  classifyDecisionRecorderCommand,
   commandContainsCodeVerificationEntrypoint,
   tokenizeShellCommand,
 } from "../src/loop/bash-command-classify.mjs";
@@ -120,6 +121,23 @@ test("commandContainsGhPrReady (all-segments, PreToolUse gate) detects ready in 
   assert.equal(commandContainsGhPrReady("echo ok && gh pr ready 17"), true);
   assert.equal(commandContainsGhPrReady("false && gh pr ready 42"), true);
   assert.equal(commandContainsGhPrReady("gh pr merge 1"), false);
+});
+
+test("a -h value after a gh value flag does not exempt the segment; first-arg help stays allowed", () => {
+  assert.equal(commandContainsGhPrMerge("gh pr merge 42 --squash --body -h"), true);
+  assert.equal(commandContainsGhPrMerge("gh pr merge --help"), false);
+  assert.equal(commandContainsGhPrMerge("gh pr merge -h"), false);
+  for (const flag of ["--body", "-b", "--subject", "--title"]) {
+    assert.equal(commandContainsGhPrMerge(`gh pr merge 42 ${flag} -h`), true, flag);
+    assert.equal(commandContainsRawExternalWrite(`gh pr comment 42 ${flag} -h`), true, flag);
+  }
+  assert.equal(commandContainsRawExternalWrite("gh pr comment --help"), false);
+  assert.equal(commandContainsGhPrCreate("gh pr create -H feat --fill"), true);
+  assert.equal(isGhPrMergeCommand("gh pr merge 42 --body -h"), true);
+  const flagged = extractRepoFlagsFromGhPrMergeSegments("gh pr merge 42 --repo o/r --body -h");
+  assert.equal(flagged.length, 1);
+  assert.equal(flagged[0].explicitRepo, "o/r");
+  assert.deepEqual(extractRepoFlagsFromGhPrMergeSegments("gh pr merge --help"), []);
 });
 
 test("commandContainsGhPrMerge (all-segments, PreToolUse gate) detects merge in any segment", () => {
@@ -1900,4 +1918,12 @@ test("round 3: a shell reached through env/command/exec or `<(`, a joined heredo
   // thread 5: a here-string or `-c` counts as payload only for a consumer that executes text
   for (const c of ["cat <<< 'node -e x'", "head -c 100 'node -e x'", "env head -c 100 'node -e x'", 'echo "${HOME}"']) assert.equal(commandContainsInlineInterpreter(c), false, c);
   for (const c of ["bash <<< 'node -e x'", "env bash <<< 'node -e x'", "exec sh -c 'node -e x'"]) assert.equal(commandContainsInlineInterpreter(c), true, c);
+});
+
+test("commandContainsInlineInterpreter shifts a wrapper flag value that is named like a launcher", () => {
+  for (const c of ["sudo -u node node -e 'x'", "sudo -u node python3 -c 'x'", "sudo -u bun node -e 'x'", "sudo -u dev-loops node -e 'x'", "sudo -u dev-loops-run python3 -c x"]) assert.equal(commandContainsInlineInterpreter(c), true, c);
+});
+
+test("classifyDecisionRecorderCommand keeps a launcher word after a bare wrapper flag", () => {
+  assert.notEqual(classifyDecisionRecorderCommand("sudo -n node scripts/github/record-operator-*.mjs --repo o/n"), null);
 });

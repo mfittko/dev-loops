@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { buildParseError, formatCliError } from "../../scripts/_core-helpers.mjs";
 import {
@@ -10,6 +13,7 @@ import {
   parsePrNumber,
   requireOptionValue,
   requireTokenValue,
+  resolveBodyOrFile,
   runChild,
   runCommand,
 } from "../../scripts/_cli-primitives.mjs";
@@ -204,4 +208,20 @@ test("runCommand rejects with stderr detail on non-zero exit", async () => {
     () => runCommand((Bun.which("node") ?? "node"), ["-e", "process.stderr.write('boom'); process.exit(4);"]),
     /boom/,
   );
+});
+
+test("resolveBodyOrFile refuses null and empty bodies unless allowEmptyBody", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "primitives-body-"));
+  try {
+    await assert.rejects(() => resolveBodyOrFile({ body: "null" }), /--body is only `null`/);
+    const nullFile = join(dir, "null.md");
+    await writeFile(nullFile, "null\n");
+    await assert.rejects(() => resolveBodyOrFile({ bodyFile: nullFile }), /--body-file .* is only `null`/);
+    assert.equal((await resolveBodyOrFile({ bodyFile: nullFile, allowEmptyBody: true })).trim(), "null");
+    const emptyFile = join(dir, "empty.md");
+    await writeFile(emptyFile, "  \n");
+    await assert.rejects(() => resolveBodyOrFile({ bodyFile: emptyFile }), /is empty/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

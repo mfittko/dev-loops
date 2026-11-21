@@ -4059,14 +4059,14 @@ describe("shipped defaults docs and deep angle wiring", () => {
 
       assert.deepEqual(result.errors, []);
       assert.equal(prDescRole.persona, "review");
-      assert.match(prDescRole.prompt, /Summary section/i);
+      assert.match(prDescRole.prompt, /Objective section/i);
       assert.match(prDescRole.prompt, /Validation command section/i);
       assert.match(prDescRole.prompt, /Do not block on formatting/i);
       assert.match(prDescRole.prompt, /linked issue acceptance criteria/i);
       assert.match(prDescRole.prompt, /single sentence/i);
       assert.match(prDescRole.prompt, /Closes #N/i);
       assert.match(prDescRole.prompt, /operator-intended close target/i);
-      assert.match(prDescRole.prompt, /Scope and context section/i);
+      assert.match(prDescRole.prompt, /In scope section/i);
       // The File-by-file requirement was removed: GitHub's Files-changed tab already
       // lists touched files, and mandating the section churned gate findings every fix
       // round. The angle must neither require it nor be worded to flag its absence.

@@ -185,6 +185,20 @@ describe("delta trigger", () => {
     assert.throws(() => threadsToActList({ ...payload, threads: [{ ...payload.threads[0], isResolved: true }] }, { repo: "o/r", pr: 7 }), /not successful list-review-threads/);
   });
 
+  test("threadsToActList accepts a bound capture-review-threads --bodies payload and refuses an unbound one", () => {
+    const capture = (source) => ({ ok: true, source, summary: {}, skippedUntrusted: [], threads: [{ threadId: "T1", path: "a.mjs", line: 3, isOutdated: false, bodies: ["one", "two"] }] });
+    const items = threadsToActList(capture({ type: "github", repo: "o/r", pr: 7 }), { repo: "o/r", pr: 7 });
+    assert.deepEqual(items.map((item) => [item.ref, item.summary, item.file]), [["T1", "one\n\ntwo", "a.mjs"]]);
+    for (const source of [{ type: "github", repo: "o/r", pr: 8 }, { type: "input", inputPath: "x.json" }, { type: "stdin" }]) {
+      assert.throws(() => threadsToActList(capture(source), { repo: "o/r", pr: 7 }), /not successful list-review-threads/);
+    }
+    for (const bodies of [[], [1], ["ok", null]]) {
+      const bad = capture({ type: "github", repo: "o/r", pr: 7 });
+      bad.threads[0].bodies = bodies;
+      assert.throws(() => threadsToActList(bad, { repo: "o/r", pr: 7 }), /not successful list-review-threads/);
+    }
+  });
+
   test("thread-route actSetId ignores body excerpts and order; a different thread set changes it", () => {
     const mk = (threads) => startDeltaSequence({ reviewBaselineHead: A, actList: threadsToActList({ ok: true, repo: "o/r", pr: 7, threads }, { repo: "o/r", pr: 7 }) }).actSetId;
     const t = (threadId, body) => ({ trusted: true, threadId, body, isResolved: false, path: "a.mjs", line: 3 });
@@ -690,6 +704,14 @@ describe("PR-body act items leave the delta act set", () => {
 
   test("an all-body act set refuses delta_body_only_act_set with the edit-pr and body-only converged remedy", () => {
     assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [body(1), body(2)] }), /delta_body_only_act_set[^]*edit-pr\.mjs[^]*--converged-json[^]*bodyOnly/);
+  });
+
+  test("a pr_body item that names a file is a body item: an all-pr_body list refuses and a mixed list drops it from the act set", () => {
+    const fileBody = (n) => ({ ...code(n), ref: `fbody-${n}`, remedyKind: "pr_body" });
+    assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [fileBody(1), fileBody(2)] }), /delta_body_only_act_set/);
+    const seq = startDeltaSequence({ reviewBaselineHead: A, actList: [code(1), fileBody(2)] });
+    assert.deepEqual(seq.bodyItems, ["fbody-2"]);
+    assert.deepEqual(seq.actItems.map((item) => item.ref), ["code-1"]);
   });
 
   test("a thread item without a path is not a body item", () => {

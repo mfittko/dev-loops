@@ -9,7 +9,9 @@ import {
   resolveCheckpointStateFromArtifact,
 } from "@dev-loops/core/loop/public-dev-loop-routing";
 import { CHECKPOINT_FILE, resolveCheckpointRepoRoot } from "./checkpoint-contract.mjs";
-import { resolveNativeCodexContext, resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
+import { ensureLaneRunContext, resolveNativeCodexContext, resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
+import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
+import { shellWord } from "../lib/timeout-flag.mjs";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { execFileSync } from "node:child_process";
@@ -90,11 +92,16 @@ Required (exactly one):
   --spike <path>  Path to a spike artifact to start a spike loop locally
 Optional modifier:
   --claim        With --issue <n> or --pr <n> only: if the target is open and unassigned,
-                 assign the current user (the only write; open targets only), then start. Pass it
+                 assign the current user (the only GitHub write; open targets only; it also writes the local run-context file), then start. Pass it
                  only when the user explicitly asked to start or continue that
                  exact target. With --pr, an unreadable linked issue refuses
                  the claim. Rejected with --review/--ui-review/--input/
-                 --plan-file/--spike and with no target.
+                 --plan-file/--spike and with no target. Outside native Codex, a
+                 started --claim also reports runContext: it reuses the lane's
+                 run id, or mints one into <linked worktree>/.pi/dev-loop-run-context.json
+                 that later commands resolve without DEVLOOPS_RUN_ID. Outside a
+                 linked worktree with no resolvable run id, --claim returns
+                 needs_reconcile with the loop ensure-worktree command.
   --review       With --pr only: route the PR to the read-only review strategy
                  instead of the default continue_on_pr path. Requires no
                  ownership. Rejected without --pr, or combined with --issue/
@@ -1649,6 +1656,31 @@ export function buildResolveDevLoopStartupResult(input, {
     bundle: routedBundle,
   };
 }
+/**
+ * `--claim` gives the lane a run id that later commands resolve without `DEVLOOPS_RUN_ID`
+ * (a Claude Code Bash call drops exported env vars): reuse a resolvable run id, else mint
+ * one into `<worktree>/.pi/dev-loop-run-context.json`. Native Codex is left untouched. Outside a
+ * linked worktree no file can be written, so the claim refuses with the command that creates the
+ * lane worktree, instead of leaving later writers on `skipped_no_async_run_id`.
+ */
+export function withClaimRunContext(result, { claim, env, cwd, repoRoot = cwd, issue, pr }) {
+  // A needs_reconcile stop or a no-strategy route is not a started lane: keep its own nextAction and write no file.
+  if (!claim || result?.ok !== true || result.bundleKind === "needs_reconcile" || result.selectedStrategy === "none") return result;
+  let runContext;
+  try {
+    runContext = ensureLaneRunContext({ env, cwd });
+  } catch (error) {
+    if (error?.code !== "RUN_CONTEXT_SYMLINK") throw error;
+    return buildNeedsReconcileStartupResult(result.bundle ?? {}, `\`loop startup --claim\` refused: ${error.message}. Remove the symlink at ${error.path} (\`rm ${shellWord(error.path)}\`), then re-run \`loop startup --claim\`.`, result.bundle?.pendingRetrospectives);
+  }
+  if (runContext !== null) return { ...result, runContext };
+  if (resolveRuntimeHarness(env) === "codex") return result;
+  const [flag, kind, n] = issue !== undefined ? ["--issue", "issue", issue] : ["--pr", "pr", pr];
+  const worktree = resolveWorktreePath({ repoRoot, kind, number: n });
+  const root = shellWord(repoRoot);
+  const nextAction = `\`loop startup --claim\` must run from the lane's linked worktree: ${cwd} is not one, so no run-context file can be written and later gate writers would return skipped_no_async_run_id. Run \`dev-loops-run --repo-root ${root} cli/index.mjs loop ensure-worktree --repo-root ${root} ${flag} ${n}\` to create or reuse the worktree at ${worktree}, then re-run \`loop startup ${flag} ${n} --claim\` from there.`;
+  return buildNeedsReconcileStartupResult(result.bundle ?? {}, nextAction, result.bundle?.pendingRetrospectives);
+}
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, adapter = createPiAdapter() } = {}) {
   const sessionCwd = adapter.getCwd();
   const options = parseResolveDevLoopStartupCliArgs(argv);
@@ -1726,11 +1758,11 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       env: adapter.getEnv(),
     });
   }
-  const result = buildResolveDevLoopStartupResult(input, {
+  const result = withClaimRunContext(buildResolveDevLoopStartupResult(input, {
     asyncStartMode,
     adapter,
     config: devLoopConfig,
-  });
+  }), { claim: options.claim, env: adapter.getEnv(), cwd: sessionCwd, repoRoot, issue: options.issue, pr: options.pr });
   if (result.ok === false) {
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout: stderr, stderr });
     return;

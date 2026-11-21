@@ -945,12 +945,14 @@ test("a refused locally_clear result followed by a no-commit re-emission keeps t
 
 
 // ADR 0255: the PR 3087 state. The cap-round head P1, a fix commit P2, then a base refresh merged in; the sequence is closed (no marker, no plan) and the head moved.
-function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evilMerge = false, octopus = false, baseChanges = false, ownChanges = false, commitAfterMerge = false, netRevert = false, resolutionGitlink = false } = {}) {
+function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evilMerge = false, octopus = false, baseChanges = false, ownChanges = false, commitAfterMerge = false, netRevert = false, resolutionGitlink = false, overlap = false, overlapIdentical = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-"));
   initGitFixture(dir, { branch: "main", commit: null });
   const git = (...args) => runGitFixture(dir, args);
   git("config", "commit.gpgsign", "false");
+  const sharedLines = (top, bottom) => `${top}\n1\n2\n3\n4\n5\n6\n7\n8\n9\n${bottom}\n`;
   fs.writeFileSync(path.join(dir, "gone.mjs"), "export const goneIdentifierName = 1;\n");
+  if (overlap || overlapIdentical) fs.writeFileSync(path.join(dir, "shared.txt"), sharedLines("top", "bottom"));
   git("add", "."); git("commit", "-qm", "base");
   git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
   git("checkout", "-qb", "pr");
@@ -959,12 +961,15 @@ function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evil
   const baseline = git("rev-parse", "HEAD");
   fs.writeFileSync(path.join(dir, "a.mjs"), "// uses goneIdentifierName\nexport const a = 2;\n");
   if (ownChanges) { fs.mkdirSync(path.join(dir, "changes")); fs.writeFileSync(path.join(dir, "changes", "own.md"), "own\n"); }
+  if (overlap || overlapIdentical) fs.writeFileSync(path.join(dir, "shared.txt"), sharedLines("top", "pr-bottom"));
   git("add", "."); git("commit", "-qm", "fix: a");
   if (netRevert) { fs.writeFileSync(path.join(dir, "a.mjs"), "// uses goneIdentifierName\nexport const a = 1;\n"); git("add", "."); git("commit", "-qm", "revert: a"); }
   const fix = git("rev-parse", "HEAD");
   git("checkout", "-q", "main");
   fs.writeFileSync(path.join(dir, "refreshed.txt"), "from the base\n");
   if (baseChanges) { fs.mkdirSync(path.join(dir, "changes")); fs.writeFileSync(path.join(dir, "changes", "base.md"), "base\n"); }
+  if (overlap) fs.writeFileSync(path.join(dir, "shared.txt"), sharedLines("main-top", "bottom"));
+  if (overlapIdentical) fs.writeFileSync(path.join(dir, "shared.txt"), sharedLines("top", "pr-bottom"));
   if (conflictOnly) fs.writeFileSync(path.join(dir, "a.mjs"), "export const a = \"main\";\n");
   git("rm", "-q", "gone.mjs");
   git("add", "."); git("commit", "-qm", "base moves");
@@ -1398,6 +1403,132 @@ test("a reviewer-only run reviews a merge that is not base-only through its own 
     assert.doesNotMatch(patch, /refreshed\.txt/);
     assert.equal(evilRun.decision.outcome, "locally_clear");
   } finally { cleanup(clean); cleanup(evil); }
+});
+
+test("AC1: a reviewer-only run over a clean merge whose base touched a PR-changed file reviews that overlap and refuses only when the overlap is empty", async () => {
+  const overlap = reviewerOnlyRepo({ overlap: true });
+  const none = reviewerOnlyRepo();
+  try {
+    const at = (repo) => ({ ...repo, baseline: repo.fix, head: repo.mergeHead });
+    const run = await reviewerOnlyRun(at(overlap), {});
+    const patch = fs.readFileSync(run.input.patchPath, "utf8");
+    assert.match(patch, /shared\.txt/);
+    assert.doesNotMatch(patch, /refreshed\.txt|gone\.mjs/, "base-only paths stay out of the review");
+    assert.equal(run.decision.outcome, "locally_clear");
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(at(none)), "--spec-identity", "spec@1", "--result-path", path.join(none.dir, "r.json")], seam), /no PR-own commit/);
+    // A non-base-only clean merge (seam says so) whose parents share no changed path has an empty overlap and refuses.
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(at(none)), "--spec-identity", "spec@1", "--result-path", path.join(none.dir, "r2.json")], { ...seam, baseOnlyMerge: async () => false }), /no PR-own commit/);
+  } finally { cleanup(overlap); cleanup(none); }
+});
+
+test("AC1: an overlap that main changed identically to the PR is a base-only carry, not an empty_resolution_patch refusal", async () => {
+  const repo = reviewerOnlyRepo({ overlapIdentical: true });
+  try {
+    const at = { ...repo, baseline: repo.fix, head: repo.mergeHead };
+    const refusal = await runDeltaCli([...reviewerOnlyArgs(at), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam).then(() => null, (error) => error.message);
+    assert.match(refusal, /no PR-own commit/, "the merge carries no PR-own change, as a base-only merge");
+    assert.doesNotMatch(refusal, /empty_resolution_patch/);
+  } finally { cleanup(repo); }
+});
+
+function renameRepo(mainEdits) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-rename-"));
+  initGitFixture(dir, { branch: "main", commit: null });
+  const git = (...args) => runGitFixture(dir, args);
+  git("config", "commit.gpgsign", "false");
+  const body = (n) => `${n}\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n`;
+  fs.writeFileSync(path.join(dir, "old.mjs"), body("top")); fs.writeFileSync(path.join(dir, "b.mjs"), "b0\n");
+  git("add", "."); git("commit", "-qm", "base");
+  git("checkout", "-qb", "pr");
+  fs.writeFileSync(path.join(dir, "a.mjs"), "a\n"); git("add", "."); git("commit", "-qm", "feat: a");
+  git("mv", "old.mjs", "new.mjs"); git("commit", "-qm", "rename old");
+  const baseline = git("rev-parse", "HEAD");
+  git("checkout", "-q", "main");
+  fs.writeFileSync(path.join(dir, mainEdits), mainEdits === "old.mjs" ? body("main-top") : "b1\n"); git("commit", "-qam", "main edit");
+  git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
+  git("checkout", "-q", "pr");
+  git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
+  return { dir, baseline, head: git("rev-parse", "HEAD"), tmpRoot: resolveGateArtifactTmpRoot(dir) };
+}
+
+test("AC1: a PR rename of a file that main edited puts the rename destination in the overlap and does not refuse", async () => {
+  const repo = renameRepo("old.mjs");
+  try {
+    const run = await reviewerOnlyRun(repo, {});
+    assert.match(fs.readFileSync(run.input.patchPath, "utf8"), /new\.mjs/, "main's edit that landed in the renamed file is reviewed");
+    assert.equal(run.decision.outcome, "locally_clear");
+  } finally { cleanup(repo); }
+});
+
+test("AC1: a PR rename with a main edit of an unrelated file adds no overlap", async () => {
+  const repo = renameRepo("b.mjs");
+  try {
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam), /no PR-own commit/);
+  } finally { cleanup(repo); }
+});
+
+test("AC1: a main rename of a file the PR edited puts the rename destination in the overlap and does not refuse", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-main-rename-"));
+  initGitFixture(dir, { branch: "main", commit: null });
+  const git = (...args) => runGitFixture(dir, args);
+  git("config", "commit.gpgsign", "false");
+  const body = (n) => `${n}\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n`;
+  fs.writeFileSync(path.join(dir, "old.mjs"), body("top"));
+  git("add", "."); git("commit", "-qm", "base");
+  git("checkout", "-qb", "pr");
+  fs.writeFileSync(path.join(dir, "old.mjs"), body("pr-top")); git("commit", "-qam", "pr edit");
+  const baseline = git("rev-parse", "HEAD");
+  git("checkout", "-q", "main");
+  git("mv", "old.mjs", "new.mjs"); git("commit", "-qm", "main rename");
+  git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
+  git("checkout", "-q", "pr");
+  git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
+  const repo = { dir, baseline, head: git("rev-parse", "HEAD"), tmpRoot: resolveGateArtifactTmpRoot(dir) };
+  try {
+    const run = await reviewerOnlyRun(repo, {});
+    assert.match(fs.readFileSync(run.input.patchPath, "utf8"), /new\.mjs/, "the merged file where main's rename and the PR edit meet is reviewed");
+    assert.equal(run.decision.outcome, "locally_clear");
+  } finally { cleanup(repo); }
+});
+
+test("AC1: a criss-cross history with two merge bases does not fail the overlap route", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-crisscross-"));
+  initGitFixture(dir, { branch: "main", commit: null });
+  const git = (...args) => runGitFixture(dir, args);
+  const put = (name, text) => fs.writeFileSync(path.join(dir, name), text);
+  git("config", "commit.gpgsign", "false");
+  const lines = (top, bottom) => `${top}\n1\n2\n3\n4\n5\n6\n7\n8\n9\n${bottom}\n`;
+  put("f.txt", lines("top", "bottom")); put("e.txt", "e0\n"); put("p.txt", "p0\n"); put("m.txt", "m0\n");
+  git("add", "."); git("commit", "-qm", "base");
+  git("checkout", "-qb", "pr");
+  put("p.txt", "p1\n"); git("commit", "-qam", "pr 1");
+  const pr1 = git("rev-parse", "HEAD");
+  git("checkout", "-q", "main");
+  put("m.txt", "m1\n"); git("commit", "-qam", "main 1");
+  const main1 = git("rev-parse", "HEAD");
+  git("checkout", "-q", "pr");
+  git("merge", "-q", "--no-ff", "--no-commit", main1); put("e.txt", "e-pr\n"); git("commit", "-qam", "pr merges main 1, edits e");
+  git("checkout", "-q", "main");
+  git("merge", "-q", "--no-ff", "-m", "main merges pr 1", pr1);
+  git("checkout", "-q", "pr");
+  put("f.txt", lines("pr-top", "bottom")); git("commit", "-qam", "pr 2");
+  const baseline = git("rev-parse", "HEAD");
+  git("checkout", "-q", "main");
+  put("f.txt", lines("top", "main-bottom")); put("e.txt", "e-pr\n"); put("p.txt", "p2\n"); put("m.txt", "m2\n"); git("commit", "-qam", "main 2");
+  git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
+  git("checkout", "-q", "pr");
+  git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
+  const repo = { dir, baseline, head: git("rev-parse", "HEAD"), tmpRoot: resolveGateArtifactTmpRoot(dir) };
+  try {
+    assert.equal(git("merge-base", "--all", `${repo.head}^1`, `${repo.head}^2`).split("\n").filter(Boolean).length, 2, "the fixture has two merge bases");
+    const run = await reviewerOnlyRun(repo, {});
+    const patch = fs.readFileSync(run.input.patchPath, "utf8");
+    assert.match(patch, /f\.txt/);
+    // p.txt overlaps only against the merge base main1 and m.txt only against pr1: a single-base implementation drops one.
+    assert.match(patch, /p\.txt/);
+    assert.match(patch, /m\.txt/);
+    assert.equal(run.decision.outcome, "locally_clear");
+  } finally { cleanup(repo); }
 });
 
 // ADR 0255: the reviewer-only run takes over the fixer's non-clearing record at the baseline when the refs match.
@@ -1935,13 +2066,46 @@ test("AC11: countPrOwnCommits is 0 for a base-only merge range and counts PR-own
   try {
     assert.equal(await countPrOwnCommits(repo.dir, repo.fix, repo.head, "main", deps), 0, "fix..head holds only the base-only merge");
     assert.equal(await countPrOwnCommits(repo.dir, repo.baseline, repo.head, "main", deps), 1, "baseline..head holds the fix commit");
+    const overlap = reviewerOnlyRepo({ overlap: true });
+    try { assert.equal(await countPrOwnCommits(overlap.dir, overlap.fix, overlap.mergeHead, "main", deps), 1, "an overlapping clean merge counts as one PR-own commit"); } finally { cleanup(overlap); }
     await assert.rejects(countPrOwnCommits(repo.dir, repo.head, repo.baseline, "main", deps), /own_commit_in_range: .* does not descend/, "swapped arguments name a non-descendant head");
     await assert.rejects(countPrOwnCommits(repo.dir, repo.baseline, repo.head, "gone", deps), /origin\/gone does not exist/);
   } finally { cleanup(repo); }
   const merged = reviewerOnlyRepo({ nonBaseOnlyMerge: true });
   try {
-    assert.ok(await countPrOwnCommits(merged.dir, merged.mergeHead, merged.head, "main", deps) >= 2, "a non-base-only merge and its side commit count");
+    assert.equal(await countPrOwnCommits(merged.dir, merged.mergeHead, merged.head, "main", deps), 1, "a clean non-base-only merge resolves nothing, so only its side commit counts");
   } finally { cleanup(merged); }
+  const evil = reviewerOnlyRepo({ evilMerge: true });
+  try {
+    assert.equal(await countPrOwnCommits(evil.dir, evil.mergeHead, evil.head, "main", deps), 2, "the side commit plus the resolved merge");
+  } finally { cleanup(evil); }
+  const conflict = reviewerOnlyRepo({ conflictOnly: true });
+  try {
+    assert.equal(await countPrOwnCommits(conflict.dir, conflict.fix, conflict.head, "main", deps), 1, "the conflict resolution is the only change and counts");
+  } finally { cleanup(conflict); }
+});
+
+test("countPrOwnCommits is 1 for a clean merge whose base commit touches a PR-changed file", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clean-merge-"));
+  initGitFixture(dir, { branch: "main", commit: null });
+  const git = (...args) => runGitFixture(dir, args);
+  git("config", "commit.gpgsign", "false");
+  const lines = (top, bottom) => `${top}\n1\n2\n3\n4\n5\n6\n7\n8\n9\n${bottom}\n`;
+  fs.writeFileSync(path.join(dir, "f.txt"), lines("top", "bottom"));
+  git("add", "."); git("commit", "-qm", "base");
+  git("checkout", "-qb", "pr");
+  fs.writeFileSync(path.join(dir, "f.txt"), lines("top", "pr-bottom"));
+  git("add", "."); git("commit", "-qm", "feat: f");
+  const before = git("rev-parse", "HEAD");
+  git("checkout", "-q", "main");
+  fs.writeFileSync(path.join(dir, "f.txt"), lines("base-top", "bottom"));
+  git("add", "."); git("commit", "-qm", "base moves f");
+  git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
+  git("checkout", "-q", "pr");
+  git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
+  try {
+    assert.equal(await countPrOwnCommits(dir, before, git("rev-parse", "HEAD"), "main", { fetchBase: () => {} }), 1);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 const BODY_ACT = (n) => { const item = { ref: `body-${n}`, severity: "low", angle: "spec", summary: `PR body finding ${n}`, judgeDisposition: "act" }; return { ...item, fingerprint: fingerprintFinding(item) }; };
@@ -1961,4 +2125,207 @@ test("an all-body act list refuses delta_body_only_act_set with the edit-pr and 
   const actList = path.join(dir, "body-act-list.json");
   fs.writeFileSync(actList, JSON.stringify([BODY_ACT(1), BODY_ACT(2)]));
   await assert.rejects(runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], headAt(B)), /delta_body_only_act_set[^]*edit-pr\.mjs[^]*--converged-json/);
+});
+
+// A real zero-thread commit_only emission carrying the focus round, as the fixer pulls it.
+async function focusEmission(round, payload = { ...THREADS, threads: [] }) {
+  const { emitFixerWorkOrder } = await import("../../scripts/loop/emit-fixer-work-order.mjs");
+  const { dir, threadsFile } = threadsFixture(payload);
+  const operatorFocusFile = path.join(dir, "focus.json");
+  fs.writeFileSync(operatorFocusFile, JSON.stringify({ round }));
+  const unit = await emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "commit_only", threadsFile, operatorFocusFile, cwd: coverageRepo,
+    fetchPr: async () => ({ headRefName: "issue-1", headRefOid: A }), fetchVerdictMarkers: async () => ({ draft_gate: { visible: true, contractComplete: true } }), executionIdentity: `f${Date.now()}-${Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0")}` });
+  return { dir, threadsFile, unit, planPath: unit.planPath };
+}
+
+test("--threads-file with no unresolved thread builds the act set from the canonical plan's operator focus round and refuses a noncanonical plan", async () => {
+  const { dir, threadsFile, planPath } = await focusEmission("tighten the summary wording");
+  const input = (await runCli(threadArgs(threadsFile, "--spec-identity", "spec@1", "--fixer-plan", planPath, "--worktree", coverageRepo), headAt(B))).input;
+  assert.deepEqual(input.actItems.map(({ ref, summary }) => [ref, summary]), [["operator-focus", "tighten the summary wording"]]);
+  await assert.rejects(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1"), headAt(B)), /no operator focus round/);
+  const handWritten = path.join(dir, "plan.json");
+  fs.writeFileSync(handWritten, JSON.stringify({ ...JSON.parse(fs.readFileSync(planPath, "utf8")), workOrder: { operatorFocus: { round: "fix a typo" } } }));
+  await assert.rejects(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1", "--fixer-plan", handWritten, "--worktree", coverageRepo), headAt(B)), /not the canonical commit_only threads plan/);
+  const missing = path.join(dir, "missing-plan.json");
+  await assert.rejects(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1", "--fixer-plan", missing, "--worktree", coverageRepo), headAt(B)), (error) => error.message.includes(`--fixer-plan ${missing} is unreadable or not JSON`) && !/no operator focus round/.test(error.message));
+});
+
+test("--threads-file refuses an empty capture paired with a canonical plan whose pinned source holds an unresolved thread", async () => {
+  const { planPath } = await focusEmission("tighten the summary wording", THREADS);
+  const { threadsFile: emptyThreads } = threadsFixture({ ...THREADS, threads: [] });
+  await assert.rejects(runCli(threadArgs(emptyThreads, "--spec-identity", "spec@1", "--fixer-plan", planPath, "--worktree", coverageRepo), headAt(B)), /pinned threads source holds an actionable thread/);
+});
+
+test("--threads-file refuses the canonical focus plan of another PR or repo", async () => {
+  const { dir, threadsFile, planPath } = await focusEmission("tighten the summary wording");
+  for (const [repo, pr] of [["o/r", "8"], ["o/other", "7"]]) {
+    const otherThreads = path.join(dir, `threads-${pr}-${repo.replace("/", "-")}.json`);
+    fs.writeFileSync(otherThreads, JSON.stringify({ ...JSON.parse(fs.readFileSync(threadsFile, "utf8")), repo, pr: Number(pr) }));
+    await assert.rejects(runCli(["--threads-file", otherThreads, "--repo", repo, "--pr", pr, "--baseline", A, "--spec-identity", "spec@1", "--fixer-plan", planPath, "--worktree", coverageRepo], headAt(B)), /not the canonical commit_only threads plan/);
+  }
+});
+
+test("--threads-file refuses a canonical zero-thread plan whose mutationAuthority branch differs from the worktree branch", async () => {
+  const { threadsFile, planPath } = await focusEmission("tighten the summary wording");
+  const original = fs.readFileSync(planPath, "utf8"), plan = JSON.parse(original);
+  const { workOrderDigest } = await import("../../scripts/github/_work-order-protocol.mjs");
+  plan.workOrder.mutationAuthority = { ...plan.workOrder.mutationAuthority, branch: "some-other-branch" };
+  plan.workOrderDigest = workOrderDigest(plan.workOrder);
+  fs.writeFileSync(planPath, JSON.stringify(plan));
+  try {
+    await assert.rejects(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1", "--fixer-plan", planPath, "--worktree", coverageRepo), headAt(B)), /not the canonical commit_only threads plan/);
+  } finally { fs.writeFileSync(planPath, original); } // later emissions in this file share the plan directory
+});
+
+test("a zero-thread focus sequence whose fixer hands back the baseline closes as no_commit and clears its marker", async () => {
+  const { pullWorkOrder } = await import("../../scripts/github/_work-order-protocol.mjs");
+  const { threadsFile, unit } = await focusEmission("tighten the summary wording");
+  const tmpRoot = resolveGateArtifactTmpRoot(coverageRepo);
+  await pullWorkOrder({ ref: unit.workOrderRef, digest: unit.workOrderDigest, execution: unit.executionIdentity, cwd: coverageRepo, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
+  const output = unit.workOrder.outputRefs[0];
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  fs.writeFileSync(output, JSON.stringify({ headSha: A, siteCoverage: [] }));
+  assert.notEqual(readSequenceMarker(tmpRoot, A), null);
+  const seam = headAt(A, tmpRoot);
+  const result = await runDeltaCli(threadArgs(threadsFile, "--spec-identity", "s", "--worktree", coverageRepo, "--fixer-plan", unit.planPath, "--site-coverage", output), seam);
+  assert.equal(result.outcome, "no_commit");
+  assert.equal(readSequenceMarker(tmpRoot, A), null);
+});
+
+test("--threads-file with no unresolved thread records a locally_clear result against the operator-focus item", async () => {
+  const { dir, threadsFile, planPath } = await focusEmission("tighten the summary wording");
+  const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ref: "operator-focus", angle: "operator-focus", summary: "tighten the summary wording", judgeDisposition: "act" }] });
+  const result = path.join(dir, "focus-result.json");
+  fs.writeFileSync(result, JSON.stringify({
+    reviewBaselineHead: A, candidateHead: B, actSetId: sequence.actSetId,
+    actionableItems: [{ ref: "operator-focus", status: "resolved", evidence: ["e"] }],
+    newFindings: [], widenedReads: [], outcome: "locally_clear",
+  }));
+  const seam = headAt(B);
+  assert.equal((await runCli(threadArgs(threadsFile, "--result", result, "--invocation", "1", "--fixer-plan", planPath), seam)).nextStep, "push");
+  const record = JSON.parse(fs.readFileSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`), "utf8"));
+  assert.deepEqual(record.items, [{ ref: "operator-focus", status: "resolved" }]);
+  assert.equal(record.nextStep, "push");
+});
+
+// Issue 3364: a residue with no site (a PR-body item) clears on a PR body edit or a siteless skip; a code-site residue still needs a commit or a site-matched skip.
+test("issue 3364: a siteless residue is cleared by a PR body edit after the sealed result; a code-site residue still refuses", async () => {
+  const { prBodySha256 } = await import("../../scripts/github/write-gate-context.mjs");
+  const sealedBody = "tradeoff: snapshot-sourced";
+  const siteless = { severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" };
+  const target = ["--repo", "o/r", "--pr", "7"];
+  const calls = [];
+  const withBody = (body) => ({ ...headAt(B), fetchPr: async (t) => { calls.push(t); if (body instanceof Error) throw body; return { body }; } });
+  const fx = openRecordFixture([siteless]);
+  const recordPath = gateDeltaRecordPath(fx.tmpRoot, A);
+  const sealedWith = (findings) => writeSealedGateDeltaRecord(fx.tmpRoot, A, { ...JSON.parse(fs.readFileSync(recordPath, "utf8")), findings, bodySha256: prBodySha256(sealedBody), bodyTarget: { repo: "o/r", pr: 7 } });
+  sealedWith([siteless]);
+  const atC = fx.handback(B);
+  await assert.rejects(fx.run(atC, ["--handback", ...target], withBody(sealedBody)), /open task[^]*edit the PR body/);
+  await assert.rejects(fx.run(atC, ["--handback", ...target], withBody(new Error("gh offline"))), /open task/);
+  await assert.rejects(fx.run(atC, ["--handback"], withBody("edited")), /open task/);
+  // A handback naming another PR than the sealed target keeps the residue open, whatever that PR's body holds (the mismatch is refused before any fetch).
+  const before = calls.length;
+  await assert.rejects(fx.run(atC, ["--handback", "--repo", "o/r", "--pr", "8"], withBody("tradeoff: fixed")), /open task/);
+  assert.equal(calls.length, before);
+  calls.length = 0;
+  assert.ok((await fx.run(atC, ["--handback", ...target], withBody("tradeoff: fixed"))).ok);
+  assert.deepEqual(calls, [{ repo: "o/r", pr: 7 }]);
+  // A case variant of the sealed repo is the same target.
+  assert.ok((await fx.run(atC, ["--handback", "--repo", "O/R", "--pr", "7"], withBody("tradeoff: fixed"))).ok);
+  // A code-site residue keeps refusing after a body edit.
+  sealedWith([RESIDUE_FINDING]);
+  await assert.rejects(fx.run(atC, ["--handback", ...target], withBody("tradeoff: fixed")), /open task/);
+});
+
+test("issue 3364: --repo and --pr are validated together on the ACT route", async () => {
+  const base = ["--act-list", "a.json", "--baseline", A, "--spec-identity", "s", "--handback", "--site-coverage", "c.json"];
+  const ok = parseCheckPrePushDeltaArgs([...base, "--repo", "o/r", "--pr", "7"]);
+  assert.deepEqual([ok.repo, ok.pr], ["o/r", 7]);
+  assert.equal(parseCheckPrePushDeltaArgs(base).repo, null);
+  for (const extra of [["--repo", "o/r", "--pr", "abc"], ["--repo", "o/r", "--pr", "0"], ["--repo", "o/r"], ["--pr", "7"]]) assert.throws(() => parseCheckPrePushDeltaArgs([...base, ...extra]), /passed together/, extra.join(" "));
+});
+
+test("issue 3364: a siteless residue is cleared by a recorded skip reason that carries no site", async () => {
+  const fx = openRecordFixture([{ severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" }]);
+  const skipped = fx.handback(B, [{ fingerprint: ACT.fingerprint ?? FP, returnedSites: [], noSitesReason: "query empty", sitelessSkipReason: "a PR-body item with no code site", sites: [] }]);
+  assert.ok((await fx.run(skipped, ["--handback"])).ok);
+});
+
+test("issue 3364: noSitesReason alone does not clear a siteless residue at the handback", async () => {
+  const fx = openRecordFixture([{ severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" }]);
+  const noSites = fx.handback(B, [{ fingerprint: ACT.fingerprint ?? FP, returnedSites: [], noSitesReason: "the query returned nothing", sites: [] }]);
+  await assert.rejects(fx.run(noSites, ["--handback"]), /open task/);
+});
+
+test("issue 3364: a sealed record with no bodySha256 names the --result re-run as the remedy", async () => {
+  const fx = openRecordFixture([{ severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" }]);
+  await assert.rejects(fx.run(fx.handback(B), ["--handback", "--repo", "o/r", "--pr", "7"]), /no bodySha256[^]*seals the current body[^]*sitelessSkipReason or edit the body again/);
+});
+
+test("issue 3364: the coordinator input run reads the PR target from --fixer-plan when --repo and --pr are absent", async () => {
+  const { prBodySha256 } = await import("../../scripts/github/write-gate-context.mjs");
+  const fx = openRecordFixture([{ severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" }]);
+  const recordPath = gateDeltaRecordPath(fx.tmpRoot, A);
+  writeSealedGateDeltaRecord(fx.tmpRoot, A, { ...JSON.parse(fs.readFileSync(recordPath, "utf8")), bodySha256: prBodySha256("old body"), bodyTarget: { repo: "o/r", pr: 7 } });
+  const plan = path.join(path.dirname(fx.tmpRoot), "issue-3364-plan.json");
+  fs.writeFileSync(plan, JSON.stringify({ workOrder: { target: { repo: "o/r", pr: 7 } } }));
+  const atC = fx.handback(B);
+  const calls = [];
+  const withBody = (body) => ({ ...headAt(B), fetchPr: async (t) => { calls.push(t); return { body }; } });
+  await assert.rejects(fx.run(atC, ["--fixer-plan", plan, "--findings-log", logFor(A)], withBody("old body")), /open task/);
+  assert.deepEqual(calls, [{ repo: "o/r", pr: 7 }]);
+  // An edited body clears the guard; the run then fails on the unauthenticated plan, not on open work.
+  await assert.rejects(fx.run(atC, ["--fixer-plan", plan, "--findings-log", logFor(A)], withBody("new body")), (error) => !/open task/.test(error.message));
+  assert.deepEqual(calls, [{ repo: "o/r", pr: 7 }, { repo: "o/r", pr: 7 }]);
+  // An explicit pair that differs from the plan target is refused before any body read.
+  await assert.rejects(fx.run(atC, ["--fixer-plan", plan, "--findings-log", logFor(A), "--repo", "o/r", "--pr", "8"], withBody("old body")), (error) => /target_mismatch/.test(error.message) && !/Delta coverage binding/.test(error.message));
+  assert.equal(calls.length, 2);
+});
+
+test("issue 3364: the --result run seals the live body digest for a siteless residue and records none when the body is unreadable", async () => {
+  const { prBodySha256 } = await import("../../scripts/github/write-gate-context.mjs");
+  const { dir, threadsFile, planPath } = await focusEmission("tighten the summary wording");
+  const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ref: "operator-focus", angle: "operator-focus", summary: "tighten the summary wording", judgeDisposition: "act" }] });
+  const result = path.join(dir, "siteless-result.json");
+  fs.writeFileSync(result, JSON.stringify({
+    reviewBaselineHead: A, candidateHead: B, actSetId: sequence.actSetId,
+    actionableItems: [{ ref: "operator-focus", status: "resolved", evidence: ["e"] }],
+    newFindings: [{ severity: "low", summary: "body tradeoff stale", evidence: ["pr body"], residueOf: "operator-focus" }], widenedReads: [], outcome: "needs_fix",
+  }));
+  const run = async (fetchPr) => {
+    const seam = { ...headAt(B), fetchPr };
+    await runCli(threadArgs(threadsFile, "--result", result, "--invocation", "1", "--fixer-plan", planPath), seam);
+    return JSON.parse(fs.readFileSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`), "utf8"));
+  };
+  const sealed = await run(async (t) => { assert.deepEqual(t, { repo: "o/r", pr: 7 }); return { baseRefName: "main", body: "live body" }; });
+  assert.equal(sealed.bodySha256, prBodySha256("live body"));
+  assert.deepEqual(sealed.bodyTarget, { repo: "o/r", pr: 7 });
+  assert.equal((await run(async () => { throw new Error("gh offline"); })).bodySha256, undefined);
+});
+
+// The ACT route: the --result run without --repo/--pr takes the body target from the authenticated --fixer-plan target.
+test("issue 3364: the ACT --result run without --repo/--pr seals the live body digest and the plan target; a code-site-only residue seals none", async () => {
+  const { prBodySha256 } = await import("../../scripts/github/write-gate-context.mjs");
+  const { dir, actList, result } = fixture();
+  const finding = (extra) => ({ severity: "low", summary: "residue", evidence: ["e"], residueOf: "act-1", ...extra });
+  const run = async (newFindings) => {
+    const file = path.join(dir, `act-result-${Math.random()}.json`);
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(result, "utf8")), newFindings, outcome: "needs_fix" }));
+    const calls = [];
+    const seam = { ...headAt(B), fetchPr: async (t) => { calls.push(t); return { body: "live body" }; } };
+    await runCli(["--act-list", actList, "--baseline", A, "--result", file, "--invocation", "1"], seam);
+    return { record: JSON.parse(fs.readFileSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`), "utf8")), calls };
+  };
+  const siteless = await run([finding()]);
+  assert.equal(siteless.record.bodySha256, prBodySha256("live body"));
+  assert.deepEqual(siteless.record.bodyTarget, { repo: "o/r", pr: 7 });
+  assert.deepEqual(siteless.calls, [{ repo: "o/r", pr: 7 }]);
+  const coded = await run([finding({ site: "src/a.mjs:10" })]);
+  assert.equal(coded.record.bodySha256, undefined);
+  assert.deepEqual(coded.calls, []);
+  // An explicit --repo/--pr that differs from the authenticated plan target is refused.
+  const file = path.join(dir, "act-result-mismatch.json");
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(result, "utf8")), newFindings: [finding()], outcome: "needs_fix" }));
+  await assert.rejects(runCli(["--act-list", actList, "--baseline", A, "--result", file, "--invocation", "1", "--repo", "o/r", "--pr", "8"], { ...headAt(B), fetchPr: async () => ({ body: "x" }) }), /target_mismatch|Delta coverage binding: wrong role, target/);
 });

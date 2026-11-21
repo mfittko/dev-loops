@@ -427,9 +427,13 @@ function describeAcceptedCiState(ciStatus, preApprovalRequireCi) {
   return "CI not required by config";
 }
 
-// Shared remedy text for a capped PR with zero threads and failing or unconfirmed required CI.
-function buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha }) {
-  const prefix = `round_cap_reached at ${copilotReviewRoundCount}/${maxCopilotRounds}`;
+const COPILOT_UNAVAILABLE_REASON = "request_not_observable";
+
+// Shared remedy text for a capped (or Copilot-unavailable) PR with zero threads and failing or unconfirmed required CI.
+function buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha, copilotUnavailable = false }) {
+  const prefix = copilotUnavailable
+    ? `copilot_unavailable (${COPILOT_UNAVAILABLE_REASON})`
+    : `round_cap_reached at ${copilotReviewRoundCount}/${maxCopilotRounds}`;
   const head = `at head ${currentHeadSha ?? "unknown"} and zero unresolved threads`;
   return ciStatus === "failure"
     ? `${prefix} with failing CI (required) ${head}: fix the failing required check at the head and push, then re-run gate-coordination.`
@@ -601,6 +605,7 @@ function buildResult({
  * @param {object} params
  * @param {string} params.copilotReviewRequestStatus - "none"|"requested"|"already-requested"|"unavailable"|"failed"
  * @param {boolean} [params.copilotReviewEverFormallyRequested=false] - whether Copilot was ever formally requested via GitHub review_requested mechanism
+ * @param {boolean} [params.copilotUnavailable=false] - the interpreter resolved copilot_unavailable
  * @param {number} params.copilotReviewRoundCount
  * @param {number|null} params.maxCopilotRounds
  * @param {boolean} params.sameHeadCleanConverged
@@ -627,6 +632,7 @@ export function shouldGuardCopilotReviewRequest({
   roundCapCleanFallback = false,
   postConvergenceSignificantChange = false,
   postConvergenceReviewSuppressed = false,
+  copilotUnavailable = false,
   gateBoundary,
 }) {
   const gateBoundariesRequiringCopilotFormalRequest = new Set([
@@ -643,7 +649,7 @@ export function shouldGuardCopilotReviewRequest({
   if (maxCopilotRounds === 0) {
     return false;
   }
-  if (copilotReviewRequestStatus !== "none") {
+  if (copilotReviewRequestStatus !== "none" || copilotUnavailable === true) {
     return false;
   }
   // A carried convergence settles this head without a new Copilot round; the
@@ -749,6 +755,10 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
   const sameHeadCleanConverged = input.sameHeadCleanConverged === true;
   const copilotReviewRoundCount = normalizeNonNegativeInteger(input.copilotReviewRoundCount);
   const copilotReviewOnCurrentHead = input.copilotReviewOnCurrentHead === true;
+  // Copilot is unavailable: no request or wait can ever settle, so entry is not refused.
+  if (input.copilotRequestNotObservable === true && copilotReviewRequestStatus === "none" && !copilotReviewOnCurrentHead) {
+    return null;
+  }
   const outstandingRequest = copilotReviewRequestStatus === "requested"
     || copilotReviewRequestStatus === "already-requested";
   const roundCapReached = isCopilotRoundCapReached({
@@ -964,8 +974,9 @@ export const ADR_TRIPWIRE_REMEDIES = Object.freeze([
 // The flags every reviewer-only remedy needs (the route binds the findings log to the PR, ADR 0255).
 const REVIEWER_ONLY_FLAGS = " The reviewer-only command takes `--repo <owner/name> --pr <number> --baseline <sha> --pr-head <sha> --findings-log <draft_gate cap-round ledger path>` and, on the input run, `--spec-identity <id> --result-path <result-file>` (`loop pre-push-delta --help`).";
 
-/** The one failed cap-round-fixed condition (`resolveCapRoundFixed` `onFailure`, ADR 0218) and its remedy. `onFailure` also receives `no_cap_round` below the cap, the one non-failure condition, which has no entry. */
+/** The failed cap-round-fixed conditions and their remedies. Every key is a `resolveCapRoundFixed` `onFailure` condition (ADR 0218) except `clean_cap_verdict_unposted`, which `resolveDraftCapRoundFact` reports. `onFailure` also receives `no_cap_round` below the cap, the one non-failure condition, which has no entry. */
 export const CAP_ROUND_REFUSAL = Object.freeze({
+  clean_cap_verdict_unposted: "Condition clean_cap_verdict_unposted: the cap round is clean and its sealed ledger proves it, but its draft_gate verdict was never posted, so CI sees no clean draft_gate evidence. Remedy: run `node <dev-loops-package-root>/cli/index.mjs gate upsert-verdict --repo <owner/name> --pr <n> --gate draft_gate --post-sealed-cap-round`; it posts the verdict derived from the sealed ledger.",
   baseline_orphaned: "Condition baseline_orphaned: the cap-round baseline is not an ancestor of the current head (a rebase rewrote it), so no clearing record can bind to this head. Remedy: push the head to a new branch that keeps the issue slug (`git push origin HEAD:<new-branch>`), record a pre-PR review on the new branch head (`node <dev-loops-package-root>/cli/index.mjs loop pre-pr-review ...`) before `pr create`, run `node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number>` while this PR is still open, then close this PR (gate history restarts at round 1); do not rebase a PR that reached the cap round, merge the base instead.",
   no_clearing_record: "Condition no_clearing_record: no sealed clearing delta record exists for the cap-round baseline. Remedy: run `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` for that baseline. A clean cap round has no fixer pass: when every commit since the cap-round head is docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>` directly with no fixer pass. Otherwise, after the cap-round clearing record exists, when the later commits are docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>` to extend the chain. When the later commits touch code, run the pre-push delta for them (`node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` with the start of the logic range as baseline: the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end) until it is `locally_clear` for exactly that start..head, then run the same `gate extend-cap-round-chain` command; it seals the `delta_covered` extension (ADR 0254)." + REVIEWER_ONLY_FLAGS,
   unsealed_record: "Condition unsealed_record: the delta record for the cap-round baseline carries no valid seal. Remedy: rerun `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` for that baseline. It takes over an unsealed non-clearing record over the same act refs and seals the new record; any other unsealed record refuses `unsealed_record` with an `rm -f <record> <record>.seal` remedy to run before the rerun; never edit the record." + REVIEWER_ONLY_FLAGS,
@@ -974,15 +985,21 @@ export const CAP_ROUND_REFUSAL = Object.freeze({
   chain_does_not_reach_head: "Condition chain_does_not_reach_head: the sealed clearing chain ends before the current head and the head is not a base-only merge of its last candidate. Remedy: run `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` for the current head, or fetch origin/<base> so a base-only merge is verifiable. When the later commits are docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>`. When the later commits touch code, run the pre-push delta for them (`node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` with the start of the logic range as baseline: the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end) until it is `locally_clear` for exactly that start..head, then run the same `gate extend-cap-round-chain` command; it seals the `delta_covered` extension (ADR 0254)." + REVIEWER_ONLY_FLAGS,
 });
 
-const CAP_ROUND_COMMAND_CONDITIONS = Object.freeze(["no_clearing_record", "items_do_not_cover", "chain_does_not_reach_head", "unsealed_record"]);
+const CAP_ROUND_COMMAND_CONDITIONS = Object.freeze(["clean_cap_verdict_unposted", "no_clearing_record", "items_do_not_cover", "chain_does_not_reach_head", "unsealed_record"]);
 
 /**
- * The one exit of a failed cap-round-fixed condition (issue 3139). ADR 0254: these conditions end at the chain-extension command, which seals docs and tests commits or code commits a locally_clear delta covers.
+ * The one exit of a failed cap-round-fixed condition (issue 3139). ADR 0254: these conditions end at the chain-extension command, except `clean_cap_verdict_unposted`, which ends at `gate upsert-verdict --post-sealed-cap-round`. The chain-extension command seals docs and tests commits or code commits a locally_clear delta covers.
  * ADR 0255: baseline_orphaned (replacement PR) and cap_round_unresolved (ledger repair) have no command that clears them: the operator decides.
  * @returns {{ agentRemedy: { command: string, summary: string } } | { blockedOn: string }}
  */
 export function capRoundExit(condition, { repo, pr }) {
   if (!CAP_ROUND_COMMAND_CONDITIONS.includes(condition)) return { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
+  if (condition === "clean_cap_verdict_unposted") {
+    return remedyOrOperator({ repo, pr }, (r, n) => ({
+      command: `dev-loops gate upsert-verdict --repo ${r} --pr ${n} --gate draft_gate --post-sealed-cap-round`,
+      summary: "Post the sealed clean cap-round verdict from its ledger; the verdict, head and findings derive from the ledger.",
+    }));
+  }
   return remedyOrOperator({ repo, pr }, (r, n) => ({
     command: `dev-loops gate extend-cap-round-chain --repo ${r} --pr ${n}`,
     summary: "Extend the sealed cap-round clearing chain over the later commits; the command refuses with a typed reason that names the next step.",
@@ -1344,15 +1361,21 @@ function evaluatePrGateCoordinationCore(input = {}) {
 
   // Issue 3105 AC15 (ADR 0288): the open draft_gate act list at the current head; the fixer route below consumes it.
   const actList = input.draftOpenActList;
-  const headActList = !draftReady && draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"
-    && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && String(actList?.headSha ?? "").toLowerCase() === currentHeadSha.toLowerCase()
+  // A carried list (a base-only merge of the cap head A) keeps its findings_present marker at A: findings_present markers never carry across a merge.
+  const carriedMarker = normalizeGateComment(input.draftGateMarker);
+  const markerAtCarriedList = trimmedOrNull(actList?.carriedToHead)?.toLowerCase() === currentHeadSha?.toLowerCase() && carriedMarker.visible && carriedMarker.contractComplete
+    && carriedMarker.verdict === "findings_present" && carriedMarker.headSha !== null && String(actList.headSha ?? "").toLowerCase().startsWith(carriedMarker.headSha.toLowerCase());
+  const headActList = !draftReady && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"))
+    && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase())
     && Number.isInteger(actList.openActCount) && actList.openActCount > 0
     // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.
     && (input.draftRoundRefused !== true || input.draftCapRoundFailure === "no_clearing_record");
+  // ADR 0271: a cap round of PR-body items only has no fixer route; its exit is the body-only converged post, named in the cap refusal below.
+  const bodyOnlyList = headActList && actList.bodyOnly === true;
   const actBlockers = headActList && Array.isArray(actList.blockers) ? actList.blockers : [];
   // An eligible draft act list wins over a BEHIND-only refresh; a real conflict (CONFLICTING, DIRTY, conflict files) still resolves first.
   const actListWinsOverBehind = mergeStateStatus === "BEHIND" && mergeable !== "CONFLICTING" && conflictFiles.length === 0
-    && headActList && actBlockers.length === 0 && (prDraft || effectiveLifecycleState === STATE.PR_DRAFT);
+    && headActList && !bodyOnlyList && actBlockers.length === 0 && (prDraft || effectiveLifecycleState === STATE.PR_DRAFT);
   if (!actListWinsOverBehind && (hasBlockedMergeStatus(mergeStateStatus) || mergeable === "CONFLICTING" || conflictFiles.length > 0)) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS]);
     pushUnique(forbiddenActions, CONFLICT_FORBIDDEN_ACTIONS);
@@ -1537,7 +1560,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         reason: (capRoundFixed && !draftGate.markerCleanThreadsUnresolved
           ? "The PR is still draft and the `draft_gate` cap round's fixer pass landed (ADR 0208), but"
           : "The PR is still draft and this round's draft_gate verdict is clean, but")
-          + " a gate-authored review thread is still unresolved (ADR 0088) — reply/resolve it rather than re-running the draft gate. An open defect thread is resolved via fixer fix-close, or a close-gate-findings rerun once the judge has deferred it or disposed it act with an evidence-only remedy (ADR 0144); a judge-rejected medium, low or nit defect thread is reject-closed by a close-gate-findings rerun (ADR 0144), and a judge-rejected high needs an operator decision. A question thread's remedy depends on the judge's disposition: unanswered — post an answer reply, then rerun close-gate-findings, which reject-closes it if the judge disposed it reject; answered and judge-disposed reject — rerun close-gate-findings to reject-close it; answered and judge-disposed act with an evidence-only remedy — closed by a close-gate-findings rerun; any other judge-disposed act question — resolved by the fixer's own answer-and-resolve path; ambiguous/unrecorded disposition — needs an operator decision, no automated path.",
+          + " a gate-authored review thread is still unresolved (ADR 0088) — reply/resolve it rather than re-running the draft gate. An open defect thread is resolved via fixer fix-close, or a close-gate-findings rerun once the judge has deferred it or disposed it act with an evidence-only remedy (ADR 0144); an open judge-act thread with remedyKind pr_body is closed by a close-gate-findings rerun after the PR-body edit is applied (the live PR body digest differs from the one recorded at the verdict head); a judge-rejected medium, low or nit defect thread is reject-closed by a close-gate-findings rerun (ADR 0144), and a judge-rejected high needs an operator decision. A question thread's remedy depends on the judge's disposition: unanswered — post an answer reply, then rerun close-gate-findings, which reject-closes it if the judge disposed it reject; answered and judge-disposed reject — rerun close-gate-findings to reject-close it; answered and judge-disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied — closed by a close-gate-findings rerun; any other judge-disposed act question — resolved by the fixer's own answer-and-resolve path; ambiguous/unrecorded disposition — needs an operator decision, no automated path.",
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,
@@ -1639,7 +1662,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     }
 
     // Issue 3105 AC15 (ADR 0288): a posted findings_present verdict at the current head with an open act list goes to the fixer, not to another round.
-    if (headActList && actBlockers.length === 0) {
+    if (headActList && !bodyOnlyList && actBlockers.length === 0) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK]);
       pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, ...draftReviewForbidden]);
       return buildResult({
@@ -1683,10 +1706,15 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        ...(actBlockers.length > 0 ? { blockedOn: BLOCKED_ON.OPERATOR_DECISION } : capRoundExit(input.draftCapRoundFailure, input)),
+        ...(actBlockers.length > 0 ? { blockedOn: BLOCKED_ON.OPERATOR_DECISION } : bodyOnlyList ? remedyOrOperator(input, (r, n) => ({
+          command: `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo ${r} --pr ${n} --gate draft_gate --verdict clean --head-sha ${actList.headSha} --findings-ledger <cap-round ledger> --findings-summary <text> --next-action "mark ready for review" --execution-mode fanout_fanin --converged-json <path to a file holding { fixerCommit${actList.carriedToHead ? ` (${actList.headSha})` : ""}, actList, bodyOnly: true }>`,
+          summary: "Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (ADR 0271); that verdict is the cap-round proof for ready-for-review and the ADR waiver.",
+        })) : capRoundExit(input.draftCapRoundFailure, input)),
         reason: actBlockers.length > 0
           ? `The PR is still draft at the round cap (\`round_cap_reached\`, ADR 0208) and the current head's act list names a human decision (GATE-EXEC-SOFT-CAP): ${actBlockers.map((b) => b?.item).join("; ")}. Round N+1 never runs.`
-          : `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but the cap round's fixer pass is not proven landed with a cleared pre-push delta. ${Object.hasOwn(CAP_ROUND_REFUSAL, input.draftCapRoundFailure) ? CAP_ROUND_REFUSAL[input.draftCapRoundFailure] : CAP_ROUND_REFUSAL.cap_round_unresolved} Round N+1 never runs.`,
+          : bodyOnlyList
+            ? `The PR is still draft at the round cap (\`round_cap_reached\`, ADR 0208) and every open act item of the current head is a PR-body item (ADR 0271). Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true). Round N+1 never runs.`
+          : `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but ${input.draftCapRoundFailure === "clean_cap_verdict_unposted" ? "the clean cap round's draft_gate verdict is not posted" : "the cap round's fixer pass is not proven landed with a cleared pre-push delta"}. ${Object.hasOwn(CAP_ROUND_REFUSAL, input.draftCapRoundFailure) ? CAP_ROUND_REFUSAL[input.draftCapRoundFailure] : CAP_ROUND_REFUSAL.cap_round_unresolved} Round N+1 never runs.`,
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,
@@ -2142,7 +2170,10 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // blocks), and conflicts / blocked states are handled earlier, so
   // genuinely-blocked states still forbid pre_approval. Mirrors
   // LOW_SIGNAL_CONVERGED routing with round-cap reasoning.
-  if (effectiveLifecycleState === STATE.ROUND_CAP_CLEAN_FALLBACK) {
+  // COPILOT_UNAVAILABLE shares this routing: no Copilot round can ever land, so
+  // the pre_approval_gate reviews the head itself, with the unavailability noted.
+  const copilotUnavailable = effectiveLifecycleState === STATE.COPILOT_UNAVAILABLE && unresolvedThreadCount === 0;
+  if (effectiveLifecycleState === STATE.ROUND_CAP_CLEAN_FALLBACK || copilotUnavailable) {
     if (preApprovalRequireCi && (ciStatus === "failure" || ciStatus === "crediblyGreen")) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
       pushUnique(forbiddenActions, postDraftForbidden);
@@ -2159,7 +2190,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        reason: buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha }),
+        reason: buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha, copilotUnavailable }),
+        ...(copilotUnavailable ? ciAgentRemedy(input, ciStatus) : {}),
         mergeStateStatus,
         conflictFiles,
           refinementArtifact,
@@ -2181,7 +2213,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.WAIT_FOR_CI,
-        reason: "The Copilot round cap is exhausted, but the current head does not yet have green or credibly green CI, so `pre_approval_gate` remains illegal until CI settles.",
+        reason: `${copilotUnavailable ? "Copilot is unavailable (request_not_observable)" : "The Copilot round cap is exhausted"}, but the current head does not yet have green or credibly green CI, so \`pre_approval_gate\` remains illegal until CI settles.`,
         mergeStateStatus,
         conflictFiles,
           refinementArtifact,
@@ -2220,7 +2252,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
           preApprovalGate,
           mergeStateStatus,
           conflictFiles,
-          underlyingReason: "Round-cap clean fallback has clean pre_approval_gate but no clean draft_gate evidence.",
+          underlyingReason: copilotUnavailable
+            ? `Copilot is unavailable (${COPILOT_UNAVAILABLE_REASON}) and the current head has clean pre_approval_gate but no clean draft_gate evidence.`
+            : "Round-cap clean fallback has clean pre_approval_gate but no clean draft_gate evidence.",
           refinementArtifact,
           effectiveLifecycleState,
         });
@@ -2248,7 +2282,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
-        reason: `Round-cap clean fallback (${copilotReviewRoundCount}/${maxCopilotRounds} rounds, zero unresolved threads, ${describeAcceptedCiState(ciStatus, preApprovalRequireCi)}) with clean draft_gate evidence; the current head has clean \`pre_approval_gate\` evidence, so the PR is at the final approval boundary.`,
+        reason: copilotUnavailable
+          ? `Copilot unavailable (${COPILOT_UNAVAILABLE_REASON}) with clean draft_gate evidence; the current head has clean \`pre_approval_gate\` evidence, so the PR is at the final approval boundary.`
+          : `Round-cap clean fallback (${copilotReviewRoundCount}/${maxCopilotRounds} rounds, zero unresolved threads, ${describeAcceptedCiState(ciStatus, preApprovalRequireCi)}) with clean draft_gate evidence; the current head has clean \`pre_approval_gate\` evidence, so the PR is at the final approval boundary.`,
         mergeStateStatus,
         conflictFiles,
           refinementArtifact,
@@ -2275,11 +2311,15 @@ function evaluatePrGateCoordinationCore(input = {}) {
       allowedNextActions,
       forbiddenActions,
       nextAction: PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
-      reason: `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), and the current head has zero unresolved threads with ${describeAcceptedCiState(ciStatus, preApprovalRequireCi)}, so \`pre_approval_gate\` fallback is now the next legal boundary (it reviews the current post-cap head; no further Copilot re-request is permitted).`,
+      reason: copilotUnavailable
+        ? `Copilot review requests were accepted but never observable (${COPILOT_UNAVAILABLE_REASON}), so \`pre_approval_gate\` is the next legal boundary; it reviews the current head without Copilot.`
+        : `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), and the current head has zero unresolved threads with ${describeAcceptedCiState(ciStatus, preApprovalRequireCi)}, so \`pre_approval_gate\` fallback is now the next legal boundary (it reviews the current post-cap head; no further Copilot re-request is permitted).`,
       mergeStateStatus,
       conflictFiles,
       refinementArtifact,
-      gateEvidenceNote: buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi }),
+      gateEvidenceNote: copilotUnavailable
+        ? `Copilot was unavailable (${COPILOT_UNAVAILABLE_REASON}): review requests were accepted but never observable, so this verdict rests on the pre_approval_gate review alone.`
+        : buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi }),
     copilotReviewRoundCount,
     });
   }

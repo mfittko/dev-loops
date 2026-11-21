@@ -14,31 +14,32 @@ const USAGE = `Usage:
   scope-boundary-cross-checker.mjs --input <path> [--json]
 Cross-check sibling scopes and non-goal handoffs to detect scope gaps and duplicate ownership.${"\n"}${DEFAULT_USAGE_SUFFIX}`;
 
+// Returns Map<token, Set<raw trimmed source line>> so shared boilerplate can be told from rival claims.
 function extractOwnershipClaims(issue) {
-  const tokens = new Set();
+  const claims = new Map();
+  const add = (token, line) => {
+    if (token.length === 0) return;
+    if (!claims.has(token)) claims.set(token, new Set());
+    claims.get(token).add(line.trim());
+  };
   const scopeSection = extractSection(issue.body, "Scope") ?? "";
   const ownershipSection = extractSection(issue.body, "Ownership") ?? "";
   const searchText = [scopeSection, ownershipSection, issue.body].filter(Boolean).join("\n");
 
-  const ownsPattern = /\bowns?\s+([^\n.;]+)/giu;
-  for (const match of searchText.matchAll(ownsPattern)) {
-    const token = normalizeScopeToken(match[1]);
-    if (token.length > 0) {
-      tokens.add(token);
-    }
+  // Scan the whole text so a claim wrapped across lines ("owns\nAPI") still counts.
+  for (const match of searchText.matchAll(/\bowns?\s+([^\n.;]+)/giu)) {
+    const lineStart = searchText.lastIndexOf("\n", match.index) + 1;
+    const end = searchText.indexOf("\n", match.index + match[0].length);
+    add(normalizeScopeToken(match[1]), searchText.slice(lineStart, end === -1 ? undefined : end));
   }
 
   for (const line of scopeSection.split(/\r?\n/gu)) {
     const bullet = /^\s*[-*]\s+(.+)$/u.exec(line);
     if (!bullet) continue;
-    const rawToken = bullet[1].replace(/^\s*owns?\s+/iu, '');
-    const token = normalizeScopeToken(rawToken);
-    if (token.length > 0) {
-      tokens.add(token);
-    }
+    add(normalizeScopeToken(bullet[1].replace(/^\s*owns?\s+/iu, '')), line);
   }
 
-  return [...tokens];
+  return claims;
 }
 
 function extractNonGoalDelegations(issue) {
@@ -87,7 +88,7 @@ export function runScopeBoundaryCrossChecker(tree) {
 
     const ownersByToken = new Map();
     for (const sibling of siblings) {
-      for (const token of ownershipByIssue.get(sibling.number) ?? []) {
+      for (const token of ownershipByIssue.get(sibling.number)?.keys() ?? []) {
         if (!ownersByToken.has(token)) {
           ownersByToken.set(token, new Set());
         }
@@ -102,7 +103,7 @@ export function runScopeBoundaryCrossChecker(tree) {
         if (!target || !childrenSet.has(target.number)) {
           continue;
         }
-        const targetClaims = new Set(ownershipByIssue.get(target.number) ?? []);
+        const targetClaims = new Set(ownershipByIssue.get(target.number)?.keys() ?? []);
         if (!targetClaims.has(delegation.token)) {
           errors.push({
             code: "mutual_exclusion_gap",
@@ -125,11 +126,15 @@ export function runScopeBoundaryCrossChecker(tree) {
     }
 
     for (const [token, owners] of ownersByToken.entries()) {
-      if (owners.size > 1) {
+      // Shared constraint: three or more siblings (the floor keeps two-sibling overlaps flagged)
+      // that all repeat the identical raw line. Any differing wording is a rival claim.
+      const lineSets = [...owners].map((n) => [...ownershipByIssue.get(n).get(token)].sort().join("\n"));
+      const sharedConstraint = siblings.length >= 3 && owners.size === siblings.length && new Set(lineSets).size === 1;
+      if (owners.size > 1 && !sharedConstraint) {
         errors.push({
           code: "duplicate_ownership",
           issue: parent,
-          message: `Siblings under #${parent} claim duplicate ownership for '${token}': ${[...owners].map((n) => `#${n}`).join(", ")}.`,
+          message: `Siblings under #${parent} claim duplicate ownership for '${token}': ${[...owners].map((n) => `#${n}`).join(", ")}. Give the claim to one sibling, or repeat the identical line in every sibling (three or more siblings) when it is a shared constraint.`,
           parent,
         });
       }

@@ -48,8 +48,8 @@ export function parseConvertToDraftCliArgs(argv) {
   return options;
 }
 
-export async function convertToDraft(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
-  const result = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
+export async function convertToDraft(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot, coordinationSnapshotRoot } = {}) {
+  const result = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild, repoRoot, coordinationSnapshotRoot });
   return {
     ok: true,
     action: result.alreadyDraft ? "already_draft" : "converted",

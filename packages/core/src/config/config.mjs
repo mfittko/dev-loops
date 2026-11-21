@@ -228,6 +228,7 @@ const GateAngleEntry = z.preprocess(
     readsPrBody: z.boolean().optional().describe("Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it."),
     categories: z.array(z.enum(CHANGE_CATEGORY_NAMES)).min(1).optional().describe("Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed."),
     kinds: z.array(z.enum(FILE_KIND_NAMES)).min(1).optional().describe("File kinds (code/config/test/ci/docs/asset/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed."),
+    "developer-checklist": z.array(z.string().regex(/^[A-Z]+\d+: \S/u)).min(1).optional().describe("Developer self-check lines for this angle, each `<ID>: <text>`. The developer brief renders them as selfCheck items from `gates.draft.angles` and the pre-PR record requires evidence per ID. `resolveReviewerRole` also renders the lines into the draft_gate angle prompt (PRE-PR-DEVELOPER-SELF-CHECK)."),
   }),
 );
 
@@ -378,7 +379,7 @@ function formatConfigValue(value) {
 const GATE_KEYS_WITH_BLOCKING_SEVERITIES = /** @type {const} */ (["draft", "preApproval", "spike"]);
 
 const GateConfig = z.strictObject({
-  angles: z.array(GateAngleEntry).optional().describe("Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds."),
+  angles: z.array(GateAngleEntry).optional().describe("Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds/developer-checklist."),
   dynamic: GateDynamicConfig.optional().describe("Diff-driven dynamic angle selection policy for this gate."),
   required: z.boolean().default(true).describe("Whether this gate must run."),
   requireCi: z.boolean().default(true).describe("Per-gate CI prerequisite (default true): the gate requires green CI on the current head; false opts this gate out of the CI precondition entirely, including a real failure."),
@@ -1245,6 +1246,8 @@ function normalizeAngleEntry(a) {
       ? a.kinds.filter((k) => typeof k === "string" && k.trim().length > 0).map((k) => k.trim())
       : [];
     if (kinds.length > 0) entry.kinds = kinds;
+    const checklist = Array.isArray(a["developer-checklist"]) ? a["developer-checklist"].filter((l) => typeof l === "string" && l.length > 0) : [];
+    if (checklist.length > 0) entry["developer-checklist"] = checklist;
     return entry;
   }
   return null;
@@ -1330,6 +1333,13 @@ function resolveTierMapping(config, tierAlias, harness) {
   return trimmedOrNull(model);
 }
 
+// The gate rendering of an angle's `developer-checklist`: the developer brief renders the same entry (issue 3396 ac:4).
+const withChecklist = (prompt, checklist) => {
+  if (!checklist?.length) return prompt;
+  const block = `Checklist (the developer applies the same lines while writing):\n${checklist.map((line) => `- ${line}`).join("\n")}`;
+  return typeof prompt === "string" ? `${prompt}\n\n${block}` : block;
+};
+
 /**
  * Resolve a gate angle name to a reviewer persona and model. Resolution:
  * the angle's own configured entry (findAngleEntry), else BUILTIN_PERSONAS,
@@ -1358,7 +1368,7 @@ export function resolveReviewerRole(config, angle) {
     return {
       persona: personaName,
       model: modelOverride || builtinPersona?.defaultModel || null,
-      prompt: entry?.prompt ?? null,
+      prompt: withChecklist(entry?.prompt ?? null, entry?.["developer-checklist"]),
       fallback: false,
     };
   }

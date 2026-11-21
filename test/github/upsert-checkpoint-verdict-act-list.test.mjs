@@ -5,6 +5,10 @@ import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 import { parseUpsertCheckpointVerdictCliArgs, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
+import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
+import { judgePassCli } from "../../scripts/loop/judge-pass.mjs";
+import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
+import { deliverJudge, seedJudgeSources, writeVerdictAfterPull } from "../loop/_judge-delivery-fixture.mjs";
 
 // A judge act list drives the review verdict read from the findings ledger:
 // a non-empty act list keeps the round from clean, whatever the severities.
@@ -544,3 +548,73 @@ for (const { name, jsonFile, refused } of [
     }, { prefix: "dev-loops-act-list-fingerprint-" });
   });
 }
+
+// The 3297 order: fan-in, emit and pull the judge, judge-pass --ledger-out, then the durable log from that file, then the poster.
+async function postAfterJudgePassLedgerOut(tempDir, { copilotBody, coerce, tamper }) {
+  const tmp = path.join(tempDir, "tmp");
+  const contextDir = path.join(tmp, "gate-context", "owner-repo", "pr-17");
+  await mkdir(contextDir, { recursive: true });
+  await writeFile(path.join(contextDir, `draft_gate-${HEAD}.emit-plan.json`), JSON.stringify({ ok: true, repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, roundId: "r2000-aa", count: 2, units: [{ angles: ["pr-description"], group: null }, { angles: ["holistic"], group: null }] }), "utf8");
+  await writeFile(path.join(contextDir, `draft_gate-${HEAD}.fanin-ledger.json`), JSON.stringify({ overallVerdict: "findings_present", findings: [], provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "review-a" }, { angle: "holistic", reviewer: "review-b" }] } }), "utf8");
+  const raw = [{ severity: "medium", angle: "holistic", summary: "medium finding", clusterId: 0 }, { severity: "low", angle: "holistic", summary: "low finding", clusterId: 1 }];
+  await writeFile(path.join(tempDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: raw }), "utf8");
+  if (copilotBody) {
+    const bodyPath = copilotBodyJudgePath({ tmpRoot: tmp, repo: "owner/repo", pr: 17, headSha: HEAD });
+    await mkdir(path.dirname(bodyPath), { recursive: true });
+    await writeFile(bodyPath, JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "Copilot body defect", recommendation: "fix it" }] }), "utf8");
+  }
+  const sources = await seedJudgeSources(tempDir, { repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json" });
+  const { plan, receiptTmpRoot } = await deliverJudge(tempDir, sources);
+  const disposed = (index, disposition) => ({ index, disposition, title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" });
+  const dispositions = [disposed(0, "act"), disposed(1, "reject"), ...(copilotBody ? [disposed(2, "act")] : [])];
+  await writeVerdictAfterPull(plan.workOrder.outputRefs[0], Buffer.from(JSON.stringify({ headSha: HEAD, scopeDrift: { verdict: "within_scope", rationale: "ok", driftedAreas: [] }, dispositions })));
+  const ledgerOut = path.join(tempDir, "enriched.json");
+  await judgePassCli({ repo: "owner/repo", pr: "17", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgePlan: plan.planPath, judgeVerdict: plan.workOrder.outputRefs[0], ledgerOut }, { repoRoot: tempDir, receiptTmpRoot });
+  // A bridge coercion (a rejection judge-pass applied after the verdict) and a Copilot follow-up target must survive the writer.
+  if (coerce) {
+    const bridged = JSON.parse(await readFile(ledgerOut, "utf8"));
+    bridged.findings[0].judgeDisposition = "reject";
+    if (copilotBody) bridged.findings[2].followUpIssueNumber = 99;
+    await writeFile(ledgerOut, JSON.stringify(bridged), "utf8");
+  }
+  if (tamper) {
+    const edited = JSON.parse(await readFile(ledgerOut, "utf8"));
+    edited.findings[1].judgeDisposition = "act";
+    await writeFile(ledgerOut, JSON.stringify(edited), "utf8");
+  }
+  const written = await writeGateFindingsLog({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, findingsFile: ledgerOut, judgeVerdict: plan.workOrder.outputRefs[0], tmpRoot: tmp, contextTmpRoot: tmp }, { repoRoot: tempDir });
+  return { written, posted: await post(written.path) };
+}
+
+for (const { name, copilotBody } of [
+  { name: "3297: the fanout order (judge-pass --ledger-out, then the writer, then the poster) posts without a rewrite", copilotBody: false },
+  { name: "3297: the same order over a Copilot-pinned round does not append the Copilot cluster twice", copilotBody: true },
+]) {
+  test(name, async () => {
+    await withTempDir(async (tempDir) => {
+      const { written, posted } = await postAfterJudgePassLedgerOut(tempDir, { copilotBody });
+      const log = JSON.parse(await readFile(written.path, "utf8"));
+      assert.equal(log.findings.length, copilotBody ? 3 : 2);
+      assert.equal(posted.error, undefined);
+      assert.match(posted.body, /\*\*Verdict:\*\* findings_present/);
+    }, { prefix: "dev-loops-act-list-new-order-" });
+  });
+}
+
+test("3297: the writer drops a non-re-derivable bridge rejection and keeps the Copilot follow-up target", async () => {
+  await withTempDir(async (tempDir) => {
+    const { written } = await postAfterJudgePassLedgerOut(tempDir, { copilotBody: true, coerce: true });
+    const log = JSON.parse(await readFile(written.path, "utf8"));
+    assert.equal(log.findings[0].judgeDisposition, "act");
+    assert.equal(log.findings[2].followUpIssueNumber, 99);
+    assert.equal(log.findings.length, 3);
+  }, { prefix: "dev-loops-act-list-coerce-" });
+});
+
+test("3297: the writer keeps the re-derived reject when a hand-edited ledger-out flips it to act", async () => {
+  await withTempDir(async (tempDir) => {
+    const { written } = await postAfterJudgePassLedgerOut(tempDir, { copilotBody: false, coerce: false, tamper: true });
+    const log = JSON.parse(await readFile(written.path, "utf8"));
+    assert.equal(log.findings[1].judgeDisposition, "reject");
+  }, { prefix: "dev-loops-act-list-tamper-" });
+});

@@ -14,6 +14,7 @@ import { parseArgs } from "node:util";
 import { loadDevLoopConfigStrict } from "@dev-loops/core/config";
 import { extractSection } from "@dev-loops/core/loop/markdown-sections";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { detectAcDodMatrix } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { pathsMissingFromMatrix } from "../github/waive-adr-tripwire.mjs";
 import { resolveSizeBounds } from "./check-size-budget.mjs";
 import { CONTRACT_DOC_RE } from "./check-adr-tripwire.mjs";
@@ -22,6 +23,7 @@ import {
   NON_RULE_TOKENS,
   RULE_ID_CITATION_RE,
   RULE_ID_SHAPE_RE,
+  ruleOwnerIndex,
   normalizeRuleEntry,
 } from "../docs/validate-rule-ownership.mjs";
 import { firstMeaningfulLine, isAcceptedOrSuperseded, splitStatus } from "../docs/validate-decision-records.mjs";
@@ -36,7 +38,7 @@ Lint an issue body against skills/docs/required-rules.json, docs/decisions and t
 
 Output (stdout, JSON):
   { "ok": true, "findings": [{ "kind", "id", "detail" }],
-    "checks": { "sizeForecast": { "status": "ran" },
+    "checks": { "sizeForecast": { "status": "ran", "band": { "minLoc", "softLoc", "waiverLoc", "absoluteHardLoc" } },
                 "rules": { "status": "ran" } | { "status": "skipped", "reason" },
                 "adrs":  { "status": "ran" } | { "status": "skipped", "reason" } } }
 
@@ -46,8 +48,12 @@ size_forecast_missing, size_forecast_malformed, size_forecast_split_required (PL
 a line at or above the resolved default-tier waiverLoc must be split, not disposed;
 a list item that starts with the word "forecast" or contains "wloc=" and does not parse is
 size_forecast_malformed, also not disposable; non-list lines are never claimed),
+size_band_above_soft_loc (softLoc < wloc < waiverLoc; split assessment required in the results comment) and
+size_band_below_min_loc (wloc < minLoc; merge assessment required in the results comment), both informational and disposable there;
+"checks.sizeForecast.band" is the resolved planning band,
 simplest_design_missing (DESIGN-SIMPLEST-FIRST; a body with a "## Size forecast" section and no "## Simplest design" section),
-contract_doc_not_in_matrix (a contract doc in a forecast files= list that no row of a valid AC / DoD matrix names in backticks; a body without a valid matrix is not flagged).
+contract_doc_not_in_matrix (a contract doc in a forecast files= list that no row of a valid AC / DoD matrix names in backticks, or a contract doc owning a rule ID cited in a matrix row and named by no row; a body without a valid matrix is not flagged),
+state_recovery_rows_missing (REFINE-STATE-RECOVERY-ROWS; a criterion adding persistent state or a fail-closed refusal with no crash, same-head rebuild, replacement or named recovery row).
 ADR citation forms: "ADR NNNN", "ADR-<digits>" and docs/decisions/NNNN-*.md links.
 
 ${JQ_OUTPUT_USAGE}
@@ -237,8 +243,11 @@ const FORECAST_BULLET_RE = /^\s*(?:[-*+]|\d+[.)])\s+(?:[*_`]*forecast\b|.*wloc\s
  * `- forecast: slice=<id> wloc=<n> files=<path>,<path>`. A missing line and a
  * line at or above the resolved waiverLoc are findings, and so is a forecast
  * bullet that fails to parse (size_forecast_malformed); none can be disposed.
+ * softLoc < wloc < waiverLoc gives size_band_above_soft_loc and wloc < minLoc
+ * gives size_band_below_min_loc; both are informational and disposable through
+ * the results-comment assessment.
  */
-export function lintSizeForecast(body, { waiverLoc }) {
+export function lintSizeForecast(body, { waiverLoc, softLoc, minLoc }) {
   const section = extractSection(stripFencedCode(body), "Size forecast") ?? "";
   const rawLines = section.split(/\r?\n/);
   const lines = rawLines.map((line) => FORECAST_LINE_RE.exec(line)).filter(Boolean);
@@ -248,12 +257,24 @@ export function lintSizeForecast(body, { waiverLoc }) {
   const missing = lines.length === 0
     ? [{ kind: "size_forecast_missing", id: "size-forecast", detail: { reason: "no `- forecast: slice=<id> wloc=<n> files=<path>,<path>` line under `## Size forecast`" } }]
     : [];
-  if (lines.length === 0 || typeof waiverLoc !== "number") return [...missing, ...malformed];
+  if (lines.length === 0) return [...missing, ...malformed];
+  const atWaiver = (wloc) => typeof waiverLoc === "number" && wloc >= waiverLoc;
+  const informational = lines.flatMap(([, slice, raw]) => {
+    const wloc = Number(raw);
+    if (typeof softLoc === "number" && wloc > softLoc && !atWaiver(wloc)) {
+      return [{ kind: "size_band_above_soft_loc", id: slice, detail: { wloc, softLoc, message: `split assessment required in the results comment (softLoc ${softLoc})` } }];
+    }
+    if (typeof minLoc === "number" && wloc < minLoc && !atWaiver(wloc)) {
+      return [{ kind: "size_band_below_min_loc", id: slice, detail: { wloc, minLoc, message: `merge assessment required in the results comment (minLoc ${minLoc})` } }];
+    }
+    return [];
+  });
   return [
     ...malformed,
     ...lines
-      .filter(([, , wloc]) => Number(wloc) >= waiverLoc)
+      .filter(([, , wloc]) => atWaiver(Number(wloc)))
       .map(([, slice, wloc]) => ({ kind: "size_forecast_split_required", id: slice, detail: { wloc: Number(wloc), waiverLoc } })),
+    ...informational,
   ];
 }
 
@@ -279,6 +300,47 @@ export function lintContractDocsInMatrix(body) {
     .map((doc) => ({ kind: "contract_doc_not_in_matrix", id: doc, detail: { reason: `contract doc \`${doc}\` is in the Size forecast files but no AC / DoD matrix row names it in backticks` } }));
 }
 
+const STATE_RE = /\b(?:lock(?:file)?|sentinel|receipt|cache|marker file|plan file)s?\b/i;
+const REFUSAL_RE = /\bfail(?:s|ed|ing)?[- ]closed\b/i;
+const RECOVERY_ROW_RES = [
+  ["crash", /\bcrash/i],
+  ["rebuild at the same head", /\bsame[- ]head\b/i],
+  ["replacement by a later step", /\breplac(?:e[sd]?|ing|ements?)\b/i],
+];
+
+/** REFINE-STATE-RECOVERY-ROWS: matrix rows adding persistent state or a fail-closed refusal need the recovery rows or a named `recovery`. */
+export function lintStateRecoveryRows(body) {
+  const matrix = detectAcDodMatrix(body);
+  if (!matrix.found || !matrix.valid) return [];
+  const criteria = matrix.rows.map((row) => row.criterion);
+  const text = criteria.join("\n");
+  const missing = [
+    ...(criteria.some((c) => STATE_RE.test(c)) ? RECOVERY_ROW_RES.filter(([, re]) => !re.test(text)).map(([name]) => name) : []),
+    ...(criteria.some((c) => REFUSAL_RE.test(c)) && !/\brecovery\b/i.test(text) ? ["named recovery"] : []),
+  ];
+  return missing.map((name) => ({ kind: "state_recovery_rows_missing", id: name, detail: { reason: `the matrix adds persistent state or a fail-closed refusal but no row covers: ${name} (REFINE-STATE-RECOVERY-ROWS)` } }));
+}
+
+/** A rule ID cited in a matrix row whose owner is a contract doc needs that doc named, backticked, in a matrix row. */
+export async function lintRuleOwnerDocsInMatrix(body, repoRoot) {
+  const matrix = detectAcDodMatrix(body);
+  if (!matrix.found || !matrix.valid) return [];
+  const cited = new Set(matrix.rows.flatMap((row) => `${row.criterion}\n${row.evidence}`.match(RULE_ID_CITATION_RE) ?? []));
+  if (cited.size === 0) return [];
+  const owners = await ruleOwnerIndex(repoRoot);
+  const byDoc = new Map();
+  for (const token of cited) {
+    // Mirror lintRuleIds: the whole token first, the rule-shaped matches inside it only when the token has no owner.
+    const ids = owners.has(token) ? [token] : token.match(RULE_ID_SHAPE_RE) ?? [];
+    for (const id of ids) {
+      const doc = owners.get(id)?.doc;
+      if (doc && CONTRACT_DOC_RE.test(doc)) byDoc.set(doc, byDoc.get(doc) ?? id);
+    }
+  }
+  const { missing } = pathsMissingFromMatrix([...byDoc.keys()], body);
+  return missing.map((doc) => ({ kind: "contract_doc_not_in_matrix", id: doc, detail: { reason: `rule \`${byDoc.get(doc)}\` is cited in the AC / DoD matrix and owned by contract doc \`${doc}\`, but no matrix row names that doc in backticks` } }));
+}
+
 export async function lintSpec({ body, repoRoot }) {
   const rootStat = await stat(repoRoot).catch((error) => {
     if (isMissing(error)) return null;
@@ -295,10 +357,15 @@ export async function lintSpec({ body, repoRoot }) {
     checks.rules = { status: "ran" };
   }
   const { config } = await loadDevLoopConfigStrict({ repoRoot });
-  findings.push(...lintSizeForecast(body, resolveSizeBounds(config)));
-  checks.sizeForecast = { status: "ran" };
+  const bounds = resolveSizeBounds(config);
+  findings.push(...lintSizeForecast(body, bounds));
+  const { minLoc, softLoc, waiverLoc, absoluteHardLoc } = bounds;
+  checks.sizeForecast = { status: "ran", band: { minLoc, softLoc, waiverLoc, absoluteHardLoc } };
   findings.push(...lintSimplestDesign(body));
   findings.push(...lintContractDocsInMatrix(body));
+  findings.push(...lintStateRecoveryRows(body));
+  const forecastDocs = new Set(findings.filter((f) => f.kind === "contract_doc_not_in_matrix").map((f) => f.id));
+  findings.push(...(await lintRuleOwnerDocsInMatrix(body, repoRoot)).filter((f) => !forecastDocs.has(f.id)));
   const decisionsDir = path.join(repoRoot, "docs", "decisions");
   const records = await indexDecisionRecords(decisionsDir);
   if (records) {

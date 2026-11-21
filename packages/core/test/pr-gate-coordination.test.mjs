@@ -892,6 +892,28 @@ test("round-cap exhaustion opens the pre-approval gate window even without a cur
   assert.match(result.reason, /pre_approval_gate/i);
 });
 
+test("a one-round cap opens the pre-approval gate window after the first Copilot round", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    sameHeadCleanConverged: false,
+    ciStatus: "success",
+    copilotReviewRoundCount: 1,
+    maxCopilotRounds: 1,
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert.match(result.gateEvidenceNote, /\(1\/1\)/);
+});
+
 // #1472: this is the SAME reachable branch as the test above (READY_TO_REREQUEST_REVIEW
 // at the round cap, PRE_APPROVAL_GATE_WINDOW) — the only difference is
 // preApprovalRequireCi:false with a failing CI. Before this fix,
@@ -4819,6 +4841,50 @@ test("3105 AC15: a posted findings_present draft_gate verdict with an open act l
   assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, blocked.reason);
 });
 
+test("3309: a cap-round body-only act list routes to the converged post, never the fixer; a clean converged verdict ends the block", async () => {
+  const head = "ab".repeat(20);
+  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict, draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record" };
+  const result = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 2, blockers: [], bodyOnly: true } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+  assert.match(result.agentRemedy.command, /^dev-loops-run scripts\/github\/upsert-checkpoint-verdict\.mjs --repo o\/r --pr 9 .*--converged-json/);
+  assert.equal(result.agentRemedy.command, `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo o/r --pr 9 --gate draft_gate --verdict clean --head-sha ${head} --findings-ledger <cap-round ledger> --findings-summary <text> --next-action "mark ready for review" --execution-mode fanout_fanin --converged-json <path to a file holding { fixerCommit, actList, bodyOnly: true }>`);
+  // The filled command parses: every flag the CLI requires on draft_gate is present and --converged-json takes a path.
+  const { parseUpsertCheckpointVerdictCliArgs } = await import("../../../scripts/github/upsert-checkpoint-verdict.mjs");
+  const parsed = parseUpsertCheckpointVerdictCliArgs(["--repo", "o/r", "--pr", "9", "--gate", "draft_gate", "--verdict", "clean", "--head-sha", head, "--findings-ledger", "ledger.json", "--findings-summary", "converged", "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin", "--converged-json", "converged.json"]);
+  assert.equal(parsed.convergedJson, "converged.json");
+  // A BEHIND draft PR at the cap merges the base first: the body-only post refuses a stale base.
+  const behind = evaluatePrGateCoordination({ ...base, mergeStateStatus: "BEHIND", mergeable: "MERGEABLE", draftOpenActList: { headSha: head, openActCount: 2, blockers: [], bodyOnly: true } });
+  assert.equal(behind.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS, behind.reason);
+  // At the base-merge head the carried list (the cap head A) names the post with --head-sha A and fixerCommit A.
+  const merged = "cd".repeat(20);
+  const carried = evaluatePrGateCoordination({ ...base, currentHeadSha: merged, draftOpenActList: { headSha: head, carriedToHead: merged, openActCount: 2, blockers: [], bodyOnly: true } });
+  assert.equal(carried.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, carried.reason);
+  assert.match(carried.agentRemedy.command, new RegExp(`--head-sha ${head} .*\\{ fixerCommit \\(${head}\\), actList, bodyOnly: true \\}`));
+  // The carry needs a findings_present marker at the cap head A and a carriedToHead equal to the current head; any other shape never names the converged post.
+  const carriedList = { headSha: head, carriedToHead: merged, openActCount: 2, blockers: [], bodyOnly: true };
+  const otherHead = { ...verdict, headSha: "ef".repeat(20) };
+  const cleanMarker = { ...verdict, verdict: "clean" };
+  for (const [name, input] of [
+    ["a marker at another head", { ...base, currentHeadSha: merged, draftGate: otherHead, draftGateMarker: otherHead, draftOpenActList: carriedList }],
+    ["a clean marker", { ...base, currentHeadSha: merged, draftGate: cleanMarker, draftGateMarker: cleanMarker, draftOpenActList: carriedList }],
+    ["a carriedToHead that is not the current head", { ...base, currentHeadSha: merged, draftOpenActList: { ...carriedList, carriedToHead: "ef".repeat(20) } }],
+  ]) {
+    const refused = evaluatePrGateCoordination(input);
+    assert.doesNotMatch(refused.agentRemedy?.command ?? "", /--converged-json/, name);
+  }
+  assert.match(result.agentRemedy.summary, /^Edit the PR body through scripts\/github\/edit-pr\.mjs, then post the body-only converged draft_gate verdict/);
+  assert.match(result.reason, /every open act item of the current head is a PR-body item/);
+  assert.doesNotMatch(result.reason, /fixer pass is not proven landed/);
+  const blocked = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 1, blockers: [{ kind: "round_cap_reached", reason: "new_act", item: "[high] x (new_act)" }], bodyOnly: true } });
+  assert.equal(blocked.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+  // The posted converged verdict is clean evidence at the head: the refusal no longer applies and the result is not address_review_feedback.
+  const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
+  const done = evaluatePrGateCoordination({ ...base, draftRoundRefused: false, draftCapRoundFailure: null, draftGate: { ...clean, cleanEvidenceExists: true, currentHeadClean: true }, draftGateMarker: clean, draftOpenActList: null });
+  assert.notEqual(done.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, done.reason);
+  assert.notEqual(done.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, done.reason);
+});
+
 test("3105 AC15: an eligible open act list wins over a BEHIND-only refresh, and a real conflict still resolves first", () => {
   const head = "ab".repeat(20);
   const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
@@ -4919,3 +4985,109 @@ for (const { name, evidence, clean } of [
     assert.equal(result.draftGate.cleanEvidenceExists, clean);
   });
 }
+
+test("copilot_unavailable allows pre_approval_gate and notes Copilot was unavailable", () => {
+  const input = {
+    pr: 10,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.COPILOT_UNAVAILABLE,
+    copilotRequestNotObservable: true,
+    loopDisposition: DISPOSITION.DONE,
+    copilotReviewRequestStatus: "none",
+    unresolvedThreadCount: 0,
+    ciStatus: "success",
+    copilotReviewRoundCount: 0,
+    maxCopilotRounds: 3,
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+  };
+  const result = evaluatePrGateCoordination(input);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert.ok(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.match(result.reason, /request_not_observable/);
+  assert.match(result.gateEvidenceNote, /Copilot was unavailable/);
+  assert.equal(shouldGuardCopilotReviewRequest({
+    copilotReviewRequestStatus: "none",
+    copilotUnavailable: true,
+    maxCopilotRounds: 3,
+    gateBoundary: result.gateBoundary,
+  }), false);
+});
+
+const unavailableInput = {
+  pr: 10,
+  currentHeadSha: "fedcba987654",
+  prDraft: false,
+  lifecycleState: STATE.COPILOT_UNAVAILABLE,
+  copilotRequestNotObservable: true,
+  loopDisposition: DISPOSITION.DONE,
+  copilotReviewRequestStatus: "none",
+  unresolvedThreadCount: 0,
+  ciStatus: "success",
+  copilotReviewRoundCount: 0,
+  maxCopilotRounds: 3,
+  draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+  draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+};
+
+test("copilot_unavailable with unresolved threads does not open pre_approval_gate", () => {
+  const result = evaluatePrGateCoordination({ ...unavailableInput, unresolvedThreadCount: 2 });
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+});
+
+test("copilot_unavailable CI reasons name the unavailability, not the round cap", () => {
+  for (const ciStatus of ["failure", "pending"]) {
+    const result = evaluatePrGateCoordination({ ...unavailableInput, ciStatus });
+    assert.match(result.reason, /request_not_observable/);
+    assert.doesNotMatch(result.reason, /round[ _]cap/i);
+  }
+});
+
+test("copilot_unavailable with failing CI blocks on the operator, and with credibly green CI names a runnable wait-pr-checks remedy", () => {
+  const failing = evaluatePrGateCoordination({ ...unavailableInput, ciStatus: "failure" });
+  assert.equal(failing.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.equal(failing.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+  const green = evaluatePrGateCoordination({ ...unavailableInput, repo: "owner/repo", ciStatus: "crediblyGreen" });
+  assert.equal(green.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(green.agentRemedy.command, /wait-pr-checks\.mjs --repo owner\/repo --pr 10/);
+});
+
+test("the raw copilotRequestNotObservable flag never bypasses an observable Copilot request or review", () => {
+  for (const [label, overrides] of [
+    ["requested", { copilotReviewRequestStatus: "requested" }],
+    ["already-requested", { copilotReviewRequestStatus: "already-requested" }],
+  ]) {
+    const result = evaluatePrGateCoordination({ ...unavailableInput, ...overrides });
+    assert.ok(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), label);
+    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE, label);
+  }
+});
+
+test("#3373: the reply_resolve_review_threads reason names the close-gate-findings rerun for a judge-act pr_body thread, on the clean-marker and cap-round-fixed branches", () => {
+  const base = {
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "success",
+    unresolvedGateThreadCount: 1,
+  };
+  const cleanMarker = evaluatePrGateCoordination({
+    ...base,
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+  });
+  const capFixed = evaluatePrGateCoordination({
+    ...base,
+    draftCapRoundFixed: true,
+    draftGate: gate({ visible: true, headSha: "def5678", verdict: "findings_present" }),
+  });
+  for (const result of [cleanMarker, capFixed]) {
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
+    assert.match(result.reason, /judge-act thread with remedyKind pr_body is closed by a close-gate-findings rerun after the PR-body edit/);
+    assert.match(result.reason, /judge-disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied — closed by a close-gate-findings rerun/);
+  }
+  assert.match(capFixed.reason, /cap round's fixer pass landed/);
+});

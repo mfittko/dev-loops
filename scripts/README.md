@@ -521,9 +521,11 @@ Subcommands:
 - `release` — clear ownership when the active run is done
 - `handoff` — atomically record the verified owner's exit signal and clear its claim
 
-Explicit completion handoff:
+Explicit completion handoff (routed form: `dev-loops loop runner-coordination handoff ...`):
 - `handoff --repo <owner/name> --pr <number> [--run-id <id>]` uses the verified runtime
-  identity when one exists (Pi/Claude run context or a verified native Codex child session);
+  identity when one exists (resolution order: `DEVLOOPS_RUN_ID`, the Pi run id variable, the native Pi
+  synthesis, then the linked worktree's `.pi/dev-loop-run-context.json`, never read in the main
+  checkout; or a verified native Codex child session);
   a mismatching `--run-id` is `ownership_lost`. With no verified id, `--run-id <the id used at
   claim>` is the identity and releases the claim only when it equals the active owner. Native
   Codex still requires its verified thread identity; an explicit `--run-id` alone is refused
@@ -744,10 +746,12 @@ Required:
 - `--repo <owner/name>`
 - `--pr <number>`
 - `--gate <draft_gate|pre_approval_gate>`
-- `--head-sha <sha>` — the FULL current head commit SHA (40 or 64 hex chars); a short prefix is rejected (the gate marker is keyed by it and the pre-merge check resolves the full head SHA)
+- `--head-sha <sha>` — the FULL current head commit SHA (40 or 64 hex chars), or with `--gate draft_gate` and a clean verdict the head of a completed clean cap round that the PR head descends from; a short prefix is rejected (the gate marker is keyed by it and the pre-merge check resolves the full head SHA)
 - `--verdict <clean|findings_present|blocked>`
 - `--findings-summary <text>`
 - `--next-action <text>`
+
+Alternate form: `--repo <owner/name> --pr <number> --gate draft_gate --post-sealed-cap-round` posts the sealed clean cap-round verdict that was never posted (`clean_cap_verdict_unposted`). It derives head, verdict, findings, next action and execution mode from the sealed ledger and refuses `--head-sha`, `--verdict`, `--findings-*`, `--next-action` and `--execution-mode` at parse time, so the Required list above does not apply to it.
 
 Optional:
 - `--force --force-reason <text>` — narrow operator-authorized CI override for the helper-local gate-entry refusal only; `--force-reason` is required with `--force`, `--force-reason` without `--force` is rejected, and the reason text is whitespace-normalized for machine-readable output
@@ -764,6 +768,28 @@ Failure behavior:
 - `--force` does **not** bypass stale-head protection, non-draft `draft_gate` refusal, unresolved-feedback / unsettled-review `pre_approval_gate` refusal, merge-conflict handling, or closed/merged PR protection
 
 Use `--force` only after the user explicitly authorizes ignoring the current-head CI failure for this one gate-comment upsert. Prefer the normal paths first: green current-head CI, or the draft-gate policy knob `gates.draft.requireCi` (issue #351) for a durable draft-gate policy.
+
+### `scripts/loop/match-copilot-threads-to-gate-findings.mjs`
+
+Marks each exported Copilot review thread as matched or Copilot-only against the local gate-finding round files, classifies the Copilot-only ones by keyword, and names the `draft_gate` angles that should have caught each class. Reads local files only; makes no GitHub call.
+
+Required:
+- `--threads <jsonl>` — one JSON thread per line; uses `pr` (integer), `path` (string), optional `line` (integer), `author` and `body`; only lines whose `author` is the Copilot reviewer login are read; other fields are ignored
+- `--repo <owner/name>` — selects the default findings dir `<main-checkout>/tmp/gate-findings/<owner-name>/` (the main-anchored ledger, validated like `gate-finding-classes.mjs`) (not needed with `--findings-root`)
+
+Optional:
+- `--findings-root <dir>` — directory holding `pr-<N>/draft_gate-<sha>.json` and `pr-<N>/draft_gate-<sha>.round-<N>.json` round files, the only ones read (other files are ignored; a malformed one is skipped and counted in `summary.skippedRoundFiles`)
+- `--repo-root <dir>` — checkout whose main worktree anchors the default findings dir (default: cwd)
+
+Matching rule:
+- a thread is matched when a finding of the same PR lists the thread path in `files[]` (or the singular `file`) and, when both the thread and the finding carry a line, the thread line is within 25 lines of the finding line; when either side has no line the file match alone counts, so the Copilot-only count is then a lower bound
+
+Success output shape (stdout):
+- `{ "threads": [{ "pr", "path", "matched", "matchedAngles", "class", "shouldHaveCaughtAngles" }], "summary": { "total", "copilotOnly", "byClass", "byAngle", "skippedRoundFiles" } }`
+- `class` is one of `edge-case-input-validation`, `docs-help-description`, `tests`, `other`, the `COPILOT_BUCKETS` table of `gate-finding-classes.mjs` (first keyword match wins in that order)
+
+Failure behavior:
+- unknown flags, a missing required flag, an unreadable input, malformed JSONL, a thread without an integer `pr` and string `path` emit `{ "ok": false, "error": "...", ... }` on stderr and exit `2`
 
 ### `scripts/loop/run-refinement-audit.mjs`
 
@@ -805,7 +831,7 @@ Required:
 Success output shape:
 - `{ "ok": true, "repo": "owner/repo", "pr": 266, "currentHeadSha": "...", "mergeStateStatus": string|null, "conflictFiles": ["path"]|[], "lifecycleState": string, "loopDisposition": string, "gateBoundary": string, "draftGate": { ... }, "preApprovalGate": { ... }, "draftGateAlreadySatisfied": true, "allowedNextActions": [ ... ], "forbiddenActions": [ ... ], "nextAction": string, "reason": "...", "toolchain": { "root": "...", "headSha": string|null, "selfHosting": boolean }, "capRoundFailure"?: string, "runnerRelease"?: { "status": "skipped_no_async_run_id", "remedy": "..." } }`
 - `toolchain` (`root`, `headSha`, `selfHosting`) is always emitted (issue 3139): the toolchain checkout that answered, its `HEAD`, and whether the PR changes the gate toolchain of this repository; `headSha` is `null` when `selfHosting` is `false`
-- `capRoundFailure` is the failed cap-round-fixed condition (`resolveCapRoundFixed`, ADR 0218). It is present only on a ready PR that lacks clean `draft_gate` evidence and whose cap round exists but is not proven fixed, and then the result is `report_blocked` with that condition's one exit (`agentRemedy` or `blockedOn`). A PR with no cap round (below the round cap) carries no `capRoundFailure` and gets `reconcile_draft_gate` alone
+- `capRoundFailure` is the failed cap-round-fixed condition (`resolveCapRoundFixed`, ADR 0218), or `clean_cap_verdict_unposted` (a clean cap round whose `draft_gate` verdict is not posted; its remedy is `gate upsert-verdict --repo <owner/name> --pr <n> --gate draft_gate --post-sealed-cap-round`). It is present only on a ready PR that lacks clean `draft_gate` evidence and whose cap round exists but is not proven fixed, and then the result is `report_blocked` with that condition's one exit (`agentRemedy` or `blockedOn`). A PR with no cap round (below the round cap) carries no `capRoundFailure` and gets `reconcile_draft_gate` alone
 - `fixerDispositionWarning` (`{ "warning": "...", "incomplete": [...] }`) is present only when the fixer disposition is incomplete; it is advisory (ADR 0155) and blocks nothing
 - `blockedOn` and `agentRemedy` (`{ "command": "...", "summary": "..." }`) are present only on `report_blocked` results, at most one per result (a `reconcile_draft_gate` result carries neither); results listed in `KNOWN_GAPS` in `packages/core/src/loop/gate-no-dead-end.mjs` carry neither until the issue 3105 slices that remove them land
 - `runnerRelease` (`{ "status": "skipped_no_async_run_id", "remedy": "..." }`) is present only on a terminal action when the automatic release status is `skipped_no_async_run_id`; `remedy` names the explicit `handoff --run-id` command

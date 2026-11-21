@@ -56,6 +56,8 @@ export const STATE = Object.freeze({
   ROUND_CAP_CLEAN_FALLBACK: "round_cap_clean_fallback",
   /** Internal tooling only PR; Copilot external review skipped, proceed directly to pre_approval_gate. */
   INTERNAL_TOOLING_DIRECT_GATE: "internal_tooling_direct_gate",
+  /** Copilot accepted review requests that never became observable; proceed to pre_approval_gate without Copilot. */
+  COPILOT_UNAVAILABLE: "copilot_unavailable",
 });
 
 /** Stable high-level loop dispositions for completion vs follow-up decisions. */
@@ -107,6 +109,7 @@ export const TRANSITIONS = Object.freeze({
   [STATE.ROUND_CAP_REACHED]: [],
   [STATE.ROUND_CAP_CLEAN_FALLBACK]: [],
   [STATE.INTERNAL_TOOLING_DIRECT_GATE]: [STATE.DONE],
+  [STATE.COPILOT_UNAVAILABLE]: [],
 });
 
 /** Recommended next action for each state. */
@@ -126,6 +129,7 @@ export const NEXT_ACTIONS = Object.freeze({
   [STATE.ROUND_CAP_CLEAN_FALLBACK]: "Round cap reached with clean PR; continue to pre_approval_gate instead of re-requesting Copilot review",
   [STATE.INTERNAL_TOOLING_DIRECT_GATE]: "Internal tooling PR — Copilot external review suppressed; run pre_approval_gate directly",
   [STATE.DONE]: "Loop is complete; confirm merge-readiness or close",
+  [STATE.COPILOT_UNAVAILABLE]: "Copilot review requests were never observable (request_not_observable); continue to pre_approval_gate without Copilot review",
 });
 
 const SAME_HEAD_CLEAN_CONVERGED_NEXT_ACTION = "Current head already has a clean submitted Copilot review; suppress automatic same-head re-request unless a meaningful remediation event occurs, or explicitly request another Copilot pass";
@@ -204,6 +208,7 @@ export function buildSnapshotFromPrFacts({
   // reads the same draft-gate-reset-filtered set as the other Copilot facts.
   // Omitted, it is counted over the unfiltered reviews.
   copilotErrorReviewCountOnCurrentHead,
+  copilotRequestNotObservable = false,
 }) {
   const prState = typeof prData?.state === "string" ? prData.state.toUpperCase() : "OPEN";
   const prMerged = prState === "MERGED";
@@ -237,6 +242,7 @@ export function buildSnapshotFromPrFacts({
     excludedFailureDetails: excludedFailureDetails ?? rollupDerivation.excludedFailureDetails,
     copilotBodyFeedbackUnresolved,
     copilotPriorHeadBodyFeedbackUnresolved,
+    copilotRequestNotObservable,
   });
 }
 
@@ -311,6 +317,9 @@ export function normalizeSnapshot(raw) {
     // earlier head with no trusted disposition record. Consumed only at the
     // round cap, where no fresh Copilot review can supersede it.
     copilotPriorHeadBodyFeedbackUnresolved: Boolean(raw.copilotPriorHeadBodyFeedbackUnresolved),
+    // The durable request record reached its threshold: Copilot accepted
+    // requests on this head that never became observable.
+    copilotRequestNotObservable: Boolean(raw.copilotRequestNotObservable),
     // Copilot error reviews on the current head (ADR 0114). One allows a
     // same-head re-request; two or more block for an operator decision.
     copilotErrorReviewCountOnCurrentHead: Number.isInteger(raw.copilotErrorReviewCountOnCurrentHead) && raw.copilotErrorReviewCountOnCurrentHead > 0
@@ -403,6 +412,17 @@ export function interpretLoopState(snapshot, refinementConfig) {
     state = STATE.REVIEW_REQUEST_UNAVAILABLE;
   } else if (s.copilotReviewRequestStatus === "failed") {
     state = STATE.BLOCKED_NEEDS_USER_DECISION;
+  } else if (
+    s.copilotRequestNotObservable
+    && s.copilotReviewRequestStatus === "none"
+    && !s.copilotReviewOnCurrentHead
+    && s.unresolvedThreadCount === 0
+    && !s.copilotBodyFeedbackUnresolved
+    && !s.copilotPriorHeadBodyFeedbackUnresolved
+  ) {
+    // A request that became observable (status requested, or a review on this
+    // head) and any unresolved feedback take the normal round routing instead.
+    state = STATE.COPILOT_UNAVAILABLE;
   }
 
   // Round-cap enforcement, gated before the fix/reply-resolve routing below.
@@ -529,6 +549,7 @@ export function interpretLoopState(snapshot, refinementConfig) {
     sameHeadCleanConverged,
     roundCapCleanEligible,
     roundCapReopenEligible,
+    copilotUnavailableReason: state === STATE.COPILOT_UNAVAILABLE ? "request_not_observable" : null,
   };
 }
 
@@ -586,6 +607,7 @@ export function summarizeLoopInterpretation(snapshotOrInterpretation, refinement
       break;
     case STATE.LOW_SIGNAL_CONVERGED:
     case STATE.ROUND_CAP_CLEAN_FALLBACK:
+    case STATE.COPILOT_UNAVAILABLE:
     case STATE.DONE:
       loopDisposition = DISPOSITION.DONE;
       break;

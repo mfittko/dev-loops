@@ -34,8 +34,12 @@ async function withLock(file, fn) {
   try { return await fn(); } finally { await rm(lock, { recursive: true, force: true }); }
 }
 
-export async function writeSealed(file, text) {
+// `expectedLive`, when given, is the exact text the caller read: the write refuses with `live_ledger_changed` when the file differs inside the lock.
+export async function writeSealed(file, text, { expectedLive } = {}) {
   await withLock(file, async () => {
+    if (expectedLive !== undefined && (await readFile(file, "utf8").catch(() => undefined)) !== expectedLive) {
+      throw Object.assign(new Error(`live_ledger_changed: ${file} changed after it was read; rerun the write`), { code: "live_ledger_changed", file });
+    }
     // Delete the seal first and write it last: a crash between the writes leaves an unsealed (legacy) pair, never a stale seal.
     await rm(sealPath(file), { force: true });
     await writeFile(file, text, "utf8");

@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { readSealed } from "./_gate-artifact-seal.mjs";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
-import { validateZeroUnitCarryProof } from "./_carried-angles.mjs";
+import { requireAbsolutePlanFilePath, validateCarryForwardPlanShape, validateZeroUnitCarryProof, verifyCarryForwardPlanIdentity } from "./_carried-angles.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { VERIFIED_ITEMS_ANGLES, baseAngleName } from "@dev-loops/core/loop/gate-fanin";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -84,15 +84,22 @@ Optional:
                                fanout.groups only when pendingGroups is ABSENT (an
                                older artifact); a PRESENT-but-empty pendingGroups
                                requires every resolved angle to be carried with
-                               --carry-forward-plan proof, or refuses zero units.
+                               --carry-forward-plan-file (or --carry-forward-plan)
+                               proof, or refuses zero units.
                                The persisted plan also keeps the completed prior
                                units marked "resumed": true, so its count can
                                exceed the stdout count. Only the stdout "units"
                                are dispatched, and --expected-dispatch-units
                                takes the stdout count.
-  --carry-forward-plan <json>  Resolver output (or its carried array). Required
-                               for a zero-unit pending round; persisted with the
-                               keyed plan for fan-in and provenance verification.
+  --carry-forward-plan <json>  Resolver output (or its carried array). The
+                               alternative to --carry-forward-plan-file, one of
+                               which is required for a zero-unit pending round;
+                               persisted with the keyed plan for fan-in and
+                               provenance verification.
+  --carry-forward-plan-file <absolute path>  Same shape, read from a file (the keyed
+                               <gate>-<headSha>.carry-forward-plan.json). Keeps
+                               finding text off the command line. Passing both
+                               plan flags is refused.
   --operator-focus-file <path> A JSON file { round?: string } rendered as a bounded, sanitized
                                "Operator focus" section in every unit's prompt and pinned by the
                                unit work-order digest (GATE-EXEC-OPERATOR-FOCUS). Items are refused.
@@ -218,7 +225,7 @@ export const REVIEWER_VERIFIED_ITEMS_INSTRUCTION = "Verified items: in the findi
  *   computed budget (computeReviewerUnitBudget); the floor when absent
  * @returns {string}
  */
-export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET, operatorFocus = null, unitBound = REVIEWER_UNIT_MAX_ANGLES) {
+export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET, operatorFocus = null, unitBound = REVIEWER_UNIT_MAX_ANGLES, resolutionPaths = [], resolutionMerges = [], fullReviewPaths = []) {
   if (typeof scope !== "string" || scope.length === 0) {
     throw new TypeError(`buildAngleNamingSuffix requires a non-empty scope string, got ${JSON.stringify(scope)}`);
   }
@@ -231,6 +238,11 @@ export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unit
   const scopeLine = `Dispatch scope: pass \`--scope ${scope}\` verbatim to the mandatory \`verify-fresh-review-context.mjs\` sentinel named in the briefing prefix above — this is your dispatch unit's exact emitted scope, never composed from the unit name.`;
   const reads = unitReads.length > 0
     ? `Unit required read. It REPLACES the shared \`evidence\` read of the prefix's \`## Required reads\` for this unit: read this scoped evidence IN FULL instead of the shared evidence file, and verify its sha256 before judgment. Every other prefix read still applies:\n${unitReads.map((read) => renderRequiredReadLine(read, process.cwd())).join("\n")}\n\n`
+    : "";
+  // resolution_delta (issue 3284): the merge hand-resolved these files, so review their resolution hunks, not the whole diff of the carried surface.
+  const resolutionCommand = resolutionMerges.map((m) => `git diff-tree --cc --no-ext-diff -p ${m}`).join("; ");
+  const resolutionScope = resolutionPaths.length > 0
+    ? `Resolution scope: this round re-reviews a base merge that hand-resolved conflicts. Review the resolution hunks of these files (${resolutionPaths.map((p) => JSON.stringify(p)).join(", ")}) first and report findings in them.${resolutionCommand ? ` The resolving merge commits are ${resolutionMerges.join(", ")}; read the resolution hunks with \`${resolutionCommand}\`. Findings outside those hunks are out of scope for the resolution files.` : ""}${fullReviewPaths.length > 0 ? ` Also review the PR hunks of these re-run files in full (${fullReviewPaths.map((p) => JSON.stringify(p)).join(", ")}); the resolution-hunk limit does not apply to them.` : ""} Widen only per the Widening rule below.\n\n`
     : "";
   const writeTool = "with the file-write tool (the `write` builtin, `Write` on Claude Code), never a shell write (redirect, heredoc, `tee`, or an inline script)";
   const body = single
@@ -251,7 +263,7 @@ Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is
 Prohibited: ${prohibited}.
 Widening: ${REVIEWER_WIDENING_RULE}.
 ${verifiedItemsLine}If you exceed this budget (more than ${budget.maxModelTurns} model turns or ${budget.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --max-model-turns ${budget.maxModelTurns} --max-tool-calls ${budget.maxToolCalls}${unitBound !== REVIEWER_UNIT_MAX_ANGLES ? ` --unit-bound ${unitBound}` : ""} --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
-  return `${header}\n\n${scopeLine}\n\n${renderOperatorFocusSection(operatorFocus)}${reads}${body}\n\n${instructions}\n\n${contract}\n`;
+  return `${header}\n\n${scopeLine}\n\n${renderOperatorFocusSection(operatorFocus)}${resolutionScope}${reads}${body}\n\n${instructions}\n\n${contract}\n`;
 }
 
 /**
@@ -487,6 +499,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const jq = jqArg === null ? undefined : jqArg;
   const silent = argv.includes("--silent") || argv.includes("-s");
   const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
+  if (argv.includes("--carry-forward-plan") && argv.includes("--carry-forward-plan-file")) {
+    return finish({ ok: false, error: "--carry-forward-plan and --carry-forward-plan-file are mutually exclusive", recovery: "Pass only --carry-forward-plan-file <keyed carry-forward-plan.json path>." }, false);
+  }
 
   // The same config write-gate-context resolved against (this step runs in that
   // worktree). A config load error refuses before any artifact is read.
@@ -539,6 +554,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // literal) so a future lifecycle gate is guarded automatically rather than
   // silently falling open — the same load-bearing derivation _gate-names.mjs
   // uses for GATE_NAMES.
+  let resolutionDeltaPaths = [];
+  let resolutionDeltaMerges = [];
+  let resolutionDeltaFullPaths = [];
   if (LIFECYCLE_GATES.includes(gate)) {
     const priorHeads = await listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot });
     if (priorHeads.size > 0) {
@@ -568,6 +586,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
         && String(plan.repo ?? "").trim().toLowerCase() === repo.trim().toLowerCase()
         && String(plan.pr ?? "") === String(pr)
         && priorHeads.has(String(plan.prevHead ?? "").trim().toLowerCase());
+      if (planOk && Array.isArray(plan.resolutionDeltaPaths)) resolutionDeltaPaths = plan.resolutionDeltaPaths.filter((p) => typeof p === "string" && p.length > 0);
+      if (planOk && Array.isArray(plan.resolutionDeltaFullPaths)) resolutionDeltaFullPaths = plan.resolutionDeltaFullPaths.filter((p) => typeof p === "string" && p.length > 0);
+      if (planOk && Array.isArray(plan.resolutionDeltaMerges)) resolutionDeltaMerges = plan.resolutionDeltaMerges.filter((s) => typeof s === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(s));
       if (!planOk) {
         return finish({ ok: false, error: `GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED: refusing — a prior gate findings-log for ${gate} exists at an earlier head (this is a re-gate), but no valid carry-forward plan artifact (keyed to this repo/pr/gate/head with a prevHead naming a real prior round) is recorded at the current head ${headSha}. Run scripts/github/resolve-angle-carry-forward.mjs --repo ${repo} --pr ${pr} --gate ${gate} --prev-head <A> --head-sha ${headSha} from the current-head worktree before dispatch — the resolver records the plan this step requires.` }, false);
       }
@@ -606,6 +627,19 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   if (!Array.isArray(units) || (units.length === 0 && !allCarried)) {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout dispatch plan resolves zero units (${pendingOnly ? "pendingGroups" : "groups"}) — nothing to dispatch` }, false);
   }
+  // A plan file is validated on every round that passes it, so a bad path fails before any reviewer is dispatched.
+  const planFile = resolveFlagValue(argv, "--carry-forward-plan-file");
+  let planFileProof;
+  if (planFile !== null) {
+    try {
+      requireAbsolutePlanFilePath(planFile);
+      planFileProof = JSON.parse(await readFile(planFile, "utf8"));
+      verifyCarryForwardPlanIdentity(planFileProof, { headSha, gate, repo, pr });
+      try { validateCarryForwardPlanShape(planFileProof); } catch (shapeError) { throw new Error(shapeError.message.replace(/^--carry-forward-plan(?=\s)/, "--carry-forward-plan-file")); }
+    } catch (error) {
+      return finish({ ok: false, error: `${units.length === 0 ? "zero-unit carry proof" : "carry-forward plan file"} refused: ${error.message}`, recovery: "Pass --carry-forward-plan-file <keyed carry-forward-plan.json path> with the resolver's complete plan, or rebuild the context and dispatch every angle." }, false);
+    }
+  }
   let carryProof;
   if (units.length === 0) {
     try {
@@ -613,7 +647,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       if (angles.some((angle) => angleReviewSurface(angle).kind !== "kinds")) {
         throw new Error("zero-unit plan cannot carry mandatory, always-run, or unknown angles");
       }
-      const rawProof = JSON.parse(resolveFlagValue(argv, "--carry-forward-plan") ?? "null");
+      const rawProof = planFile !== null ? planFileProof : JSON.parse(resolveFlagValue(argv, "--carry-forward-plan") ?? "null");
       carryProof = validateZeroUnitCarryProof(rawProof, angles);
       // A proof resolved from a head whose log was quarantined no longer counts (GATE-EXEC-FINDINGS-LOG-QUARANTINE):
       // fail closed so the caller rebuilds the context and dispatches every angle.
@@ -626,7 +660,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
         }
       }
     } catch (error) {
-      return finish({ ok: false, error: `zero-unit carry proof refused: ${error.message}` }, false);
+      // Name the flag the caller passed, not the inline one the shape check words its errors with.
+      const message = resolveFlagValue(argv, "--carry-forward-plan-file") !== null ? error.message.replace(/^--carry-forward-plan(?=\s)/, "--carry-forward-plan-file") : error.message;
+      return finish({ ok: false, error: `zero-unit carry proof refused: ${message}`, recovery: "Pass --carry-forward-plan-file <keyed carry-forward-plan.json path> with the resolver's complete plan, or rebuild the context and dispatch every angle." }, false);
     }
   }
   // An angle-less resolved unit is a malformed plan: refuse rather than silently
@@ -728,11 +764,13 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const roundId = injectedRoundId ?? `r${Date.now()}-${randomBytes(4).toString("hex")}`;
   // Each unit's budget scales with the filtered diff it reads. A thin briefing
   // records no diff read, so every unit gets the floor.
-  const diffRead = artifact.scope?.diffSource === "none" ? undefined : sharedReads.find((read) => read?.kind === "diff");
+  const diffReads = artifact.scope?.diffSource === "none" ? [] : sharedReads.filter((read) => read?.kind === "diff");
   let diffBlocks = null;
-  if (diffRead) {
+  if (diffReads.length > 0) {
     try {
-      diffBlocks = parseDiffFileBlocks(await readFile(path.resolve(process.cwd(), diffRead.path), "utf8"));
+      const partTexts = [];
+      for (const read of diffReads) partTexts.push(await readFile(path.resolve(process.cwd(), read.path), "utf8"));
+      diffBlocks = parseDiffFileBlocks(partTexts.join(""));
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;
@@ -768,7 +806,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
-      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound), "utf8");
+      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound, resolutionDeltaPaths, resolutionDeltaMerges, resolutionDeltaFullPaths), "utf8");
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;

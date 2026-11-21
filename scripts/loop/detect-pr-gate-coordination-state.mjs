@@ -13,7 +13,7 @@ import {
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
+import { isBlockedActItem, isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
 import { buildSnapshotFromPrFacts, DISPOSITION, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateEarlySurface } from "./early-surface-checks.mjs";
@@ -23,7 +23,7 @@ import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-co
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
-import { OUT_OF_BAND_WRITE } from "../github/_gate-artifact-seal.mjs";
+import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
@@ -31,6 +31,7 @@ import {
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
+import { convergedCarryAccepts } from "../github/_carried-verdict.mjs";
 import { countCompletedRounds, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
 import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
@@ -48,6 +49,7 @@ import { copilotBodyJudgePath, readReviewMarkerCommits, resolveCurrentHeadBodyFe
 import { evaluateToolchainAuthority, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
+import { readRequestNotObservable } from "./_unobservable-review-request-record.mjs";
 import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -274,11 +276,24 @@ async function fetchPrFacts({ repo, pr }, { env = process.env, ghCommand = "gh",
   return parseJsonText(result.stdout, { label: "gh pr view" });
 }
 
+// Only `mergeable` and `mergeStateStatus` change while GitHub settles, so the
+// re-polls read just those two plus `headRefOid`. A re-poll that sees a different
+// head falls back to one full fetch, so `mergeable` always belongs to the head returned.
+async function fetchPrMergeable({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  const result = await runChild(ghCommand, ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,mergeable,mergeStateStatus"], env);
+  if (result.code !== 0) {
+    throw new Error(`gh command failed: ${result.stderr.trim() || `exit code ${result.code}`}`);
+  }
+  return parseJsonText(result.stdout, { label: "gh pr view" });
+}
+
 // GitHub computes `mergeable` asynchronously, so a freshly-pushed head briefly
 // reads `UNKNOWN`. After the initial fetch, re-poll up to `maxPolls` more times
 // while the value stays UNKNOWN (so at most 1 + maxPolls total fetches) before
 // deciding; never treat a transient UNKNOWN as a pass — the caller fails closed
-// to recheck if it never settles.
+// to recheck if it never settles. If the last allowed re-poll sees a new head, the
+// result is `{ headRefOid: <new>, headMoved: true, mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN", stale: true }`
+// with no other field; loadPrGateCoordinationContext fails closed on it.
 export async function fetchPrFactsWithSettledMergeable(
   options,
   {
@@ -288,15 +303,25 @@ export async function fetchPrFactsWithSettledMergeable(
     maxPolls = 3,
     pollDelayMs = 1500,
     sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-    fetch = fetchPrFacts,
   } = {},
 ) {
-  let prData = await fetch(options, { env, ghCommand, runChild });
+  let prData = await fetchPrFacts(options, { env, ghCommand, runChild });
   let polls = 0;
   while (String(prData?.mergeable || "").toUpperCase() === "UNKNOWN" && polls < maxPolls) {
     polls += 1;
     await sleep(pollDelayMs);
-    prData = await fetch(options, { env, ghCommand, runChild });
+    const next = await fetchPrMergeable(options, { env, ghCommand, runChild });
+    if (typeof next?.headRefOid === "string" && next.headRefOid !== "" && next.headRefOid === prData?.headRefOid) {
+      prData = { ...prData, mergeable: next.mergeable ?? prData.mergeable, mergeStateStatus: next.mergeStateStatus ?? prData.mergeStateStatus };
+    } else if (polls < maxPolls) {
+      // The head-change full fetch counts against the cap too.
+      polls += 1;
+      prData = await fetchPrFacts(options, { env, ghCommand, runChild });
+    } else {
+      // Cap edge: the last narrow re-poll saw a new head and no further gh call is allowed.
+      // Return only the new head with `stale: true`, so no superseded-head field reads as current.
+      return { headRefOid: next.headRefOid, headMoved: true, mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN", stale: true };
+    }
   }
   return prData;
 }
@@ -1010,8 +1035,29 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
 // The trusted marker commits for every review-body entry of the handoff; no review-body entry means no read.
 const readHandoffReviewMarkers = (handoff, ctx, runtime) => readReviewMarkerCommits(handoff.dispositions.filter((entry) => entry.reviewId).map((entry) => entry.reviewId), ctx, runtime);
 
+// Gate-authored unresolved thread count (ADR 0088) from a raw thread payload; an unreadable payload or login fails closed (-1).
+async function countUnresolvedGateThreads(threadsPayload, runtime) {
+  try {
+    if (countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload) === 0) return 0;
+    return countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload, await resolveAuthenticatedLogin(runtime));
+  } catch {
+    return -1;
+  }
+}
+
+/** One live thread read: the generic and the gate-authored unresolved counts. */
+export async function fetchLiveThreadCounts(options, runtime = {}) {
+  const threadsPayload = await fetchGithubReviewThreadsPayload(options, runtime);
+  return {
+    unresolvedThreadCount: parseReviewThreads(threadsPayload).summary.unresolvedThreads,
+    unresolvedGateThreadCount: await countUnresolvedGateThreads(threadsPayload, runtime),
+  };
+}
+
 export async function loadPrGateCoordinationContext(options, runtime = {}) {
-  const prData = await fetchPrFactsWithSettledMergeable(options, runtime);
+  const prData =await fetchPrFactsWithSettledMergeable(options, runtime);
+  // A cap-edge result carries only the new head: no state or files, so the toolchain guard below would silently pass. Fail closed; the next run re-fetches.
+  if (prData?.stale) throw new Error(`PR head moved while mergeable was still UNKNOWN (new head ${prData.headRefOid}); rerun to re-fetch`);
   const currentHeadSha = typeof prData?.headRefOid === "string" && prData.headRefOid.trim().length > 0
     ? prData.headRefOid.trim()
     : null;
@@ -1043,18 +1089,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // (buildGateCoordinationEvaluatorInput below) is what reconciles this
   // detector with detect-checkpoint-evidence.mjs: neither can report
   // mark_ready_for_review/clean while the other reports unresolved threads.
-  let unresolvedGateThreadCount;
-  try {
-    const markerOnlyCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload);
-    if (markerOnlyCount === 0) {
-      unresolvedGateThreadCount = 0;
-    } else {
-      const login = await resolveAuthenticatedLogin(runtime);
-      unresolvedGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload, login);
-    }
-  } catch {
-    unresolvedGateThreadCount = -1;
-  }
+  const unresolvedGateThreadCount = await countUnresolvedGateThreads(threadsPayload, runtime);
   // Injects the login-narrowed count computed just above so
   // detectCheckpointEvidence's own draftGateSatisfied fold (ADR 0088) agrees
   // with this detector without a second thread-payload fetch or a second
@@ -1155,6 +1190,10 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     // A finding the judge cannot receive (failed write) keeps blocking, for both shapes.
     copilotBodyFeedbackUnresolved: bodyFeedback.copilotBodyFeedbackUnresolved && !bodyRoutedToJudge,
     copilotPriorHeadBodyFeedbackUnresolved: bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved && !bodyRoutedToJudge,
+    copilotRequestNotObservable: await readRequestNotObservable(
+      { repo: options.repo, pr: options.pr, headSha: currentHeadSha },
+      { checkpointDir: runtime.checkpointDir },
+    ),
   });
   if (snapshot.unresolvedThreadCount > 0
       && !snapshot.copilotReviewOnCurrentHead
@@ -1268,6 +1307,63 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   };
 }
 
+/** A snapshot older than this is refetched; one gate round finishes well inside it. */
+export const PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS = 10 * 60 * 1000;
+
+// An injected runChild test double stays off the shared tmp root unless the test names its own `coordinationSnapshotRoot`.
+const coordinationSnapshotPath = (options, runtime) => {
+  const root = runtime.coordinationSnapshotRoot
+    ?? (runtime.runChild === undefined || runtime.runChild === defaultRunChild ? resolveGateArtifactTmpRoot(runtime.repoRoot ?? resolveRepoRoot(process.cwd())) : null);
+  return root && path.join(root, "gate-coordination", repoSlugFor(options.repo), `pr-${options.pr}`, "context-snapshot.json");
+};
+
+const deletionStampPath = (file) => `${file}.deleted`;
+
+/** Persists the loaded context sealed; `nowMs` is the fetch time and must be captured before the load. A write failure never fails the caller. */
+export async function writePrGateCoordinationSnapshot(options, runtime, context, nowMs = Date.now()) {
+  try {
+    const file = coordinationSnapshotPath(options, runtime);
+    if (!file) return;
+    await mkdir(path.dirname(file), { recursive: true });
+    // A delete at or after the fetch time means the loaded data predates a draft flip or a verdict post: do not resurrect it.
+    if (Number(await readFile(deletionStampPath(file), "utf8").catch(() => 0)) >= nowMs) return;
+    const snapshot = { repo: options.repo, pr: options.pr, headSha: context.currentHeadSha, lightweight: options.lightweight === true, fetchedAtMs: nowMs, context };
+    await writeSealed(file, JSON.stringify(snapshot));
+    // A delete that landed after the check above stamped before it removed, so the stamp now shows it: take the snapshot back.
+    if (Number(await readFile(deletionStampPath(file), "utf8").catch(() => 0)) >= nowMs) await rm(file, { force: true });
+  } catch { /* best effort */ }
+}
+
+export async function deletePrGateCoordinationSnapshot(options, runtime = {}) {
+  try {
+    const file = coordinationSnapshotPath(options, runtime);
+    if (!file) return;
+    await mkdir(path.dirname(file), { recursive: true });
+    // Stamp first: a writer that checks the stamp after this point skips, and one that wrote earlier sees the stamp on its re-read.
+    await writeFile(deletionStampPath(file), String(Date.now()));
+    await rm(file, { force: true });
+  } catch { /* best effort */ }
+}
+
+/**
+ * Returns `{ context, reused }`: the persisted context when it matches repo, PR, lightweight (unless `matchLightweight` is false), the exact full expected head and the age bound; otherwise a fresh load. Only the pre-flight writes snapshots.
+ */
+export async function loadPrGateCoordinationContextReusingSnapshot(options, runtime = {}, { expectedHeadSha, matchLightweight = true, nowMs = Date.now() } = {}) {
+  if (typeof expectedHeadSha === "string" && /^([0-9a-f]{40}|[0-9a-f]{64})$/i.test(expectedHeadSha)) {
+    try {
+      // A seal mismatch (out-of-band edit) throws and falls to the fresh load.
+      const snap = JSON.parse(await readSealed(coordinationSnapshotPath(options, runtime) ?? ""));
+      if (snap.repo === options.repo && snap.pr === options.pr && (!matchLightweight || snap.lightweight === (options.lightweight === true))
+        && typeof snap.headSha === "string" && snap.headSha.toLowerCase() === expectedHeadSha.toLowerCase()
+        && Number.isFinite(snap.fetchedAtMs) && nowMs >= snap.fetchedAtMs && nowMs - snap.fetchedAtMs < PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS && snap.context) {
+        return { context: snap.context, reused: true };
+      }
+    } catch { /* missing or unparsable: fetch fresh */ }
+  }
+  const context = await loadPrGateCoordinationContext(options, runtime);
+  return { context, reused: false };
+}
+
 // Composes the formal-request guard's round-cap exemption from both shapes
 // that must suppress it — the interpreter's own roundCapCleanEligible
 // (round_cap_clean_fallback) and the evaluator's independent ROUND_CAP_REACHED
@@ -1296,23 +1392,42 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
 
 /**
  * Issue 3105 AC15 (ADR 0288): the open act list of the current head's live draft_gate ledger, or null.
- * Null when the head has no live ledger with an open act item, when every open item is a PR-body item, past the cap (cap > 0 and round > cap), and when every open item is a nit outside draft round 1.
+ * Null when the head has no live ledger with an open act item, when every open item is a PR-body item below the cap, past the cap (cap > 0 and round > cap), and when every open item is a nit outside draft round 1.
+ * At the cap round an all-PR-body list is `{ bodyOnly: true }`: its exit is the body-only converged post (GATE-EXEC-NO-DEAD-END).
  * `blockers` are the GATE-EXEC-SOFT-CAP blockers of the cap round; below the cap every act item goes to the fixer.
  * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
  */
-export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
+export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnlyMerge = ({ fromHead, head, mainRef, repoRoot: root }) => convergedCarryAccepts({ originHead: fromHead, headSha: head, baseRef: mainRef, repoRoot: root }) }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
   const options = { repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: head };
   // The live ledger at the current head is that head's latest round; retained same-head rounds are earlier rounds.
   const logs = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead: true });
-  const log = logs.find((entry) => String(entry.headSha).trim().toLowerCase() === head);
+  let log = logs.find((entry) => String(entry.headSha).trim().toLowerCase() === head);
   // The posted verdict is findings_present (the evaluator checks it); a legacy ledger may persist `clean` beside open act items.
-  const open = log ? listOpenActItems(log.findings) : [];
-  // The emitter refuses an all-PR-body act list (delta_body_only_act_set), so that list keeps the earlier routing.
-  if (open.length === 0 || open.every(isDeltaBodyItem)) return null;
+  let open = log ? listOpenActItems(log.findings) : [];
+  let ledgerHead = head;
+  // GATE-EXEC-NO-DEAD-END: a head with no live ledger that is a base-only merge of the cap-round head A keeps A's body-only list, so the post stays reachable after the base merge.
+  const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
+  if (open.length === 0 && baseRefName) {
+    // Only a head's live ledger (its latest round) counts: it sorts after its retained `.round-N` siblings, so the last entry per head wins.
+    const latestPerHead = new Map(logs.map((entry) => [String(entry.headSha).trim().toLowerCase(), entry]));
+    // Newest head first (logs sort oldest first): a later ledger supersedes an older one, so only the newest accepted head decides and a mixed list there carries nothing.
+    for (const [from, prior] of [...latestPerHead].reverse()) {
+      const priorOpen = listOpenActItems(prior.findings);
+      if (from === head || priorOpen.length === 0) continue;
+      if (!(await baseOnlyMerge({ fromHead: from, head, mainRef: `origin/${baseRefName}`, repoRoot }))) continue;
+      if (priorOpen.every(isDeltaBodyItem)) { log = prior; open = priorOpen; ledgerHead = from; }
+      break;
+    }
+  }
+  if (open.length === 0) return null;
   // countCompletedRounds counts the round being posted, so the live ledger's round is one less.
-  const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead: true }) - 1;
+  const round = await countCompletedRounds({ ...options, headSha: ledgerHead }, { repoRoot, includeLiveCurrentHead: true }) - 1;
+  // The emitter refuses an all-PR-body act list (delta_body_only_act_set): its only exit is the ADR 0271 body-only converged post at the cap round, any other round keeps the earlier routing.
+  if (open.every(isDeltaBodyItem)) return cap > 0 && round === cap ? { headSha: ledgerHead, ...(ledgerHead !== head ? { carriedToHead: head } : {}), openActCount: open.length, blockers: [...pastCapBlockers(log.findings, { round, cap }), ...open.filter(isBlockedActItem).map((f) => ({ kind: "round_cap_reached", reason: f.resurfaces ? "resurfaced" : "new_act", item: `[${normalizeSeverity(f.severity)}] ${String(f.summary ?? "").trim()} (blocked_item)` }))], bodyOnly: true } : null;
+  // A carried list (a base-only merge of the cap head) is body-only or nothing.
+  if (ledgerHead !== head) return null;
   // Past the cap the emitter refuses every act list (round_cap_reached), so that round keeps the earlier routing.
   if (cap > 0 && round > cap) return null;
   // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so that list keeps the earlier routing.
@@ -1383,6 +1498,7 @@ export function buildGateCoordinationEvaluatorInput({
     // the absent/never-driven entry guard keys on a round driven for THIS head
     // (never a raw across-PR copilotReviewRoundCount, which counts prior-head rounds).
     copilotReviewOnCurrentHead: context.snapshot?.copilotReviewOnCurrentHead === true,
+    copilotRequestNotObservable: context.snapshot?.copilotRequestNotObservable === true,
     // Blocks the evaluator's absent-review round-cap grant.
     copilotPriorHeadBodyFeedbackUnresolved: context.snapshot?.copilotPriorHeadBodyFeedbackUnresolved ?? null,
     // Operator-marker suppression OR carried convergence: see
@@ -1413,7 +1529,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // The config loads first: a config load error refuses before any gh read.
   const config = (await loadDevLoopConfigStrict({ repoRoot })).config ?? {};
   // ADR 0117 (issue 3139): an open self-hosting PR is answered by its own head's toolchain; another checkout refuses inside the loader, before any shared gate state is written.
+  const fetchedAtMs = Date.now();
   const context = await loadPrGateCoordinationContext(options, { ...runtime, guardToolchain: true });
+  await writePrGateCoordinationSnapshot(options, runtime, context, fetchedAtMs);
   const { toolchain } = context;
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
@@ -1482,7 +1600,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
       });
   // ADR 0208: a PR whose cap round is fixed never runs draft_gate again; fail closed when the evidence is unreadable.
   // A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
-  const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact(context, { repoRoot, resolve: runtime.resolveCapRoundFixed ?? resolveCapRoundFixed });
+  const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact(context, { repoRoot, resolve: runtime.resolveCapRoundFixed ?? resolveCapRoundFixed, trustRuntime: { env: runtime.env, ghCommand: runtime.ghCommand, runChild: runtime.runChild } });
   const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
     && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot, includeLiveCurrentHead: true }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
   const draftOpenActList = context.prData?.isDraft === true && !draftCapRoundFixed
@@ -1558,6 +1676,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     roundCapCleanFallback,
     postConvergenceSignificantChange,
     postConvergenceReviewSuppressed: context.postConvergenceReviewSuppressed === true,
+    copilotUnavailable: context.interpretation?.state === STATE.COPILOT_UNAVAILABLE,
     gateBoundary: result.gateBoundary,
   })) {
     result.gateBoundary = PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW;
@@ -1586,7 +1705,8 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     result.allowedNextActions = [PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE];
   }
   // GATE-EXEC-BASE-REFRESH: a stale head must integrate the base before a gate-run action. A fetch failure or unresolved head keeps the action (write-gate-context still refuses at dispatch).
-  if (result.nextAction === PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE || result.nextAction === PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE) {
+  // ADR 0299: the same check guards the routes a clean verdict posted with the stale-base line would otherwise reach.
+  if ([PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL].includes(result.nextAction)) {
     const checkFreshness = runtime.checkBaseFreshness ?? (runtime.runChild ? null : checkBaseFreshness);
     if (checkFreshness && prBaseRefName.length > 0 && typeof context.currentHeadSha === "string" && context.currentHeadSha.length > 0) {
       const freshness = await checkFreshness({ base: prBaseRefName, head: context.currentHeadSha, cwd: repoRoot, env: runtime.env ?? process.env, trusted: true })

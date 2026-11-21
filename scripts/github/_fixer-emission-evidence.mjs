@@ -10,6 +10,12 @@ const unchanged = (a, b) => same(a, b) && a?.size === b?.size && a?.mtimeMs === 
 const optionalStat = (file) => lstat(file).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
 const systemPath = (file) => process.platform === "darwin" ? file.replace(/^\/(var|tmp)(?=\/|$)/, "/private/$1") : file;
 
+// The renderer always ends the prompt with the complete Work order JSON block.
+export const promptEndsWithWorkOrder = (prompt, order) => {
+  const suffix = Buffer.from(`## Work order\n\n\`\`\`json\n${JSON.stringify(order, null, 2)}\n\`\`\`\n`);
+  return prompt.subarray(-suffix.length).equals(suffix);
+};
+
 // Historical prose is authenticated by its actual pull, never by the current renderer.
 export async function authenticateOriginalPlan({ plan, canonical, receiptTmpRoot, emissionTmpRoot = receiptTmpRoot, requireReceipt = false, read = readFile }) {
   const order = plan.workOrder;
@@ -20,8 +26,7 @@ export async function authenticateOriginalPlan({ plan, canonical, receiptTmpRoot
     || canonical !== path.join(emissionTmpRoot, "gate-fixer", repoSlugFor(order.target.repo), `pr-${order.target.pr}`, "fixer-emit-plan.json")) refuse("original identity or semantic digest mismatch");
   const prompt = await read(path.join(path.dirname(canonical), "work-orders", `${executionIdentity}.md`));
   if (materializationHash(prompt) !== plan.materializationHash) refuse("original historical materialization hash mismatch");
-  const suffix = Buffer.from(`## Work order\n\n\`\`\`json\n${JSON.stringify(order, null, 2)}\n\`\`\`\n`);
-  if (!prompt.subarray(-suffix.length).equals(suffix)) refuse("historical complete Work order JSON suffix differs");
+  if (!promptEndsWithWorkOrder(prompt, order)) refuse("historical complete Work order JSON suffix differs");
   const receiptBytes = await read(pullReceiptPath(receiptTmpRoot, workOrderRef)).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
   if (!receiptBytes && !requireReceipt) return order;
   const pulled = await verifyPullReceipt({ receiptTmpRoot, role: "fixer", workOrderRef, workOrderDigest: digest, executionIdentity });

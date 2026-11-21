@@ -357,9 +357,10 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
       if (body.includes("Gate review:") || body.includes("**draft_gate**") || body.includes("**pre_approval_gate**") || isGateMachineArtifactBody(body)) {
         continue;
       }
-      // The loop's own fixer disposition markers are tool output, whatever login `gh` posts under.
+      // The loop's own fixer and judge-bound disposition markers are tool output, whatever login `gh` posts under.
       // shortcut: markers are not matched to loop records, a pasted marker silences a comment; upgrade if abused.
-      if (parseReviewBodyDispositionMarkers(body).length > 0 || parseCopilotBodyDispositionMarker(body)?.fixSha) {
+      const copilotMarker = parseCopilotBodyDispositionMarker(body);
+      if (parseReviewBodyDispositionMarkers(body).length > 0 || copilotMarker?.fixSha || copilotMarker?.judgeBinding) {
         continue;
       }
       humanComments.push({
@@ -618,7 +619,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
   // Check for human comments since last subagent action
   // Only active in async subagent context (DEVLOOPS_RUN_ID set)
   let humanCommentCheck = { paused: false };
-  if (resolveRunId(env)) {
+  if (resolveRunId(env, { cwd: resolvedRepoRoot })) {
     humanCommentCheck = await detectRecentHumanComments(
       { repo: options.repo, pr: options.pr, claimedAtMs: runnerOwnership?.activeRun?.claimedAt ? new Date(runnerOwnership.activeRun.claimedAt).getTime() : undefined },
       { env, ghCommand, runChild },

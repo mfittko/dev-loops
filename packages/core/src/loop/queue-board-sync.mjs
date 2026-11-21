@@ -72,6 +72,7 @@ export const DEFAULT_STATE_LOGICAL_MAP = Object.freeze({
   round_cap_reached: LOGICAL_COLUMN.IN_PROGRESS,
   round_cap_clean_fallback: LOGICAL_COLUMN.IN_PROGRESS,
   internal_tooling_direct_gate: LOGICAL_COLUMN.IN_PROGRESS,
+  copilot_unavailable: LOGICAL_COLUMN.IN_PROGRESS,
   low_signal_converged: LOGICAL_COLUMN.IN_PROGRESS,
   blocked_needs_user_decision: LOGICAL_COLUMN.IN_PROGRESS,
 

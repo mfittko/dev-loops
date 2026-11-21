@@ -828,6 +828,8 @@ test("CLI persists a keyed carry-forward plan artifact at the CURRENT head befor
       "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
     ], { repoRoot });
     assert.equal(result.ok, true);
+    // The stdout result reports the absolute path it wrote, for --carry-forward-plan-file.
+    assert.equal(result.carryForwardPlanPath, planPath);
     // The resolver recorded its plan keyed to the CURRENT head, self-describing.
     const persisted = JSON.parse(await readFile(planPath, "utf8"));
     assert.equal(persisted.ok, true);
@@ -1444,3 +1446,120 @@ test("buildCarryForwardPlan: duplicate rerun names are idempotent; case mismatch
   assert.deepEqual(twice, once);
   assert.throws(() => buildCarryForwardPlan({ log: cleanLog, changedFiles: [], rerunAngles: ["Docs"] }), { code: "unknown_rerun_angle" });
 });
+
+// Issue 3284: a same-file base merge or a resolved conflict reaches the plan through computeBaseMergeCarry.
+async function sameFileBaseMergeRepo({ conflict, ownEdit = false, ownFooEdit = false }) {
+  const lines = Array.from({ length: 30 }, (_, i) => `line${i}\n`).join("");
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-samefile-"));
+  git(repoRoot, ["init", "-q", "-b", "main"]);
+  git(repoRoot, ["config", "user.email", "test@example.com"]);
+  git(repoRoot, ["config", "user.name", "Test"]);
+  await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\ngates:\n  draft: {}\n", "utf8");
+  await mkdir(path.join(repoRoot, "src"), { recursive: true });
+  await mkdir(path.join(repoRoot, "docs"), { recursive: true });
+  await writeFile(path.join(repoRoot, "src/foo.mjs"), lines, "utf8");
+  await writeFile(path.join(repoRoot, "docs/guide.md"), "# Guide\n", "utf8");
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "fork"]);
+  git(repoRoot, ["checkout", "-q", "-b", "pr"]);
+  await writeFile(path.join(repoRoot, "src/foo.mjs"), `${lines.slice(0, -7)}PR\n`, "utf8");
+  // The file is already in the PR diff at the reviewed head, so both heads yield a sound hunk digest.
+  if (ownEdit) await writeFile(path.join(repoRoot, "src/z.mjs"), "export const z = 0;\n", "utf8");
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "PR round 1 (reviewed)"]);
+  const prevHead = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+  if (ownEdit) {
+    await writeFile(path.join(repoRoot, "src/z.mjs"), "export const z = 1;\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "PR own edit after the reviewed head"]);
+  }
+  // A PR-own edit to the resolution file itself (top of the file), after the reviewed head.
+  if (ownFooEdit) {
+    await writeFile(path.join(repoRoot, "src/foo.mjs"), `OWN\n${lines.slice(0, -7)}PR\n`, "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "PR own edit to foo after the reviewed head"]);
+  }
+  git(repoRoot, ["checkout", "-q", "main"]);
+  await writeFile(path.join(repoRoot, "src/foo.mjs"), conflict ? `${lines.slice(0, -7)}MAIN\n` : `TOP\n${lines}`, "utf8");
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "main edits foo"]);
+  git(repoRoot, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  git(repoRoot, ["checkout", "-q", "pr"]);
+  if (conflict) {
+    try { git(repoRoot, ["merge", "--no-edit", "origin/main"]); } catch { /* conflict expected */ }
+    await writeFile(path.join(repoRoot, "src/foo.mjs"), `${ownFooEdit ? "OWN\n" : ""}${lines.slice(0, -7)}PR\nMAIN\n`, "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "resolve"]);
+  } else {
+    git(repoRoot, ["merge", "-q", "--no-edit", "origin/main"]);
+  }
+  const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+  const perAngle = [{ angle: "correctness", reviewer: "review-a" }, { angle: "docs", reviewer: "review-c" }];
+  const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
+  await mkdir(path.dirname(logPath), { recursive: true });
+  await writeFile(logPath, JSON.stringify({ headSha: prevHead, verdict: "clean", provenance: { distinctReviewers: 2, perAngle } }), "utf8");
+  return { repoRoot, prevHead, headSha };
+}
+
+for (const [name, conflict, decision] of [["same-file line shift", false, "partial_carry"], ["resolved conflict", true, "resolution_delta"]]) {
+  test(`CLI plans a ${decision} base merge (${name}): only the angle meeting the file re-runs`, async () => {
+    const { repoRoot, prevHead, headSha } = await sameFileBaseMergeRepo({ conflict });
+    try {
+      const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot });
+      assert.equal(result.baseMergeCarry, decision);
+      assert.deepEqual(result.rerunPaths, ["src/foo.mjs"]);
+      assert.deepEqual(result.mustRerun.map((m) => m.angle), ["correctness"]);
+      assert.deepEqual(result.carried.map((c) => c.angle), ["docs"]);
+      assert.deepEqual(result.resolutionDeltaPaths, conflict ? ["src/foo.mjs"] : undefined);
+      assert.equal(conflict ? result.resolutionDeltaMerges?.length : result.resolutionDeltaMerges, conflict ? 1 : undefined);
+      assert.deepEqual(result.resolutionDeltaFullPaths, conflict ? [] : undefined);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test("CLI plans a resolution_delta window with a PR-own edit: the edited file is listed for full review, not as a resolution file", async () => {
+  const { repoRoot, prevHead, headSha } = await sameFileBaseMergeRepo({ conflict: true, ownEdit: true });
+  try {
+    const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot });
+    assert.equal(result.baseMergeCarry, "resolution_delta");
+    assert.deepEqual(result.rerunPaths, ["src/foo.mjs", "src/z.mjs"]);
+    assert.deepEqual(result.resolutionDeltaPaths, ["src/foo.mjs"]);
+    assert.deepEqual(result.resolutionDeltaFullPaths, ["src/z.mjs"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI plans a resolution_delta window where a PR-own edit and the conflict share one file: the file gets a full PR-hunk review", async () => {
+  const { repoRoot, prevHead, headSha } = await sameFileBaseMergeRepo({ conflict: true, ownFooEdit: true });
+  try {
+    const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot });
+    assert.equal(result.baseMergeCarry, "resolution_delta");
+    assert.deepEqual(result.resolutionDeltaPaths, []);
+    assert.deepEqual(result.resolutionDeltaFullPaths, ["src/foo.mjs"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3284 round 4: one table over every file class the resolver can put in rerunPaths, so none goes unreviewed.
+for (const [fileClass, opts, want] of [
+  ["resolution only", { conflict: true }, { rerun: ["src/foo.mjs"], resolution: ["src/foo.mjs"], full: [] }],
+  ["PR-own only (beside a resolution file)", { conflict: true, ownEdit: true }, { rerun: ["src/foo.mjs", "src/z.mjs"], resolution: ["src/foo.mjs"], full: ["src/z.mjs"] }],
+  ["resolution and PR-own in one file", { conflict: true, ownFooEdit: true }, { rerun: ["src/foo.mjs"], resolution: [], full: ["src/foo.mjs"] }],
+  ["shifted (clean same-file merge)", { conflict: false }, { rerun: ["src/foo.mjs"], resolution: undefined, full: undefined }],
+]) {
+  test(`CLI rerunPaths scope by file class: ${fileClass}`, async () => {
+    const { repoRoot, prevHead, headSha } = await sameFileBaseMergeRepo(opts);
+    try {
+      const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot });
+      assert.deepEqual(result.rerunPaths, want.rerun);
+      assert.deepEqual(result.resolutionDeltaPaths, want.resolution);
+      assert.deepEqual(result.resolutionDeltaFullPaths, want.full);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+}

@@ -936,3 +936,71 @@ export function filterDiffForInline(diffText, { excludeGlobs = [] } = {}) {
   }
   return { filteredDiff: keptChunks.join("\n"), excludedFiles, includedFiles };
 }
+
+/** Largest persisted diff part, sized to fit one Read in every harness. */
+export const DIFF_PART_MAX_BYTES = 40_000;
+export const DIFF_PART_MAX_LINES = 2_000;
+
+/**
+ * Split a newline-terminated diff into parts that each fit one Read. Cuts fall
+ * only before a `diff --git ` line, or before an `@@` line when one file alone
+ * exceeds the cap. A file header stays with its first hunk. One hunk above the
+ * cap becomes its own part with `oversized: true`. Joining the parts returns
+ * the input. Pure: string in, parts out.
+ *
+ * @param {string} diffText
+ * @param {{ maxBytes?: number, maxLines?: number }} [opts]
+ * @returns {Array<{ text: string, oversized: boolean }>}
+ */
+export function splitDiffIntoParts(diffText, { maxBytes = DIFF_PART_MAX_BYTES, maxLines = DIFF_PART_MAX_LINES } = {}) {
+  if (typeof diffText !== "string" || diffText.length === 0) return [];
+  const lineCount = (text) => text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+  const fits = (text) => Buffer.byteLength(text, "utf8") <= maxBytes && lineCount(text) <= maxLines;
+  // Cut `text` before every line that `isStart` accepts; a leading run stays with the first chunk.
+  const cutBefore = (text, isStart) => {
+    const chunks = [];
+    let current = "";
+    for (const line of text.split(/(?<=\n)/)) {
+      if (isStart(line) && current.length > 0) {
+        chunks.push(current);
+        current = "";
+      }
+      current += line;
+    }
+    if (current.length > 0) chunks.push(current);
+    return chunks;
+  };
+  // The file header rides with the first hunk: a cut before the first `@@` would leave a bare header.
+  const toHunkUnits = (fileBlock) => {
+    let sawHunk = false;
+    return cutBefore(fileBlock, (line) => {
+      if (!line.startsWith("@@")) return false;
+      const cut = sawHunk;
+      sawHunk = true;
+      return cut;
+    });
+  };
+  const parts = [];
+  let current = "";
+  const flush = () => {
+    if (current.length > 0) parts.push({ text: current, oversized: false });
+    current = "";
+  };
+  const place = (unit) => {
+    if (fits(current + unit)) {
+      current += unit;
+      return true;
+    }
+    flush();
+    if (fits(unit)) current = unit;
+    return fits(unit);
+  };
+  for (const fileBlock of cutBefore(diffText, (line) => line.startsWith("diff --git "))) {
+    if (place(fileBlock)) continue;
+    for (const unit of toHunkUnits(fileBlock)) {
+      if (!place(unit)) parts.push({ text: unit, oversized: true });
+    }
+  }
+  flush();
+  return parts;
+}

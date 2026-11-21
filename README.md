@@ -94,6 +94,7 @@ The `dev-loop` coordinator agent sets `experimental.cacheTtl: 1h` in its frontma
 - `Bash(node scripts/github/upsert-checkpoint-verdict.mjs:*)` for the bare script verdict post, with the script path exactly as the agent types it;
 - `Bash(node scripts/github/ready-for-review.mjs:*)` for the bare script ready flip;
 - `Bash(dev-loops-run:*)` for the launcher form `dev-loops-run scripts/...`. This repo's own `.claude/settings.json` carries it.
+- Whenever `Bash(dev-loops-run:*)` is allowed, also add these two entries to `permissions.ask` (ADR 0295, `OPERATOR-DECISION-RECORDER`): `Bash(dev-loops-run cli/index.mjs decision record *)` and `Bash(dev-loops-run --repo-root * cli/index.mjs decision record *)`. Without them the allow rule lets auto mode run the decision recorder with no operator prompt, and `dev-loops status` reports the gap.
 
 Observed during the v1.0.5 drain: only an exact command prefix matched, and a mid-pattern wildcard such as `Bash(node scripts/github/*.mjs:*)` did not match. In the same drain, an ask rule on the bare form did not gate the launcher form: with `Bash(dev-loops-run:*)` allowed, `Bash(node scripts/github/merge-pr.mjs:*)` did not prompt for `dev-loops-run scripts/github/merge-pr.mjs`. For a merge or filing prompt, add the launcher-form ask rules `Bash(dev-loops-run scripts/github/merge-pr.mjs:*)` and `Bash(dev-loops-run scripts/github/create-issue.mjs:*)`.
 

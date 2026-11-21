@@ -126,9 +126,11 @@ test("copilot-pr-followup SKILL's Phase 3 step's writer invocation derives prove
     `${SKILL} Phase 3 step must not attach --provenance to the post-gate-findings.mjs comment post`,
   );
   assert.doesNotMatch(line, WRITER_FORBIDDEN_FLAGS, `${SKILL} Phase 3 writer must pass no --provenance, --emit-plan or --verdict`);
-  assert.match(line, /write-gate-findings-log\.mjs[^`]*--execution-mode fanout_fanin/, `${SKILL} Phase 3 writer must pass --execution-mode fanout_fanin`);
+  assert.match(line, /write-gate-findings-log\.mjs[^`]*--findings-file <enriched-ledger-path>/, `${SKILL} Phase 3 writer must read the judge-pass --ledger-out file`);
   const sanctioned = (await readRepo(SUB_LOOP_CONTRACT)).split("`GATE-EXEC-DISPOSITION-LEDGER`: Every gate pass")[1].match(/```sh\n([\s\S]*?)```/)[1];
   assert.match(sanctioned, /write-gate-findings-log\.mjs/);
+  assert.match(sanctioned, /--judge-verdict <verdict-path>/);
+  assert.doesNotMatch(sanctioned, /--execution-mode/);
   assert.doesNotMatch(sanctioned.replace(/\\\n/g, " ").replace(/#.*$/gm, ""), /--(provenance|emit-plan|verdict)\b/);
 });
 
@@ -146,7 +148,7 @@ test("Phase 3 writer-flag matcher accepts sanctioned forms and rejects --provena
 
 function assertJudgeBridge(step) {
   const commands = [...step.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
-  const writer = commands.find((command) => command.startsWith("write-gate-findings-log.mjs "));
+  const writer = commands.find((command) => command.startsWith("write-gate-findings-log.mjs ") && command.includes("--judge-verdict"));
   const bridge = commands.find((command) => command.startsWith("node <dev-loops-package-root>/cli/index.mjs gate judge-pass "));
   assert.ok(writer && bridge, "fan-in must write judged findings and run the judge bridge");
   assert.match(writer, /--judge-verdict\s+<judge-verdict-path>/);
@@ -156,7 +158,7 @@ function assertJudgeBridge(step) {
     ["ledger-out", "enriched-ledger-path"], ["spec-file", "spec-path"],
     ["content-digest", "content-digest"], ["spec-authority-verdict", "spec-authority-verdict-path"],
   ]) assert.match(bridge, new RegExp(`--${flag}\\s+<${value}>`));
-  assert.ok(step.indexOf(writer) < step.indexOf(bridge), "durable judged write precedes the bridge");
+  assert.ok(step.indexOf(bridge) < step.indexOf(writer), "durable judged write follows the bridge");
 }
 
 test("fan-in routes judged findings through the spec-bound act-list bridge", async () => {

@@ -11,6 +11,8 @@ import { staleSurfaceTruncatedHit, unaddressedStaleSurfaceHits } from "@dev-loop
 import { fetchIssueBody } from "./detect-issue-refinement-artifact.mjs";
 import { gitStaleSurfaceHits } from "./check-pre-push-delta.mjs";
 import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
+import { pathsMissingFromMatrix } from "../github/waive-adr-tripwire.mjs";
+import { CONTRACT_DOC_RE, parseNameStatus } from "./check-adr-tripwire.mjs";
 
 export const PRE_PR_STALE_SURFACE_UNADDRESSED = "pre_pr_stale_surface_unaddressed";
 
@@ -26,15 +28,24 @@ function readIssueBodyFromGitHub({ cwd, issue }) {
  * Scan `merge-base(base, HEAD)..HEAD` and, with a linked issue, compare the PR body file with the issue body.
  * Any git or read error throws (fail closed).
  */
-export async function scanPrePrStaleSurface({ cwd, base, bodyFile, issue, staleSurface = gitStaleSurfaceHits, readIssueBody = readIssueBodyFromGitHub }) {
-  const head = git(cwd, ["rev-parse", "HEAD"]);
-  const baseline = git(cwd, ["merge-base", base, "HEAD"]);
+export async function scanPrePrStaleSurface({ cwd, base, bodyFile, issue, staleSurface = gitStaleSurfaceHits, readIssueBody = readIssueBodyFromGitHub, head = git(cwd, ["rev-parse", "HEAD"]) }) {
+  const baseline = git(cwd, ["merge-base", base, head]);
   if (baseline === head) throw new Error(`empty scan range: merge-base of ${base} and HEAD is HEAD, nothing to scan (PRE-PR-STALE-SURFACE-SWEEP fails closed)`);
   const found = staleSurface(cwd, baseline, head);
   const staleSurfaceHits = [...found.hits];
   if (bodyFile) {
     const issueBody = await readIssueBody({ cwd, issue });
     staleSurfaceHits.push(...diffPrBodyAgainstIssue({ prBody: readFileSync(bodyFile, "utf8"), issueBody }));
+    // ADR 0301: a touched contract doc the matrix does not name fails the waiver later; flag it before the first gate round.
+    // Pick the path the tripwire reports: a rename out of the surface names the original path.
+    const contractDocs = parseNameStatus(git(cwd, ["diff", "--name-status", baseline, head]))
+      .map((f) => (f.origPath && CONTRACT_DOC_RE.test(f.origPath) ? f.origPath : f.path))
+      .filter((p) => CONTRACT_DOC_RE.test(p));
+    const { matrixInvalid, missing } = pathsMissingFromMatrix(contractDocs, issueBody);
+    // An invalid matrix is already one issue-body/issue-matrix hit from the comparison above.
+    if (!matrixInvalid) {
+      for (const p of missing) staleSurfaceHits.push({ kind: "pr-body", side: "issue", needle: `${p} is changed but no row of the issue's AC / DoD matrix names it in backticks`, file: `issue-body/issue-matrix:${p}`, line: 0, site: `issue-body/issue-matrix:${p}` });
+    }
   }
   return { ok: true, head, base, staleSurfaceHits, staleSurfaceTruncated: found.truncated === true, truncatedNeedles: found.truncatedNeedles ?? [] };
 }
