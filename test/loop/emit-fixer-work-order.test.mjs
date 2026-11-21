@@ -2878,6 +2878,8 @@ for (const route of ["Historical main", "OLD authority", "complete"]) test(`${ro
     const pulled = spawnSync("node", [pullScript, unit.executionIdentity], { cwd: wt, encoding: "utf8", env });
     assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
     assert.equal(pulled.stdout, await readFile(unit.promptPath, "utf8"));
+    // The fixture runs real gh-stub calls through the throttle; pacing them would exceed the 10s test timeout.
+    await writeFile(path.join(root, ".devloops.json"), JSON.stringify({ version: 1, queue: { ghMinIntervalMs: 0 } }));
     const bin = path.join(root, "tmp/bin");
     await mkdir(bin);
     await writeFile(path.join(bin, "gh"), `#!/bin/sh\ncase "$1 $2" in\n'pr view') printf '%s\\n' '${JSON.stringify({ headRefOid: f.candidate })}';;\n'api graphql') printf '%s\\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}';;\n'api user') printf '%s\\n' '{"login":"bot"}';;\n"api --paginate") case "$4" in *check-runs*) printf '%s\\n' '{"check_runs":[{"name":"build","status":"completed","conclusion":"success"}]}';; *) printf '%s\\n' '{"statuses":[]}';; esac;;\napi*) printf '%s\\n' '{"status":"ahead"}';;\n*) exit 1;;\nesac\n`);

@@ -135,9 +135,27 @@ describe("gh-throttle", () => {
   });
 
   test("takeGhSlot composes root and configured interval into a reserved slot", async () => {
-    await writeFile(path.join(root, ".devloops"), "version: 1\nqueue:\n  ghMinIntervalMs: 120\n");
-    await takeGhSlot({ execFile: () => `${path.join(root, ".git")}\n`, now, sleep });
-    assert.equal(Number(await readFile(slotFile(), "utf8")), clock + 120);
+    const savedEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production"; // test mode is unpaced by design
+    try {
+      await writeFile(path.join(root, ".devloops"), "version: 1\nqueue:\n  ghMinIntervalMs: 120\n");
+      await takeGhSlot({ execFile: () => `${path.join(root, ".git")}\n`, now, sleep });
+      assert.equal(Number(await readFile(slotFile(), "utf8")), clock + 120);
+    } finally {
+      process.env.NODE_ENV = savedEnv;
+    }
+  });
+
+  test("takeGhSlot is unpaced in test mode and for an attested gh stub", async () => {
+    const execFile = () => { throw new Error("must not resolve a root"); };
+    await takeGhSlot({ execFile });
+    const savedEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      await takeGhSlot({ execFile, env: { DEV_LOOPS_GH_STUB: "1" } });
+    } finally {
+      process.env.NODE_ENV = savedEnv;
+    }
   });
 
   test("a config load failure warns exactly once per process", async () => {

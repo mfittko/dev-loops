@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
+import { ghExecFileSync } from "@dev-loops/core/github/gh-throttle";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -85,7 +86,7 @@ function validateRepo(repo) {
 
 function ghJson(args, cwd) {
   try {
-    const stdout = execFileSync("gh", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const stdout = ghExecFileSync("gh", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     return JSON.parse(stdout);
   } catch (err) {
     throw new Error(`gh command failed: ${err instanceof Error ? err.message : String(err)}`);

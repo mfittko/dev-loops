@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { setTimeout as delay } from "node:timers/promises";
 import { spawn } from "node:child_process";
+import { takeGhSlot } from "@dev-loops/core/github/gh-throttle";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, requireTokenValue } from "../_cli-primitives.mjs";
@@ -69,6 +70,7 @@ export async function watchCopilotRunUntilComplete(
   { repo, runId, timeoutMs = null },
   { env = process.env, ghCommand = "gh" } = {},
 ) {
+  if (ghCommand === "gh") await takeGhSlot();
   return new Promise((resolve, reject) => {
     const child = spawn(
       ghCommand,

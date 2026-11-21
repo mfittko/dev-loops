@@ -26,6 +26,7 @@
  * jq-output.mjs).
  */
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { resolveNpmDistTag } from "./resolve-npm-dist-tag.mjs";
 import { isDirectCliRun } from "../lib/direct-run.mjs";
@@ -276,8 +277,22 @@ export function resolveApprovalState({ version, operator, comments, releaseRef }
   return { applies: true, approved: false, refusal };
 }
 
+// Release scripts import nothing from @dev-loops/core (import-closure test), so the shared gh throttle
+// is reached by running its slot child by path. A failed slot fails closed.
+const GH_SLOT_SCRIPT = fileURLToPath(new URL("../../packages/core/src/github/gh-throttle-slot.mjs", import.meta.url));
+function ghExecFileSync(command, args, options) {
+  if (command === "gh") {
+    try {
+      execFileSync(process.execPath, [GH_SLOT_SCRIPT], { stdio: ["ignore", "ignore", "pipe"], timeout: 60_000 });
+    } catch (error) {
+      throw Object.assign(new Error(`gh throttle unavailable: ${String(error.stderr ?? error.message).trim()}`), { code: "GH_THROTTLE_UNAVAILABLE", cause: error });
+    }
+  }
+  return execFileSync(command, args, options);
+}
+
 /** Run a bounded `gh` call; throws (fail closed) on any non-zero exit. */
-function runGh(args, { ghCommand = "gh", runChild = execFileSync } = {}) {
+function runGh(args, { ghCommand = "gh", runChild = ghExecFileSync } = {}) {
   const stdout = runChild(ghCommand, args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
   return stdout;
 }
@@ -363,7 +378,7 @@ export function resolveReleaseCommitDate({ override = null, gitCommand = "git", 
   return date;
 }
 
-export function verifyReleaseApproval({ version, repo, operator = null, releaseCommitDate = null, ghCommand = "gh", runChild = execFileSync, runGit = execFileSync } = {}) {
+export function verifyReleaseApproval({ version, repo, operator = null, releaseCommitDate = null, ghCommand = "gh", runChild = ghExecFileSync, runGit = execFileSync } = {}) {
   version = version.trim();
   const distTag = resolveNpmDistTag(version); // throws on garbage -> usage error upstream
   if (distTag !== "latest") {

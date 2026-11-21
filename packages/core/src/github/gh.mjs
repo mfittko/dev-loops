@@ -37,7 +37,11 @@ const SECONDARY_RATE_LIMIT_BACKOFF_MS = 30_000;
  * slot there). A secondary rate limit backs off once and retries; a second one
  * throws RATE_LIMITED with the original gh message.
  */
-async function runWithBackoff(runChild, command, args, env, { backoffMs = SECONDARY_RATE_LIMIT_BACKOFF_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
+async function runWithBackoff(runChild, command, args, env, { backoffMs, sleep }) {
+  // An injected runner (a caller with its own rate-limit handling, or a test stub) is not retried unless the caller passes a backoff seam.
+  if (runChild !== defaultRunChild && backoffMs === undefined && sleep === undefined) return runChild(command, args, env);
+  backoffMs ??= SECONDARY_RATE_LIMIT_BACKOFF_MS;
+  sleep ??= (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const isSecondaryLimit = (result) => result.code !== 0 && isSecondaryRateLimitError(result.stderr);
   let result = await runChild(command, args, env);
   if (!isSecondaryLimit(result)) return result;

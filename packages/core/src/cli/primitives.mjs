@@ -159,7 +159,7 @@ export function parseAllowedRefsCsv(value, flag, parseError = null) {
 // Every default-runner `gh` call takes a gh-throttle slot first; an injected runChild stays unpaced.
 // `takeSlot` is a test seam. gh-throttle is imported lazily to avoid an import cycle.
 export async function runChild(command, args, env = process.env, stdinText = undefined, { timeoutMs, takeSlot } = {}) {
-  if (command === "gh") await (takeSlot ?? (await import("../github/gh-throttle.mjs")).takeGhSlot)();
+  if (command === "gh") await (takeSlot ?? ((await import("../github/gh-throttle.mjs")).takeGhSlot))({ env });
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { env, timeout: timeoutMs, killSignal: "SIGKILL", stdio: [stdinText === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
     let stdout = "";
@@ -203,7 +203,8 @@ export async function resolveBodyOrFile({ body, bodyFile, allowStdin = false, al
   return content;
 }
 
-export function runCommand(command, args, { cwd = process.cwd(), env = process.env } = {}) {
+export async function runCommand(command, args, { cwd = process.cwd(), env = process.env } = {}) {
+  if (command === "gh") await (await import("../github/gh-throttle.mjs")).takeGhSlot({ env });
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";

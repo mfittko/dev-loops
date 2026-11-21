@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { link, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const DEFAULT_GH_MIN_INTERVAL_MS = 500;
 const LOCK_TIMEOUT_MS = 10_000;
@@ -150,8 +151,30 @@ export async function acquireSlot({
 }
 
 /** Default slot taker for the real `gh` path: resolves root and interval lazily. */
+/** No pacing for a gh attested as a stub (`DEV_LOOPS_GH_STUB`, set by the writeGhStub helper) or in test mode (`NODE_ENV=test`): neither sends traffic. */
+export const isUnpaced = (env) => Boolean(env?.DEV_LOOPS_GH_STUB || process.env.DEV_LOOPS_GH_STUB || process.env.NODE_ENV === "test");
+
 export async function takeGhSlot(opts = {}) {
+  if (!opts.root && isUnpaced(opts.env)) return;
   const root = opts.root ?? resolveMainRoot(opts.execFile ? { execFile: opts.execFile } : undefined);
   const intervalMs = opts.intervalMs ?? await resolveIntervalMs(root, { warn: opts.warn });
   await acquireSlot({ ...opts, root, intervalMs });
+}
+
+const SYNC_SLOT_TIMEOUT_MS = 60_000;
+const SLOT_SCRIPT = fileURLToPath(new URL("./gh-throttle-slot.mjs", import.meta.url));
+
+/** Sync slot taker for `execFileSync` call sites: runs the slot child and blocks until it exits. */
+export function takeGhSlotSync({ execFile = execFileSync } = {}) {
+  try {
+    execFile(process.execPath, [SLOT_SCRIPT], { stdio: ["ignore", "ignore", "pipe"], timeout: SYNC_SLOT_TIMEOUT_MS });
+  } catch (error) {
+    throw unavailable(`sync slot failed: ${String(error.stderr ?? error.message).trim()}`, error);
+  }
+}
+
+/** `execFileSync` that takes a slot first when the command is `gh`. */
+export function ghExecFileSync(command, args, options) {
+  if (command === "gh" && !isUnpaced(options?.env)) takeGhSlotSync();
+  return execFileSync(command, args, options);
 }
