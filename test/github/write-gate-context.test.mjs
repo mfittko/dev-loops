@@ -10835,3 +10835,10 @@ test("resolveDraftCapRoundFact: a clean cap round with no posted draft_gate revi
   const withAct = { log: { verdict: "findings_present", headSha: capHead, findings: [{ judgeDisposition: "act", severity: "low", summary: "x" }] }, residue: [] };
   assert.deepEqual(await fact([], {}, withAct), { capRoundFixed: true, failure: null }, "a cap round with act items posts through the normal flow");
 });
+
+test("readsPrBody reads the developer-checklist lines the reviewer receives", () => {
+  const cfg = (line) => ({ gates: { draft: { angles: [{ name: "docs", prompt: "Docs.", "developer-checklist": [line] }] } } });
+  assert.equal(readsPrBody("docs", cfg("X1: Check the PR body In scope list against the diff")), true);
+  assert.equal(readsPrBody("docs", cfg("X1: Review the PR description for completeness")), true);
+  assert.equal(readsPrBody("docs", cfg("A1: Check null and empty inputs")), false);
+});
