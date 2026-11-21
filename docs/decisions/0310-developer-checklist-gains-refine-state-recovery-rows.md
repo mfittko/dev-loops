@@ -4,7 +4,7 @@
 
 Accepted — 2026-11-21 ([issue 3425](https://github.com/mfittko/dev-loops/issues/3425))
 
-Extends: 0304 ([record](./0304-developer-pre-pr-self-check.md)). The record stays unedited.
+Partially amends 0304 ([record](./0304-developer-pre-pr-self-check.md)): the checklist item count of 15 replaces the count of 14. The record stays unedited.
 
 ## Context
 

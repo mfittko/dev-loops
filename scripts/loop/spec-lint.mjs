@@ -305,7 +305,7 @@ const REFUSAL_RE = /\bfail-closed\b/i;
 const RECOVERY_ROW_RES = [
   ["crash", /\bcrash/i],
   ["rebuild at the same head", /\bsame[- ]head\b/i],
-  ["replacement by a later step", /\breplac(?:e|ed|ement)\b/i],
+  ["replacement by a later step", /\breplac(?:e[sd]?|ing|ements?)\b/i],
 ];
 
 /** REFINE-STATE-RECOVERY-ROWS: matrix rows adding persistent state or a fail-closed refusal need the recovery rows or a named `recovery`. */

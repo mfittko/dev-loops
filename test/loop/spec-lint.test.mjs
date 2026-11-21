@@ -575,3 +575,24 @@ test("state_recovery_rows_missing: a spec with the three recovery rows and a nam
   assert.deepEqual(lintStateRecoveryRows(clean), []);
   assert.deepEqual(lintStateRecoveryRows("no matrix here, a lock"), []);
 });
+
+test("state_recovery_rows_missing: verb forms and partial rows are matched per keyword", () => {
+  const rows = (...c) => recoverySpec(["The loop writes a lock file", "unit test"], ...c.map((r) => [r, "unit test"]));
+  for (const replace of ["A later step replaces the lock", "A later step is replacing the lock", "A later step replaced the lock"]) {
+    assert.deepEqual(lintStateRecoveryRows(rows("The lock survives a crash", "A same-head rebuild reuses it", replace)), [], replace);
+  }
+  assert.deepEqual(lintStateRecoveryRows(rows("The lock survives a crash")).map((f) => f.id), ["rebuild at the same head", "replacement by a later step"]);
+});
+
+test("state_recovery_rows_missing: lintSpec and the CLI report the finding", async () => {
+  const root = await fixtureRepo();
+  const body = `${recoverySpec(["The loop writes a lock file", "unit test"])}${FORECAST}`;
+  const found = (await lintSpec({ body, repoRoot: root })).findings.filter((f) => f.kind === "state_recovery_rows_missing");
+  assert.equal(found.length, 3);
+  assert.deepEqual((await lintSpec({ body: `${recoverySpec(["The parser rejects bad input", "unit test"])}${FORECAST}`, repoRoot: root })).findings.filter((f) => f.kind === "state_recovery_rows_missing"), []);
+  const bodyFile = path.join(root, "body.md");
+  await writeFile(bodyFile, body);
+  const stdout = buffer();
+  await main(["--body-file", bodyFile, "--repo-root", root], { stdout: stdout.stream, stderr: buffer().stream });
+  assert.equal((stdout.read().match(/state_recovery_rows_missing/g) ?? []).length, 3);
+});
