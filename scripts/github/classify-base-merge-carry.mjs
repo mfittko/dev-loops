@@ -65,6 +65,8 @@ const prBlobPaths = (before, after) => {
 // (the line numbers) are dropped. Binary output has no sound digest and yields null (fail closed).
 async function hunkDigest(bareGit, base, head, filePath) {
   const out = (await bareGit(["diff", "-U0", "--no-ext-diff", "--no-textconv", "--no-renames", "--binary", "--ignore-submodules=none", "--diff-algorithm=myers", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", base, head, "--", `:(literal)${filePath}`])).toString("latin1").split("\n");
+  // An empty diff means the pathspec matched nothing (a non-ASCII path is latin1-decoded but sent UTF-8 encoded): no sound digest, fail closed.
+  if (!out.some((l) => l.startsWith("diff --git "))) return null;
   const start = out.findIndex((l) => l.startsWith("@@ "));
   const header = start === -1 ? out : out.slice(0, start);
   if (header.some((l) => l.startsWith("Binary files ") || l === "GIT binary patch")) return null;

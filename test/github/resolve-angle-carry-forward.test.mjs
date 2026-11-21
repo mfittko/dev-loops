@@ -1444,3 +1444,60 @@ test("buildCarryForwardPlan: duplicate rerun names are idempotent; case mismatch
   assert.deepEqual(twice, once);
   assert.throws(() => buildCarryForwardPlan({ log: cleanLog, changedFiles: [], rerunAngles: ["Docs"] }), { code: "unknown_rerun_angle" });
 });
+
+// Issue 3284: a same-file base merge or a resolved conflict reaches the plan through computeBaseMergeCarry.
+async function sameFileBaseMergeRepo({ conflict }) {
+  const lines = Array.from({ length: 30 }, (_, i) => `line${i}\n`).join("");
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-samefile-"));
+  git(repoRoot, ["init", "-q", "-b", "main"]);
+  git(repoRoot, ["config", "user.email", "test@example.com"]);
+  git(repoRoot, ["config", "user.name", "Test"]);
+  await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\ngates:\n  draft: {}\n", "utf8");
+  await mkdir(path.join(repoRoot, "src"), { recursive: true });
+  await mkdir(path.join(repoRoot, "docs"), { recursive: true });
+  await writeFile(path.join(repoRoot, "src/foo.mjs"), lines, "utf8");
+  await writeFile(path.join(repoRoot, "docs/guide.md"), "# Guide\n", "utf8");
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "fork"]);
+  git(repoRoot, ["checkout", "-q", "-b", "pr"]);
+  await writeFile(path.join(repoRoot, "src/foo.mjs"), `${lines.slice(0, -7)}PR\n`, "utf8");
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "PR round 1 (reviewed)"]);
+  const prevHead = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+  git(repoRoot, ["checkout", "-q", "main"]);
+  await writeFile(path.join(repoRoot, "src/foo.mjs"), conflict ? `${lines.slice(0, -7)}MAIN\n` : `TOP\n${lines}`, "utf8");
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "main edits foo"]);
+  git(repoRoot, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  git(repoRoot, ["checkout", "-q", "pr"]);
+  if (conflict) {
+    try { git(repoRoot, ["merge", "--no-edit", "origin/main"]); } catch { /* conflict expected */ }
+    await writeFile(path.join(repoRoot, "src/foo.mjs"), `${lines.slice(0, -7)}PR\nMAIN\n`, "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "resolve"]);
+  } else {
+    git(repoRoot, ["merge", "-q", "--no-edit", "origin/main"]);
+  }
+  const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+  const perAngle = [{ angle: "correctness", reviewer: "review-a" }, { angle: "docs", reviewer: "review-c" }];
+  const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
+  await mkdir(path.dirname(logPath), { recursive: true });
+  await writeFile(logPath, JSON.stringify({ headSha: prevHead, verdict: "clean", provenance: { distinctReviewers: 2, perAngle } }), "utf8");
+  return { repoRoot, prevHead, headSha };
+}
+
+for (const [name, conflict, decision] of [["same-file line shift", false, "partial_carry"], ["resolved conflict", true, "resolution_delta"]]) {
+  test(`CLI plans a ${decision} base merge (${name}): only the angle meeting the file re-runs`, async () => {
+    const { repoRoot, prevHead, headSha } = await sameFileBaseMergeRepo({ conflict });
+    try {
+      const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot });
+      assert.equal(result.baseMergeCarry, decision);
+      assert.deepEqual(result.rerunPaths, ["src/foo.mjs"]);
+      assert.deepEqual(result.mustRerun.map((m) => m.angle), ["correctness"]);
+      assert.deepEqual(result.carried.map((c) => c.angle), ["docs"]);
+      assert.deepEqual(result.resolutionDeltaPaths, conflict ? ["src/foo.mjs"] : undefined);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+}

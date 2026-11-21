@@ -6,7 +6,6 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { classifyBaseMergeCarry, validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-verdict-carry";
-import { resolveBaseMergeAngleCarry } from "@dev-loops/core/loop/gate-carry-forward";
 import { buildBaseMergeCarryPath, computeBaseMergeCarry, main, runPinnedGit } from "../../scripts/github/classify-base-merge-carry.mjs";
 
 const A = "a".repeat(40);
@@ -171,17 +170,30 @@ test("pure: partial carry needs equal digests, a base touch and no tooling; bina
   assert.equal(classifyBaseMergeCarry({ ...base, baseDeltaPaths: ["src/x.mjs", ".devloops"], prHunkDigests: d("h", "h") }).decision, "full_regate");
 });
 
-test("angles: partial and resolution carry re-run only angles meeting rerunPaths", () => {
-  const prevAngles = ["correctness", "docs"];
-  assert.equal(resolveBaseMergeAngleCarry({ decision: "full_regate", rerunPaths: ["a.mjs"] }, prevAngles), null);
-  assert.equal(resolveBaseMergeAngleCarry({ decision: "partial_carry", rerunPaths: [] }, prevAngles), null);
-  for (const decision of ["partial_carry", "resolution_delta"]) {
-    const r = resolveBaseMergeAngleCarry({ decision, rerunPaths: ["README.md"] }, prevAngles);
-    assert.equal(r.carried.length + r.mustRerun.length, 2);
-    assert.ok(r.carried.length > 0 || r.mustRerun.length > 0);
-    const code = resolveBaseMergeAngleCarry({ decision, rerunPaths: ["src/a.mjs"] }, ["correctness"]);
-    assert.equal(code.mustRerun.length, 1);
-  }
+test("pure: carry_verdict evidence keeps the pre-3284 key set, and resolution reruns include shifted files", () => {
+  const ev = classifyBaseMergeCarry(ok);
+  assert.deepEqual(Object.keys(ev), ["sourceHead", "newHead", "prBlobsBefore", "prBlobsAfter", "prDiffPaths", "baseDeltaPaths", "conflictResolutionHunks", "pathIntersection", "gateToolingPaths", "decision", "reason"]);
+  const prBlobsAfter = [`src/x.mjs\t100644\t${"2".repeat(40)}`, `src/z.mjs\t100644\t${"3".repeat(40)}`];
+  const prBlobsBefore = [blob, `src/z.mjs\t100644\t${"4".repeat(40)}`];
+  const res = classifyBaseMergeCarry({
+    ...ok, prBlobsBefore, prBlobsAfter, baseDeltaPaths: ["src/x.mjs"], conflictResolutionHunks: true, resolutionPaths: ["src/r.mjs"],
+    prHunkDigests: { "src/x.mjs": { before: "h", after: "h" }, "src/z.mjs": { before: "h", after: "g" } },
+  });
+  assert.equal(res.decision, "resolution_delta");
+  assert.deepEqual(res.rerunPaths, ["src/r.mjs", "src/x.mjs", "src/z.mjs"]);
+  assert.equal(validateBaseMergeCarryEvidence(res).ok, true);
+});
+
+test("git: a non-ASCII changed path has no sound digest and re-gates", async () => {
+  const s = setup();
+  s.git("checkout", "-q", "main"); s.put("ü.txt", LINES); s.git("add", "-A"); s.git("commit", "-qm", "main adds file");
+  s.git("checkout", "-q", "pr"); s.git("merge", "-q", "--no-edit", "main");
+  s.put("ü.txt", `${LINES.slice(0, -7)}PR\n`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits bottom");
+  const prev = s.head();
+  s.git("checkout", "-q", "main"); s.put("ü.txt", `TOP\n${LINES}`); s.git("add", "-A"); s.git("commit", "-qm", "main inserts at top");
+  s.git("checkout", "-q", "pr"); s.git("merge", "-q", "--no-edit", "main");
+  const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
+  assert.equal(ev.decision, "full_regate", ev.reason);
 });
 
 test("git: hostile ambient env and repo-local config never change the evidence", async () => {

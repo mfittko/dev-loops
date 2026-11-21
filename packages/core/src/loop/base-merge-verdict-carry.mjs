@@ -80,15 +80,19 @@ export function classifyBaseMergeCarry(input = {}, { ignoreGateTooling = false }
     prDiffPaths: null,
     baseDeltaPaths: baseDeltaPaths ?? null,
     conflictResolutionHunks: conflictResolutionHunks ?? null,
-    resolutionPaths,
-    prHunkDigests,
-    rerunPaths: [],
     pathIntersection: [],
     gateToolingPaths: [],
     decision: "fallback_full",
     reason: "",
   };
-  const done = (decision, reason) => ({ ...evidence, decision, reason });
+  let rerunPaths = [];
+  // The issue 3284 keys appear only when nonempty, so a carry_verdict record stays byte-identical to the older shape (its evidenceDigest is unchanged).
+  const done = (decision, reason) => ({
+    ...evidence, decision, reason,
+    ...(resolutionPaths.length > 0 ? { resolutionPaths } : {}),
+    ...(prHunkDigests && Object.keys(prHunkDigests).length > 0 ? { prHunkDigests } : {}),
+    ...(rerunPaths.length > 0 ? { rerunPaths } : {}),
+  });
 
   if (detectionError) return done("fallback_full", `detection failed: ${detectionError}`);
   if (!FULL_SHA_RE.test(sourceHead ?? "") || !FULL_SHA_RE.test(newHead ?? "") || sourceHead === newHead) {
@@ -117,12 +121,12 @@ export function classifyBaseMergeCarry(input = {}, { ignoreGateTooling = false }
   const moved = changed.filter((p) => !sameHunks(p));
   if (conflictResolutionHunks) {
     if (resolutionPaths.length === 0) return done("full_regate", "merge carries conflict-resolution hunks without resolution paths");
-    evidence.rerunPaths = [...new Set([...resolutionPaths, ...moved])].sort();
+    rerunPaths = [...new Set([...resolutionPaths, ...moved, ...shifted])].sort();
     return done("resolution_delta", "merge carries conflict-resolution hunks; delta review of the resolution hunks, other angles carry");
   }
   if (moved.length > 0) return done("full_regate", "PR hunk changed between heads");
   if (shifted.length > 0) {
-    evidence.rerunPaths = shifted;
+    rerunPaths = shifted;
     return done("partial_carry", "PR hunks identical at both heads; base edits in the same file only shift or surround them");
   }
   if (evidence.pathIntersection.length > 0) return done("full_regate", "base delta overlaps PR paths");
@@ -154,7 +158,8 @@ export function validateBaseMergeCarryEvidence(evidence, { expectedSourceHead, e
   const re = classifyBaseMergeCarry(evidence, { ignoreGateTooling });
   if (re.decision !== evidence.decision) return { ok: false, reason: `decision recomputes to ${re.decision}` };
   for (const k of ["prDiffPaths", "pathIntersection", "gateToolingPaths", "rerunPaths", "reason"]) {
-    if (JSON.stringify(re[k]) !== JSON.stringify(evidence[k] ?? (k === "rerunPaths" ? [] : undefined))) return { ok: false, reason: `${k} does not match recomputed value` };
+    const fallback = k === "rerunPaths" ? [] : undefined;
+    if (JSON.stringify(re[k] ?? fallback) !== JSON.stringify(evidence[k] ?? fallback)) return { ok: false, reason: `${k} does not match recomputed value` };
   }
   return { ok: true, reason: "" };
 }
