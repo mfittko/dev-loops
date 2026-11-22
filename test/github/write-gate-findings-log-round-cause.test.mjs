@@ -143,7 +143,7 @@ const tamper = async (file) => writeFile(file, `${await readFile(file, "utf8")} 
 const retire = async (dir, headSha, extra = {}) => {
   const round = path.join(dir, "retired-gate-rounds", headSha, "r1");
   await mkdir(round, { recursive: true });
-  await writeFile(path.join(round, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: "2026-11-22T00:00:00.000Z", ...extra }));
+  await writeFile(path.join(round, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: new Date().toISOString(), ...extra }));
 };
 
 test("W11 a later head after a clean round is other_head_move", async () => {
@@ -218,5 +218,62 @@ test("W16 a repeated judged write of an earlier round keeps its cause after a la
     await write(dir, B);
     const again = await write(dir, A, { findings: unjudged, judgeVerdict });
     assert.equal(again.log.roundCause, "first");
+  });
+});
+
+const retireAt = async (root, headSha, extra = {}) => {
+  const round = path.join(root, "retired-gate-rounds", headSha, "r1");
+  await mkdir(round, { recursive: true });
+  await writeFile(path.join(round, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: new Date().toISOString(), ...extra }));
+};
+const unjudged = JSON.stringify([{ severity: "low", angle: "scope", summary: "x" }]);
+
+test("W17 a retirement under the checkout tmp or the context root, apart from the ledger root, still gives system_rerun", async () => {
+  for (const place of ["checkout", "context"]) {
+    await withTempDir(async (ledgerRoot) => {
+      await withTempDir(async (checkout) => {
+        await withTempDir(async (contextRoot) => {
+          await clean(ledgerRoot, A);
+          await retireAt(place === "checkout" ? path.join(checkout, "tmp") : contextRoot, B);
+          const result = await writeGateFindingsLog({ ...ID, headSha: B, verdict: "clean", findings: "[]", tmpRoot: ledgerRoot, contextTmpRoot: contextRoot }, { repoRoot: checkout });
+          assert.equal(result.log.roundCause, "system_rerun");
+        });
+      });
+    });
+  }
+});
+
+test("W18 a retirement does not override the same-head digest rule", async () => {
+  await withTempDir(async (dir) => {
+    await writeCtx(dir, A, bodyCtx("1".repeat(64)));
+    await clean(dir, A);
+    await retireAt(dir, A);
+    await writeCtx(dir, A, bodyCtx("2".repeat(64)));
+    assert.equal((await clean(dir, A)).log.roundCause, "body_only");
+  });
+});
+
+test("W19 a retirement recorded before the prior round does not count for a later head", async () => {
+  await withTempDir(async (dir) => {
+    await retireAt(dir, B);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await clean(dir, A);
+    assert.equal((await clean(dir, B)).log.roundCause, "other_head_move");
+  });
+});
+
+test("W20 an unfinished intermediate write between a blocked round and the judged write keeps system_rerun", async () => {
+  await withTempDir(async (dir) => {
+    await write(dir, B, { verdict: "blocked" });
+    assert.equal((await write(dir, B, { findings: unjudged })).log.roundCause, "system_rerun");
+    assert.equal((await write(dir, B)).log.roundCause, "system_rerun");
+  });
+});
+
+test("W21 an unfinished blocked write with findings is no earlier round of itself", async () => {
+  await withTempDir(async (dir) => {
+    assert.equal((await write(dir, A, { verdict: "blocked", findings: unjudged })).log.roundCause, "first");
+    assert.equal((await write(dir, A, { verdict: "blocked", findings: unjudged })).log.roundCause, "first");
+    assert.equal((await write(dir, A)).log.roundCause, "first");
   });
 });

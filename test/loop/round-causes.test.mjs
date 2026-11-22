@@ -336,6 +336,18 @@ test("R14 legacy rounds derive same head, own commit, base-only merge and an unr
   });
 });
 
+test("R14b a legacy same-head round with a changed PR body digest derives body_only", async () => {
+  await withTempDir(async (dir) => {
+    const { a } = legacyRepo(dir);
+    await ledger(dir, 22, a, "2026-11-01T00:00:00.000Z", { prBodySha256: "1".repeat(64) }, 1);
+    await ledger(dir, 22, a, "2026-11-01T01:00:00.000Z", { prBodySha256: "2".repeat(64) });
+    await json(dir, "merged.json", [{ number: 22, mergedAt: "2026-11-05T00:00:00Z" }]);
+    const change = (await run(dir, ["--merged-prs", path.join(dir, "merged.json")])).perChange[0];
+    assert.deepEqual([change.rounds, change.derivedRounds], [2, 2]);
+    assert.deepEqual(change.byCause, { ...ZERO, first: 1, body_only: 1 });
+  });
+});
+
 test("R15 a legacy head contained in the current base after a merge-commit landing is undetermined, not base_refresh", async () => {
   await withTempDir(async (dir) => {
     const { a, b } = legacyRepo(dir, { land: true });

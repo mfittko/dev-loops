@@ -51,9 +51,11 @@ test("T6 a head move after a round without an act item is other_head_move", () =
   assert.equal(deriveRoundCause({ prior: prior(), headSha: B, baseOnly: false }), "other_head_move");
 });
 
-test("T6b a same-head rerun record wins over the prior rules", () => {
+test("T6b a same-head rerun record wins over the no-prior and head-move rules, not the same-head digest rule", () => {
   assert.equal(deriveRoundCause({ prior: undefined, headSha: B, sameHeadRerun: "system_rerun" }), "system_rerun");
   assert.equal(deriveRoundCause({ prior: prior({ findings: [{ judgeDisposition: "act" }] }), headSha: B, sameHeadRerun: "body_only" }), "body_only");
+  assert.equal(deriveRoundCause({ prior: prior({ prBodySha256: D1 }), headSha: A, prBodySha256: D2, sameHeadRerun: "system_rerun" }), "body_only");
+  assert.equal(deriveRoundCause({ prior: prior({ prBodySha256: D1 }), headSha: A, prBodySha256: D1, sameHeadRerun: "body_only" }), "system_rerun");
 });
 
 test("T7 a throwing base probe is called once, never throws and is not base_refresh", async () => {
