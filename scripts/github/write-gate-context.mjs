@@ -2434,21 +2434,22 @@ const fewestUncovered = (coverages) => coverages.reduce((best, c) => (c.uncovere
 
 /**
  * The one coverage read shared by the cap-round proof, extend-cap-round-chain and the reviewer-only refusals: the coverage (`{ uncovered, records }`) of the start that leaves the fewest act refs uncovered, or null when no sealed clearing record starts a chain.
- * `chain` is an already read `{ starts, bridges }`; without it the starts are read here (seeding base-only merges needs `baseRefName`). The bridge alternatives are read up to the 16-combination limit, so past that limit a stale merge record of a chain end can hide a covering one and the coverage fails closed.
+ * `chain` is the required, already read `{ starts, bridges }`. The bridge alternatives are read up to the 16-combination limit, so past that limit a stale merge record of a chain end can hide a covering one and the coverage fails closed.
  */
-export async function capRoundChainCoverage({ capRound, tmpRoot, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, bound = {}, chain }) {
-  const { starts, bridges } = chain ?? await capRoundChainStarts({ tmpRoot, capHead: capRound.log.headSha, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
+export async function capRoundChainCoverage({ capRound, tmpRoot, bound = {}, chain }) {
+  const { starts, bridges } = chain;
   return starts.length === 0 ? null : fewestUncovered(starts.flatMap((s) => bridges.map((bridge) => capRoundCoverage(capRound, tmpRoot, s, { ...bound, bridge }))));
 }
 
 /**
  * Issue 3443: whether the cover run can still let the cap-round chain reach the head. The draft proof needs a chain that reaches the head, so a cover run is useful on a draft PR only while some sealed chain (bridges included) visits the head or ends on its history;
  * a chain whose every end lies off that history and that never visits the head stays short of the head whatever a cover record covers. A chain that visits the head (A..H, then a sealed H..X) reaches it, however far a later record continues. A ready PR (anyHead) accepts the first record whatever its candidate, so it keeps the cover run.
+ * `chain` is the required, already read `{ starts, bridges }`.
  * `onHistory(candidate)` is the caller's history probe (it records an unresolved history for the fetch request).
  */
-export async function coverRunReachesHead({ isDraft, head, onHistory, tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, chain }) {
+export async function coverRunReachesHead({ isDraft, head, onHistory, tmpRoot, capHead, chain }) {
   if (!isDraft) return true;
-  const { ends, candidates } = await clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge, allowUnsealedEnd: true, chain }).catch(() => ({ ends: [], candidates: [] }));
+  const { ends, candidates } = await clearingChainWalk({ tmpRoot, capHead, allowUnsealedEnd: true, chain }).catch(() => ({ ends: [], candidates: [] }));
   return candidates.includes(head) || ends.some((end) => end === head || onHistory(end));
 }
 
