@@ -9,7 +9,9 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { commandContainsInlineInterpreter } from "@dev-loops/core/loop/bash-command-classify";
-import { analyzeTranscript, run } from "../../scripts/loop/check-retro-tooling.mjs";
+import { decideBashGate } from "../../packages/core/src/claude/hook-decisions.mjs";
+import { analyzeCommand, analyzeTranscript, run } from "../../scripts/loop/check-retro-tooling.mjs";
+import { INLINE_INTERPRETER_FORMS } from "../fixtures/inline-interpreter-forms.mjs";
 
 test("retro node verdict matches the shared classifier (#2943)", () => {
   for (const [cmd, bad] of [["node --input-type=module - <<EOF", true], ["node -p 1", true], ["node --require x.js - <<EOF", true], ["node scripts/x.mjs", false]]) {
@@ -55,7 +57,7 @@ test("a bash -c payload is audited per segment", () => {
 test("python and python3 are violations", () => {
   const { violations } = analyzeTranscript("python3 -c 'import json'\npython script.py");
   assert.equal(violations.length, 2);
-  assert.match(violations[0], /^python3:/);
+  assert.match(violations[0], /^inline-interpreter:/);
   assert.match(violations[1], /^python:/);
 });
 
@@ -67,7 +69,7 @@ test("node -e and node --eval are violations; node scripts/x.mjs is not", () => 
   ].join("\n");
   const { violations } = analyzeTranscript(transcript);
   assert.equal(violations.length, 2);
-  assert.ok(violations.every((v) => v.startsWith("node inline:")));
+  assert.ok(violations.every((v) => v.startsWith("inline-interpreter:")));
 });
 
 test("--eval after the script path is a script arg, not inline eval — clean", () => {
@@ -142,9 +144,10 @@ test("env-prefixed, wrapper-prefixed, and path-prefixed raw calls are violations
     ["TIMEOUT 60 gh api foo", "gh"],
     ["timeout .5 gh api foo", "gh"],
     ["timeout 1e3 gh api foo", "gh"],
-    ["NODE_OPTIONS=x node -e 'x'", "node inline"],
+    ["NODE_OPTIONS=x node -e 'x'", "inline-interpreter"],
     ["./node_modules/.bin/gh pr view 1", "gh"],
-    ["/usr/bin/python3 -c 'x'", "python3"],
+    ["/usr/bin/python3 -c 'x'", "inline-interpreter"],
+    ["/usr/bin/python3 script.py", "python3"],
   ];
   for (const [line, tool] of cases) {
     const { violations, internalToolingOnly } = analyzeTranscript(line);
@@ -255,66 +258,71 @@ test("comment-only transcript is analyzed normally", async () => {
   assert.equal(JSON.parse(r.stdout).internalToolingOnly, true);
 });
 
-test("wrapper and substitution forms get one verdict from hook and retro paths; python forms are compared on the hook only (#2943)", () => {
-  const cases = [
-    ["sudo node - <<EOF", true], ["xargs node - <<EOF", true], ["timeout 5 node - <<EOF", true], ["env X=1 nice node -p 1", true],
-    ["X=$(python3 -c \"print(1)\")", true], ["X=`node -e 1`", true], ["python3 -Ic \"print(1)\"", true], ["python3 -IEc \"x\"", true], ["python -Sc \"x\"", true],
-    ["sudo node scripts/x.mjs", false], ["X=$(node scripts/x.mjs)", false], ["python3 -I script.py", false], ["python3 -W error script.py", false], ["python3 -Wc script.py", false], ["node scripts/x.mjs -e", false],
-    ["gh pr comment --body 'the hook missed `node -e 1`'", false], ["git commit -m 'mention $(python3 -c x)'", false], ["echo \"$(date)\"", false],
-    ["echo \"$(python3 -c x)\"", true], ["echo $(echo $(python3 -c x))", true], ["time node -", true], ["nice node -e 1", true],
-    ["echo \"don't\" ; X=$(python3 -c x) ; echo \"it's\"", true], ["gh pr comment 1 --body \"Here's the result: $(python3 -c 'print(1)')\"", true], ["echo \"don't\" `node -e 'x'`", true],
-    ["echo \"don't\" # it's fine", false], ["cat <<EOF\ndon't\nit's\nEOF", false], ["echo 'it is $(python3 -c x)'", false],
-    ["# Don't touch main\nSPEC=$(python3 -c x)\n# Won't retry", true], ["# don't refetch\nSPEC=$(python3 -c \"import json\")\n# it's cached", true], ["cat <<EOF\ndon't\n$(python3 -c x)\nit's\nEOF", true],
-    ["gh pr ready 5", false], ["gh pr ready 5 $(node -e 1)", true], ["gh pr ready 1 `node -e 1`", true], ["X=$(cat <<EOF\ndon't\n$(python3 -c x)\nit's\nEOF)", true], ["X=$(cat <<EOF\ndon't\n$(python3 -c x)\nit's\nEOF\n)", true], ["gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\"", true],
-    ["gh pr comment 1 --body \"$(cat <<'EOF'\nthe hook missed `node -e 1`\nEOF\n)\"", true],
-    ["gh pr comment 1 --body \"the hook missed \\`node -e 1\\`\"", false], ["echo \"\\$(python3 -c x)\"", false], ["X=$(node -e 1)", true], ["echo \"$(echo \"it's\")\" ; X=$(python3 -c x)", true],
-    ["X=$(echo x | node scripts/x.mjs)", false], ["X=$(echo x | node -)", true], ["X=\"$(echo x | node -)\"", true], ["X=`echo x | node -`", true],
-    ["cat <<'END-X'\ndon't\nEND-X\nX=$(python3 -c x)\n# it's", true], ["cat <<END-X\ndon't\nEND-X\nX=$(python3 -c x)\n# it's", true],
-    ["cat <<'END-X'\nuse `node -e 1`\nEND-X", false], ["cat <<'EOF'\nuse `node -e 1`\nEOF", false], ["cat <<EOF\nplain text\nEOF", false],
-    ["gh pr comment 1 --body \"the hook refuses \\`node - <<EOF\\`\"", false], ["git commit -m 'refuse `python3 - <<EOF`'", false],
-    ["X=$(node '-e' 1)", true], ["X=$(node \\-e 1)", true], ["X=$(python3 '-c' x)", true], ["X=$(python3 \\-c x)", true], ["X=$(python3 script.py)", false],
-    ["cat <<'EOF'\nEOF", false], ["cat <<'EOF'\nEOF\nX=$(python3 -c x)\ncat <<'EOF'\nhi\nEOF", true], ["cat <<EOF\nEOF\nX=$(python3 -c x)", true],
-    ["echo \"<<'EOF'\"", false], ["echo \"<<'EOF'\"\n$(python3 -c x)\nEOF", true], ["# <<'EOF'\n$(python3 -c x)\nEOF", true],
-    ["cat <<'A'\n\"\nA\necho \"<<'EOF'\"\n$(python3 -c x)\nEOF", true],
-    ["cat <<A\n\"\nA\necho \"<<'EOF'\"\n$(python3 -c x)\nEOF", true],
-    ["X=$'a\\'b' node scripts/x.mjs", false], ["X=$'\\'' $(python3 -c x) $'\\'''", true],
-    ["cat <<EOF-X\n# $(python3 -c y)\nEOF-X", true], ["cat <<<'x'\necho $(python3 -c y)\nx", true], ["cat <<<\"x\"\necho $(python3 -c y)\nx", true], ["cat <<<'x'\necho `node -e 1`\nx", true], ["cat <<<'x'", false], ["X=$(node scripts/x.mjs)", false],
-    ["cat <<A <<B\nx\nA\ndon't\n$(python3 -c y)\nit's\nB", true],
-  ];
-  for (const [cmd, bad] of cases) {
-    assert.equal(commandContainsInlineInterpreter(cmd), bad, `hook ${cmd}`);
-    if (!/python/.test(cmd) && !cmd.includes("\n") && !/gh pr comment/.test(cmd)) assert.equal(analyzeTranscript(cmd).violations.length > 0, bad, `retro ${cmd}`);
+test("the retro report names every denied and every ceiling fixture row as inline-interpreter, and no other row (#2442)", () => {
+  for (const { command, deny, ceiling } of INLINE_INTERPRETER_FORMS) {
+    const reported = analyzeCommand(command).violations.filter((v) => v.startsWith("inline-interpreter: "));
+    assert.deepEqual(reported, deny || ceiling ? [`inline-interpreter: ${command}`] : [], command);
   }
   const src = readFileSync(fileURLToPath(new URL("../../scripts/loop/check-retro-tooling.mjs", import.meta.url)), "utf8");
-  assert.match(analyzeTranscript("X=$(python3 -c x)").violations[0], /^python3\b/);
-  assert.match(src, /stripLeadingWrappers, tokenizeShellCommand \} from "@dev-loops\/core\/loop\/bash-command-classify"/);
-  // a separator inside a quoted argument does not start a segment (#2442 slice 2), and the hook agrees
-  const quoted = 'node scripts/loop/x.mjs --notes "11 were python3 or node -e; python3 -c denied"';
-  assert.equal(analyzeTranscript(quoted).violations.length, 0);
-  assert.equal(commandContainsInlineInterpreter(quoted), false);
+  assert.match(src, /inlineInterpreterParseError, inlineInterpreterVerdict, isPayloadWord, stripLeadingWrappers, tokenizeShellCommand \} from "@dev-loops\/core\/loop\/bash-command-classify"/);
   assert.doesNotMatch(src, /function stripLeadingWrappers|WRAPPER_BINARIES/);
 });
 
-test("the retro violation label names the matched form, not a python mention elsewhere in the segment (#2943)", () => {
-  assert.match(analyzeTranscript('node -e "x" /opt/python3/bin').violations[0], /^node inline/);
-  assert.match(analyzeTranscript("gh pr ready 5 $(node -e 1) --body python").violations[0], /^node inline/);
-  assert.match(analyzeTranscript("python3 script.py $(node -e 1)").violations[0], /^node inline/);
-  assert.match(analyzeTranscript("node -e 1 $(python3 script.py)").violations[0], /^node inline/);
-  assert.match(analyzeTranscript("X=$(python3 -c x)").violations[0], /^python3/);
-  assert.match(analyzeTranscript("X=$(python -c x)").violations[0], /^python:/);
-  assert.match(analyzeTranscript("X=/opt/python/bin python3 -c x").violations[0], /^python3\b/);
+test("a ceiling row gets a PreToolUse allow with no added output (#2442 decision 4)", () => {
+  const ctx = { repoSlug: "mfittko/dev-loops", inManagedContext: true, managedRepoSlug: "mfittko/dev-loops" };
+  let allowed = 0;
+  for (const { command } of INLINE_INTERPRETER_FORMS.filter((row) => row.ceiling)) {
+    const decision = decideBashGate({ command, ...ctx });
+    // another rule (a wait loop, a raw gh write) may still deny the row; the inline-interpreter rule never does
+    assert.doesNotMatch(decision.reason ?? "", /OPS-NO-INLINE-INTERPRETER/, command);
+    if (decision.decision === "allow") {
+      assert.deepEqual(decision, { decision: "allow" }, command);
+      allowed += 1;
+    }
+  }
+  assert.ok(allowed > 0);
 });
 
-test("retro classification keeps origin/main verdicts for a line with an unterminated quote and for an escaped backtick before a separator (#2442)", () => {
-  // the hook denies incomplete input as a whole command; a per-line transcript entry is never a whole command
-  assert.equal(analyzeTranscript("don't merge yet").violations.length, 0);
-  assert.equal(analyzeTranscript("git commit -m \"$(cat <<'EOF' fix: don't retry EOF )\"").violations.length, 0);
+test("the retro label names a python script call, and the inline form as inline-interpreter (#2943)", () => {
+  assert.match(analyzeTranscript('node -e "x" /opt/python3/bin').violations[0], /^inline-interpreter:/);
+  assert.match(analyzeTranscript("X=$(python3 -c x)").violations[0], /^inline-interpreter:/);
+  assert.match(analyzeTranscript("python3 script.py").violations[0], /^python3:/);
+  assert.match(analyzeTranscript("X=/opt/python/bin python3 script.py").violations[0], /^python3\b/);
+  // a segment slice drops a heredoc body: a python head with a heredoc is still reported as python3
+  for (const command of ["python3 tool.py - <<'E'\nx\nE", "python3 script.py <<EOF\nx\nEOF\necho done"]) {
+    assert.ok(analyzeTranscript(command).violations.some((v) => v.startsWith("python3:")), JSON.stringify(command));
+  }
+  // a python ceiling segment is reported once, as inline-interpreter
+  assert.deepEqual(analyzeTranscript("python3 - <<< x").violations, ["inline-interpreter: python3 - <<< x"]);
+});
+
+test("retro classification of an unterminated quote and an escaped backtick before a separator (#2442)", () => {
+  // input that does not parse is a gate deny (ADR 0276), so the retro reports it
+  assert.deepEqual(analyzeTranscript("don't merge yet").violations, ["inline-interpreter: don't merge yet"]);
   assert.match(analyzeTranscript("echo \\` ; python3 x.py").violations[0], /^python3\b/);
+});
+
+test("retro joins a multi-line command: heredoc body lines and apostrophe-split message lines are not reported (#2442)", () => {
+  assert.deepEqual(analyzeTranscript("cat > tmp/f.md <<'EOF'\nnode -e 'x'\npython3 -c y\nEOF\ngit status").violations, []);
+  assert.deepEqual(analyzeTranscript("git commit -m \"fix: don't run\nnode -e x\nit's denied\"\ngit status").violations, []);
+  assert.deepEqual(analyzeTranscript("git commit -m 'fix: the hook\ndenies node -e x\n'").violations, []);
+  // a joined command is still classified as a whole
+  assert.deepEqual(analyzeTranscript("cat > src/a.mjs <<'EOF'\nx\nEOF").violations, ["inline-interpreter: cat > src/a.mjs <<'EOF'\nx\nEOF"]);
+  // a line that never closes stays one entry
+  assert.deepEqual(analyzeTranscript("don't merge yet\ngit status").violations, ["inline-interpreter: don't merge yet"]);
 });
 
 test("retro splitter traverses command substitution (#2442)", () => {
   assert.match(analyzeTranscript('echo "$(true; gh pr list)"').violations[0], /^gh:/);
   assert.match(analyzeTranscript('echo "$(true; python3 script.py)"').violations[0], /^python3:/);
+});
+
+test("an unclosed line joins at most 200 lines and is reported (join cap)", () => {
+  // the closing quote sits beyond the cap: inside the cap the three parts would join into one entry
+  const { violations } = analyzeTranscript(['echo "a', ...Array.from({ length: 248 }, () => "ls"), '"'].join("\n"));
+  assert.equal(violations[0], 'inline-interpreter: echo "a');
+  assert.ok(violations.includes('inline-interpreter: "'));
+  assert.ok(violations.every((v) => v.split("\n").length <= 200));
 });
 
 test("--transcript accepts several Claude Code session transcripts and extracts their Bash commands", async () => {
@@ -346,10 +354,11 @@ test("a heredoc body is dropped only for a data host; a quote-blind or arithmeti
     assert.equal(JSON.parse(r.stdout).internalToolingOnly, false, JSON.stringify(command));
     assert.ok(JSON.parse(r.stdout).rawCallViolations.some((v) => v === gh || v.startsWith("unproven heredoc:")), JSON.stringify(command));
   }
-  for (const command of ["cat <<'EOF'\ngh api repos/o/r\nEOF", "tee out <<EOF\ngh text\nEOF"]) {
-    const r = await runCli(["--json"], sessionLine(command));
-    assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, [], JSON.stringify(command));
-  }
+  const clean = await runCli(["--json"], sessionLine("cat <<'EOF'\ngh api repos/o/r\nEOF"));
+  assert.deepEqual(JSON.parse(clean.stdout).rawCallViolations, []);
+  // a `tee` heredoc writes a file: an OPS-NO-INLINE-INTERPRETER ceiling case, reported as inline-interpreter, never as a raw gh call
+  const tee = await runCli(["--json"], sessionLine("tee out <<EOF\ngh text\nEOF"));
+  assert.deepEqual(JSON.parse(tee.stdout).rawCallViolations, ["inline-interpreter: tee out <<EOF\nx\nEOF"]);
 });
 
 test("a heredoc that is not provably data fails closed: mid-line #, nested heredoc, escaped substitution after #", async () => {

@@ -36,6 +36,7 @@
       "dependencies": {
         "@secretlint/core": "14.0.0",
         "@secretlint/secretlint-rule-preset-recommend": "13.1.0",
+        "sh-syntax": "0.8.7",
         "yaml": "^2.9.0",
         "zod": "^4.4.3",
       },
@@ -305,6 +306,8 @@
     "safe-buffer": ["safe-buffer@5.2.1", "", {}, "sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ=="],
 
     "semver": ["semver@7.8.0", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-AcM7dV/5ul4EekoQ29Agm5vri8JNqRyj39o0qpX6vDF2GZrtutZl5RwgD1XnZjiTAfncsJhMI48QQH3sN87YNA=="],
+
+    "sh-syntax": ["sh-syntax@0.8.7", "", {}, "sha512-zaJUdXFCbDFgtREm3KiqvX3dBlngGY0tumPzHvC5RqX67UuaBLIIZqb16MCbYLGyk5rPYrM+5FlghF+w6WdVUw=="],
 
     "shebang-command": ["shebang-command@2.0.0", "", { "dependencies": { "shebang-regex": "^3.0.0" } }, "sha512-kHxr2zZpYtdmrN1qDjrrX/Z1rR1kG8Dx+gkpK1G4eXmvXswmcE1hTWBWYUzlraYw1/yZp6YuDY77YtvbN0dmDA=="],
 

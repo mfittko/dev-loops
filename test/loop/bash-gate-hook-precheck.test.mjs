@@ -175,7 +175,10 @@ for (const command of [
 ]) {
   test(`PR/issue body write is denied for every Claude actor: ${command}`, async () => {
     await withManagedRepo(async (root) => {
-      denyForEveryActor(root, command, /ADR-TRIPWIRE-STANDING-WAIVER/);
+      // The decider decides first, and ADR 0276 makes it deny an `env -S` split string and a brace-expanded head
+      // (`{gh,x}`) as unreadable commands, so those carry its reason; the body-write token rule would deny them too.
+      const decidedFirst = /^env\s(?:\S+\s)*?(?:-[A-Za-z]*S|--split-string)|^\{gh,x\}/.test(command);
+      denyForEveryActor(root, command, decidedFirst ? /OPS-NO-INLINE-INTERPRETER/ : /ADR-TRIPWIRE-STANDING-WAIVER/);
     });
   });
 }
@@ -194,7 +197,6 @@ test("non-body writes and reads remain allowed", async () => {
       "nice -n 5 gh pr edit 5 --add-label needs-review",
       "time -p gh pr view 5 --json body",
       "gh pr view 5",
-      "env -S'gh pr view 5'",
       "setsid gh pr view 5",
       "gh pr list",
       "gh issue view 5",

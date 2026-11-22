@@ -300,7 +300,16 @@ const COMMENT_REASON =
   "OPERATOR-OWNED-LINE: this command holds the tokens of a raw GitHub comment or review write (gh, issue or pr, comment and a body or editor flag; pr review and a body flag; close or reopen with a comment flag; or a gh api graphql addComment, updateIssueComment or addPullRequestReview mutation, or a REST issues comment write; a `$'...'` ANSI-C word in a command that holds one of the comment, review, close or reopen words is denied too, because the decoded flag is not judged), so it is blocked for every actor. " +
   "Post a new comment with `dev-loops-run scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <f>` and edit one with `dev-loops-run scripts/github/edit-comment.mjs`. " +
   "To read comments, use `gh pr view <n> --json comments`.";
-const decision = decideBashGate(bashGateFacts);
+let decision;
+try {
+  decision = decideBashGate(bashGateFacts);
+} catch (error) {
+  // a classifier throw must not exit the hook nonzero (every guard would fail open): deny in a managed repo (ADR 0276)
+  if (inManagedContext) {
+    emitDeny(`OPS-NO-INLINE-INTERPRETER: the inline-interpreter classifier failed (${error?.message ?? error}), so the gate cannot read this command. Use the editor tools (Write/Edit under Claude Code, write/edit under Pi).`);
+  }
+  decision = { decision: "allow" }; // outside a managed repo the guards pass through; the single emitAllow below ends the hook
+}
 // The decider decides first. Only the decider's raw write denies (the body-write rule and the generic subagent external write deny) are replaced by the comment reason;
 // a registered rule such as COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY keeps its own remedy.
 if (decision.decision === "deny") {

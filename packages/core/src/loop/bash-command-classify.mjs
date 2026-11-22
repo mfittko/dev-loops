@@ -7,6 +7,7 @@
  *
  * Pure and side-effect free.
  */
+import { parseShell, shellOperators, walkShell } from "./shell-ast.mjs";
 
 /**
  * The dev-loops repo itself. Retained ONLY for the Pi extension's
@@ -1572,7 +1573,7 @@ export function commandContainsTimeoutWrappedSanctionedTool(command) {
 }
 
 /** Wrapper binaries whose first argument is the real command to classify. */
-const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command", "nohup", "exec", "stdbuf", "setsid", "ionice", "busybox"]);
+const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command", "nohup", "exec", "stdbuf", "setsid", "ionice", "busybox", "builtin"]);
 // A bare wrapper flag (`-n`, `--user`) takes the next word as its argument, unless that word is itself the command.
 const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS, "timeout", "gtimeout", "sleep"]);
 // The decision-recorder scan also keeps a launcher word after a bare wrapper flag (`sudo -n node ...`). The shared set leaves it out so `sudo -u node node -e` still shifts the user name.
@@ -1616,80 +1617,6 @@ export function stripLeadingWrappers(segment, flagTargets = WRAPPER_FLAG_TARGETS
   return s;
 }
 
-/** Build a `node`/`python`/`python3` command-head matcher (env/wrapper/path prefix tolerated). */
-function interpreterRegex(bin) {
-  return new RegExp(`^${SHELL_EXEC_PREFIX}${bin}(?:\\s|$)`, "i");
-}
-
-// Bare `-` stdin script, or a heredoc token (`<<EOF`, `-<<EOF`, or one attached to a flag: `-I<<EOF`).
-const isStdinScriptToken = (t) => /^-[)`"]*$/.test(t) || t.startsWith("<<") || (t.startsWith("-") && t.includes("<<")) || (REDIRECTION_RE.test(t) && t.includes("<<"));
-// A redirection token (`2>&1`, `2>/dev/null`, `>out`, `&>x`) between flags and the heredoc is not the script path. Returns how many tokens to skip: 0 (not a redirection), 1, or 2 (operator alone, its target is the next token).
-const REDIRECTION_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)/;
-const REDIRECTION_OPERATOR_ONLY_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)$/;
-const redirectionSkip = (t) => (!t.includes("<<") && REDIRECTION_RE.test(t) ? (REDIRECTION_OPERATOR_ONLY_RE.test(t) ? 2 : 1) : 0);
-const QUOTE_AWARE_TOKEN_RE = /(?:\\.|\$'(?:\\.|[^'\\])*'|[^\s'"\\]|'[^']*'|"(?:\\.|[^"\\])*")+/g; // `\\.` first: an escaped character never opens or closes a quoted span
-// The shell removes quotes and backslash escapes before the interpreter sees an argument, so `'-e'`, `"--eval"` and `\-e` are the flags `-e`/`--eval`. Normalize each token the same way before any flag or stdin check.
-const unshellToken = (t) => t.replace(/\\(.)|\$'((?:\\.|[^'\\])*)'|'([^']*)'|"((?:\\.|[^"\\])*)"/g, (_m, a, d, b, c) => a ?? d?.replace(/\\(.)/g, "$1") ?? b ?? c.replace(/\\(.)/g, "$1")); // `$'...'` is ANSI-C quoting: one word, backslash escapes unescaped
-const unshellTokens = (code) => (code.match(QUOTE_AWARE_TOKEN_RE) ?? []).map(unshellToken);
-const SCRIPT_EXT_RE = /\.(?:[cm]?js|[cm]?ts)$/;
-// Closed allow-list of known boolean node flags: the token after one is the script, not a value. Any unlisted `--flag` is treated as value-taking (the refusing direction), so a new value-taking flag can never slip through as boolean.
-const NODE_BOOLEAN_FLAGS = new Set(["--no-warnings", "--no-deprecation", "--trace-warnings", "--trace-deprecation", "--trace-uncaught", "--enable-source-maps", "--experimental-vm-modules", "--experimental-strip-types", "--experimental-transform-types", "--experimental-detect-module", "--experimental-require-module", "--experimental-websocket", "--experimental-sqlite", "--experimental-permission", "--permission", "--watch", "--expose-gc", "--abort-on-uncaught-exception", "--pending-deprecation", "--throw-deprecation", "--no-experimental-fetch"]);
-
-/**
- * Blank literal shell text with same-length spaces so offsets in `out` index the input: comments,
- * backslash-escaped characters and single-quoted/ANSI-C (`$'...'`, where a backslash escapes the
- * next character) spans. `quoted[i]` is true when char i sits in a quote or comment outside any `$(...)` (a literal context); `open` is
- * true when a single quote is left unclosed.
- * @param {string} text @returns {{ out: string, quoted: boolean[], open: boolean }}
- */
-function scanShellText(text) {
-  const out = [];
-  const quoted = [];
-  let quote = "";
-  let subDepth = 0; // open `$(` count inside the current double quotes: a live command context
-  const emit = (ch, q) => { out.push(ch); quoted.push(q); };
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (quote === "'" || quote === "$'") {
-      if (c === "\\" && quote === "$'") { emit(" ", true); if (i + 1 < text.length) emit(" ", true); i++; }
-      else if (c === "'") { quote = ""; emit("'", true); }
-      else emit(" ", true);
-    } else if (c === "#" && quote === "" && (i === 0 || /[\s;&|(]/.test(text[i - 1]))) { // an unquoted `#` at word start is a comment up to the end of the line
-      for (; i < text.length && text[i] !== "\n"; i++) emit(" ", true);
-      i--;
-    } else if (c === "\\") { emit(" ", true); if (i + 1 < text.length) emit(" ", true); i++; }
-    else if (c === "'" && quote === "") { quote = out[out.length - 1] === "$" ? "$'" : "'"; emit("'", true); }
-    else {
-      if (c === '"') { quote = quote === '"' ? "" : '"'; subDepth = 0; }
-      else if (quote === '"') subDepth += c === "(" && text[i - 1] === "$" ? 1 : c === ")" && subDepth > 0 ? -1 : 0;
-      emit(c, c === '"' || (quote === '"' && subDepth === 0));
-    }
-  }
-  return { out: out.join(""), quoted, open: quote === "'" || quote === "$'" };
-}
-
-/**
- * OPS-NO-INLINE-INTERPRETER: an inline interpreter — `node -e`/`--eval`/`-p`, `python3 -c`, or a
- * heredoc fed to node/python (`node - <<EOF`, `python3 - <<EOF`). Sanctioned output parsing uses
- * `--jq`/`--silent`, never an inline interpreter. Actor-independent (bars both coordinator and
- * agent flows). A script-path head (running a `.mjs` file, `python3 script.py`) does not match by itself, but a non-data heredoc body it reads is scanned.
- * Malformed input (`tokenizeShellCommand(...).incomplete`) fails closed. Data heredoc
- * bodies (`dataHeredocs`) are blanked before the scan, and quoted text is inert only in a segment that passes `inertQuoteSegment`.
- * @param {string} command @returns {boolean}
- */
-export function commandContainsInlineInterpreter(command) {
-  // Checked on the whole command only: the recursive substitution slices below are cut mid-construct on purpose.
-  const tok = tokenizeShellCommand(command);
-  return tok.incomplete || scanInlineInterpreter(blankDataHeredocs(command, tok));
-}
-
-/** Sentence (with a leading space) for the deny reason when the cause is malformed input, else "": it names the class so the agent can fix the quoting. */
-export function inlineInterpreterDenyDetail(command) {
-  return tokenizeShellCommand(command).incomplete
-    ? " The command has an unterminated quote, $( or backtick substitution, heredoc, or substitution nesting that is too deep (incomplete tokenization), so the gate cannot tell data from code. Close the construct or write the file with the editor tool."
-    : "";
-}
-
 /**
  * Whether the quoted words of segment S are inert text. A quoted word is inert only behind a text head or a repo script runner; any other head keeps its quoted words visible (origin/main's raw split), so `git bisect run 'x; node -e y'` is still seen.
  * The head must be the bare name (no path, no env prefix) and the command must define no function, since either can rebind the name to a program that runs its quoted words.
@@ -1697,136 +1624,360 @@ export function inlineInterpreterDenyDetail(command) {
  */
 function inertQuoteSegment(tok, s) {
   const [h = "", arg = ""] = s.words.filter((w) => !w.op).map((w) => w.value);
-  return tok.segments.length === 1 && !s.pipedOut && writeTargets(s).length === 0 && !h.includes("/") && !s.words.some((w) => /\$\(|`|[<>]\(|\$\{[\s|]/.test(w.raw.replaceAll("\\\n", ""))) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
+  return tok.segments.length === 1 && !s.pipedOut && writeTargets(s).length === 0 && !h.includes("/") && !s.words.some((w) => /\$\(|`|[<>]\(|\$\{[\s|]/.test(joinContinuations(w.raw))) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
 }
 
+// A redirection token (`2>&1`, `2>/dev/null`, `>out`, `&>x`) is not a command word. Returns how many tokens to skip: 0 (not a redirection), 1, or 2 (operator alone, its target is the next token). Read by the sleep-loop predicates, not by the inline-interpreter gate.
+const REDIRECTION_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)/;
+const REDIRECTION_OPERATOR_ONLY_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)$/;
+const redirectionSkip = (t) => (!t.includes("<<") && REDIRECTION_RE.test(t) ? (REDIRECTION_OPERATOR_ONLY_RE.test(t) ? 2 : 1) : 0);
+
+/** Interpreter heads covered by OPS-NO-INLINE-INTERPRETER (issue 2442 item 10). `deno` stays uncovered. */
+const INTERPRETER_HEAD_RE = /^(?:node|bun|python3?|perl|ruby)$/;
+/** Heads that run a file: a heredoc-written file run by one of them in the same command is denied. */
+const FILE_RUNNER_HEAD_RE = /^(?:node|bun|python3?|perl|ruby|sh|bash|dash|ksh|zsh|\.|source)$/;
+/** A path in its comparison form: lowercased (a case-insensitive file system), `//` and `/./` collapsed, no leading `./`. */
+const normPath = (p) => {
+  const out = [];
+  for (const seg of p.toLowerCase().split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === ".." && out.length && out.at(-1) !== "..") out.pop();
+    else out.push(seg);
+  }
+  return (p.startsWith("/") ? "/" : "") + out.join("/");
+};
+/** TEXT without its line continuations: a backslash-newline joins lines unless its backslash is itself escaped (an even run before it). */
+const joinContinuations = (text) => text.replace(/(?<!\\)((?:\\\\)*)\\\n/g, "$1");
+/** node and bun flags whose next word is the flag's value, never the script (the origin/main 99bb8b3ce lists). */
+const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type", "--title", "--disable-warning", "--watch-path", "--redirect-warnings", "--env-file-if-exists", "--test-reporter", "--report-dir", "--diagnostic-dir", "--cpu-prof-dir", "--heap-prof-dir", "--snapshot-blob", "--test-reporter-destination", "--localstorage-file", "--openssl-config", "--icu-data-dir", "--tls-keylog", "--experimental-config-file", "--experimental-sea-config", "--trace-event-file-pattern"]);
+const BUN_VALUE_FLAGS = new Set(["--cwd", "--env-file", "-r", "--preload", "--require", "--import", "-c", "--config", "--tsconfig-override", "--define", "-d", "--loader", "-l", "--port", "--conditions", "--console-depth"]);
+/** node and bun long flags known to be boolean: the word after one is the script. Any other `--flag` takes a value (the refusing direction). */
+const NODE_BOOLEAN_FLAGS = new Set(["--no-warnings", "--no-deprecation", "--trace-warnings", "--trace-deprecation", "--trace-uncaught", "--enable-source-maps", "--experimental-vm-modules", "--experimental-strip-types", "--experimental-transform-types", "--experimental-detect-module", "--experimental-require-module", "--experimental-websocket", "--experimental-sqlite", "--experimental-permission", "--permission", "--watch", "--expose-gc", "--abort-on-uncaught-exception", "--pending-deprecation", "--throw-deprecation", "--no-experimental-fetch"]);
+const BUN_BOOLEAN_FLAGS = new Set(["--silent", "--bun", "--watch", "--hot", "--smol", "--no-install", "--if-present", "--no-clear-screen"]);
+/** A word that is the script after an unlisted `--flag`: it has a script extension or is path-like. */
+const SCRIPT_WORD_RE = /\.(?:[cm]?js|[cm]?ts)$|^\.|^[^/]+\//;
+const PRELOAD_FLAG_RE = /^(?:-r|--require|--import|--loader|--experimental-loader|--preload)$/;
+
 /**
- * Command segments and nested texts for the interpreter scan. A complete tokenization yields one text per unquoted-separator segment plus
- * the executable nested texts (payload words after `-c`/`--command`/`eval` or a `<<<` here-string, and every heredoc body, which is blank
- * when `blankDataHeredocs` removed it). Incomplete input (mid-construct slices) falls back to the line/operator split.
+ * Classify one interpreter flag word: "code" (inline code), "inplace" (in-place edit), "value" (the next word is
+ * its value), "long" (an unlisted node/bun `--flag`: the next word is its value unless it reads as the script) or
+ * null (a plain flag, a python `-m` included).
  */
-function interpreterScanParts(command) {
-  const tok = tokenizeShellCommand(command);
-  if (tok.incomplete) return { segments: shellSegments(command), nested: [] };
-  const segments = tok.segments.filter((s) => s.words.length).flatMap((s) => { const text = command.slice(s.words[0].start, s.words.at(-1).end); return inertQuoteSegment(tok, s) ? [text] : shellSegments(text); });
-  const nested = [];
-  const bodies = (segs) => segs.forEach((seg) => { seg.heredocs.forEach((h) => nested.push(h.body)); seg.words.forEach((w) => w.subs.forEach((sub) => bodies(sub.segments))); }); // the substitution slices cut quoted-delimiter bodies out, so read every heredoc body from the token tree
-  bodies(tok.segments);
-  for (const { words } of tok.segments) words.forEach((w, k) => { if (isPayloadWord(words, k)) nested.push(w.value); });
-  return { segments, nested };
+function interpreterFlag(head, t) {
+  if (head === "node" || head === "bun") {
+    if (/^-[ep]|^--(?:eval|print)(?:=|$)/.test(t)) return "code";
+    if ((head === "node" ? NODE_VALUE_FLAGS : BUN_VALUE_FLAGS).has(t)) return "value";
+    return t.startsWith("--") && !t.includes("=") && !(head === "node" ? NODE_BOOLEAN_FLAGS : BUN_BOOLEAN_FLAGS).has(t) ? "long" : null;
+  }
+  if (head.startsWith("python")) return /^-[BEIOPRSUVbdhiqsuvx]*c/.test(t) ? "code" : /^-[BEIOPRSUVbdhiqsuvx]*[WXm]$|^--check-hash-based-pycs$/.test(t) ? "value" : null; // `-m x -c y` and `-m x <<EOF` deny on purpose (review 5912982100): the module word is the flag's value, and `-c` or a stdin heredoc after it still reads as code (origin/main allowed both)
+  if (t.startsWith("--")) return null;
+  // perl and ruby: walk the short-flag cluster; a letter that takes an argument ends it
+  const argLetters = head === "perl" ? "IMmxdD" : "IrCEFxT";
+  for (let k = 1; k < t.length; k++) {
+    if (head === "perl" && ("CF".includes(t[k]) || (t[k] === "V" && t[k + 1] === ":"))) return null; // -C, -F and `-V:` take an attached value (`-Cio`, `-Fi`, `-V:intsize`): its letters are no `e`/`i` flags; a bare `-V` is a flag and the cluster goes on (`-Ve x`)
+    if (head === "ruby" && t[k] === "W") { k += /^(?:\d+|:[\w-]+)?/.exec(t.slice(k + 1))[0].length; continue; } // `-W2`, `-W:no-deprecated`: the level or category ends, the cluster goes on (`-We`)
+    if (head === "ruby" && t[k] === "K") { k++; continue; } // `-Ku`: one encoding letter, then the cluster goes on (`-Kue`)
+    if (argLetters.includes(t[k])) return k === t.length - 1 && "IMmrCEF".includes(t[k]) ? "value" : null;
+    if (t[k] === "e" || (head === "perl" && t[k] === "E")) return "code";
+    if (t[k] === "i") return "inplace";
+  }
+  return null;
 }
 
 /**
- * The token-level interpreter scan (no incomplete-input check; `commandContainsInlineInterpreter` adds that and the data-heredoc blanking).
- * Shared with the retro-tooling transcript check, which calls it per transcript segment.
+ * The closed-list form of an interpreter command (ARGS are the words after the head; STDIN holds the source offsets of its
+ * fd-0 heredoc and here-string redirects): "code", "inplace", "heredoc" (a stdin heredoc), "herestring" (a `<<<` stdin script and no
+ * other form), "dash" (a `-` stdin script with no heredoc), "stdin" (no script: the interpreter reads stdin) or null (a script runs).
+ * OUT receives the script word and, with `out.loaded`, the preload values.
+ */
+function interpreterForm(head, args, { heredoc = Infinity, herestring = Infinity }, out = {}) {
+  let here = false; // a here-string came before the current word
+  for (let k = 0; k < args.length; k++) {
+    const { value: t, start } = args[k];
+    if (heredoc < start) return "heredoc";
+    here ||= herestring < start;
+    if (t === "-") return heredoc < Infinity ? "heredoc" : "dash"; // later words are script arguments
+    if (head === "bun" && t === "run") continue;
+    if (!t.startsWith("-")) { out.script = args[k]; return here ? "herestring" : null; }
+    if (t === "--") continue; // origin/main keeps scanning past `--`, so `node -- -e x` stays denied
+    const attached = out.loaded && /^--(?:require|import|loader|experimental-loader|preload)=(.+)$/.exec(t);
+    if (attached) out.loaded.push({ value: attached[1] }); // an attached preload value is code that runs too
+    const flag = interpreterFlag(head, t);
+    if (flag === "code" || flag === "inplace") return flag;
+    const next = args[k + 1];
+    if (flag === "value" && next) { if (out.loaded && PRELOAD_FLAG_RE.test(t)) out.loaded.push(next); k++; } // a preload flag value is code that runs
+    // shortcut: a relative path value after an unlisted path-valued `--flag` reads as the script (allow), as on origin/main; list such a flag.
+    if (flag === "long" && next && !next.value.startsWith("-") && !SCRIPT_WORD_RE.test(next.value)) k++;
+  }
+  return heredoc < Infinity ? "heredoc" : herestring < Infinity ? "herestring" : "stdin";
+}
+
+/** Whether `sed`/`gsed` ARGS edit in place (`-i`, `-i.bak`, a cluster holding `i`, `--in-place`). */
+function sedInPlace(args) {
+  for (let k = 0; k < args.length; k++) {
+    const t = args[k].value;
+    if (t === "--") return false;
+    if (/^--in-place(?:=|$)/.test(t)) return true;
+    if (/^--(?:expression|file|line-length)$/.test(t)) { k++; continue; }
+    if (!/^-[^-]/.test(t)) continue;
+    for (let j = 1; j < t.length; j++) {
+      if (t[j] === "i") return true;
+      if ("efl".includes(t[j])) { if (j === t.length - 1) k++; break; } // the rest of the word, or the next word, is the value
+    }
+  }
+  return false;
+}
+
+/** Whether `awk`/`gawk` ARGS load the inplace extension (`-i inplace`, `-iinplace`, `--include=inplace`). */
+function awkInPlace(args) {
+  const INPLACE = /^inplace(?:\.awk)?$/;
+  for (let k = 0; k < args.length; k++) {
+    const t = args[k].value;
+    if (/^(?:-i|--include=)inplace(?:\.awk)?$/.test(t) || ((t === "-i" || t === "--include") && INPLACE.test(args[k + 1]?.value ?? ""))) return true;
+    if (/^(?:-[ifvFe]|--(?:include|file|assign|field-separator|source))$/.test(t)) { k++; continue; }
+    if (/^--source=/.test(t)) continue;
+    if (!t.startsWith("-") || t === "--") return false; // the program text: later words are operands
+  }
+  return false;
+}
+
+const DEVICE_TARGETS = new Set(["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"]);
+
+/** A temp path: it has a `tmp/` segment, the last `tmp/` is not followed by `worktrees`, and it has no `..` and no variable. */
+function isTempPath(path) {
+  const at = path.lastIndexOf("tmp/");
+  return at >= 0 && (at === 0 || path[at - 1] === "/") && !path.slice(at + 4).startsWith("worktrees") && !/(?:^|\/)\.\.(?:\/|$)/.test(path) && !path.includes("$");
+}
+
+/** The text of a parsed word: quotes and backslashes removed, every expansion read as `$`. Returns `{ value, start, quoted }`. */
+function wordOf(word) {
+  const text = (p) => (p.type === "Lit" ? p.value.replace(/\\(.)/gs, "$1") : p.type === "SglQuoted" ? p.value : p.type === "DblQuoted" ? p.parts.map(text).join("") : p.type === "ParamExp" ? `$${p.param?.value ?? ""}` : "$");
+  const dynamic = (p) => (p.type === "DblQuoted" ? p.parts.some(dynamic) : p.type !== "Lit" && p.type !== "SglQuoted");
+  // bash expands the head word before it looks the command up: ANSI-C quoting and unquoted `{ * ? [` (brace and pathname expansion) can spell any binary name
+  // a brace needs a comma or `..` inside to expand, so a literal `{}` stays a name
+  const bare = word.parts.map((p) => (p.type === "Lit" ? p.value.replace(/\\./gs, "") : "\0")).join("");
+  const expandsToName = word.parts.some((p) => p.type === "SglQuoted" && p.dollar) || /[*?[]|\{[^}]*(?:,|\.\.)[^}]*\}/.test(bare);
+  return { value: word.parts.map(text).join(""), start: word.start, procSubsts: word.parts.filter((p) => p.type === "ProcSubst"), quoted: word.parts.some((p) => p.type === "SglQuoted" || p.type === "DblQuoted"), expandsToName, dynamic: word.parts.some(dynamic) };
+}
+
+/** Whether WORDS is `env` with a split-string option (`-S`, a cluster holding `S`, `--split-string`): env runs its operand as a command line the gate cannot read, so it denies. */
+function envSplitString(words) {
+  let w = words;
+  while (ENV_ASSIGNMENT_WORD_RE.test(w[0]?.value ?? "")) w = w.slice(1);
+  if ((w[0]?.value ?? "").split("/").pop() !== "env") return false;
+  for (let i = 1; i < w.length; i++) {
+    const { value } = w[i];
+    const cluster = /^-([A-Za-z]+)(.*)$/s.exec(value);
+    if (cluster) {
+      // walk the leading letter run: `S` before a value-taking letter splits (it takes the rest of the word, `-S'node -e x'`); the rest of the word after `u`, `C`, `P` or `a` is that option's value (`-uSSH_AUTH_SOCK`)
+      const letters = cluster[1];
+      const stop = letters.search(/[uCPa]/);
+      if (letters.slice(0, stop < 0 ? undefined : stop).includes("S")) return true;
+      if (stop === letters.length - 1 && !cluster[2]) i++; // the value letter ends the word: its value is the next word
+      continue;
+    }
+    if (/^--split-string(=|$)/.test(value)) return true;
+    if (/^(?:--(?:unset|chdir|argv0))$/.test(value)) i++; // the option's value is the next word
+    else if (!value.startsWith("-")) return false;
+  }
+  return false;
+}
+
+const DURATION_WORD_RE = /^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?$/i;
+/** WORDS from the command head on: env assignments, `timeout [options] DURATION` and the `WRAPPER_BINARIES` with their flags are skipped (`stripLeadingWrappers` on a word list, so no quote ever pairs across words). */
+function stripWordWrappers(words) {
+  for (let w = words; ;) {
+    while (ENV_ASSIGNMENT_WORD_RE.test(w[0]?.value ?? "")) w = w.slice(1);
+    const head = (w[0]?.value ?? "").split("/").pop();
+    let rest;
+    if (/^g?timeout$/i.test(head)) {
+      let i = 1;
+      for (let v; (v = w[i]?.value) !== undefined && /^-{1,2}[\w-]+(?:=.*)?$/.test(v); i++) if (!v.includes("=") && DURATION_WORD_RE.test(w[i + 2]?.value ?? "") && !w[i + 1].value.startsWith("-")) i++; // an option value, when a duration follows it
+      rest = DURATION_WORD_RE.test(w[i]?.value ?? "") ? w.slice(i + 1) : [];
+    } else if (WRAPPER_BINARIES.has(head)) {
+      if (envSplitString(w)) return w; // stop at the `env -S` word: `visit` denies it
+      rest = w.slice(1);
+      while (rest[0]?.value.startsWith("-")) {
+        const bare = /^(?:-[A-Za-z]|--[\w-]+)$/.test(rest[0].value);
+        rest = rest.slice(1);
+        if (bare && rest.length > 1 && !rest[0].value.startsWith("-") && !WRAPPER_FLAG_TARGETS.has(rest[0].value.replace(/^.*\//, ""))) rest = rest.slice(1);
+      }
+    }
+    if (!rest?.length) return w;
+    w = rest;
+  }
+}
+
+/** WORDS from the command head on by the `SHELL_EXEC_PREFIX` reading: env assignments, `command`, `exec` and `env` with its option forms (`env -i node`), in any case. */
+function stripExecPrefix(words) {
+  for (let w = words; ;) {
+    while (ENV_ASSIGNMENT_WORD_RE.test(w[0]?.value ?? "")) w = w.slice(1);
+    const head = (w[0]?.value ?? "").toLowerCase();
+    if (head === "command" || head === "exec" || head === "builtin") { w = w.slice(1); continue; }
+    if (head !== "env") return w;
+    w = w.slice(1);
+    for (let v; (v = w[0]?.value) !== undefined;) {
+      if (ENV_ASSIGNMENT_WORD_RE.test(v) || /^(?:-i|--ignore-environment|--|-|-[uCS].+|--(?:unset|chdir|split-string)=.*)$/.test(v)) w = w.slice(1);
+      else if (/^(?:-[uCS]|--(?:unset|chdir|split-string))$/.test(v)) w = w.slice(2);
+      else break;
+    }
+  }
+}
+
+/** Index in TAIL (the words from the head on) of the first word the shell runs as command text: the words after `eval`, a `-c` cluster, `git -x`/`--exec`, or every argument of `watch`/`trap`. Text readers (`TEXT_CONSUMER_RE`) have none. */
+function payloadStart(tail, head) {
+  if (/^(?:watch|trap)$/.test(head)) return 1;
+  if (TEXT_CONSUMER_RE.test(head)) return Infinity;
+  const at = tail.findIndex((w) => w.value === "eval" || EXEC_FLAG_RE.test(w.value) || (head === "git" && /^(?:-x|--exec(?:=.*)?)$/.test(w.value)));
+  return at < 0 ? Infinity : at + (tail[at].value.startsWith("--exec=") ? 0 : 1);
+}
+
+/** Heads whose quoted arguments are inert text when the command is one simple command (`inertQuoteSegment`'s list). */
+const TEXT_HEAD_RE = /^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/;
+const WRITE_REDIRECTS = ["RdrOut", "AppOut", "RdrInOut", "RdrClob", "AppClob", "RdrAll", "RdrAllClob", "AppAll"];
+
+/**
+ * One walk over every simple command of COMMAND's syntax tree (substitutions, process substitution, function bodies, `case` arms,
+ * `coproc` and unquoted heredoc bodies included; a quoted-delimiter heredoc body is inert text). The command head is read from the
+ * parsed word list after env assignments and wrappers. Returns `{ deny, ceiling, parseError }`:
+ * deny when a closed-list form (issue 2442 item 10) sits in a simple command, or when the text does not parse;
+ * with REPORT, ceiling when a form sits where the gate does not read: a pipe or `-`/here-string stdin into an interpreter, a payload word
+ * (`-c`, `eval`, `watch`, a here-string), a heredoc body or quoted word that a non-inert command carries.
+ * SKIP_FIRST ignores the first simple command (the first command of a quoted word is text, a later one follows a separator).
+ */
+function inspectShell(command, report = false, skipFirst = false) {
+  const parsed = parseShell(command);
+  if (parsed.error) {
+    // every parse failure denies: bash runs the lines before a syntax error, so a text match on the head would fail open (ADR 0276)
+    return { deny: true, ceiling: false, parseError: parsed.error.message };
+  }
+  const { redir: R, binCmd: B } = shellOperators();
+  const out = { deny: false, ceiling: false, parseError: null };
+  const pipedOut = new Set(); // statements that feed a pipe
+  const pipeSource = new Map(); // a statement fed by a pipe -> its feeder
+  const written = []; // lowercased paths that a cat/tee heredoc writes
+  const ends = (s, side) => (s.cmd?.type === "BinaryCmd" ? ends(s.cmd[side], side) : s);
+  const isHeredoc = (r) => r.op === R.Hdoc || r.op === R.DashHdoc;
+  const isStdinText = (r) => isHeredoc(r) || r.op === R.WordHdoc; // a heredoc or here-string: the text a cat/tee writes
+  const formIn = (text, skip) => { const r = inspectShell(text, false, skip); return r.deny && r.parseError === null; }; // prose that does not parse holds no closed-list form
+  const alone = parsed.file.stmts.length === 1 && parsed.file.stmts[0].cmd?.type === "CallExpr"; // the whole command is one simple command
+  const runChecks = []; // write-then-run checks, run once the walk ends: a backgrounded or piped runner before the write runs after it
+  // a `<(...)` holding a heredoc or here-string, among an interpreter's words, is text it runs as a script or preload (origin/main denied every such word)
+  const procHeredoc = (w) => (w?.procSubsts ?? []).some((p) => { let hit = false; walkShell(p, (n) => { if (n.type === "Stmt" && (n.redirs ?? []).some(isStdinText)) hit = true; return !hit; }); return hit; });
+  let depth = 0; // open substitutions
+  let skipping = skipFirst;
+  const visit = (node, stmt) => {
+    const words = node.args.map(wordOf);
+    const redirs = stmt.redirs ?? [];
+    const stdin = {}; // any fd: `node --stack-size 2000<<EOF` reads `2000<<` as an fd redirect, which origin/main denied
+    for (const r of redirs) { if (isHeredoc(r)) stdin.heredoc ??= r.start; else if (r.op === R.WordHdoc) stdin.herestring ??= r.start; }
+    const tails = [stripWordWrappers(words), stripExecPrefix(words)].filter((t) => t.length);
+    if (skipping) { skipping = false; return; }
+    if (tails.some(envSplitString)) out.deny = true;
+    for (const tail of tails) {
+      // a head that bash expands first (ANSI-C quote, brace/glob) can name any binary: deny. A parameter expansion or substitution in the head is a reported ceiling.
+      if (tail[0].expandsToName && tail[0].value.split("/").pop() !== "[") out.deny = true;
+      if (tail[0].dynamic) out.ceiling = true;
+      const head = tail[0].value.split("/").pop().toLowerCase();
+      const args = tail.slice(1);
+      const form = INTERPRETER_HEAD_RE.test(head) ? interpreterForm(head, args, stdin) : null;
+      if (form === "code" || form === "inplace" || form === "heredoc" || (/^g?sed$/.test(head) && sedInPlace(args)) || (/^g?awk$/.test(head) && awkInPlace(args))) out.deny = true;
+      if (form === "dash" || form === "herestring" || (form === "stdin" && pipeSource.has(stmt))) out.ceiling = true;
+      // only the script word of a runner runs the file; a written file later in the args is data (`node s.mjs --body-file tmp/b.md`)
+      const script = { loaded: [] };
+      if (INTERPRETER_HEAD_RE.test(head)) { interpreterForm(head, args, stdin, script); if (args.some(procHeredoc) || redirs.some((r) => (r.op === R.RdrIn || r.op === R.RdrInOut) && (!r.n || r.n.value === "0") && procHeredoc(wordOf(r.word)))) out.deny = true; }
+      else if (FILE_RUNNER_HEAD_RE.test(head)) { // sh/bash/zsh: skip `-o`/`-O`/`+o`/`+O` option values and `+x` words
+        for (let k = 0; k < args.length; k++) {
+          if (/^[-+][A-Za-z]*[oO]$/.test(args[k].value)) { k++; continue; } // a cluster ending in o (`-euo pipefail`) takes the next word as its value
+          if (!/^[-+]/.test(args[k].value)) { script.script = args[k]; break; }
+        }
+      }
+      // `sh < tmp/r.sh`, `node < tmp/r.mjs`: with no script word, a stdin redirect is the script, for every runner
+      const stdinFile = redirs.find((r) => (r.op === R.RdrIn || r.op === R.RdrInOut) && (!r.n || r.n.value === "0"));
+      if (FILE_RUNNER_HEAD_RE.test(head) && !script.script && stdinFile) script.script = wordOf(stdinFile.word);
+      // compared when the command ends: bash expands the substitutions in its words first, so a heredoc write in one of them comes before the run
+      const isWritten = (w) => !!w && written.includes(normPath(w.value));
+      runChecks.push(() => { if (isWritten(tail[0]) || isWritten(script.script) || script.loaded.some(isWritten)) out.deny = true; });
+      // a tee that receives a pipe from a cat heredoc segment is the heredoc write (other heads write their own output, not the heredoc)
+      const feeder = pipeSource.get(stmt);
+      const fed = head === "tee" && feeder?.cmd?.type === "CallExpr" && feeder.redirs.some(isStdinText) && feeder.cmd.args.some((a) => wordOf(a).value.split("/").pop().toLowerCase() === "cat");
+      if (/^(?:cat|tee)$/.test(head) && (redirs.some(isStdinText) || fed)) {
+        // a redirect of another fd than 1 (`2>err.log`) is no heredoc write; `>&2` duplicates a descriptor; only an exact device name is no file write
+        const targets = [...redirs.filter((r) => WRITE_REDIRECTS.some((n) => r.op === R[n]) && (!r.n || r.n.value === "1")).map((r) => wordOf(r.word).value), ...(head === "tee" ? args.filter((a) => !a.value.startsWith("-")).map((a) => a.value) : [])]
+          .filter((t) => t && !/^\d+$|^-$/.test(t)).map((t) => t.replace(/^\.\//, "")).filter((t) => !DEVICE_TARGETS.has(t));
+        written.push(...targets.map(normPath));
+        if (targets.some((t) => !isTempPath(t) || !isTempPath(normPath(t)))) out.deny = true;
+      }
+    }
+    if (!report || out.deny) return;
+    // ceiling: text the gate does not read. A cat/tee heredoc of a one-statement command is data; every other body, payload word and quoted word is read again as shell.
+    const head0 = (tails[0]?.[0].value ?? "").split("/").pop().toLowerCase();
+    const dataHost = alone && depth === 0 && !pipedOut.has(stmt) && node.assigns.length === 0 && /^(?:\/bin\/|\/usr\/bin\/)?(?:cat|tee)$/.test(words[0]?.value);
+    const heredocBody = (r) => (isHeredoc(r) && r.hdoc?.parts.every((p) => p.type === "Lit") ? r.hdoc.parts.map((p) => p.value).join("") : null);
+    // a heredoc that never reaches its delimiter has no readable body (origin/main denied it as incomplete)
+    const unterminated = (r) => isHeredoc(r) && (!r.hdoc || (r.hdoc.parts.length > 0 && !(r.hdoc.parts.at(-1).type === "Lit" && r.hdoc.parts.at(-1).value.endsWith("\n"))));
+    // a body is data when a top-level `gh` takes it unpiped (a PR or issue comment body; bash expands only `$()`, backticks and `${}` in it, and the walk reads those); any other host may write then run it, so its body stays read as shell
+    // shortcut: only `gh` is a data head, widen the head set when another body-taking CLI shows up as a ceiling false positive
+    // body-taking subcommands only: any other `gh` subcommand (`gh alias set --shell`) can run its body as shell
+    const ghData = /^(?:pr (?:comment|create|edit|review)|issue (?:comment|create|edit)|api)$/.test((tails[0] ?? []).slice(1).filter((w) => !w.value.startsWith("-")).slice(0, 2).map((w) => w.value).join(" ").replace(/^api .*/, "api"));
+    const bodyIsShell = !(head0 === "gh" && ghData && depth === 0 && !pipedOut.has(stmt));
+    // a shell that reads a here-string built by a substitution runs text the gate cannot see
+    if (FILE_RUNNER_HEAD_RE.test(head0) && redirs.some((r) => r.op === R.WordHdoc && wordOf(r.word).dynamic)) out.ceiling = true;
+    if (redirs.some(unterminated) || (!dataHost && bodyIsShell && redirs.some((r) => heredocBody(r) !== null && formIn(heredocBody(r), false)))) out.ceiling = true;
+    const tail0 = tails[0] ?? [];
+    const from = words.length - tail0.length + payloadStart(tail0, head0);
+    const hereWords = TEXT_CONSUMER_RE.test(head0) ? [] : redirs.filter((r) => r.op === R.WordHdoc).map((r) => wordOf(r.word));
+    if ([...words.slice(from), ...hereWords].some((w) => formIn(w.value, false))) out.ceiling = true;
+    const inert = alone && depth === 0 && !pipedOut.has(stmt) && !pipeSource.has(stmt) && node.assigns.length === 0 && !redirs.some((r) => WRITE_REDIRECTS.some((n) => r.op === R[n])) && !words[0]?.value.includes("/") && (TEXT_HEAD_RE.test(words[0]?.value) || (/^(?:node|bun)$/.test(words[0]?.value) && words[1]?.value.startsWith("scripts/")));
+    const quoted = [...words.slice(0, from), ...node.assigns.map((a) => ({ ...(a.value ? wordOf(a.value) : { value: "" }), quoted: true }))].filter((w) => w.quoted);
+    if (!inert && quoted.some((w) => formIn(w.value, true))) out.ceiling = true;
+  };
+  walkShell(parsed.file, {
+    enter(node, parent) {
+      if (out.deny && !report) return false;
+      if (node.type === "CmdSubst" || node.type === "ProcSubst") depth++;
+      if (node.type === "BinaryCmd" && (node.op === B.Pipe || node.op === B.PipeAll)) { pipedOut.add(ends(node.x, "y")); pipeSource.set(ends(node.y, "x"), ends(node.x, "y")); }
+      if (node.type === "CallExpr" && parent?.type === "Stmt") visit(node, parent);
+      return true;
+    },
+    exit(node) {
+      if (node.type === "CmdSubst" || node.type === "ProcSubst") depth--;
+    },
+  });
+  for (const check of runChecks) check();
+  return out;
+}
+
+/** `inspectShell` on COMMAND and, when it holds a backslash-newline, on the text with each one removed: bash joins `$\`+newline+`(` into a live substitution that the parser reads as text. */
+function inspect(command, report = false) {
+  const first = inspectShell(command, report);
+  if (first.deny || !command.includes("\\\n")) return first;
+  const joined = inspectShell(joinContinuations(command), report);
+  return joined.deny ? joined : first;
+}
+
+/**
+ * OPS-NO-INLINE-INTERPRETER: whether the gate denies COMMAND (`inspectShell`): a closed-list form in any simple command of its syntax tree.
+ * Actor-independent. Ceiling cases are allowed; `inlineInterpreterVerdict` reports them for `check-retro-tooling`.
  * @param {string} command @returns {boolean}
  */
-export function scanInlineInterpreter(command) {
-  // Token-level, not a shell parser: text after each `$(` and inside backtick pairs is checked as a command too.
-  // Literal text is blanked for this scan only (the per-segment check below keeps the raw text): quoted-delimiter heredoc bodies in this regex pass (the nested pass in `interpreterScanParts` rescans every body `dataHeredocs` does not classify as data), single-quoted spans outside double quotes, and backslash-escaped characters.
-  // ponytail: ceiling: nested quote context inside `$(...)`, process substitution `<(...)` and subshell `(...)` are not covered; stripLeadingWrappers skips a bare wrapper flag plus its argument by heuristic, so a flag whose argument is not the next word (`env -i grep sleep`, `sudo -E echo sleep` inside a loop) is denied (fails closed, known ceiling).
-  // An unquoted-delimiter heredoc body keeps `$(` live but its quotes and `#` are literal: blank them so apostrophes never pair.
-  // The delimiter is any unquoted shell word. A heredoc operator these regexes do not consume (a second heredoc on one line, an unusual delimiter) fails closed below.
-  // A heredoc operator counts as consumed only when it is unquoted and outside a comment (`echo "<<'EOF'"` and `# <<'EOF'` are literal text): any other `<<` fails closed below.
-  // Quote state is scanned over the text already emitted (earlier heredoc bodies removed), so a quote character inside an earlier body never desynchronizes a later operator.
-  const replaceUnquoted = (text, re, onMatch) => {
-    let out = "";
-    let last = 0;
-    for (const m of text.matchAll(re)) {
-      out += text.slice(last, m.index);
-      out += scanShellText(`${out}<`).quoted[out.length] ? m[0] : (consumed++, onMatch(m));
-      last = m.index + m[0].length;
-    }
-    return out + text.slice(last);
-  };
-  let consumed = 0;
-  // One left-to-right pass handles both forms, so a quote character in an earlier unquoted-delimiter body never desynchronizes the quote state of a later operator.
-  // Bash closes `<<` on an unindented delimiter line; `<<-` strips leading tabs only. Each form has its own alternatives (groups 1-6 for `<<-`, 7-12 for `<<`; quoted head/quote/delimiter, then unquoted head/delimiter/body).
-  const heredocForm = (g, op, ind) => `((?<!<)<<${op}\\s*(['"])([^\\s'"<>|;&()\\\\]+)\\${g + 2}[^\\n]*\\n)(?:[\\s\\S]*?\\n)??${ind}\\${g + 3}(?=\\)|\\n|$)|((?<!<)<<${op}\\s*([^\\s'"<>|;&()\\\\]+)[^\\n]*\\n)([\\s\\S]*?)(?=(?:(?<=\\n)|\\n)${ind}\\${g + 5}(?:\\)|\\n|$))`;
-  const blank = (s) => s.replace(/\\\n/g, "").replace(/['"#]/g, " "); // an unquoted heredoc joins backslash-newline lines, so `$\` + newline + `(` is a live `$(`
-  const noHeredoc = replaceUnquoted(command, new RegExp(`${heredocForm(0, "-", "\\t*")}|${heredocForm(6, "(?!-)", "")}`, "g"), (m) => m[1] ?? (m[4] === undefined ? m[7] ?? m[10] + blank(m[12]) : m[4] + blank(m[6]))); // quoted: body optional, an empty body closes on the first terminator line
-  // An operator with no later newline has no body to hide, so a single-line mention (quoted text, arithmetic) keeps the blanked scan. ponytail: a multi-line command that quotes `<<` still fails closed.
-  const heredocOperators = (noHeredoc.match(/(?<!<)<<(?!<)(?=[^\n]*\n)/g) ?? []).length;
-  // `unquoted` has the same length as `base`, so offsets found in it slice `base` (the text with quotes intact).
-  let base = noHeredoc;
-  const scanned = scanShellText(noHeredoc);
-  let unquoted = scanned.out;
-  if (heredocOperators > consumed) base = unquoted = command; // an unconsumed heredoc operator (nested/second heredoc): fail closed, scan the raw text
-  else if (scanned.open) unquoted = noHeredoc; // unclosed single quote (nested quote context): fail closed, scan the unblanked text
-  const starts = [];
-  for (let i = unquoted.indexOf("$("); i !== -1; i = unquoted.indexOf("$(", i + 2)) starts.push(i + 2);
-  const ticks = [];
-  for (let i = unquoted.indexOf("`"); i !== -1; i = unquoted.indexOf("`", i + 1)) ticks.push(i);
-  const subs = [
-    ...starts.map((s, k) => base.slice(s, k + 1 < starts.length ? starts[k + 1] - 2 : undefined)),
-    ...ticks.filter((_, k) => k % 2 === 0).map((t, k) => base.slice(t + 1, ticks[2 * k + 1]).replace(/\\([`$\\])/g, "$1")), // bash unescapes \` \$ \\ in a backtick body
-  ];
-  if (subs.some((sub) => scanInlineInterpreter(sub))) return true;
-  const { segments, nested } = interpreterScanParts(command);
-  if (nested.some((text) => scanInlineInterpreter(text))) return true;
-  // The raw head keeps the env-option forms; the stripped head adds sudo/xargs/timeout.
-  return segments.flatMap((segment) => [segment, stripLeadingWrappers(segment)]).some((s) => {
-    if (interpreterRegex("node").test(s)) {
-      const code = s.replace(interpreterRegex("node"), "").trim();
-      const tokens = unshellTokens(code); // quote-aware: a quoted option value with spaces stays one token
-      // ponytail: closed list of value flags. an unlisted `--long value` flag fails closed: a non-flag token that follows a `--flag` (not `--`, no `=`) is skipped as its value and the scan continues, unless it ends in a script extension (.js/.mjs/.cjs/.ts/.mts/.cts) and so is the script. A relative path-like token (starts with `.` or has a non-leading `/`) is the script, not a value. Path-valued flags (--report-dir, --diagnostic-dir, --cpu-prof-dir, ...) are on the closed list so a relative value is skipped. Ceiling: a relative path value after an UNLISTED path-valued long flag is read as the script (fail-open); a bare extensionless name or absolute path after a boolean long flag is still read as a value.
-      // Node value-taking flags (short + long) each consume the following token. Consuming them lets
-      // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
-      // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value.
-      const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type", "--title", "--disable-warning", "--watch-path", "--redirect-warnings", "--env-file-if-exists", "--test-reporter", "--report-dir", "--diagnostic-dir", "--cpu-prof-dir", "--heap-prof-dir", "--snapshot-blob", "--test-reporter-destination", "--localstorage-file", "--openssl-config", "--icu-data-dir", "--tls-keylog", "--experimental-config-file", "--experimental-sea-config", "--trace-event-file-pattern"]);
-      for (let i = 0; i < tokens.length; i++) {
-        const t = tokens[i];
-        if (isStdinScriptToken(t)) return true;
-        // `-e`/`-p` may be directly attached to the code (`node -e"console.log(1)"`), which a
-        // prefix match catches; break at the first non-flag token so a later `-e` on a script path
-        // is a script argument.
-        if (t === "-e" || t.startsWith("-e") || t === "--eval" || t.startsWith("--eval=") || t === "-p" || t.startsWith("-p")) return true;
-        const skip = redirectionSkip(t);
-        if (skip) { if (skip === 2 && tokens[i + 1]?.includes("<<")) return true; i += skip - 1; continue; }
-        if (!t.startsWith("-")) {
-          const prev = tokens[i - 1];
-          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !NODE_BOOLEAN_FLAGS.has(prev) &&!SCRIPT_EXT_RE.test(stripSurroundingQuotes(t.split("<<")[0])) && !/^\.|^[^/]+\//.test(t)) { if (t.includes("<<")) return true; continue; } // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
-          break; // script path reached — a later `-e` is a script argument
-        }
-        if (NODE_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
-      }
-    }
-    if (interpreterRegex("python3?").test(s)) {
-      const code = s.replace(interpreterRegex("python3?"), "").trim();
-      const tokens = unshellTokens(code); // quote-aware: a quoted option value with spaces stays one token
-      const PYTHON_VALUE_FLAGS = new Set(["-W", "-X", "--check-hash-based-pycs"]);
-      for (let i = 0; i < tokens.length; i++) {
-        const t = tokens[i];
-        if (isStdinScriptToken(t)) return true;
-        if (t === "-c" || t.startsWith("-c") || /^-[BEIOPRSUVbdhiqsuvx]+c/.test(t)) return true; // boolean-flag cluster ending in c (-Ic, -IEc); -W/-X value flags are not in the set
-        const skip = redirectionSkip(t);
-        if (skip) { if (skip === 2 && tokens[i + 1]?.includes("<<")) return true; i += skip - 1; continue; }
-        if (!t.startsWith("-")) break; // script path reached — a later `-c` is a script argument
-        if (PYTHON_VALUE_FLAGS.has(t) || /^-[A-Za-z]*[WX]$/.test(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
-      }
-    }
-    if (interpreterRegex("bun").test(s)) {
-      const tokens = unshellTokens(s.replace(interpreterRegex("bun"), "").trim());
-      const BUN_VALUE_FLAGS = new Set(["--cwd", "--env-file", "-r", "--preload", "--require", "--import", "-c", "--config", "--tsconfig-override", "--define", "-d", "--loader", "-l", "--port", "--conditions"]);
-      const BUN_BOOLEAN_FLAGS = new Set(["--silent", "--bun", "--watch", "--hot", "--smol", "--no-install", "--if-present", "--no-clear-screen"]); // the token after one is the script/subcommand, not a value
-      for (let i = 0; i < tokens.length; i++) {
-        const t = tokens[i];
-        if (isStdinScriptToken(t)) return true;
-        if (/^(?:-e|-p|--eval|--print)(?:=|$)/.test(t) || /^-[ep]./.test(t)) return true;
-        const skip = redirectionSkip(t);
-        if (skip) { if (skip === 2 && tokens[i + 1]?.includes("<<")) return true; i += skip - 1; continue; }
-        if (!t.startsWith("-")) {
-          const prev = tokens[i - 1];
-          if (t === "run") continue; // `bun run` takes the same flags: keep scanning so `-e`/`-p`/`--bun -` after it are caught
-          // ponytail: unlisted `--flag value` fails closed like node: skip the value token unless it is a script or path-like.
-          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !BUN_BOOLEAN_FLAGS.has(prev) && !SCRIPT_EXT_RE.test(stripSurroundingQuotes(t.split("<<")[0])) && !/^\.|^[^/]+\//.test(t)) { if (t.includes("<<")) return true; continue; }
-          break; // subcommand or script path reached (`bun run x`, `bun test`)
-        }
-        if (BUN_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; }
-      }
-    }
-    return false;
-  });
+export function commandContainsInlineInterpreter(command) {
+  return inspect(command).deny;
+}
+
+/**
+ * The verdict for COMMAND: "deny" when the gate denies it, "ceiling" when the gate allows a form it does not read (reported after the fact), else "allow".
+ * @param {string} command @returns {"deny"|"ceiling"|"allow"}
+ */
+export function inlineInterpreterVerdict(command) {
+  const { deny, ceiling } = inspect(command, true);
+  return deny ? "deny" : ceiling ? "ceiling" : "allow";
+}
+
+/** The parse error message when the gate denies COMMAND because it does not parse, else null. */
+export function inlineInterpreterParseError(command) {
+  const { deny, parseError } = inspectShell(command);
+  return deny ? parseError : null;
 }
 
 /**

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 import os from "node:os";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -183,6 +184,22 @@ test("the committed .claude tree is byte-reproducible from the canonical sources
   );
 });
 
+test("the vendored sh-syntax files equal the pinned package byte for byte, main.wasm included (ADR 0276)", () => {
+  const core = path.join(repoRoot, "packages/core/package.json");
+  const root = path.dirname(createRequire(core).resolve("sh-syntax/package.json"));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version, JSON.parse(fs.readFileSync(core, "utf8")).dependencies["sh-syntax"], "the installed version is the exact pin");
+  const prefix = ".claude/hooks/_vendor/sh-syntax/";
+  const vendored = collectGeneratedAssets({ repoRoot }).filter((a) => a.target.startsWith(prefix));
+  assert.deepEqual(vendored.map((a) => a.target.slice(prefix.length)).sort(), ["LICENSE", "lib/internal-XxXM9y_8.cjs", "lib/sync/index.cjs", "main.wasm", "vendors/wasm_exec.cjs"]);
+  for (const asset of vendored) {
+    const file = asset.target.slice(prefix.length);
+    assert.ok(Buffer.from(asset.content).equals(fs.readFileSync(path.join(root, file))), `${file} generated from the package`);
+    assert.ok(fs.readFileSync(path.join(repoRoot, asset.target)).equals(fs.readFileSync(path.join(root, file))), `${file} committed copy`);
+  }
+  // the bundled adapter requires the vendored entry through a relative specifier
+  assert.match(fs.readFileSync(path.join(repoRoot, ".claude/hooks/_shell-ast.mjs"), "utf8"), /require\("\.\/_vendor\/sh-syntax\/lib\/sync\/index\.cjs"\)/);
+});
+
 test("checkAssets flags an orphaned committed asset with no generating source", () => {
   // Simulate a consumer tree: write the real generated assets, then plant a stale file
   // that no source produces. checkAssets must report it as `orphaned`.
@@ -200,6 +217,26 @@ test("checkAssets flags an orphaned committed asset with no generating source", 
     fs.writeFileSync(orphan, "stale\n", "utf8");
     const drifted = checkAssets(assets, { repoRoot: tmpRoot });
     assert.deepEqual(drifted, [{ target: ".claude/agents/stale-removed.md", reason: "orphaned" }]);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("checkAssets flags a stray file under the vendored sh-syntax tree (#2442)", () => {
+  // a vendored file has no generator banner: after an upgrade renames the internal module, the old copy must still be reported
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-assets-vendor-orphan-"));
+  try {
+    for (const dir of ["agents", "skills"]) {
+      fs.cpSync(path.join(repoRoot, dir), path.join(tmpRoot, dir), { recursive: true });
+    }
+    const assets = collectGeneratedAssets({ repoRoot: tmpRoot });
+    writeAssets(assets, { repoRoot: tmpRoot });
+    assert.deepEqual(checkAssets(assets, { repoRoot: tmpRoot }), [], "freshly written tree must be clean");
+
+    const stray = path.join(tmpRoot, ".claude", "hooks", "_vendor", "sh-syntax", "lib", "internal-stale.cjs");
+    fs.mkdirSync(path.dirname(stray), { recursive: true });
+    fs.writeFileSync(stray, "stale\n", "utf8");
+    assert.deepEqual(checkAssets(assets, { repoRoot: tmpRoot }), [{ target: ".claude/hooks/_vendor/sh-syntax/lib/internal-stale.cjs", reason: "orphaned" }]);
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }

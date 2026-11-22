@@ -8,7 +8,7 @@
  * gone through internal dev-loops tooling:
  *   - `gh ...` (incl. `gh api`, `gh ... --jq`)
  *   - `python` / `python3`
- *   - `node` inline interpreter forms (`-e`/`--eval`/`-p`, stdin `-`, heredoc)
+ *   - the OPS-NO-INLINE-INTERPRETER forms (tool `inline-interpreter`)
  *
  * These three are the same breach: reaching past the dev-loops tooling to read
  * or parse tool output with a raw call. The verifier returns the list of
@@ -39,9 +39,10 @@
  *   - `gh ...` at the start of a command segment (start of line, or after
  *     `&&`, `||`, `|`, `;`) that is not in the write-op allowlist.
  *   - `python` / `python3` at the start of a command segment.
- *   - `node` inline interpreter (`-e`/`--eval`/`-p`, stdin `-`, heredoc; the OPS-NO-INLINE-INTERPRETER forms) at the start of a command segment.
- *   - a `node` or `python`/`python3` inline form inside `$(...)` or backticks anywhere in a segment
- *     (`X=$(node -e 1)`), reported with the `node inline`, `python3` or `python` label.
+ *   - `inline-interpreter`: a command the Bash gate denies under OPS-NO-INLINE-INTERPRETER (input that does not
+ *     parse and a closed-list form inside a substitution included), or a ceiling case it allows (a form inside
+ *     quotes, a payload or a heredoc body, a pipe into an interpreter), from the shared `inlineInterpreterVerdict`.
+ *     One entry per command.
  *
  * Head normalization (before classifying a segment, fail-closed):
  *   - strips leading `NAME=value ` env-assignment prefixes (`GH_TOKEN=x gh api`)
@@ -62,14 +63,17 @@ import { readFileSync } from "node:fs";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
-import { isPayloadWord, scanInlineInterpreter, stripLeadingWrappers, tokenizeShellCommand } from "@dev-loops/core/loop/bash-command-classify";
+import { inlineInterpreterParseError, inlineInterpreterVerdict, isPayloadWord, stripLeadingWrappers, tokenizeShellCommand } from "@dev-loops/core/loop/bash-command-classify";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+
+const MAX_JOIN_LINES = 200;
 
 const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>]... [--json]
 
 Reads a newline-delimited transcript of agent shell commands, or Claude Code
-session transcripts (JSONL), from each --transcript or stdin and reports agent-level raw gh/python/node -e calls (internal-tooling-only
-rule, issue #982).
+session transcripts (JSONL), from each --transcript or stdin and reports agent-level
+raw gh and python calls (internal-tooling-only rule, issue #982), plus every
+OPS-NO-INLINE-INTERPRETER form and ceiling case as inline-interpreter.
 
 Options:
   --transcript <path>   Repeatable. A file of newline-delimited commands, or a Claude Code session
@@ -115,32 +119,23 @@ function splitSegments(line) {
 }
 
 /**
- * Classify a single command segment.
+ * Classify a single command segment for the raw gh and python calls (inline-interpreter forms are reported per command).
  * @returns {{ kind: "violation"|"allowedWriteOp"|"clean", tool?: string }}
  */
 function classifySegment(rawSegment) {
-  // The shared matcher runs first, so an allowed head (`gh pr ready 5 $(node -e 1)`) never hides a substitution from it.
-  if (scanInlineInterpreter(rawSegment)) {
-    // The label names the matched form: a python head (plain, wrapped, or at the head of a substitution), else node inline.
-    // Each candidate (the head up to its first substitution, and each substitution body) must itself hit the matcher, so a python script call beside a node hit never labels python.
-    const candidates = [rawSegment.split(/\$\(|`/)[0], ...[...rawSegment.matchAll(/(?:\$\(|`)([^)`]*)/g)].map((m) => m[1])];
-    // The digit comes from the stripped head that matched, never from a python path earlier in the raw text.
-    const py = candidates.map((c) => (/^(?:\S*\/)?python(3?)\b/.exec(stripLeadingWrappers(c.trim())) ?? [])[1]).find((d, i) => d !== undefined && scanInlineInterpreter(candidates[i]));
-    return { kind: "violation", tool: py === undefined ? "node inline" : `python${py}` };
-  }
   const segment = stripLeadingWrappers(rawSegment);
-  // `node scripts/....mjs` (or any script path) is allowed tooling; only inline
-  // eval forms are violations. Check node first so script invocations pass.
-  if (/^node\b/.test(segment)) {
-    return scanInlineInterpreter(segment) ? { kind: "violation", tool: "node inline" } : { kind: "clean" };
-  }
   if (/^gh\b/.test(segment)) {
     if (ALLOWED_WRITE_OPS.some((re) => re.test(segment))) {
       return { kind: "allowedWriteOp", tool: "gh" };
     }
     return { kind: "violation", tool: "gh" };
   }
-  if (/^python3?\b/.test(segment)) {
+  // a python segment the gate denies or reports as a ceiling is already reported as inline-interpreter
+  // (a segment slice drops a heredoc body, so a slice holding a heredoc reads as unterminated: it counts only when denied and parsed)
+  // shortcut: a `<<` heredoc anywhere in the slice stays reported as python3, even when the ceiling is real, as the slice cannot tell; list the case if it shows up
+  const verdict = inlineInterpreterVerdict(rawSegment);
+  const reported = inlineInterpreterParseError(rawSegment) === null && (verdict === "deny" || (verdict === "ceiling" && !/(?<!<)<<(?!<)/.test(rawSegment)));
+  if (/^python3?\b/.test(segment) && !reported) {
     return { kind: "violation", tool: /^python3\b/.test(segment) ? "python3" : "python" };
   }
   return { kind: "clean" };
@@ -150,7 +145,27 @@ function classifySegment(rawSegment) {
 const UNPROVEN_HEREDOC = "\u0000unproven-heredoc:";
 
 /**
- * Analyze a transcript of newline-delimited shell commands.
+ * Analyze one whole command: an `inline-interpreter` violation for every form the Bash gate denies and every ceiling
+ * case it allows (OPS-NO-INLINE-INTERPRETER, `inlineInterpreterVerdict`), plus the raw gh and python calls per segment.
+ * @param {string} command
+ * @returns {{ violations: string[], allowedWriteOps: string[] }}
+ */
+export function analyzeCommand(command) {
+  const violations = inlineInterpreterVerdict(command) === "allow" ? [] : [`inline-interpreter: ${command}`];
+  const allowedWriteOps = [];
+  for (const segment of splitSegments(command)) {
+    const result = classifySegment(segment);
+    if (result.kind === "violation") {
+      violations.push(`${result.tool}: ${segment}`);
+    } else if (result.kind === "allowedWriteOp") {
+      allowedWriteOps.push(segment);
+    }
+  }
+  return { violations, allowedWriteOps };
+}
+
+/**
+ * Analyze a transcript of newline-delimited shell commands. Lines that continue an incomplete command are joined to it.
  *
  * @param {string} transcript
  * @returns {{ violations: string[], allowedWriteOps: string[], internalToolingOnly: boolean }}
@@ -159,21 +174,27 @@ export function analyzeTranscript(transcript) {
   const violations = [];
   const allowedWriteOps = [];
   const lines = String(transcript ?? "").split(/\r?\n/);
-  for (const raw of lines) {
-    const line = raw.trim();
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i].trim();
     if (line.length === 0 || line.startsWith("#")) continue;
     if (line.startsWith(UNPROVEN_HEREDOC)) {
       violations.push(`unproven heredoc: ${line.slice(UNPROVEN_HEREDOC.length)}`);
       continue;
     }
-    for (const segment of splitSegments(line)) {
-      const result = classifySegment(segment);
-      if (result.kind === "violation") {
-        violations.push(`${result.tool}: ${segment}`);
-      } else if (result.kind === "allowedWriteOp") {
-        allowedWriteOps.push(segment);
+    // A multi-line command (a heredoc body, a quoted message across lines) is one entry: join lines until the tokenizer reads it completely.
+    // One line never holds a heredoc body, so a heredoc operator opens a multi-line command too.
+    // shortcut: a line that never closes stays a single entry, but a later unpaired apostrophe can close it and absorb the lines between; upgrade to a delimited transcript format if that misfires.
+    const tok = tokenizeShellCommand(line);
+    if (tok.incomplete || tok.segments.some((s) => s.heredocs.length > 0)) {
+      // the join window is capped so an unclosed line costs a bounded number of re-tokenizations
+      for (let j = i + 1; j < Math.min(lines.length, i + MAX_JOIN_LINES); j++) {
+        const joined = lines.slice(i, j + 1).join("\n").trim();
+        if (!tokenizeShellCommand(joined).incomplete) { line = joined; i = j; break; }
       }
     }
+    const result = analyzeCommand(line);
+    violations.push(...result.violations);
+    allowedWriteOps.push(...result.allowedWriteOps);
   }
   return { violations, allowedWriteOps, internalToolingOnly: violations.length === 0 };
 }
@@ -221,7 +242,8 @@ function collapseCommand(command) {
     for (const h of dropped.sort((x, y) => y.bodyStart - x.bodyStart)) {
       // An empty body with an empty delimiter puts bodyEnd on the delimiter line's own newline; any other bodyEnd precedes the delimiter line.
       const end = text.indexOf("\n", h.delimiter === "" && h.bodyEnd === h.bodyStart ? h.bodyEnd : h.bodyEnd + 1);
-      text = text.slice(0, h.bodyStart) + (end === -1 ? "" : text.slice(end));
+      // A placeholder body and the delimiter line stay so the heredoc remains closed and non-empty (an empty body is an inline-interpreter ceiling case) for the line analyzer.
+      text = text.slice(0, h.bodyStart) + "x\n" + h.delimiter + (end === -1 ? "" : text.slice(end));
     }
   }
   // Fail closed: a `#` after `$(` or a backtick (data heredoc bodies already dropped) may be a literal inside a substitution, not a comment; the line splitter cannot tell. Coarse on purpose.
