@@ -18,7 +18,7 @@ import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposi
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
-import { buildFindingMarker, countUnresolvedGateAuthoredThreadsFromRawNodes } from "../../scripts/github/_gate-finding-surface.mjs";
+import { buildFindingMarker, countUnresolvedGateAuthoredThreadsFromRawNodes, fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { parseUpsertCheckpointVerdictCliArgs, renderGateReviewCommentBody, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { foldDraftGateSatisfied, isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
 import { main as writeGateContextMain, resolveDraftCapRoundFact } from "../../scripts/github/write-gate-context.mjs";
@@ -5120,6 +5120,8 @@ for (const { name, isDraft, seal, verdict, threads = 0, seed = true, satisfied, 
       // The failed condition reaches the detector result: on a ready PR as capRoundFailure, on a draft PR through the refusal reason.
       if (condition) assert.ok(isDraft ? String(detectedResult.reason).includes(`Condition ${condition}:`) : detectedResult.capRoundFailure === condition, `${condition}: ${detectedResult.capRoundFailure} ${detectedResult.reason}`);
       else assert.equal(detectedResult.capRoundFailure, undefined);
+      // Issue 3443 AC2: the live refusal names the uncovered act ref: deleting the detail from the detector call drops the ref here (the upsert refusal below equals this reason).
+      if (condition === "items_do_not_cover") assert.ok(String(detectedResult.reason).includes(fingerprintFinding(AC1_ACT)), `the detector reason names the uncovered ref: ${detectedResult.reason}`);
 
       const chunks = [];
       let reachedRun = false;
@@ -5146,9 +5148,10 @@ for (const { name, isDraft, seal, verdict, threads = 0, seed = true, satisfied, 
       // A not-satisfied post fails for the gate reason: a draft PR is refused by the draft_gate post path, and a ready PR takes the draft transition (its first gh call, which the stub has no entry for).
       // Any other error (a config load failure, a changed call order) fails the test.
       // A ready PR with a failed cap-round condition refuses at gate entry with the detector's own reason, and never reaches the draft transition. Without a condition it takes the draft transition (its first gh call, which the stub has no entry for).
-      if (!satisfied && !isDraft && condition) assert.equal(upsertError?.message, `Cannot enter draft_gate on owner/repo#10: ${detectedResult.reason}`, `${upsertError?.stack}`);
-      else if (!satisfied) assert.match(String(upsertError?.message), isDraft ? /draft_gate|cap round|round_cap/i : /^Failed to resolve PR node ID for #10: unexpected extra gh call/, `${upsertError?.stack}`);
+      if (!satisfied && !isDraft && condition) assert.equal(upsertError?.message, `Cannot enter draft_gate on owner/repo#10: ${detectedResult.reason}`, `${upsertError?.stack}`);      else if (!satisfied) assert.match(String(upsertError?.message), isDraft ? /draft_gate|cap round|round_cap/i : /^Failed to resolve PR node ID for #10: unexpected extra gh call/, `${upsertError?.stack}`);
       else assert.equal(upsertError, null);
+      // The upsert refusal carries the same uncovered ref: dropping `draftCapRoundDetail,` from its production call loses it here.
+      if (condition === "items_do_not_cover") assert.ok(String(upsertError?.message).includes(fingerprintFinding(AC1_ACT)), `the upsert refusal names the uncovered ref: ${upsertError?.message}`);
 
       assert.deepEqual({ detected, ordering, upserted }, { detected: satisfied, ordering: satisfied, upserted: satisfied });
     } finally {

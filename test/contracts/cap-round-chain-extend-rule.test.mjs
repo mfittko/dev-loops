@@ -35,15 +35,15 @@ test("GATE-EXEC-ROUND-CAP-CHAIN-EXTEND describes the CI-failed cap-round path wi
   assert.match(rule, /the cover run \(`--cover-uncovered`\) is the one reviewer-only run that starts at the cap-round head/);
   assert.match(rule, /`logic_commit_in_range` and `delta_range_mismatch` refusals return `recovery` naming the reviewer-only run at the start of the logic range/);
   assert.match(rule, /`no_cap_round_chain` returns `recovery` by case: `loop gate-coordination` when no cap round resolves/);
-  assert.match(rule, /`git fetch origin <cap-round-head-sha>` when the cap-round head is not in this clone/);
+  assert.match(rule, /`git -C <worktree> fetch origin <cap-round-head-sha>` when the cap-round head is not in this clone/);
   assert.match(rule, /Its `recovery` is `operator:` followed by the full procedure/);
   // The refusal list points at the CI-failed paragraph, which lists the cases once and names no count (issue 3443 folded the duplicate list), so the rule does not contradict itself.
-  assert.match(rule, /`no_cap_round_chain` \(the cases are listed once in the CI-failed paragraph below; the unfetched cap-round head runs `git rev-parse --is-shallow-repository`/);
+  assert.match(rule, /`no_cap_round_chain` \(the cases are listed once in the CI-failed paragraph below; the unfetched cap-round head runs `git -C <worktree> rev-parse --is-shallow-repository`/);
   assert.doesNotMatch(rule, /five cases/);
   // `history_unresolved` is a separate reason: the by-case list of `no_cap_round_chain` does not hold it.
   const byCase = rule.slice(rule.indexOf("`no_cap_round_chain` returns `recovery` by case:"), rule.indexOf("`history_unresolved` is a separate reason"));
   assert.ok(byCase.length > 0 && !byCase.includes("history_unresolved"), "the by-case list of no_cap_round_chain holds no history_unresolved case");
-  assert.match(rule, /`history_unresolved` is a separate reason, not a case of `no_cap_round_chain`: its `recovery` is `git fetch origin <sha>`/);
+  assert.match(rule, /`history_unresolved` is a separate reason, not a case of `no_cap_round_chain`: its `recovery` is `git -C <worktree> fetch origin <sha>`/);
   assert.match(rule, /the head-moving `operator:` form \(push one docs or tests commit to the PR branch, then rerun this command\) when the cap-round head is the PR head/);
   assert.match(rule, /the `no_cap_round_chain` case with no resolved cap round is the exception: coordination does not route back from it/);
   assert.match(rule, /A replacement PR is the operator recovery for an orphaned baseline, for a candidate or cap-round head outside the PR head's history, and, as the alternative to the cover run, for a non-covering record/);

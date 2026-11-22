@@ -9601,6 +9601,43 @@ test("resolveCapRoundFixed follows the bridge for a clean cap round and never pa
   }
 });
 
+// Issue 3443 round 4 (operator focus, false clears first): the clean-cap walk honors the history bound under anyHead. A later link, direct or bridged, whose candidate is off the ready head's history never proves the round; an unreadable candidate fails closed.
+test("resolveCapRoundFixed anyHead never proves a clean cap round from an extension record off the head's history (issue 3443)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const child = (parent, msg) => git(repoRoot, ["commit-tree", `${B}^{tree}`, "-p", parent, "-m", msg]).trim();
+    const M = child(B, "base-only merge of B (ready head)");
+    const D = child(B, "abandoned sibling of the head");
+    const onHist = child(B, "on-history extension candidate");
+    const H = child(onHist, "ready head over the extension");
+    const unreadable = "9".repeat(40);
+    await seedClosedRounds(repoRoot, 84, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-84", `draft_gate-${A}.json`);
+    await writeFile(ledger, JSON.stringify({ ...JSON.parse(await readFile(ledger, "utf8")), verdict: "clean", findings: [] }), "utf8");
+    const opts = (headSha) => ({ repo: "owner/repo", pr: 84, gate: "draft_gate", headSha, baseRefName: "main", anyHead: true });
+    const baseOnlyM = async (args) => args.fromHead === B && args.head === M;
+    const reset = async () => { await rm(path.join(repoRoot, "tmp", "gate-delta"), { recursive: true, force: true }); await writeDeltaRecord(repoRoot, A, B, "push", { items: [] }); };
+    await reset();
+    // Direct link B..D: D is an abandoned sibling off the history of the ready head M.
+    await writeDeltaRecord(repoRoot, B, D, "push", { items: [], extension: "docs_tests_only" });
+    assert.equal(await resolveCapRoundFixed(opts(M), { repoRoot }), null, "direct link: the extension candidate D is off the head's history");
+    // Bridged link M..D: the base-only merge M of B bridges to an extension record whose candidate D is off the history of M.
+    await reset();
+    await writeDeltaRecord(repoRoot, M, D, "push", { items: [], extension: "docs_tests_only" });
+    assert.equal(await resolveCapRoundFixed(opts(M), { repoRoot, baseOnlyMerge: baseOnlyM }), null, "bridged link: the extension candidate D is off the head's history");
+    // An unreadable candidate (a commit this clone never fetched) fails closed.
+    await reset();
+    await writeDeltaRecord(repoRoot, B, unreadable, "push", { items: [], extension: "docs_tests_only" });
+    assert.equal(await resolveCapRoundFixed(opts(M), { repoRoot }), null, "an unreadable candidate never proves the clean cap round");
+    // Control: an extension candidate on the head's history still proves the round.
+    await reset();
+    await writeDeltaRecord(repoRoot, B, onHist, "push", { items: [], extension: "docs_tests_only" });
+    assert.ok(await resolveCapRoundFixed(opts(H), { repoRoot }), "control: the extension candidate is an ancestor of the ready head");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // Issue 3443 delta review: a clean cap round never counts a record past the head. Head B carries the plain record A..B, and an extension record B..D bound to the head as its baseline belongs to a later range.
 test("resolveCapRoundFixed never reads a clean cap round's extension record past the head (issue 3443 delta review)", async () => {
   const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
