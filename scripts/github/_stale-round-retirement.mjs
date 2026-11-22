@@ -133,9 +133,9 @@ async function readEmitPlan(key) {
   return null;
 }
 
-/** The recovery for a round whose reviewers may still run: wait and resume, and name `operator` before the retire command so no coordinator runs it unattended. */
+/** The recovery for a round whose reviewers may still run: wait, rebuild the context and resume, and name `operator` before the retire command so no coordinator runs it unattended. */
 export function buildLiveRoundRecovery({ gate, headSha, tmpRoot, findingsDir = null, repo, pr }) {
-  return `wait for the running reviewers to write their findings and resume the round with emit-fanout-dispatch.mjs --pending; if they crashed, operator: run \`${buildRetireCommand({ gate, headSha, tmpRoot, findingsDir, repo, pr, reason: `operator confirmed the reviewers of ${headSha} are no longer running` })}\``;
+  return `wait for the running reviewers to write their findings, re-run write-gate-context.mjs at the same head so pendingGroups drops the completed units, then run emit-fanout-dispatch.mjs --pending; if they crashed, operator: run \`${buildRetireCommand({ gate, headSha, tmpRoot, findingsDir, repo, pr, reason: `operator confirmed the reviewers of ${headSha} are no longer running` })}\``;
 }
 
 /**
