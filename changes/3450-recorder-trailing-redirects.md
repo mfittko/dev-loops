@@ -1,3 +1,3 @@
 ### Fixed
 
-- The operator-decision-recorder hook ignores simple output redirections such as `2>&1` and `>/dev/null` at the end of a command segment, so `dev-loops-run cli/index.mjs --help 2>&1 | head` is no longer denied (#3450)
+- The operator-decision-recorder hook no longer denies commands that end in a simple output redirection such as `2>&1` or `>/dev/null` (#3450)
