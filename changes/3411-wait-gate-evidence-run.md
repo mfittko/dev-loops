@@ -1,3 +1,3 @@
 ### Changed
 
-- The merge wrapper waits up to 540 s for a Gate evidence run. It refuses a failed run (unless `gate-evidence` is `success`), a timeout or a head change with one recovery (#3411)
+- `merge-pr` waits up to 540 s for Gate evidence, then refuses a failed latest non-cancelled run without `gate-evidence` success, a timeout, or a head change after a wait or failed-run read (#3411)
