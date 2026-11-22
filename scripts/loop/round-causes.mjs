@@ -157,12 +157,14 @@ export async function buildReport(values, { repoRoot = process.cwd() } = {}) {
   const checkoutRoot = resolveRepoRoot(repoRoot);
   const warnings = new Set();
   let worktreePaths = [];
+  // A root without .git is no checkout even when the listing succeeds (a bare repository root or a directory inside .git): it reads neither the repository config nor any worktree record.
+  const hasGit = await stat(path.join(checkoutRoot, ".git")).then(() => true, () => false);
+  if (!hasGit) warnings.add(`${checkoutRoot} is no Git checkout: the repository .devloops and the worktree retirement records can be unread`);
   try {
     worktreePaths = listWorktreeEntries(checkoutRoot).map((e) => e.path);
   } catch {
-    // A checkout whose listing fails would silently drop its linked worktrees; a directory with no .git reads neither the repository config nor any worktree record.
-    if (await stat(path.join(checkoutRoot, ".git")).then(() => true, () => false)) warnings.add(`worktree listing failed in ${checkoutRoot}: linked-worktree retirement records are unread and can undercount system_rerun and body_only`);
-    else warnings.add(`${checkoutRoot} is no Git checkout: the repository .devloops and the worktree retirement records can be unread`);
+    // A checkout whose listing fails would silently drop its linked worktrees.
+    if (hasGit) warnings.add(`worktree listing failed in ${checkoutRoot}: linked-worktree retirement records are unread and can undercount system_rerun and body_only`);
   }
   const retirementRoots = [checkoutRoot, ...worktreePaths].map((p) => path.join(p, "tmp"));
 

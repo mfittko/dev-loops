@@ -579,6 +579,16 @@ test("R30 a run from a directory with no Git checkout warns that the config and 
   });
 });
 
+test("R31 a run from a bare repository root warns although the worktree listing succeeds", async () => {
+  await withTempDir(async (dir) => {
+    execFileSync("git", ["init", "-q", "--bare", dir]);
+    await ledger(dir, 1, sha("a"), "2026-11-01T01:00:00.000Z", { findings: [] });
+    await mergedOne(dir);
+    const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
+    assert.ok(r.warnings.some((w) => /is no Git checkout/.test(w)));
+  });
+});
+
 test("R29 --gate review counts no draft_gate drop and names both dropped checklist ledgers in warnings", async () => {
   await withTempDir(async (dir) => {
     await ledger(dir, 1, sha("a"), "2026-11-01T01:00:00.000Z");
