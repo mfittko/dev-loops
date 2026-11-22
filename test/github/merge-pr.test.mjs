@@ -969,7 +969,8 @@ test("a merge blocked by branch protection with a stale gate-evidence context na
   assert.match(threw.message, /failure/i);
   assert.match(threw.message, /COMPLETED Gate-evidence run/);
   assert.ok(threw.message.includes("run `dev-loops-run --repo-root <checkout> scripts/github/reconcile-gate-evidence-status.mjs --repo mfittko/dev-loops --pr 5`"));
-  assert.match(threw.message, /no-run-to-refire.*gh run rerun <run-id> --repo mfittko\/dev-loops.*evidence-not-satisfied-fail-closed/);
+  assert.match(threw.message, /no-run-to-refire.*start a new run with a gate-verdict event for the head.*lost-run recovery.*evidence-not-satisfied-fail-closed.*run merge-pr with --check and fix the other failures it lists/);
+  assert.doesNotMatch(threw.message, /gh run rerun|<run-id>/);
 });
 
 test("a base-branch-policy block with a SUCCESS gate-evidence context gets no gate-evidence note (#2262)", async () => {
@@ -2223,23 +2224,61 @@ test("gate_evidence_run refuses a failed run with the exact reconcile command an
     assert.match(error.message, /gate_evidence_run \(.*run 77.*completed as failure.*reconcile-gate-evidence-status\.mjs --repo mfittko\/dev-loops --pr \d+.*call merge-pr again/);
     assert.doesNotMatch(error.message, /gh run rerun|edit the/);
     assert.ok(error.mergePrFailure.recovery.includes(`run \`${RECONCILE_CMD}\``));
-    return assertRecovery(error, { reasonPattern: /run 77/, recoveryPattern: /evidence-not-satisfied-fail-closed, the head needs a new gate round/ });
+    return assertRecovery(error, { reasonPattern: /run 77/, recoveryPattern: /evidence-not-satisfied-fail-closed, run merge-pr with --check and fix the other failures it lists/ });
   });
   assert.equal(mergeCalls(calls).length, 0);
 });
 
-test("gate_evidence_run names a rerun of the failed run when the head has no gate-evidence status", async () => {
-  const { runtime, calls } = withRunReads([[RUN(77, "completed", "startup_failure")]]);
+test("gate_evidence_run names a rerun of a plainly failed run when the head has no gate-evidence status", async () => {
+  const { runtime, calls } = withRunReads([[RUN(77, "completed", "failure")]]);
   await assert.rejects(() => mergePr(baseOptions(), runtime), (error) => {
     assert.doesNotMatch(error.message, /reconcile-gate-evidence-status/);
-    return assertRecovery(error, { reasonPattern: /run 77.*startup_failure/, recoveryPattern: /^rerun it with `gh run rerun 77 --repo mfittko\/dev-loops`, then call merge-pr again/ });
+    return assertRecovery(error, { reasonPattern: /run 77.*failure/, recoveryPattern: /^rerun it with `gh run rerun 77 --repo mfittko\/dev-loops`, then call merge-pr again/ });
   });
   assert.equal(mergeCalls(calls).length, 0);
 });
 
-test("gate_evidence_run names the run approval for an action_required run without a gate-evidence status", async () => {
+test("gate_evidence_run names the lost-run recovery, never a rerun, for a startup_failure run without a gate-evidence status", async () => {
+  const { runtime, calls } = withRunReads([[RUN(77, "completed", "startup_failure")]]);
+  await assert.rejects(() => mergePr(baseOptions(), runtime), (error) => {
+    assert.doesNotMatch(error.message, /gh run rerun|reconcile-gate-evidence-status/);
+    return assertRecovery(error, { reasonPattern: /run 77.*startup_failure/, recoveryPattern: /^the run cannot be rerun, so start a new run with a gate-verdict event for the head.*lost-run recovery.*, then call merge-pr again/ });
+  });
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("gate_evidence_run names the run approval for public-fork runs and the lost-run recovery otherwise for an action_required run", async () => {
   const { runtime } = withRunReads([[RUN(78, "completed", "action_required")]]);
-  await assert.rejects(() => mergePr(baseOptions(), runtime), (error) => assertRecovery(error, { reasonPattern: /run 78.*action_required/, recoveryPattern: /^approve the run with `gh api -X POST repos\/mfittko\/dev-loops\/actions\/runs\/78\/approve`/ }));
+  await assert.rejects(() => mergePr(baseOptions(), runtime), (error) => assertRecovery(error, { reasonPattern: /run 78.*action_required/, recoveryPattern: /^approve a public-fork run with `gh api -X POST repos\/mfittko\/dev-loops\/actions\/runs\/78\/approve`, or otherwise start a new run with a gate-verdict event.*lost-run recovery/ }));
+});
+
+test("gate_evidence_run merges with a newest skipped or neutral run", async () => {
+  for (const conclusion of ["skipped", "neutral"]) {
+    const { runtime } = withRunReads([[RUN(3, "completed", "failure"), RUN(4, "completed", conclusion)]]);
+    assert.equal((await mergePr(baseOptions(), runtime)).merged, true, conclusion);
+  }
+});
+
+test("gate_evidence_run refuses a first-read timeout with no known run and the recovery to call again", async () => {
+  const { runtime, calls } = withRunReads([Object.assign(new Error("gh run list failed: timed out after 5000ms"), { code: "GH_TIMEOUT" })]);
+  await assert.rejects(() => mergePr(baseOptions(), runtime), (error) => assertRecovery(error, { reasonPattern: /the Gate evidence run read for head .* timed out after \d+s; call merge-pr again$/, recoveryPattern: /^call merge-pr again$/ }));
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("gate_evidence_run stops waiting when the next poll would start after the deadline, even with read latency", async () => {
+  const { runtime, sleeps } = withRunReads([[RUN(9, "in_progress", null)]], { intervalMs: 10, timeoutMs: 35 });
+  // Each read takes 4 ms: polls start at 0, 14 and 28; the poll at 28 ends at 32, and 32 + 10 > 35 refuses without a third sleep.
+  let latency = 0;
+  const now = runtime.now;
+  runtime.now = () => now() + latency;
+  const list = runtime.ghJson;
+  runtime.ghJson = async (args, opts) => {
+    const result = await list(args, opts);
+    if (args[0] === "run" && args[1] === "list") latency += 4;
+    return result;
+  };
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /run 9 .*still in_progress/);
+  assert.deepEqual(sleeps, [10, 10]);
 });
 
 test("gate_evidence_run judges a failed run against a status read after the run list, in both directions", async () => {
@@ -2406,4 +2445,35 @@ test("--check collects a failed run as a gate_evidence_run entry", async () => {
   const { runtime } = withRunReads([[RUN(6, "completed", "failure")]]);
   const result = await mergePr(baseOptions({ check: true, humanApprovedBy: "mfittko" }), runtime);
   assert.ok(result.failures.some((f) => f.precondition === "gate_evidence_run" && /run 6 .*failure/.test(f.reason)));
+});
+
+test("--check returns spike_pr alone when the PR re-read of a failed run finds the spike marker", async () => {
+  const { runtime, calls } = withRunReads([[RUN(7, "completed", "failure")]]);
+  withViewPatches(runtime, { 2: { body: "spike\n\n<!-- dev-loops:spike-pr no-merge -->\n" } });
+  const result = await mergePr(baseOptions({ check: true, humanApprovedBy: "mfittko" }), runtime);
+  assert.equal(result.check, true);
+  assert.deepEqual(result.failures.map((f) => f.precondition), ["spike_pr"]);
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+// ghJson maps a null exit code to GH_TIMEOUT only when the spawn timer killed the child; any other signal death keeps its stderr in GH_API_ERROR.
+test("ghJson reports GH_TIMEOUT only for the spawn timer's kill, not for other signal deaths or a plain failure", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "ghjson-signal-"));
+  const stub = async (name, body) => {
+    const file = path.join(dir, name);
+    await writeFile(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    return file;
+  };
+  const run = (ghCommand) => defaultGhJson(["run", "list"], { ghCommand, env: process.env, label: "gh run list", timeoutMs: 300 }).catch((e) => e);
+  try {
+    assert.equal((await run(await stub("hung", "exec sleep 30"))).code, "GH_TIMEOUT");
+    const forms = { sigterm: ["kill -TERM $$", "killed-by-term"], sigkill: ["kill -KILL $$", "killed-by-kill"], exit1: ["exit 1", "plain-failure"] };
+    for (const [name, [action, text]] of Object.entries(forms)) {
+      const error = await run(await stub(name, `echo ${text} >&2\n${action}`));
+      assert.equal(error.code, "GH_API_ERROR", name);
+      assert.match(error.message, new RegExp(`gh run list failed: ${text}`), name);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

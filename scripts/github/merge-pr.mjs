@@ -118,9 +118,10 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
   gate_evidence_run (waits up to 540 s for a queued or in-progress Gate
   evidence run of the head, one gh run list per 15 s; the caller's tool timeout
   must cover the wait; refuses with one recovery, the same text in the reason
-  and in the recovery field, when the newest run failed and the gate-evidence
-  status is not success, the wait or a run read timed out, or the head changed
-  during the wait; the reason names the run id when one is known, and a head
+  and in the recovery field, when the newest non-cancelled run failed and the
+  gate-evidence status is not success, the wait or a run read timed out, or the
+  head changed during the wait or the run read; --check reports these and an
+  active run as failures instead; the reason names the run id when one is known, and a head
   change names the old and the new head; after an optional wait line, the
   refusal JSON is the last stderr line),
   human_approver, mergeable, ci_green, title_markers, gate_evidence,
@@ -780,7 +781,7 @@ async function resolveGateEvidenceRunRefusal({ repo, pr, headSha, check }, { env
     const runs = await readRuns();
     if (runs === null) return { refusal: null, waited };
     if (runs === GATE_EVIDENCE_READ_TIMED_OUT) {
-      return { refusal: { kind: "active", detail: `the Gate evidence run read for head ${headSha} timed out after ${Math.round(timeoutMs / 1000)}s${lastActiveId === null ? "" : ` (last active run ${lastActiveId})`}` }, waited };
+      return { refusal: { kind: "active", runId: lastActiveId ?? undefined, detail: `the Gate evidence run read for head ${headSha} timed out after ${Math.round(timeoutMs / 1000)}s${lastActiveId === null ? "" : ` (last active run ${lastActiveId})`}` }, waited };
     }
     // A missing status counts as active-unknown: it waits until the deadline, then refuses with that status named.
     const active = runs.filter((r) => r?.status !== "completed").sort(newestFirst)[0];
@@ -791,7 +792,8 @@ async function resolveGateEvidenceRunRefusal({ repo, pr, headSha, check }, { env
     }
     lastActiveId = active.databaseId;
     const status = typeof active.status === "string" && active.status.length > 0 ? active.status : "an unknown status";
-    if (check || now() >= deadline) {
+    // Refuse when the next poll would start after the deadline, so a read with latency never runs past the wait.
+    if (check || now() + intervalMs > deadline) {
       return { refusal: { kind: "active", runId: active.databaseId, detail: `Gate evidence run ${active.databaseId} for head ${headSha} is still ${status}${check ? " (--check does not wait)" : ` after ${Math.round(timeoutMs / 1000)}s`}` }, waited };
     }
     if (!waited) stderr?.write?.(`merge-pr: waiting for Gate evidence run ${active.databaseId} (up to ${Math.round(timeoutMs / 1000)}s)\n`);
@@ -807,14 +809,16 @@ const GATE_EVIDENCE_READ_TIMED_OUT = Symbol("gate-evidence-read-timed-out");
 // it has no run to re-fire and the refusal names the failed run itself.
 function gateEvidenceRunRecovery(refusal, { repo, pr, statusState }) {
   if (refusal.kind === "head_changed") return "call merge-pr again to re-gate the new head";
-  if (refusal.kind === "active") return "wait for it to complete, then call merge-pr again";
+  if (refusal.kind === "active") return refusal.runId === undefined ? "call merge-pr again" : "wait for it to complete, then call merge-pr again";
   if (statusState === "none") {
-    const act = refusal.conclusion === "action_required"
-      ? `approve the run with \`gh api -X POST repos/${repo}/actions/runs/${refusal.runId}/approve\``
-      : `rerun it with \`gh run rerun ${refusal.runId} --repo ${repo}\``;
+    // GitHub rejects a rerun of a startup_failure run, and the approve endpoint covers public-fork runs only.
+    const newRun = "start a new run with a gate-verdict event for the head (the lost-run recovery in skills/docs/merge-preconditions.md)";
+    let act = `rerun it with \`gh run rerun ${refusal.runId} --repo ${repo}\``;
+    if (refusal.conclusion === "startup_failure") act = `the run cannot be rerun, so ${newRun}`;
+    else if (refusal.conclusion === "action_required") act = `approve a public-fork run with \`gh api -X POST repos/${repo}/actions/runs/${refusal.runId}/approve\`, or otherwise ${newRun}`;
     return `${act}, then call merge-pr again (the head has no gate-evidence status, so reconcile has no run to re-fire)`;
   }
-  return `run \`dev-loops-run --repo-root <checkout> scripts/github/reconcile-gate-evidence-status.mjs --repo ${repo} --pr ${pr}\` (it re-fires the run when the evidence is satisfied; when it reports evidence-not-satisfied-fail-closed, the head needs a new gate round), then call merge-pr again`;
+  return `run \`dev-loops-run --repo-root <checkout> scripts/github/reconcile-gate-evidence-status.mjs --repo ${repo} --pr ${pr}\` (it re-fires the run when the evidence is satisfied; when it reports evidence-not-satisfied-fail-closed, run merge-pr with --check and fix the other failures it lists), then call merge-pr again`;
 }
 
 export async function mergePr(options, runtime = {}) {
@@ -1231,7 +1235,7 @@ export async function mergePr(options, runtime = {}) {
     const looksLikeBranchPolicyBlock = /base branch policy|protected branch|required status check/i.test(rawStderr);
     const gateEvidenceState = resolveNamedContextState(prView?.statusCheckRollup, LOOP_DERIVED_CI_CHECK_NAME);
     const gateEvidenceNote = looksLikeBranchPolicyBlock && gateEvidenceState !== "success"
-      ? ` The required \`${LOOP_DERIVED_CI_CHECK_NAME}\` context is ${gateEvidenceState} at head ${currentHeadSha}; this required check needs a COMPLETED Gate-evidence run. Recovery: run \`dev-loops-run --repo-root <checkout> scripts/github/reconcile-gate-evidence-status.mjs --repo ${options.repo} --pr ${options.pr}\` (it re-runs the Gate-evidence run when the evidence is satisfied; when it reports no-run-to-refire, rerun the failed run with \`gh run rerun <run-id> --repo ${options.repo}\`; when it reports evidence-not-satisfied-fail-closed, the head needs a new gate round), then call merge-pr again (see ADR 0043 / the reporter split in ADR 0076).`
+      ? ` The required \`${LOOP_DERIVED_CI_CHECK_NAME}\` context is ${gateEvidenceState} at head ${currentHeadSha}; this required check needs a COMPLETED Gate-evidence run. Recovery: run \`dev-loops-run --repo-root <checkout> scripts/github/reconcile-gate-evidence-status.mjs --repo ${options.repo} --pr ${options.pr}\` (it re-runs the Gate-evidence run when the evidence is satisfied; when it reports no-run-to-refire, start a new run with a gate-verdict event for the head, the lost-run recovery in skills/docs/merge-preconditions.md; when it reports evidence-not-satisfied-fail-closed, run merge-pr with --check and fix the other failures it lists), then call merge-pr again (see ADR 0043 / the reporter split in ADR 0076).`
       : "";
     throw new Error(`gh pr merge did not succeed (code ${mergeRun?.code ?? "null"}): ${rawStderr}${gateEvidenceNote}`);
   }
