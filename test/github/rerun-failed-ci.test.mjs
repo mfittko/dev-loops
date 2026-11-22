@@ -1,0 +1,126 @@
+import assert from "node:assert/strict";
+import { test } from "bun:test";
+import { makeGhMock } from "../_helpers.mjs";
+import { DEFAULT_MAX_ATTEMPTS, isRerunnableAttempt, isSmokeOnly, isSmokeTimeoutOnlyRun, parseRerunFailedCiCliArgs, rerunFailedCi } from "../../scripts/github/rerun-failed-ci.mjs";
+
+// Annotation texts GitHub writes on a real timeout (issue 3251): a job past timeout-minutes concludes `cancelled`,
+// a step past timeout-minutes fails the job with conclusion `failure`. GitHub never reports `timed_out` for a job.
+const JOB_TIMEOUT = "The job has exceeded the maximum execution time of 20m0s";
+const RUNNER_JOB_TIMEOUT = "The job running on runner GitHub Actions 2 has exceeded the maximum execution time of 45 minutes.";
+const STEP_TIMEOUT = "The action 'Set up Playwright WebKit' has timed out after 10 minutes.";
+const BARE_STEP_TIMEOUT = "The action has timed out.";
+
+const opts = { repo: "owner/repo", pr: "7", headSha: "a".repeat(40) };
+const waitRecovery = "dev-loops-run scripts/github/wait-pr-checks.mjs --repo owner/repo --pr 7";
+const fixerRecovery = `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo owner/repo --pr 7 --head-sha ${"a".repeat(40)} --phase full --ci-file <wait-pr-checks JSON path>`;
+const list = (over = {}) => ({ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 99, status: "completed", attempt: 1, ...over }]) });
+const jobs = (...entries) => ({ assertArgs: ["view", "99"], stdout: JSON.stringify({ jobs: [{ databaseId: 5, name: "build (24)", conclusion: "success" }, ...entries] }) });
+const annotations = (id, message) => ({ assertArgs: ["api", `repos/owner/repo/check-runs/${id}/annotations?per_page=100`], stdout: JSON.stringify([{ annotation_level: "failure", message }, { annotation_level: "failure", message: "The operation was canceled." }]) });
+const verifyFailed = { databaseId: 20, name: "verify", conclusion: "failure" };
+const run = async (entries) => {
+  const { runChild, calls } = makeGhMock(entries);
+  let clock = 0; // fake wall clock: only sleeping advances it
+  return { calls, call: () => rerunFailedCi(opts, { env: {}, runChild, now: () => clock, sleep: async (ms) => { clock += ms; }, waitBudgetMs: 10_000, waitIntervalMs: 10_000 }) };
+};
+
+test("re-runs the failed jobs of a completed run whose only failure is a timed-out smoke job", async () => {
+  const { call, calls } = await run([list(), jobs({ databaseId: 11, name: "viewer-smoke", conclusion: "cancelled" }), annotations(11, JOB_TIMEOUT), { assertArgs: ["rerun", "99", "--failed"], stdout: "" }]);
+  assert.deepEqual(await call(), { ok: true, action: "rerun", runId: 99, attempt: 2 });
+  assert.equal(calls.length, 4);
+});
+
+test("the verify aggregator failing beside a timed-out smoke job still re-runs, and its annotations are never read", async () => {
+  const { call, calls } = await run([list(), jobs({ databaseId: 11, name: "viewer-smoke", conclusion: "cancelled" }, verifyFailed), annotations(11, RUNNER_JOB_TIMEOUT), { assertArgs: ["rerun", "99", "--failed"], stdout: "" }]);
+  assert.deepEqual(await call(), { ok: true, action: "rerun", runId: 99, attempt: 2 });
+  assert.equal(calls.length, 4);
+});
+
+test("refuses a run still in progress after the bounded wait, without a re-run call", async () => {
+  const { call, calls } = await run([list({ status: "in_progress" }), list({ status: "in_progress" })]);
+  await assert.rejects(call(), (error) => /run_in_progress.*run wait-pr-checks\.mjs once/.test(error.message) && error.recovery === waitRecovery);
+  assert.equal(calls.length, 2);
+});
+
+test("waits for an in-progress run to complete, then re-runs its timed-out smoke job", async () => {
+  const { call, calls } = await run([list({ status: "in_progress" }), list(), jobs({ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }), annotations(11, STEP_TIMEOUT), { assertArgs: ["rerun", "99", "--failed"], stdout: "" }]);
+  assert.deepEqual(await call(), { ok: true, action: "rerun", runId: 99, attempt: 2 });
+  assert.equal(calls.length, 5);
+});
+
+test("an in-progress run that completes green refuses run_succeeded, not the fixer route, without a re-run call", async () => {
+  const { call, calls } = await run([list({ status: "in_progress" }), list({ attempt: 2, conclusion: "success" })]);
+  await assert.rejects(call(), (error) => /run_succeeded.*wait-pr-checks/.test(error.message) && error.recovery === waitRecovery);
+  assert.equal(calls.length, 2);
+});
+
+test("refuses at the per-head attempt cap, without a re-run call", async () => {
+  const { call, calls } = await run([list({ attempt: 3 })]);
+  await assert.rejects(call(), (error) => /attempt_cap.*emit the ci-failure fixer order instead/.test(error.message) && !/escalate/.test(error.message) && error.recovery === fixerRecovery);
+  assert.equal(calls.length, 1);
+});
+
+test("refuses a run with no numeric attempt, without a re-run call", async () => {
+  const { call, calls } = await run([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 99, status: "completed" }]) }]);
+  await assert.rejects(call(), /attempt_cap/);
+  assert.equal(calls.length, 1);
+});
+
+test("the attempt predicate accepts 1 and 2 and fails closed on the cap, zero and non-numeric values", () => {
+  for (const attempt of [1, 2]) assert.equal(isRerunnableAttempt(attempt), true, String(attempt));
+  for (const attempt of [DEFAULT_MAX_ATTEMPTS, 4, undefined, null, "2", 0]) assert.equal(isRerunnableAttempt(attempt), false, String(attempt));
+});
+
+test("the wait budget is wall time: gh call time counts, so fewer intervals are slept than a sleep-only count allows", async () => {
+  const { runChild, calls } = makeGhMock([list({ status: "in_progress" }), list({ status: "in_progress" }), list({ status: "in_progress" })]);
+  let clock = 0;
+  let sleeps = 0;
+  const timedRunChild = async (...args) => { clock += 4_000; return runChild(...args); };
+  const call = rerunFailedCi(opts, { env: {}, runChild: timedRunChild, now: () => clock, sleep: async (ms) => { sleeps += 1; clock += ms; }, waitBudgetMs: 30_000, waitIntervalMs: 10_000 });
+  await assert.rejects(call, /run_in_progress/);
+  assert.equal(sleeps, 2); // a sleep-only count would allow 3
+  assert.equal(calls.length, 3);
+});
+
+test("refuses a smoke failure without a timeout annotation, without a re-run call", async () => {
+  const { call, calls } = await run([list(), jobs({ databaseId: 11, name: "deck-smoke", conclusion: "failure" }), annotations(11, "Process completed with exit code 1.")]);
+  await assert.rejects(call(), (error) => /not_smoke_timeout/.test(error.message) && error.recovery === fixerRecovery);
+  assert.equal(calls.length, 3);
+});
+
+test("refuses when the head has no run, with the stable no_run token", async () => {
+  const { call } = await run([{ stdout: "[]" }]);
+  await assert.rejects(call(), (error) => /^no_run: no ci\.yml run/.test(error.message) && error.recovery === waitRecovery);
+});
+
+test("parses args, requires --repo, --pr and --head-sha, and rejects a head that is not a full 40-hex SHA", () => {
+  const sha = "a".repeat(40);
+  assert.throws(() => parseRerunFailedCiCliArgs(["--repo", "o/r"]), /requires --repo, --pr and --head-sha/);
+  assert.throws(() => parseRerunFailedCiCliArgs(["--repo", "o/r", "--pr", "7", "--head-sha", sha, "--max-attempts", "2"]), /Unknown argument: --max-attempts/);
+  assert.equal(parseRerunFailedCiCliArgs(["--repo", "o/r", "--pr", "7", "--head-sha", sha]).headSha, sha);
+  for (const bad of ["abc123", `${sha}XX`]) assert.throws(() => parseRerunFailedCiCliArgs(["--repo", "o/r", "--pr", "7", "--head-sha", bad]), /full 40-character/, bad);
+});
+
+test("isSmokeOnly pre-filters on smoke job names and ignores a failed verify aggregator beside a smoke failure", () => {
+  const names = (...n) => n.map((name) => ({ name }));
+  for (const accepted of [["viewer-smoke"], ["viewer-smoke", "deck-smoke"], ["viewer-smoke", "verify"], ["deck-smoke", "article-smoke", "verify"], ["verify"]]) assert.equal(isSmokeOnly(names(...accepted)), true, accepted.join());
+  for (const rejected of [["viewer-smoke", "build (24)"], ["verify-suite", "verify"], ["viewer-smoke", "verify-suite", "verify"], []]) assert.equal(isSmokeOnly(names(...rejected)), false, rejected.join());
+});
+
+test("isSmokeTimeoutOnlyRun reads the job and step timeout signals and rejects any other failed job", async () => {
+  const check = (entries) => isSmokeTimeoutOnlyRun({ repo: "owner/repo", runId: 99 }, { env: {}, runChild: makeGhMock(entries).runChild });
+  assert.equal(await check([jobs({ databaseId: 11, name: "viewer-smoke", conclusion: "cancelled" }, { databaseId: 12, name: "article-smoke", conclusion: "failure" }), annotations(11, JOB_TIMEOUT), annotations(12, STEP_TIMEOUT)]), true);
+  assert.equal(await check([jobs({ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }, { databaseId: 13, name: "lint", conclusion: "failure" })]), false);
+  assert.equal(await check([jobs({ databaseId: 11, name: "viewer-smoke", conclusion: "cancelled" }), annotations(11, "The run was canceled by @someone.")]), false);
+  assert.equal(await check([jobs()]), false);
+  // one timed-out smoke job beside a non-timeout smoke failure is a real failure.
+  assert.equal(await check([jobs({ databaseId: 11, name: "viewer-smoke", conclusion: "cancelled" }, { databaseId: 12, name: "deck-smoke", conclusion: "failure" }), annotations(11, JOB_TIMEOUT), annotations(12, "Process completed with exit code 1.")]), false);
+  // verify fails with a non-smoke job, or alone: never a smoke timeout.
+  assert.equal(await check([jobs({ databaseId: 13, name: "verify-suite", conclusion: "failure" }, verifyFailed)]), false);
+  assert.equal(await check([jobs(verifyFailed)]), false);
+});
+
+test("the timeout matcher accepts the runner-named job timeout and rejects non-timeout annotations", async () => {
+  const check = (message) => isSmokeTimeoutOnlyRun({ repo: "owner/repo", runId: 99 }, { env: {}, runChild: makeGhMock([jobs({ databaseId: 11, name: "viewer-smoke", conclusion: "cancelled" }), annotations(11, message)]).runChild });
+  for (const message of [JOB_TIMEOUT, RUNNER_JOB_TIMEOUT, STEP_TIMEOUT, BARE_STEP_TIMEOUT]) assert.equal(await check(message), true, message);
+  for (const message of ["Process completed with exit code 1.", "The operation was canceled.", ""]) assert.equal(await check(message), false, message);
+});
