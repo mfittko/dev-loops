@@ -17,12 +17,13 @@ import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
-import { loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveClassifyRules, resolveGateConfig, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_BUDGET_CAP, REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE, REVIEWER_UNIT_MAX_ANGLES, computeReviewerUnitBudget, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { preFanoutCiObservation } from "../loop/_coordinator-handback.mjs";
 import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "../loop/_operator-focus.mjs";
 import { dispatchUnitScope, expandDispatchUnits, normalizeUnitAngles, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 
-const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--operator-focus-file <path>] [--tmp-root <path>] [--help]
+const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--operator-focus-file <path>] [--ci-file <path>] [--tmp-root <path>] [--help]
 The SANCTIONED one-shot gate fan-out dispatch step: given a gate +
 head whose write-gate-context.mjs bundle is already on disk, it reads the resolved
 fan-out plan (the artifact's fanout.groups / fanout.pendingGroups, resolveFanoutGroups
@@ -103,6 +104,13 @@ Optional:
   --operator-focus-file <path> A JSON file { round?: string } rendered as a bounded, sanitized
                                "Operator focus" section in every unit's prompt and pinned by the
                                unit work-order digest (GATE-EXEC-OPERATOR-FOCUS). Items are refused.
+  --ci-file <path>             The CI wait result JSON the coordinator read immediately before this fan-out (GATE-EXEC-GATE-COORDINATOR).
+                               Required for --gate draft_gate unless gates.draft.requireCi is false: without it the run refuses
+                               with { ok: false, refusal: "ci_file_required", error, recovery } and emits no units.
+                               CI that is not settled green (ciStatus "success") at --head-sha refuses with { ok: false,
+                               refusal: "ci_not_green", observation: "ci_not_green", nextAction: "wait_for_ci"|"fix_ci_failure",
+                               ciStatus, error, recovery } and emits no units. A missing, unreadable or non-JSON file is a
+                               usage error (exit 2) that names the path, and an empty value is one too.
   --tmp-root <path>            The tmp/ directory the round's gate-context
                                artifacts live under (default: process.cwd()/tmp;
                                must match the write-gate-context.mjs call).
@@ -144,9 +152,12 @@ Exit codes:
      derive a colliding scope, a unit's invariant-prefix record is missing /
      suffix could not be composed, an angle has no resolvable prompt, or a
      composed work order exceeds REVIEWER_WORK_ORDER_MAX_BYTES (30 KB) or
-     carries an inline "diff --git" line
-  2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, filesystem
-     error, or invalid --jq filter)`.trim();
+     carries an inline "diff --git" line, a draft_gate run has no --ci-file
+     (ci_file_required), or the --ci-file result is not settled green at
+     --head-sha (ci_not_green)
+  2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, an empty,
+     missing, unreadable or non-JSON --ci-file, filesystem error, or invalid
+     --jq filter)`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -499,6 +510,12 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const jq = jqArg === null ? undefined : jqArg;
   const silent = argv.includes("--silent") || argv.includes("-s");
   const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
+  // Pre-fan-out CI re-check (GATE-EXEC-GATE-COORDINATOR): a round that fans out on unsettled CI loses its verdict.
+  const ciFileArg = resolveFlagValue(argv, "--ci-file");
+  if (ciFileArg === "") {
+    process.stderr.write(`${formatCliError(parseError("--ci-file must not be an empty value; pass the CI result JSON path or omit the flag"))}\n`);
+    return 2;
+  }
   if (argv.includes("--carry-forward-plan") && argv.includes("--carry-forward-plan-file")) {
     return finish({ ok: false, error: "--carry-forward-plan and --carry-forward-plan-file are mutually exclusive", recovery: "Pass only --carry-forward-plan-file <keyed carry-forward-plan.json path>." }, false);
   }
@@ -511,6 +528,23 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   } catch (err) {
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
+  }
+  // The gate's own requireCi false (gates.draft or gates.preApproval) opts it out of the CI stop, as in gate coordination.
+  const ciRequired = resolveGateConfig(config, gate === "draft_gate" ? "draft" : "preApproval").requireCi !== false;
+  const waitCommand = `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${repo} --pr ${pr} --timeout 0`;
+  if (ciRequired && gate === "draft_gate" && ciFileArg === null) {
+    return finish({ ok: false, refusal: "ci_file_required", error: "GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: a draft_gate fan-out needs --ci-file, the wait-pr-checks result read immediately before it", recovery: `Run ${waitCommand}, save its JSON to a file, then re-run this fan-out with --ci-file <that file>` }, false);
+  }
+  if (ciRequired && ciFileArg !== null) {
+    let ci;
+    try {
+      ci = JSON.parse(await readFile(ciFileArg, "utf8"));
+    } catch (err) {
+      process.stderr.write(`${formatCliError(parseError(`--ci-file ${JSON.stringify(ciFileArg)} is not readable JSON (${err?.message ?? err}); save the wait-pr-checks.mjs result to that path`))}\n`);
+      return 2;
+    }
+    const stop = preFanoutCiObservation(ci, headSha);
+    if (stop) return finish({ ok: false, refusal: stop.observation, ...stop, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: current-head CI is ${stop.ciStatus}, not settled green; stop and route ${stop.nextAction}`, recovery: `route ${stop.nextAction}, then re-run this fan-out with a fresh --ci-file once CI is settled green at --head-sha` }, false);
   }
 
   let artifact;
