@@ -2,6 +2,24 @@
   "hooks": {
     "PreToolUse": [
       {
+        "matcher": "Bash|Read|Edit|Write|NotebookEdit|Grep|Glob|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/pre-tool-use-approval-guard.mjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/pre-tool-use-ask-answers-guard.mjs\""
+          }
+        ]
+      },
+      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -30,6 +48,15 @@
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/post-tool-use-ask-approval.mjs\""
+          }
+        ]
+      },
       {
         "matcher": "Bash",
         "hooks": [

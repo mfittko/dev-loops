@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { onTestFinished, test } from "bun:test";
-import { initSizeBudgetFixtureRepo, makeGhMock, trustGhEntries, repeatedLinesContent, runIdFreeEnv } from "../_helpers.mjs";
+import { initSizeBudgetFixtureRepo, makeGhMock, trustGhEntries, repeatedLinesContent, runIdFreeEnv, NO_APPROVAL_KEY_ENV } from "../_helpers.mjs";
 
 import { parsePrePrReadyGateCliArgs, prePrReadyGate } from "../../scripts/loop/pre-pr-ready-gate.mjs";
 import { verifyPolicyChangeApproval as realVerifyPolicyChangeApproval } from "../../scripts/github/_policy-change-approval.mjs";
@@ -821,7 +821,7 @@ async function runPolicyChangeGate(tmpDir, approvalReads) {
     ghCommand: "gh",
     repoRoot: tmpDir,
     runChild,
-    verifyPolicyChangeApproval: (a, rt) => realVerifyPolicyChangeApproval(a, { ...rt, runChild: approvalReadsRunChild(approvalReads(headSha)) }),
+    verifyPolicyChangeApproval: (a, rt) => realVerifyPolicyChangeApproval(a, { ...rt, env: { ...rt.env, ...NO_APPROVAL_KEY_ENV }, runChild: approvalReadsRunChild(approvalReads(headSha)) }),
   });
   return { result, headSha };
 }
