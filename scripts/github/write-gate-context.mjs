@@ -2347,10 +2347,6 @@ const CLEAN_CAP_EXTENSIONS = new Set(["docs_tests_only", "delta_covered"]);
  * the first clearing record must name every act item of the cap round. Pass it as `covering` to clearingChainLastCandidates.
  */
 export const capRoundCovers = (capRound, tmpRoot) => (record) => {
-  const refs = new Set((Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref)));
-  // A PR-body act item never enters a delta record (startDeltaSequence drops it), so the record cannot name its ref.
-  // The delta act list carries each cluster's kept representative only, so the body-item filter reads that representative, as startDeltaSequence does.
-  const actRefs = [...new Set(capRoundActList(capRound.log.findings, capRound.log.headSha).filter((e) => !isDeltaBodyItem(e)).map((e) => e.ref))];
   // A clean cap round has no act item, so only a record whose extension is in CLEAN_CAP_EXTENSIONS proves it (ADR 0250 for docs_tests_only):
   // the first record carries one, or a clearing chain over later heads reaches one.
   if (isCleanCapRound(capRound)) {
@@ -2364,7 +2360,29 @@ export const capRoundCovers = (capRound, tmpRoot) => (record) => {
     }
     return CLEAN_CAP_EXTENSIONS.has(record.extension);
   }
-  return actRefs.every((r) => refs.has(r));
+  return capRoundCoverage(capRound, tmpRoot, record).uncovered.length === 0;
+};
+
+/**
+ * Issue 3443: the act refs of a non-clean cap round may be split across the sealed clearing chain that starts at `record` (a commit_only fixer record, then the thread-route fix of an escalated item at a later baseline),
+ * so the union of every clearing record on the chain counts. Each link's baseline is the previous link's candidate head, so it is an ancestor of the head the chain reaches.
+ * Returns the act refs no record names and the records read (baseline, candidate, refs), so a refusal can name both.
+ */
+export const capRoundCoverage = (capRound, tmpRoot, record) => {
+  // A PR-body act item never enters a delta record (startDeltaSequence drops it), so the record cannot name its ref.
+  // The delta act list carries each cluster's kept representative only, so the body-item filter reads that representative, as startDeltaSequence does.
+  const actRefs = [...new Set(capRoundActList(capRound.log.findings, capRound.log.headSha).filter((e) => !isDeltaBodyItem(e)).map((e) => e.ref))];
+  const records = [];
+  const seen = new Set();
+  for (let r = record; r;) {
+    records.push({ baseline: normalizeSha(r.reviewBaselineHead), candidate: normalizeSha(r.candidateHead), refs: (Array.isArray(r.items) ? r.items : []).map((i) => String(i?.ref)) });
+    const next = normalizeSha(r.candidateHead);
+    if (!tmpRoot || !next || seen.has(next)) break;
+    seen.add(next);
+    r = clearingDeltaRecord(tmpRoot, next);
+  }
+  const named = new Set(records.flatMap((r) => r.refs));
+  return { uncovered: actRefs.filter((a) => !named.has(a)), records };
 };
 
 /**

@@ -1288,6 +1288,9 @@ test("issue 3437 ac:3: no_cap_round_chain names a replacement PR for a non-cover
     assert.equal(refused.reason, "no_cap_round_chain");
     assert.equal(refused.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
     assert.doesNotMatch(refused.recovery, /pre-push-delta/u, "a run at the cap-round head refuses and names this command again");
+    // Issue 3443: the refusal names the records that exist; the act refs they leave uncovered are named too.
+    assert.match(refused.detail, /Records on the chain: .*\[unrelated\]/u);
+    assert.match(refused.detail, /Uncovered act refs: \S+/u);
     rmSync(gateDeltaRecordPath(tmp, A), { force: true });
     rmSync(`${gateDeltaRecordPath(tmp, A)}.seal`, { force: true });
     const noRecord = await extend(root, head);

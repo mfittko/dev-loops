@@ -9387,6 +9387,35 @@ test("resolveCapRoundFixed derives the expected refs from the deduped act list, 
   }
 });
 
+// Issue 3443: a commit_only fixer record covers 1 of 3 act refs at the cap head, a later thread-route record at the next baseline covers the escalated ref.
+test("resolveCapRoundFixed accepts the union of the chain's records over the cap round's act refs and names a genuinely uncovered ref", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const C = "8".repeat(40);
+    const opts = { repo: "owner/repo", pr: 64, gate: "draft_gate", headSha: C };
+    await seedClosedRounds(repoRoot, 64, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-64", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const q = { ...p, summary: "second defect" };
+    const r = { ...p, summary: "escalated defect" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...q, clusterId: 1 }, { ...r, clusterId: 2 }] }), "utf8");
+    const resolved = (...fs) => ({ items: fs.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) });
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", resolved(p, q));
+    let condition = null;
+    const run = () => resolveCapRoundFixed(opts, { repoRoot, onFailure: (c) => { condition = c; } });
+    assert.equal(await run(), null, "the escalated ref r is uncovered");
+    assert.equal(condition, "items_do_not_cover");
+    await writeDeltaRecord(repoRoot, B, C, "push_to_gate", resolved(r));
+    assert.ok(await run(), "the thread-route record at the later baseline covers r");
+    await writeDeltaRecord(repoRoot, B, C, "push_to_gate", resolved(p));
+    assert.equal(await run(), null, "a later record that repeats p leaves r genuinely uncovered");
+    assert.equal(condition, "items_do_not_cover");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapRoundFixed trusts only a sealed, unmodified delta record (ADR 0208, PRE-PUSH-DELTA-NOT-GATE-EVIDENCE)", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
