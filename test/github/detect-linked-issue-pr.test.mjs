@@ -7,6 +7,7 @@ import { test } from "bun:test";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import { detectLinkedIssuePr, selectLinkedIssuePr } from "../../scripts/github/detect-linked-issue-pr.mjs";
+import { detectLinkedIssuePrs } from "@dev-loops/core/github/issue-ops";
 
 const scriptPath = path.resolve("scripts/github/detect-linked-issue-pr.mjs");
 
@@ -568,4 +569,69 @@ test("detect-linked-issue-pr: a genuine ConnectedEvent is still a linked PR (sem
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+function batchChild(aliases, { code = 0 } = {}) {
+  const calls = [];
+  const runChild = async (cmd, argv) => {
+    calls.push(argv);
+    return { code, stdout: JSON.stringify({ data: { repository: aliases(argv) } }), stderr: "" };
+  };
+  return { runChild, calls };
+}
+
+const timeline = (nodes, hasNextPage = false) => ({ timelineItems: { pageInfo: { hasNextPage }, nodes } });
+
+test("detectLinkedIssuePrs makes one call per 50 issues and matches detectLinkedIssuePr selection", async () => {
+  const issues = Array.from({ length: 60 }, (_, i) => i + 1);
+  const fixtures = {
+    1: [connectedNode({ createdAt: "2026-05-12T10:00:00Z", number: 90 })],
+    2: [crossNode({ createdAt: "2026-05-12T10:00:00Z", number: 91, willCloseTarget: false })],
+    3: [connectedNode({ createdAt: "2026-05-12T10:00:00Z", number: 92, state: "CLOSED" })],
+    4: [connectedNode({ createdAt: "2026-05-12T10:00:00Z", number: 93, repo: "other/repo" })],
+  };
+  const { runChild, calls } = batchChild(() => Object.fromEntries(issues.map((n) => [`i${n}`, timeline(fixtures[n] ?? [])])));
+  const map = await detectLinkedIssuePrs({ repo: "owner/repo", issues }, { env: {}, runChild });
+  assert.equal(calls.length, 2);
+  assert.equal(map.size, 60);
+  for (const n of [1, 2, 3, 4, 5]) {
+    const single = await detectLinkedIssuePr(
+      { repo: "owner/repo", issue: n },
+      { env: {}, runChild: async () => ({ code: 0, stdout: graphqlPayload({ hasNextPage: false, endCursor: null, nodes: fixtures[n] ?? [] }), stderr: "" }) },
+    );
+    assert.equal(map.get(n), single.hasOpenLinkedPr, `issue ${n}`);
+  }
+});
+
+test("detectLinkedIssuePrs: an errored alias on a non-zero exit leaves only that issue out", async () => {
+  const { runChild } = batchChild(
+    () => ({ i1: timeline([connectedNode({ createdAt: "2026-05-12T10:00:00Z", number: 90 })]), i2: null, i3: timeline([]) }),
+    { code: 1 },
+  );
+  const map = await detectLinkedIssuePrs({ repo: "owner/repo", issues: [1, 2, 3] }, { env: {}, runChild });
+  assert.deepEqual([...map], [[1, true], [3, false]]);
+});
+
+test("detectLinkedIssuePrs: a chunk with no data leaves every issue out", async () => {
+  const runChild = async () => ({ code: 1, stdout: "", stderr: "boom" });
+  const map = await detectLinkedIssuePrs({ repo: "owner/repo", issues: [1, 2] }, { env: {}, runChild });
+  assert.equal(map.size, 0);
+});
+
+test("detectLinkedIssuePrs: hasNextPage falls back to paginated detectLinkedIssuePr for that issue only", async () => {
+  const calls = [];
+  const runChild = async (cmd, argv) => {
+    calls.push(argv);
+    if (argv.some((a) => a.startsWith("after="))) {
+      return { code: 0, stdout: graphqlPayload({ hasNextPage: false, endCursor: null, nodes: [connectedNode({ createdAt: "2026-05-12T10:00:00Z", number: 95 })] }), stderr: "" };
+    }
+    if (argv.includes("issue=2")) {
+      return { code: 0, stdout: graphqlPayload({ hasNextPage: true, endCursor: "c1", nodes: [] }), stderr: "" };
+    }
+    return { code: 0, stdout: JSON.stringify({ data: { repository: { i1: timeline([]), i2: timeline([], true) } } }), stderr: "" };
+  };
+  const map = await detectLinkedIssuePrs({ repo: "owner/repo", issues: [1, 2] }, { env: {}, runChild });
+  assert.deepEqual([...map], [[1, false], [2, true]]);
+  // 1 batch call + 2 pages for issue 2 only.
+  assert.equal(calls.length, 3);
 });
