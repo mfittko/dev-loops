@@ -1041,7 +1041,7 @@ export async function mergePr(options, runtime = {}) {
     let refreshedPatchId = null;
     try { refreshedPatchId = computePatchId({ base: `origin/${baseRefName}`, head: currentHeadSha, repoRoot }); } catch { /* fail closed below */ }
     if (refreshedPatchId !== currentPatchId) {
-      refuseBaseNotIntegrated(`the patch-id of origin/${baseRefName}...${currentHeadSha} changed after the approval was matched (the base moved); post a new approve merge line from merge-pr --check and re-run`, { mergeClass: verdict.mergeClass });
+      refuseBaseNotIntegrated(`the patch-id of origin/${baseRefName}...${currentHeadSha} changed after the approval was matched (the base moved); MERGE-ASK-APPROVAL recovery: ask the approval question again with the new head and patch-id that merge-pr --check prints, then re-run (a typed approve merge line works only on a machine without the hook key)`, { mergeClass: verdict.mergeClass });
     }
   }
 

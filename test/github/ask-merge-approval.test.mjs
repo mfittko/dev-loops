@@ -633,6 +633,19 @@ test("the guard denies a Bash command naming the record signing functions and al
   assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Edit", tool_input: { file_path: path.join(f.root, "x.mjs"), new_string: "writeApprovalRecord()" }, cwd: f.root }, f.env)), "allow", "a file body is not an address");
 });
 
+test("the guard denies a Bash command naming the PostToolUse hook script and allows Read, Edit and this module's tests", () => {
+  const f = fixture();
+  const bash = (command) => decision(runHook(GUARD_HOOK, { tool_name: "Bash", tool_input: { command }, cwd: f.root }, f.env));
+  for (const command of [
+    "node .claude/hooks/post-tool-use-ask-approval.mjs < /tmp/p.json",
+    "node ${CLAUDE_PLUGIN_ROOT}/.claude/hooks/post-tool-use-ask-approval.mjs < p.json",
+    "cat p.json | node ./.claude/hooks/post-tool-use-ask-approval.mjs",
+  ]) assert.equal(bash(command), "deny", command);
+  assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Read", tool_input: { file_path: ".claude/hooks/post-tool-use-ask-approval.mjs" }, cwd: f.root }, f.env)), "allow", "Read of the hook source");
+  assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Edit", tool_input: { file_path: ".claude/hooks/post-tool-use-ask-approval.mjs", new_string: "x" }, cwd: f.root }, f.env)), "allow", "Edit of the hook source");
+  assert.equal(bash("bun test test/github/ask-merge-approval.test.mjs"), "allow");
+});
+
 // Cluster 3: every reader of the approval line applies the record check
 test("the standing-authorization ready gate refuses a marked approve-merge comment with no record", async () => {
   const f = fixture();

@@ -9,7 +9,8 @@
  * permission denies (and the sandbox read deny when the sandbox is enabled) are the second layer.
  * A plugin consumer gets this hook alone. It also denies arguments naming the record signing
  * functions (writeApprovalRecord, createApprovalHmacKey, loadApprovalHmacKey) as whole identifiers, so a
- * consumer's own `loadKey` or `createKey` passes. A bare mention in a commit message or body flag is denied too. An
+ * consumer's own `loadKey` or `createKey` passes. It denies a Bash command naming the PostToolUse hook script
+ * `post-tool-use-ask-approval` (project and plugin paths alike), because a direct run with a forged payload signs a record; Read and Edit of it stay allowed. A bare mention in a commit message or body flag is denied too. An
  * error in this hook denies (exit 2), and so does a tool_input with more than 10000 nodes (the whole
  * tree is scanned, object keys included, except the string values under content, new_string, old_string,
  * new_source and description, which are skipped for every tool). Only the PostToolUse hook touches the directory. Agent posts of
@@ -24,6 +25,9 @@ import { isApprovalPath, approvalNameHit, ASK_APPROVAL_RECOVERY } from "./_ask-m
 const BODY_KEYS = new Set(["content", "new_string", "old_string", "new_source", "description"]);
 
 const MAX_NODES = 10000;
+
+const HOOK_SCRIPT_NAME = "post-tool-use-ask-approval";
+const fold = (s) => s.toLowerCase();
 
 // Scan the whole argument tree, bounded by a total node count (not depth): ordinary nested MCP payloads pass.
 function stringArgs(root) {
@@ -48,8 +52,11 @@ try {
   const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   // A copy of the harness env, so the test override widens the guard next to the default directory.
   const env = { ...process.env };
-  let hit = null;
-  for (const s of stringArgs(input?.tool_input)) {
+  // A Bash command that runs the PostToolUse hook script could sign a record from a forged payload: only the harness runs it.
+  // Bash only, so Read and Edit of the hook source stay allowed.
+  const bashCommand = input?.tool_name === "Bash" ? input?.tool_input?.command : null;
+  let hit = typeof bashCommand === "string" && fold(bashCommand).includes(HOOK_SCRIPT_NAME) ? HOOK_SCRIPT_NAME : null;
+  for (const s of hit === null ? stringArgs(input?.tool_input) : []) {
     hit = approvalNameHit(s, env) ?? (isApprovalPath(path.resolve(cwd, s), env) ? s : null);
     if (hit !== null) break;
   }

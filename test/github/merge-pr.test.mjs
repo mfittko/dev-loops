@@ -1752,6 +1752,21 @@ for (const mode of ["forge", "typed"]) {
   });
 }
 
+test("the base-moved refusal recovery asks the approval question again (MERGE-ASK-APPROVAL)", async () => {
+  const { runtime } = makeRuntime({
+    evidence: ESCALATED_EVIDENCE,
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD_HEAD} patch-id ${PATCH_ID}` }],
+  });
+  // The first id authorizes the merge; the refreshed id after the ADR step differs (the base moved).
+  let calls = 0;
+  runtime.computePatchId = () => (++calls === 1 ? PATCH_ID : "e".repeat(40));
+  const threw = await mergePr(baseOptions({ standingAuthorization: false }), runtime).catch((e) => e);
+  const reason = threw.mergePrFailure.failures.find((f) => f.precondition === "base_not_integrated").reason;
+  assert.match(reason, /the base moved/);
+  assert.match(reason, /ask the approval question again with the new head and patch-id/);
+  assert.match(reason, /without the hook key/);
+});
+
 test("a patch-id marker is refused when the base is not contained (no patch-id computed)", async () => {
   const { runtime } = makeRuntime({
     evidence: ESCALATED_EVIDENCE,
