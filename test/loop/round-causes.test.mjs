@@ -96,6 +96,10 @@ test("R5 argument and export errors name the cause", async () => {
     await fails(["--repo", "o/r", "--merged-prs", merged, "--last", "0"], /--last/);
     await fails(["--repo", "o/r", "--merged-prs", path.join(dir, "bad.json")], /bad\.json/);
     await fails(["--repo", "o/r", "--merged-prs", path.join(dir, "nodate.json")], /mergedAt/);
+    await fails(["--repo", "o/r", "--merged-prs", merged, "--gate", "bogus_gate"], /--gate must be one of/);
+    await fails(["--repo", "nope", "--merged-prs", merged], /--repo must be/);
+    await json(dir, "loose.json", [{ number: 1, mergedAt: "yesterday" }]);
+    await fails(["--repo", "o/r", "--merged-prs", path.join(dir, "loose.json")], /mergedAt/);
   });
 });
 
@@ -113,4 +117,19 @@ test("R7 --help prints usage", async () => {
   let out = "";
   await runCli(["--help"], { stdout: { write: (s) => { out += s; } } });
   assert.match(out, /dev-loops loop round-causes/);
+});
+
+test("R8 duplicate export rows count once", async () => {
+  await withTempDir(async (dir) => {
+    await fixture(dir);
+    await json(dir, "dup.json", [
+      { number: 10, mergedAt: "2026-11-05T00:00:00Z" },
+      { number: 10, mergedAt: "2026-11-05T00:00:00Z" },
+      { number: 11, mergedAt: "2026-11-06T00:00:00Z" },
+    ]);
+    await json(dir, "issues.json", [{ number: 1, createdAt: "2026-11-05T12:00:00Z" }, { number: 1, createdAt: "2026-11-05T12:00:00Z" }]);
+    const r = await run(dir, ["--merged-prs", path.join(dir, "dup.json"), "--issues", path.join(dir, "issues.json"), "--last", "2"]);
+    assert.deepEqual(r.perChange.map((c) => c.pr), [11, 10]);
+    assert.equal(r.issues.filed, 1);
+  });
 });

@@ -17,7 +17,7 @@ export function deriveRoundCause({ prior, headSha, prBodySha256, baseOnly }) {
 
 /**
  * Reads the prior round the same way the round count does, probes git only for a head move, then derives the cause.
- * Fail-safe: any read or git error means no base-only merge; the cause never refuses a write.
+ * Fail-safe: a git or gate-context read error means no base-only merge and never refuses a write. A sealed-ledger mismatch fails closed (OUT_OF_BAND_WRITE), as the round-cap read does.
  */
 export async function resolveRoundCause(options, { repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
   const { repo, pr, gate, headSha, tmpRoot, roundIdentity, prBodySha256 } = options;

@@ -6,6 +6,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { ROUND_CAUSES, deriveRoundCause } from "../github/_round-cause.mjs";
+import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { readClosedPriorRoundLogs } from "../github/write-gate-context.mjs";
 
 const USAGE = `Usage:
@@ -32,6 +33,7 @@ Exit codes:
   1  Argument error or runtime failure`.trim();
 
 const parseError = buildParseError(USAGE);
+const ISO_8601 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
 const GATE_SENTINEL_HEAD = "0".repeat(40);
 const round2 = (n) => Math.round(n * 100) / 100;
 const emptyCauses = () => Object.fromEntries(ROUND_CAUSES.map((c) => [c, 0]));
@@ -45,11 +47,12 @@ async function readExport(file, dateField) {
   }
   if (!Array.isArray(data)) throw parseError(`${file} must hold a JSON array`);
   for (const entry of data) {
-    if (!Number.isInteger(entry?.number) || typeof entry?.[dateField] !== "string" || !Number.isFinite(Date.parse(entry[dateField]))) {
+    if (!Number.isInteger(entry?.number) || typeof entry?.[dateField] !== "string" || !ISO_8601.test(entry[dateField]) || !Number.isFinite(Date.parse(entry[dateField]))) {
       throw parseError(`${file} has an entry without an integer number and an ISO ${dateField}`);
     }
   }
-  return data;
+  // Keep the first entry per number so a repeated export row counts once.
+  return data.filter((entry, i) => data.findIndex((e) => e.number === entry.number) === i);
 }
 
 // A ledger written before the stamp has no roundCause: derive it in memory against the previous round of the same PR.
@@ -71,6 +74,7 @@ async function roundCauses(rounds, { base, repoRoot }) {
 
 export async function buildReport(values, { repoRoot = process.cwd() } = {}) {
   const gate = values.gate ?? "draft_gate";
+  if (!GATE_NAMES.includes(gate)) throw parseError(`--gate must be one of ${GATE_NAMES.join(", ")}`);
   const base = values.base ?? "main";
   const last = values.last === undefined ? 20 : Number(values.last);
   if (!Number.isInteger(last) || last < 1) throw parseError("--last must be a positive integer");
@@ -131,6 +135,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   }
   if (!values.repo?.trim()) throw parseError("--repo is required");
   if (!values["merged-prs"]?.trim()) throw parseError("--merged-prs is required");
+  if (!/^[^/\s]+\/[^/\s]+$/.test(values.repo.trim())) throw parseError("--repo must be <owner/name>");
   const report = await buildReport({ ...values, repo: values.repo.trim(), "merged-prs": path.resolve(values["merged-prs"]), ...(values.issues ? { issues: path.resolve(values.issues) } : {}) }, { repoRoot });
   process.exitCode = emitResult(report, { jq: values.jq, silent: values.silent, stdout, stderr });
 }
