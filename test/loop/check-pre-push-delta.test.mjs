@@ -2466,6 +2466,22 @@ test("the cover run refuses an active sequence marker at the cap head and writes
   } finally { cleanup(repo); }
 });
 
+// Issue 3443 delta review (ADR 0317): the plain reviewer-only refusal probes the prior record's own candidate with the shared probe, so a failed git probe asks for the fetch and never names the replacement PR.
+test("the plain reviewer-only refusal asks for the fetch when git cannot prove the prior record's candidate history (issue 3443 delta review)", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    const findings = [CAP_ACT, SECOND_ACT];
+    const [one] = capRoundActList(findings, repo.baseline).map((entry) => entry.ref);
+    seedPartialRecord(repo, [one]);
+    const failing = { ...seam, isAncestor: (_worktree, ancestor) => { if (ancestor === repo.fix) throw new Error("git merge-base --is-ancestor failed"); return true; } };
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo, findings), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], failing), (error) => {
+      assert.equal(error.recovery, `git fetch origin ${repo.fix}`);
+      assert.match(error.message, /git could not prove whether/, "the history is unresolved, not proven off");
+      return true;
+    });
+  } finally { cleanup(repo); }
+});
+
 // Issue 3443 review (ADR 0317): only merge-base exit 1 proves a cover record's candidate off the history. Any other failure asks for the fetch of the commit this clone lacks.
 test("the cover run asks for the fetch when git cannot prove a cover candidate's history, and names the absent commit (issue 3443 review)", async () => {
   const repo = reviewerOnlyRepo();

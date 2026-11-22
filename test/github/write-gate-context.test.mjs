@@ -9559,6 +9559,48 @@ test("resolveCapRoundFixed carries the coverage union across a base-only merge o
   }
 });
 
+// Issue 3443 delta review (high): the coverage walk stops where the proof stops. Head M is a base-only merge of B and r is named only on the bridged M..C (an unpushed or amended-away fix): the proof reaches M at B, so r is not covered.
+test("resolveCapRoundFixed never counts a bridged link past a head that is a base-only merge of the chain end (issue 3443 delta review)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const M = "7".repeat(40);
+    const C = "8".repeat(40);
+    const { p, q, r, items } = await seedThreeActRefs(repoRoot, 77, A);
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", items("resolved", p, q));
+    await writeDeltaRecord(repoRoot, M, C, "push_to_gate", items("resolved", r));
+    const baseOnlyM = async (args) => args.fromHead === B && args.head === M;
+    let detail = null;
+    const onFailure = (c, d) => { detail = { c, ...d }; };
+    assert.equal(await resolveCapRoundFixed({ repo: "owner/repo", pr: 77, gate: "draft_gate", headSha: M, baseRefName: "main" }, { repoRoot, baseOnlyMerge: baseOnlyM, onFailure }), null, "head M with r only on the bridged M..C is not proven");
+    assert.equal(detail.c, "items_do_not_cover");
+    assert.deepEqual(detail.uncovered, [fingerprintFinding(r)]);
+    assert.ok(await resolveCapRoundFixed({ repo: "owner/repo", pr: 77, gate: "draft_gate", headSha: C, baseRefName: "main" }, { repoRoot, baseOnlyMerge: baseOnlyM }), "head C traverses the bridged link and counts r");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 delta review: a clean cap round follows the bridge (A..B plain, base-only merge M of B, M..C plain, C..D docs_tests_only) and stops where the proof stops.
+test("resolveCapRoundFixed follows the bridge for a clean cap round and never past a base-only head (issue 3443 delta review)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const M = "7".repeat(40);
+    const C = "8".repeat(40);
+    const D = "9".repeat(40);
+    await seedClosedRounds(repoRoot, 78, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-78", `draft_gate-${A}.json`);
+    await writeFile(ledger, JSON.stringify({ ...JSON.parse(await readFile(ledger, "utf8")), verdict: "clean", findings: [] }), "utf8");
+    await writeDeltaRecord(repoRoot, A, B, "push", { items: [] });
+    await writeDeltaRecord(repoRoot, M, C, "push", { items: [] });
+    await writeDeltaRecord(repoRoot, C, D, "push", { items: [], extension: "docs_tests_only" });
+    const baseOnlyM = async (args) => args.fromHead === B && args.head === M;
+    assert.ok(await resolveCapRoundFixed({ repo: "owner/repo", pr: 78, gate: "draft_gate", headSha: D, baseRefName: "main" }, { repoRoot, baseOnlyMerge: baseOnlyM }), "the extension C..D is reached across the bridge");
+    assert.equal(await resolveCapRoundFixed({ repo: "owner/repo", pr: 78, gate: "draft_gate", headSha: M, baseRefName: "main" }, { repoRoot, baseOnlyMerge: baseOnlyM }), null, "head M is reached at B, and the extension past the head proves nothing");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // Issue 3443 (review): the accepting branch of the history bound. Real commits: the ready head H descends from the B to C link's candidate C, so the later link counts.
 test("resolveCapRoundFixed anyHead counts a later link whose candidate is on the head's history (issue 3443)", async () => {
   const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();

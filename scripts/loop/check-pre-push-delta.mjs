@@ -703,7 +703,7 @@ export async function runCli(
   }
   const baselineSha = revParse(options.worktree, options.baseline);
   // ADR 0255: the reviewer-only act list is derived from the cap-round ledger of the plan target, or --repo/--pr on the reviewer-only route; a chain-end baseline needs no covering, so its list stays empty.
-  let derivedActList = [], prBase, capLog, chainCoverage, refuseUnresolvedHistory = () => {};
+  let derivedActList = [], prBase, capLog, chainCoverage, headOnHistory, refuseUnresolvedHistory = () => {};
   if (options.reviewerOnly) {
     const log = JSON.parse(readFileSync(options.findingsLog, "utf8"));
     capLog = log;
@@ -721,7 +721,7 @@ export async function runCli(
     // A git or record read failure is an unproven coverage: it never admits a run. Only merge-base exit 1 proves a candidate off the head's history (ADR 0317): any other failure leaves the history unresolved, and the run asks for the fetch of the commit this clone lacks.
     const prHeadSha = revParse(options.worktree, options.prHead);
     const unresolved = new Set();
-    const onHistory = (candidate) => {
+    const onHistory = headOnHistory = (candidate) => {
       if (!HEAD_SHA_RE.test(candidate)) return false;
       try { return isAncestor(options.worktree, candidate, prHeadSha); } catch {
         const lacking = [prHeadSha, candidate].filter((sha) => { try { revParse(options.worktree, sha); return false; } catch { return true; } });
@@ -778,7 +778,8 @@ export async function runCli(
     // A record that is not JSON (a crash during its write) refuses like any other unsealed leftover.
     // A candidate missing from the clone is not on the PR head's history.
     // An unsealed record is untrusted: only a hex SHA reaches git, never HEAD, a branch name or an option.
-    const onHistory = (a, b) => { try { return HEAD_SHA_RE.test(a) && isAncestor(options.worktree, a, b); } catch { return false; } };
+    // The worktree HEAD is the PR head here, so this is the shared probe that records an unresolved history for the fetch request (ADR 0317), also for the prior record's own candidate.
+    const onHistory = (candidate) => headOnHistory(candidate);
     // The cover run touches no baseline record: its records are keyed by the cap-round head and the act ref, so it neither reads, takes over nor refuses on the record at the baseline.
     const coverCommand = `dev-loops loop pre-push-delta --reviewer-only --cover-uncovered --repo ${options.repo} --pr ${options.pr} --baseline ${capLog.headSha} --pr-head ${currentHead} --findings-log ${shellQuote(options.findingsLog)} --spec-identity <id> --result-path <result-file>`;
     // The cover run is offered only for a readable coverage that leaves an act ref uncovered: a clean cap round or an unreadable coverage refuses it, so those refusals name the replacement PR.

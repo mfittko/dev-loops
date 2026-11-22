@@ -2367,21 +2367,21 @@ const CLEAN_CAP_EXTENSIONS = new Set(["docs_tests_only", "delta_covered"]);
  * The `covers` check of resolveCapRoundFixed, shared with the chain-extension tool so the two cannot disagree:
  * the union of the item refs of the traversed clearing chain (`capRoundCoverage`) must name every act ref of the cap round. Pass it as `covering` to clearingChainLastCandidates.
  */
-export const capRoundCovers = (capRound, tmpRoot, bound) => (record, bridge, link) => {
+export const capRoundCovers = (capRound, tmpRoot, bound) => (record, bridge, link = (next) => chainLink(tmpRoot, next, bridge), stopAt = bound?.stopAt) => {
   // A clean cap round has no act item, so only a record whose extension is in CLEAN_CAP_EXTENSIONS proves it (ADR 0250 for docs_tests_only):
-  // the first record carries one, or a clearing chain over later heads reaches one.
+  // the first record carries one, or a clearing chain over later heads reaches one, across the bridge to a base-only merge record and never past the point where the proof stops (`stopAt`).
   if (isCleanCapRound(capRound)) {
     const seen = new Set();
     for (let r = record; r && tmpRoot;) {
       if (CLEAN_CAP_EXTENSIONS.has(r.extension)) return true;
       const next = normalizeSha(r.candidateHead);
-      if (!next || seen.has(next)) return false;
+      if (!next || seen.has(next) || stopAt?.(next)) return false;
       seen.add(next);
-      r = clearingDeltaRecord(tmpRoot, next);
+      r = link(next);
     }
     return CLEAN_CAP_EXTENSIONS.has(record.extension);
   }
-  return capRoundCoverage(capRound, tmpRoot, record, { ...bound, bridge, link }).uncovered.length === 0;
+  return capRoundCoverage(capRound, tmpRoot, record, { ...bound, bridge, link, stopAt }).uncovered.length === 0;
 };
 
 /**
@@ -2390,10 +2390,11 @@ export const capRoundCovers = (capRound, tmpRoot, bound) => (record, bridge, lin
  * Only the start record counts every item it names: a later link (a bridged merge record included) counts a resolved item only.
  * A thread-route record names its items by thread id and covers no act ref: thread text is never trusted to map a thread to an act ref, so an escalated item fixed in the PR is covered only by a record keyed by its act ref.
  * A sealed cover record (ADR 0255 amendment: a reviewer-only `--cover-uncovered` run) of an act ref counts when it resolved the ref and its candidate is the head or `coverOnHistory` admits it.
+ * `stopAt(candidate)` marks the link where the proof stops (the PR head is a base-only merge of that candidate): no bridge or later record is followed from it, so a link past the head never counts.
  * `link` (candidate head -> the record that follows it, or null) replaces the default read of the records on disk, so a caller that also checks reachability judges one snapshot.
  * Returns the act refs no record names and the records read (baseline, candidate, refs), so a refusal can name both.
  */
-export const capRoundCoverage = (capRound, tmpRoot, record, { head, onHistory, coverOnHistory, bridge, link = (next) => chainLink(tmpRoot, next, bridge) } = {}) => {
+export const capRoundCoverage = (capRound, tmpRoot, record, { head, onHistory, coverOnHistory, stopAt, bridge, link = (next) => chainLink(tmpRoot, next, bridge) } = {}) => {
   // A PR-body act item never enters a delta record (startDeltaSequence drops it), so the record cannot name its ref.
   // The delta act list carries each cluster's kept representative only, so the body-item filter reads that representative, as startDeltaSequence does.
   const actRefs = capRoundCoverableRefs(capRound);
@@ -2405,7 +2406,7 @@ export const capRoundCoverage = (capRound, tmpRoot, record, { head, onHistory, c
     if (!first && onHistory && !onHistory(next)) break;
     const items = Array.isArray(r.items) ? r.items : [];
     records.push({ baseline: normalizeSha(r.reviewBaselineHead), candidate: next, refs: (first ? items : items.filter((i) => i?.status === "resolved")).map((i) => String(i?.ref)) });
-    if (!tmpRoot || !next || seen.has(next) || (head && next === head)) break;
+    if (!tmpRoot || !next || seen.has(next) || (head && next === head) || stopAt?.(next)) break;
     seen.add(next);
     r = link(next);
   }
@@ -2469,7 +2470,26 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
       return link;
     };
   };
-  const baseOnly = (from) => Boolean(head && typeof options.baseRefName === "string" && options.baseRefName) && baseOnlyMerge({ fromHead: from, head, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false);
+  const baseOnlyMemo = new Map();
+  const baseOnly = async (from) => {
+    if (!baseOnlyMemo.has(from)) baseOnlyMemo.set(from, Boolean(head && typeof options.baseRefName === "string" && options.baseRefName) && await baseOnlyMerge({ fromHead: from, head, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false));
+    return baseOnlyMemo.get(from);
+  };
+  // The proof stops at a chain end the head is a base-only merge of (`reaches`): the coverage walk stops there too, so a bridged link past the head never counts. A ready PR (anyHead) is bound by the history of the head instead.
+  const stopsAt = (next, direct, unsealed) => !options.anyHead && baseOnlyMemo.get(next) === true && !direct && !unsealed;
+  const primeStops = async ({ starts: startRecords, bridges }) => {
+    if (options.anyHead) return;
+    for (const bridge of bridges) for (const start of startRecords) {
+      const seen = new Set();
+      for (let r = start; r;) {
+        const next = normalizeSha(r.candidateHead);
+        if (!next || seen.has(next) || next === head) break;
+        seen.add(next);
+        if (!clearingDeltaRecord(tmpRoot, next) && !isUnsealedDeltaRecord(tmpRoot, next) && await baseOnly(next)) break;
+        r = chainLink(tmpRoot, next, bridge);
+      }
+    }
+  };
   const reaches = async (start, link) => {
     const seen = new Set();
     for (let record = start; record;) {
@@ -2527,12 +2547,12 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
     }
   };
   const onMemo = (candidate) => onHistoryMemo.get(candidate) === true;
-  const bound = { head, onHistory: options.anyHead ? onMemo : undefined, coverOnHistory: onMemo };
+  const bound = { head, onHistory: options.anyHead ? onMemo : undefined, coverOnHistory: onMemo, stopAt: (next) => stopsAt(next, clearingDeltaRecord(tmpRoot, next), isUnsealedDeltaRecord(tmpRoot, next)) };
   const covers = capRoundCovers(capRound, tmpRoot, bound);
   // A cover record counts when its candidate is the head or on its history, in both modes. Probe only the clearing cover records of the act refs a chain leaves uncovered: another record never counts.
   const primeCover = async ({ starts: startRecords, bridges }) => {
     const needed = new Set();
-    for (const bridge of bridges) for (const start of startRecords) for (const ref of capRoundCoverage(capRound, tmpRoot, start, { head, onHistory: bound.onHistory, bridge }).uncovered) needed.add(ref);
+    for (const bridge of bridges) for (const start of startRecords) for (const ref of capRoundCoverage(capRound, tmpRoot, start, { head, onHistory: bound.onHistory, stopAt: bound.stopAt, bridge }).uncovered) needed.add(ref);
     for (const ref of needed) {
       const cover = coverRecordOf(tmpRoot, normalizeSha(capHead), ref);
       const candidate = normalizeSha(cover?.candidateHead);
@@ -2546,7 +2566,7 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   const tryChain = async ({ starts: startRecords, bridges }) => {
     for (const bridge of bridges) for (const start of startRecords) {
       const link = snapshot(bridge);
-      if (!covers(start, bridge, (next) => link(next).following)) continue;
+      if (!covers(start, bridge, (next) => link(next).following, (next) => stopsAt(next, link(next).direct, link(next).unsealed))) continue;
       covering += 1;
       if (await reaches(start, link)) return true;
     }
@@ -2554,12 +2574,14 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   };
   const direct = await capRoundChainStarts({ ...chainArgs, baseRefName: undefined });
   await primeOnHistory(direct);
+  await primeStops(direct);
   await primeCover(direct);
   if (await tryChain(direct)) return capRound;
   covering = 0;
   const chain = await capRoundChainStarts({ ...chainArgs, baseRefName: options.baseRefName });
   const { starts, baseOnlyUnsealed } = chain;
   await primeOnHistory(chain);
+  await primeStops(chain);
   await primeCover(chain);
   if (await tryChain(chain)) return capRound;
   // ADR 0218: report the one condition that failed, so the refusal names its own remedy.
