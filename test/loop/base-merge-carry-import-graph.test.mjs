@@ -42,6 +42,7 @@ const ALLOWLIST = [
     "scripts/loop/check-size-budget.mjs", "scripts/loop/detect-change-scope.mjs", "scripts/loop/detect-internal-only-pr.mjs",
     "scripts/loop/early-surface-checks.mjs", "packages/core/src/loop/stale-surface-hits.mjs", "packages/core/src/loop/ui-e2e-scoping.mjs",
   ]],
+  ["round-cause report: records why a gate round ran, not a verdict input", ["scripts/github/_round-cause.mjs"]],
   ["issue, spec and PR-title parsing and plan intake: input data for the reviewer, not a rule", [
     "scripts/loop/detect-issue-refinement-artifact.mjs", "packages/core/src/loop/issue-refinement-artifact.mjs",
     "packages/core/src/loop/plan-file-promote-contract.mjs", "packages/core/src/loop/pr-title-markers.mjs",

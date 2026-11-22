@@ -2034,11 +2034,12 @@ export function isInRoundRewrite(log, incoming) {
  * dispositions are settled memory; a `blocked` verdict is skipped silently,
  * and a missing or unknown verdict (a truncated write, a hand-edited ledger)
  * is dropped and reported through `onUnreadable` when its identity matches. A
- * missing directory (first round) yields `[]`.
+ * missing directory (first round) yields `[]`. A sealed-ledger mismatch throws OUT_OF_BAND_WRITE, unless the caller passes `onOutOfBand`
+ * (telemetry readers only): it receives the ledger file name and the read continues without that ledger.
  *
  * @returns {Promise<object[]>}
  */
-export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable, includeRetainedCurrentHead = false, includeLiveCurrentHead = false, withPaths = false }) {
+export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable, onOutOfBand, includeRetainedCurrentHead = false, includeLiveCurrentHead = false, withPaths = false }) {
   let ledgerDir;
   try {
     const sampleLogPath = buildLogPath({
@@ -2064,7 +2065,11 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
     try {
       log = JSON.parse(await readSealed(path.join(ledgerDir, name)));
     } catch (err) {
-      if (err?.code === OUT_OF_BAND_WRITE) throw err;
+      if (err?.code === OUT_OF_BAND_WRITE) {
+        if (!onOutOfBand) throw err;
+        onOutOfBand(name);
+        continue;
+      }
       onUnreadable?.(name);
       continue;
     }
