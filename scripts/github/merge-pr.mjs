@@ -88,7 +88,7 @@ Optional:
                                contains origin/<base>), approvalMatch (head |
                                patch_id | null), sizeClass, and EVERY failing precondition
                                (an active run, a failed newest non-cancelled run, a read
-                               timeout and a head change are gate_evidence_run entries;
+                               timeout and, after a failed-run read, a head change are gate_evidence_run entries;
                                --check reads the runs once and never waits). Exit 0
                                whenever the preconditions could be evaluated
                                (ok:false carries the failures; under
@@ -121,7 +121,7 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
   must cover the wait; refuses with one recovery, the same text in the reason
   and in the recovery field, when the newest non-cancelled run failed and the
   gate-evidence status is not success, the wait or a run read timed out, or the
-  head changed during the wait or the run read; --check reports these and an
+  head changed during a wait or after a failed-run read; --check reports these (the head change only after a failed-run read) and an
   active run as failures instead; the reason names the run id when one is known, and a head
   change names the old and the new head; after an optional wait line, the
   refusal JSON is the last stderr line),
@@ -928,7 +928,8 @@ export async function mergePr(options, runtime = {}) {
     const spikeAfterRead = spikeResult();
     if (spikeAfterRead !== null) return spikeAfterRead;
   }
-  if (gateRun.waited) await loadAndCheckConfig();
+  // The first run read can last minutes without a wait, so the policy reloads after every run read.
+  await loadAndCheckConfig();
   const gateEvidenceStatus = resolveNamedContextState(prView?.statusCheckRollup, LOOP_DERIVED_CI_CHECK_NAME);
   // A failed run does not refuse while the head's `gate-evidence` commit status is `success` (reconcile reports already-success).
   if (gateRefusal?.kind === "failed" && gateEvidenceStatus === "success") gateRefusal = null;

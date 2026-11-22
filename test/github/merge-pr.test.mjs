@@ -2397,6 +2397,21 @@ test("gate_evidence_run loads the merge policy again after a wait and refuses a 
   assert.equal(mergeCalls(bad.calls).length, 0);
 });
 
+test("gate_evidence_run loads the merge policy again after a run read with no wait and refuses a humanMergeOnly set during it", async () => {
+  const { runtime, calls } = withRunReads([[RUN(2, "completed", "success")]]);
+  const base = runtime.loadConfig;
+  let loads = 0;
+  runtime.loadConfig = async (arg) => {
+    loads += 1;
+    const config = await base(arg);
+    return loads === 1 ? config : { ...config, config: { ...config.config, autonomy: { humanMergeOnly: true } } };
+  };
+  const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.equal(threw.mergePrFailure.humanMergeOnly, true);
+  assert.equal(loads, 2);
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
 test("a spike PR refuses at spike_pr before the config checks, under humanMergeOnly and with a config error", async () => {
   const spike = { body: "spike\n\n<!-- dev-loops:spike-pr no-merge -->\n" };
   const human = makeRuntime({ humanMergeOnly: true, prView: spike });
@@ -2464,9 +2479,10 @@ test("ghJson reports GH_TIMEOUT only for the spawn timer's kill, not for other s
     await writeFile(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
     return file;
   };
-  const run = (ghCommand) => defaultGhJson(["run", "list"], { ghCommand, env: process.env, label: "gh run list", timeoutMs: 300 }).catch((e) => e);
+  // Only the hung stub needs the short bound; the self-exiting stubs get a generous one so a slow start cannot trip the timer.
+  const run = (ghCommand, timeoutMs = 10000) => defaultGhJson(["run", "list"], { ghCommand, env: process.env, label: "gh run list", timeoutMs }).catch((e) => e);
   try {
-    assert.equal((await run(await stub("hung", "exec sleep 30"))).code, "GH_TIMEOUT");
+    assert.equal((await run(await stub("hung", "exec sleep 30"), 300)).code, "GH_TIMEOUT");
     const forms = { sigterm: ["kill -TERM $$", "killed-by-term"], sigkill: ["kill -KILL $$", "killed-by-kill"], exit1: ["exit 1", "plain-failure"] };
     for (const [name, [action, text]] of Object.entries(forms)) {
       const error = await run(await stub(name, `echo ${text} >&2\n${action}`));
