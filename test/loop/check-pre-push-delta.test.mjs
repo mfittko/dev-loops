@@ -18,6 +18,8 @@ import { runDocsValidators } from "../../scripts/docs/docs-validators.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { gateDeltaRecordPath, isLifecycleFinding, readGateDeltaRecord, readSealedGateDeltaRecord, writeGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { decidePiToolCall } from "../../extension/readonly-role-gate.ts";
+import { replacementPrOperatorRecovery } from "@dev-loops/core/loop/pr-gate-coordination";
+import { renderCliText } from "@dev-loops/core/loop/cli-command";
 
 setDefaultTimeout(30000); // most cases seed a real git repo and run the CLI; the 5 s default fails under load
 
@@ -1592,6 +1594,8 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
     ["bounded_out", { sameActSet: true, outcome: "locally_clear", invocation: 3, candidateHead: "ORPHAN" }, false, /pr create .*--allow-replacement-pr/],
     ["bounded_out", { sameActSet: true, outcome: "locally_clear", invocation: 3, candidateHead: "HEAD" }, false, /pr create .*--allow-replacement-pr/], // a symbolic candidate at the bound
     ["unsealed_record: .*is locally_clear for another act set.*rm -f \\S+\\.json \\S+\\.seal", { outcome: "locally_clear" }, true],
+    // An unsealed extension record reaches cleared() too: its message names the rm step, so it carries no extend recovery.
+    ["unsealed_record: .*carries an extension.*rm -f \\S+\\.json \\S+\\.seal", { outcome: "locally_clear", extension: "docs_tests_only", sameActSet: true }, true],
     // ADR 0255 decision 7: an unsealed non-clearing record over another ref set is not taken over.
     ["unsealed_record: .*covers another set of act refs.*rm -f \\S+\\.json \\S+\\.seal", { outcome: "needs_fix", items: [{ ref: "other", status: "not_resolved" }] }, true],
   ];
@@ -1610,6 +1614,10 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
         assert.doesNotMatch(error.message, /loop gate-coordination/, "no remedy routes back to the coordinator");
         if (!/extend-cap-round-chain/.test(String(remedy))) assert.doesNotMatch(error.message, /extend-cap-round-chain/, "a record that does not cover the derived refs never routes to the extension");
         assert.doesNotMatch(error.message, /\$\{/, "no uninterpolated placeholder");
+        // Issue 3437 ac:3: the recovery is the one runnable command of the printed remedy, with the real PR number; an unsealed record names the rm step and carries none.
+        if (unsealed || message === "bounded_out") assert.equal(error.recovery, undefined, "no recovery contradicts the printed remedy");
+        else if (/extend-cap-round-chain/.test(String(remedy))) assert.match(error.recovery, /gate extend-cap-round-chain --repo owner\/repo --pr 70$/u);
+        else assert.equal(error.recovery, renderCliText(replacementPrOperatorRecovery(70)), "the off-history and other-refs recovery is the shared operator form");
         return true;
       });
       assert.equal(fs.readFileSync(recordPath, "utf8"), before, "the record is never overwritten");
