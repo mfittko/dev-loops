@@ -66,7 +66,8 @@ import {
   resolveReviewGateAngles,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
-import { CAP_ROUND_REFUSAL, evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
+import { CAP_ROUND_REFUSAL, capRoundCoverageDetail, evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
+import { startDeltaSequence, threadsToActList } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DISPOSITION, STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { writePrGateCoordinationSnapshot } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
@@ -9459,6 +9460,63 @@ test("resolveCapRoundFixed accepts the union of the chain's records over the cap
     await writeDeltaRecord(repoRoot, B, C, "push_to_gate", resolved(p));
     assert.equal(await run(), null, "a later record that repeats p leaves r genuinely uncovered");
     assert.equal(condition, "items_do_not_cover");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 review: a thread-route record names its items by threadId; the sealed record carries the ledger fingerprint of the gate finding marker as `actRef`.
+test("resolveCapRoundFixed covers a cap-round act ref through a thread-route record sealed from threadsToActList, and not through an unrelated thread (issue 3443)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const C = "8".repeat(40);
+    const opts = { repo: "owner/repo", pr: 68, gate: "draft_gate", headSha: C };
+    await seedClosedRounds(repoRoot, 68, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-68", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const r = { ...p, summary: "escalated defect" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...r, clusterId: 1 }] }), "utf8");
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", { items: [{ ref: fingerprintFinding(p), status: "resolved" }] });
+    const sealThread = (body) => {
+      const sequence = startDeltaSequence({ reviewBaselineHead: B, actList: threadsToActList({ ok: true, repo: "owner/repo", pr: 68, threads: [{ trusted: true, threadId: "PRRT_escalated", body, isResolved: false }] }, { repo: "owner/repo", pr: 68 }) });
+      writeGateDeltaRecord({ tmpRoot: path.join(repoRoot, "tmp"), sequence, candidateHead: C, invocation: 1, decision: { outcome: "locally_clear", nextStep: "push_to_gate" }, result: { actionableItems: [{ ref: "PRRT_escalated", status: "resolved" }] } });
+    };
+    let condition = null;
+    const run = () => resolveCapRoundFixed(opts, { repoRoot, onFailure: (c) => { condition = c; } });
+    sealThread("fix it\n<!-- dev-loops:finding 0123456789abcdef severity=low angle=x round=1 -->");
+    assert.equal(await run(), null, "a thread whose marker names another fingerprint leaves r uncovered");
+    assert.equal(condition, "items_do_not_cover");
+    sealThread(`<!-- dev-loops:finding ${fingerprintFinding(r)} severity=low angle=x round=1 -->\nfix it`);
+    assert.ok(await run(), "the thread carrying r's marker covers r");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 review: with two non-covering starts the detail names the start with fewer uncovered refs, and a missing SHA renders as `?`.
+test("resolveCapRoundFixed names the closer of two non-covering starts, and the detail renders a missing SHA as ? (issue 3443)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const M = "7".repeat(40);
+    const C = "8".repeat(40);
+    const opts = { repo: "owner/repo", pr: 69, gate: "draft_gate", headSha: C, baseRefName: "main" };
+    await seedClosedRounds(repoRoot, 69, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-69", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const q = { ...p, summary: "second defect" };
+    const r = { ...p, summary: "escalated defect" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...q, clusterId: 1 }, { ...r, clusterId: 2 }] }), "utf8");
+    const resolved = (...fs) => fs.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" }));
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", { items: resolved(p) });
+    await writeDeltaRecord(repoRoot, M, C, "push_to_gate", { items: resolved(p, q) });
+    let detail = null;
+    const merge = async (args) => args.fromHead === B && args.head === M;
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge: merge, onFailure: (c, d) => { detail = d; } }), null);
+    assert.deepEqual(detail.uncovered, [fingerprintFinding(r)], "the M to C start leaves one ref uncovered, the A to B start two");
+    assert.equal(detail.records[0].baseline, M);
+    assert.match(capRoundCoverageDetail({ uncovered: ["r"], records: [{ baseline: null, candidate: null, refs: [] }] }), /\?\.\.\? \[\]/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

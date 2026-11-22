@@ -3321,6 +3321,15 @@ test("AC1: rendered-HTML diff with satisfied recorded evidence passes the builde
   assert.ok(blockedScoping.missing.includes("docs/articles/foo.html"));
 });
 
+// Issue 3443: the production builder carries the cap-round coverage detail into the evaluator input; a null detail adds no key.
+test("buildGateCoordinationEvaluatorInput carries draftCapRoundDetail and omits a null one (issue 3443)", () => {
+  const context = { repo: "owner/repo", pr: 1, currentHeadSha: "021ac63deadbeef", interpretation: { state: "pr_draft" }, disposition: { loopDisposition: "action_required" }, snapshot: {}, gateEvidence: { draftGate: {}, preApprovalGate: {}, draftGateMarker: {}, preApprovalGateMarker: {} }, prData: { isDraft: true, state: "OPEN", title: "t", files: [], closingIssuesReferences: [] } };
+  const base = { context, maxCopilotRounds: 2, draftGateConfig: {}, preApprovalGateConfig: {}, postConvergenceSignificantChange: false };
+  const draftCapRoundDetail = { uncovered: ["r"], records: [] };
+  assert.deepEqual(buildGateCoordinationEvaluatorInput({ ...base, draftCapRoundDetail }).draftCapRoundDetail, draftCapRoundDetail);
+  assert.equal(Object.hasOwn(buildGateCoordinationEvaluatorInput({ ...base, draftCapRoundDetail: null }), "draftCapRoundDetail"), false);
+});
+
 // #1443: loadRecordedDesignerEvidence reads a recorded evidence file and
 // returns null when no path is supplied.
 test("loadRecordedDesignerEvidence reads a recorded evidence file / null when absent (#1443)", async () => {

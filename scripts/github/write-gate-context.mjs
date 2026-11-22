@@ -2347,7 +2347,7 @@ export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefNam
 const CLEAN_CAP_EXTENSIONS = new Set(["docs_tests_only", "delta_covered"]);
 /**
  * The `covers` check of resolveCapRoundFixed, shared with the chain-extension tool so the two cannot disagree:
- * the first clearing record must name every act item of the cap round. Pass it as `covering` to clearingChainLastCandidates.
+ * the union of the item refs of the traversed clearing chain (`capRoundCoverage`) must name every act ref of the cap round. Pass it as `covering` to clearingChainLastCandidates.
  */
 export const capRoundCovers = (capRound, tmpRoot, bound) => (record) => {
   // A clean cap round has no act item, so only a record whose extension is in CLEAN_CAP_EXTENSIONS proves it (ADR 0250 for docs_tests_only):
@@ -2382,7 +2382,7 @@ export const capRoundCoverage = (capRound, tmpRoot, record, { head, onHistory } 
     const next = normalizeSha(r.candidateHead);
     if (!first && onHistory && !onHistory(next)) break;
     const items = Array.isArray(r.items) ? r.items : [];
-    records.push({ baseline: normalizeSha(r.reviewBaselineHead), candidate: next, refs: (first ? items : items.filter((i) => i?.status === "resolved")).map((i) => String(i?.ref)) });
+    records.push({ baseline: normalizeSha(r.reviewBaselineHead), candidate: next, refs: (first ? items : items.filter((i) => i?.status === "resolved")).map((i) => String(i?.actRef ?? i?.ref)) });
     if (!tmpRoot || !next || seen.has(next) || (head && next === head)) break;
     seen.add(next);
     r = clearingDeltaRecord(tmpRoot, next);
@@ -2426,7 +2426,7 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
     }
     return false;
   };
-  // The first clearing record must name every act item of the cap round: a delta record keyed on the same baseline for another route (a thread review) proves nothing about them.
+  // The union of the item refs of the traversed clearing chain (`capRoundCoverage`) must name every act ref of the cap round: a delta record keyed on the same baseline for another route (a thread review) proves nothing about them.
   // With no open act item the check is vacuously true unless the cap round is clean: a clean cap round binds only a record chain that carries an extension in `CLEAN_CAP_EXTENSIONS` (docs_tests_only, delta_covered).
   // Issue 3443: the coverage union spans only the links the proof traverses. anyHead accepts the first record whatever its candidate, so a later link counts only when its candidate is an ancestor of the head.
   const gitProbe = (args) => runGitCommand([...DIFF_ISOLATION_FLAGS, ...args], { repoRoot }).catch(() => ({ code: 128 }));

@@ -1342,6 +1342,27 @@ test("issue 3443: a partially covering chain names the replacement PR, since a c
   }
 });
 
+// Issue 3443 review: the tool applies the history bound of resolveCapRoundFixed, so an abandoned sibling link that resolves the missing ref does not count as covering.
+test("issue 3443: an off-history sibling link that resolves the missing ref does not make the tool treat the chain as covering", async () => {
+  const act = (summary) => ({ severity: "medium", summary, files: ["src/a.mjs"], line: 1, angle: "correctness", judgeDisposition: "act", judgeTitle: summary, judgeFix: "add" });
+  const [p, q] = [act("guard missing"), act("second defect")];
+  const { root, A, B } = await capFixture({ findings: [p, q] });
+  try {
+    const tmp = path.join(root, "tmp");
+    rmSync(gateDeltaRecordPath(tmp, A), { force: true });
+    rmSync(`${gateDeltaRecordPath(tmp, A)}.seal`, { force: true });
+    const C = String(runGitFixture(root, ["commit-tree", `${B}^{tree}`, "-p", B, "-m", "abandoned sibling"])).trim();
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: B, actSetId: "round-3", invocation: 3, outcome: "locally_clear", nextStep: "push", items: [{ ref: fingerprintFinding(p), status: "resolved" }] });
+    writeSealedGateDeltaRecord(tmp, B, { reviewBaselineHead: B, candidateHead: C, actSetId: "round-4", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: fingerprintFinding(q), status: "resolved" }] });
+    const head = await commit(root, { "docs/z.md": "z\n" }, "docs");
+    const refused = await extend(root, head);
+    assert.equal(refused.reason, "no_cap_round_chain", JSON.stringify(refused));
+    assert.ok(refused.detail.includes(`Uncovered act refs: ${fingerprintFinding(q)}.`), refused.detail);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("issue 3437 ac:3: the reviewer-only CLI prints the recovery of its refusal on stderr, rendered with the repo and PR", async () => {
   const { root, A, head } = await ciFailedCapFixture();
   const bin = await mkdtemp(path.join(os.tmpdir(), "fake-gh-"));

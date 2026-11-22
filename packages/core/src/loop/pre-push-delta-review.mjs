@@ -136,6 +136,9 @@ export function operatorFocusActItems(operatorFocus) {
   return summary ? [{ ref: OPERATOR_FOCUS_REF, angle: OPERATOR_FOCUS_REF, summary, judgeDisposition: "act" }] : [];
 }
 
+// Line-start anchored like FINDING_MARKER_RE in scripts/github/_gate-finding-surface.mjs: a marker quoted mid-line is never honored.
+const GATE_FINDING_FP_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\b/m;
+
 /**
  * Thread route: reduce successful `list-review-threads --unresolved-only` output (or a github-sourced `capture-review-threads --unresolved --bodies` file) for `repo#pr`
  * to a judge-act-list-shaped array, one act item per unresolved thread, `ref` = the `threadId`.
@@ -161,6 +164,8 @@ export function threadsToActList(rawPayload, { repo, pr, operatorFocus } = {}) {
   return [...threads].sort((a, b) => (a.threadId < b.threadId ? -1 : a.threadId > b.threadId ? 1 : 0)).map((thread) => ({
     ref: thread.threadId,
     angle: "review-thread",
+    // A gate finding thread carries its ledger fingerprint in the marker: the cap-round coverage union maps the threadId ref back to the act ref through it.
+    ...(nonEmpty(thread.body) && thread.body.match(GATE_FINDING_FP_RE) ? { fingerprint: thread.body.match(GATE_FINDING_FP_RE)[1] } : {}),
     summary: nonEmpty(thread.body) ? thread.body.trim() : "",
     judgeDisposition: "act",
     ...(nonEmpty(thread.path) ? { file: thread.path } : {}),

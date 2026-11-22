@@ -125,9 +125,11 @@ export async function extendCapRoundChain(options, {
   const capLog = cap ? shellQuote(buildLogPath({ repo, pr, gate: "draft_gate", headSha: cap.log.headSha, tmpRoot })) : "<cap-round findings log>";
   const cleanCap = isCleanCapRound(cap);
   // A clean cap round has no act item to cover: any sealed clearing chain (a thread-route record over a logic commit) ends at the E the extension record binds to, and the proof then accepts the chain through that record.
-  const ends = cap ? await clearingChainLastCandidates({ tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot, covering: cleanCap ? () => true : capRoundCovers(cap, tmpRoot, { head }), allowUnsealedEnd: true }) : [];
   const reaches = (from, to) => { try { git(repoRoot, ["merge-base", "--is-ancestor", from, to]); return true; } catch { return false; } };
   const isAncestor = (sha) => sha !== head && reaches(sha, head);
+  // The bound resolveCapRoundFixed applies on a ready PR (anyHead): a later link counts only while its candidate is on the head's history, so the tool and the proof cannot disagree.
+  const coverBound = { head, onHistory: (candidate) => candidate === head || reaches(candidate, head) };
+  const ends = cap ? await clearingChainLastCandidates({ tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot, covering: cleanCap ? () => true : capRoundCovers(cap, tmpRoot, coverBound), allowUnsealedEnd: true }) : [];
   // The latest end: the ancestor end that every other ancestor end precedes, so the logic check never spans commits a later chain cleared.
   const ancestorEnds = ends.filter(isAncestor);
   let chainEnd = ancestorEnds.find((end) => ancestorEnds.every((other) => reaches(other, end)));
@@ -209,7 +211,7 @@ export async function extendCapRoundChain(options, {
     const replacement = replacementPrOperatorRecovery(pr);
     if (sealedCap) {
       // Issue 3443: name the act refs no record on the chain covers and the records that exist, so the operator sees which item is missing.
-      const { uncovered, records } = cleanCap ? { uncovered: [], records: [] } : capRoundCoverage(cap, tmpRoot, sealedCap, { head });
+      const { uncovered, records } = cleanCap ? { uncovered: [], records: [] } : capRoundCoverage(cap, tmpRoot, sealedCap, coverBound);
       const named = capRoundCoverageDetail({ uncovered, records });
       // A further record at the chain end derives an empty act list (ADR 0255) and covers no act ref, so the replacement PR is the only recovery.
       return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}: the sealed record at the cap-round head ${capHeadSha.slice(0, 7)} does not cover the cap round's act set or its candidate is off the PR head's history, and it is never overwritten, so a reviewer-only run at that head refuses.${named} Restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, replacement);
