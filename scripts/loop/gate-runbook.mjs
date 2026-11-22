@@ -24,7 +24,7 @@ const RULE_ID_PATTERN = /\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+){2,}\b/g;
 
 const RUNBOOK = String.raw`# Gate round runbook
 
-You run one \`draft_gate\`, \`pre_approval_gate\` or \`review\` round for one PR at one head (GATE-EXEC-GATE-COORDINATOR). Read only this runbook before you act. Read the contract (\`skills/docs/${CONTRACT_FILE}\`) only for a rule ID named here, with \`grep -n '<RULE-ID>'\` and a bounded \`sed -n\` range. The contract is canonical. This runbook loosens none of its rules.
+You run one \`draft_gate\`, \`pre_approval_gate\` or \`review\` round for one PR at one head (GATE-EXEC-GATE-COORDINATOR). Read only this runbook before you act. Read the contract (\`skills/docs/${CONTRACT_FILE}\`) only for a rule ID named here, with \`grep -n '<rule ID>'\` and a bounded \`sed -n\` range. The contract is canonical. This runbook loosens none of its rules.
 
 On the \`review\` gate (the dev-loop \`--review\` route) run no judge: skip steps 11 to 13, run step 14 without \`--judge-verdict\` and without \`--ledger-out\`, and omit \`actList\`, \`specAuthorityIdentity\` and \`judgeSummary\` from the result.
 
