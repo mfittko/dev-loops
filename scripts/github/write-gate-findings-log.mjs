@@ -29,6 +29,7 @@ import { rejectClosingRefRemoval } from "../loop/_slice-linkage.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
+import { resolveRoundCause } from "./_round-cause.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--verdict <clean|findings_present|blocked>] (--findings <json> | --findings-file <path>) [--tmp-root <path>] [--context-tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -1245,12 +1246,15 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // The round's own pr-body digest (GATE-EXEC-THREAD-DISPOSITION PR-body act): a later same-head context rebuild cannot rewrite it.
   // An unreadable or ambiguous context records none, and the closer then falls back to the context path.
   const prBodyDigest = await readReviewedBodySha256({ repo: options.repo, pr: options.pr, gate: options.gate, contextTmpRoot: options.contextTmpRoot }, options.headSha, repoRoot).catch(() => null);
+  // Derived before retainSameHeadLedger runs, so the prior round is the one this round follows.
+  const roundCause = await resolveRoundCause({ ...priorOptions, roundIdentity: { ...roundIdentity, completed: roundCompleted() }, prBodySha256: prBodyDigest, contextTmpRoot: options.contextTmpRoot }, { repoRoot });
   const log = {
     repo: options.repo,
     pr: options.pr,
     gate: options.gate,
     headSha: options.headSha,
     verdict: persistedVerdict,
+    roundCause,
     loggedAt: new Date().toISOString(),
     ...(typeof prBodyDigest === "string" && /^[0-9a-f]{64}$/.test(prBodyDigest) ? { prBodySha256: prBodyDigest } : {}),
     // Record the round's real execution mode: a fanout_fanin verdict
