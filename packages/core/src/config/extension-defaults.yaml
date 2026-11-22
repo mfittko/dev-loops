@@ -114,7 +114,7 @@ gates:
             iteration's result is used (or none at all).
       - name: input-validation
         developer-checklist:
-          - "I1: For each new catch or gh/git call, rethrow or return a typed error instead of a default value, and pass a timeout to every spawned child."
+          - "I1: For each new catch or gh/git call, rethrow or return a typed error instead of a default value, and give each spawned child a timeout (`check-spawn-timeout.mjs` lints it)."
           - "I2: Before writing a matcher or tokenizer, list every form the real consumer accepts (quoting, continuations, substitutions, abbreviations, nesting, case); add one accept and reject test each."
         persona: review
         prompt: Review this change for input-validation drift. Check repo slug, issue number, host, SHA, whitespace, and sentinel normalization. Prefer shared parsers/helpers over ad hoc validation. Flag malformed inputs that slip through, confusing errors, path traversal-like segments, and inconsistent trimming/normalization across CLI/API entrypoints. Recommend minimal tests for accepted and rejected forms.
