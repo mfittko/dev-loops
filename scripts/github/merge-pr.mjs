@@ -894,6 +894,7 @@ export async function mergePr(options, runtime = {}) {
     error.mergePrFailure = {
       ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
       failures: [{ precondition: "gate_evidence_run", reason: gateRunReason }],
+      recovery: "wait for the Gate evidence run to finish on the current head, or re-gate the head if the run failed, then call merge-pr again",
     };
     throw error;
   }
