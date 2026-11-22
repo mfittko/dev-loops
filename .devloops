@@ -22,7 +22,7 @@ gates:
   requireFanoutProvenance: true
   # Bounded-parallel fan-out concurrency: dispatch up to 5 dispatch units
   # concurrently per wave via blocking joins. write-gate-context.mjs packs
-  # whole units so every round, including the full 20-angle draft pool, is
+  # whole units so every round, including the full 22-angle draft pool, is
   # one wave of at most 5 units x 5 angles. This matches the Claude harness
   # cap (5), so the Claude clamp is a no-op here. The two knobs are
   # independent: queue.maxParallel below stays 3, so the combined peak is

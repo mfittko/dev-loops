@@ -300,7 +300,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "Review lenses the refinement fan-out dispatches."
+          "description": "Angle names whose prompts the grill gives to its one fresh review agent (the simplicity review)."
         }
       },
       "additionalProperties": false,

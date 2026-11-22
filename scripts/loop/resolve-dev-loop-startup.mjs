@@ -52,9 +52,9 @@ import {
   PLAN_FILE_REFINEMENT_SECTIONS,
 } from "@dev-loops/core/loop/plan-file-intake-contract";
 import { evaluateSpikeIntakeState } from "@dev-loops/core/loop/spike-intake-contract";
+import { buildGrillFactsSnapshot } from "@dev-loops/core/loop/issue-refinement-artifact";
 import {
   GRILL_STATE,
-  buildGrillFactsSnapshot,
   buildSpecChangeFactsGhArgs,
   interpretRefinementGrillState,
   parseSpecChangeFacts,
@@ -88,14 +88,15 @@ Use --plan-file to start local planning from a phase-doc-format plan
 Use --spike to start a time-boxed exploratory loop from a local spike
 artifact (read-only: no tracker mutation, no issue/PR number).
 Required (exactly one):
-  --issue <n>    Target an issue by number (auto-resolves all state)
+  --issue <n>    Target an issue by number (auto-resolves all state;
+                 without an open PR it needs a clean grill: a results comment, a "## Simplest design" section and a "simplicity-review:" line, else it stops and prints the grill command)
   --pr <n>       Target a PR by number (auto-resolves all state)
   --input <path>  Path to a JSON file with canonical-state payload
   --plan-file <path>  Path to a phase-doc-format plan to start locally
   --spike <path>  Path to a spike artifact to start a spike loop locally
 Optional modifier:
   --claim        With --issue <n> or --pr <n> only: if the target is open and unassigned,
-                 assign the current user (the only GitHub write; open targets only; it also writes the local run-context file), then start. Pass it
+                 assign the current user (the only GitHub write; open targets only; it also writes the local run-context file), then start. An issue without a clean grill stops first, before any claim write. Pass it
                  only when the user explicitly asked to start or continue that
                  exact target. With --pr, an unreadable linked issue refuses
                  the claim. Rejected with --review/--ui-review/--input/
@@ -1033,10 +1034,12 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     // (read-only inspection, e.g. info.mjs) skips enforcement entirely,
     // regardless of strategy — resolveAuthoritativeStartupResumeBundle itself
     // never shells out, so this peek costs no extra gh calls.
-    // A grill stop returns before any ownership error or claim write, with or without --claim.
-    if (!issueReadinessReason && !ownershipGateBypassed(env)) {
+    if (!ownershipGateBypassed(env)) {
       const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
       if (ownershipGateAppliesToStrategy(peekedStrategy)) {
+        const ownership = resolveOwnershipState(assignees, repoRoot, env);
+        // A grill stop keeps the foreign-owner refusal and skips the claim write and the unassigned refusal.
+        if (issueReadinessReason && ownership.state !== OWNERSHIP_STATE.ASSIGNED_TO_OTHER) return result;
         // --claim only claims an OPEN issue; the extra state read runs only
         // when a claim write is actually possible.
         let claimNow = false;
@@ -1050,7 +1053,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         }
         // Plain review is PR-only, so issue ownership errors intentionally do
         // not suggest the review selector.
-        enforceOwnershipGate(resolveOwnershipState(assignees, repoRoot, env), {
+        enforceOwnershipGate(ownership, {
           describeArtifact: `Issue #${issue}`,
           claimCommand: `dev-loops-run scripts/github/edit-issue.mjs --repo ${repo} --issue ${issue} --add-assignee @me`,
           claimArgs: ["issue", "edit", String(issue), "--repo", repo, "--add-assignee", "@me"],
@@ -1507,6 +1510,7 @@ export function buildResolveDevLoopStartupResult(input, {
   cwd,
   asyncStartMode = "required",
   config,
+  claim = false,
   resolveHasNewerMerge = inspectNewerMergeSinceCheckpoint,
 } = {}) {
   const effectiveEnv = env ?? adapter.getEnv();
@@ -1566,7 +1570,7 @@ export function buildResolveDevLoopStartupResult(input, {
     return {
       ...buildNeedsReconcileStartupResult(
         bundle,
-        `The spec-change read for issue #${issue} failed (${SPEC_CHANGE_READ_FAILED_REASON}). Retry with \`loop startup --issue ${issue}\`; check the warnings for the read error (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
+        `The spec-change read for issue #${issue} failed (${SPEC_CHANGE_READ_FAILED_REASON}). Retry with \`loop startup --issue ${issue}${claim ? " --claim" : ""}${canonicalSpecSource === "pr_body" ? " --lightweight" : ""}\`; check the warnings for the read error (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
         pendingRetrospectives,
       ),
       issueReadiness: input.issueReadiness,
@@ -1772,6 +1776,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     asyncStartMode,
     adapter,
     config: devLoopConfig,
+    claim: options.claim,
   }), { claim: options.claim, env: adapter.getEnv(), cwd: sessionCwd, repoRoot, issue: options.issue, pr: options.pr });
   if (result.ok === false) {
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout: stderr, stderr });

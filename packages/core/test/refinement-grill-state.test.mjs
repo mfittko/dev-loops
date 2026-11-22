@@ -4,7 +4,6 @@ import {
   buildSpecChangeFactsGhArgs,
   detectGrillProvenance,
   detectSimplicityReview,
-  buildGrillFactsSnapshot,
   detectSpecChangedSinceGrill,
   parseSpecChangeFacts,
   SPEC_CHANGED_SINCE_GRILL_REASON,
@@ -13,6 +12,7 @@ import {
   interpretRefinementGrillState,
   normalizeGrillSnapshot,
 } from "@dev-loops/core/loop/refinement-grill-state";
+import { buildGrillFactsSnapshot } from "@dev-loops/core/loop/issue-refinement-artifact";
 
 const RESULTS_TITLE = "🔬 Grill / refinement results";
 
@@ -330,19 +330,11 @@ const BEFORE = "2026-11-06T09:00:00Z";
 const AFTER = "2026-11-06T11:00:00Z";
 const resultsComment = (createdAt, extra = "") => ({ body: `## ${RESULTS_TITLE}\n\nNo gaps were found.\n\nsimplicity-review: 0 findings, 0 corrected, 0 rejected${extra}`, createdAt });
 
+const MATRIX = "## AC / DoD matrix\n\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the feature works end to end | a focused test proves the feature works |\n\n## Non-goals\n\n- none\n";
+const REFINED = `${MATRIX}\n## Simplest design\n\nOne predicate.\n`;
+
 function grillStateFor({ comments, bodyLastEditedAt = null, surface = "issue" }) {
-  const provenance = detectGrillProvenance(comments);
-  return interpretRefinementGrillState({
-    loaded: true,
-    detectRan: true,
-    surface,
-    openGapCount: 0,
-    provenanceRecorded: provenance.provenanceRecorded,
-    provenanceBypass: provenance.bypass,
-    simplestDesign: true,
-    simplicityReview: detectSimplicityReview(comments),
-    specChangedSinceGrill: detectSpecChangedSinceGrill({ comments, bodyLastEditedAt }),
-  });
+  return interpretRefinementGrillState(buildGrillFactsSnapshot({ body: REFINED, comments, bodyLastEditedAt, surface }));
 }
 
 test("AC1: a counted comment after the latest results comment returns detect_gaps / spec_changed_since_grill", () => {
@@ -456,30 +448,54 @@ test("parseSpecChangeFacts reads the GraphQL node and tolerates a body-only payl
 
 // DESIGN-SIMPLEST-FIRST (issue 3462): grill_clean needs a `## Simplest design` section and a latest-comment review line.
 const REVIEW_LINE = "simplicity-review: 2 findings, 2 corrected, 0 rejected";
-const withSection = "## Simplest design\n\nOne predicate.\n";
-const grilled = (extra = "") => ({ body: `## ${RESULTS_TITLE}\n\nVerdict: grill-clean.\n\n${extra}`, createdAt: GRILL_AT });
-const stateOf = (input) => interpretRefinementGrillState(buildGrillFactsSnapshot({ openGapCount: 0, ...input }));
+const grilled = (extra = "", createdAt = GRILL_AT) => ({ body: `## ${RESULTS_TITLE}\n\nVerdict: grill-clean.\n\n${extra}`, createdAt });
+const stateOf = (input) => interpretRefinementGrillState(buildGrillFactsSnapshot(input));
 
 test("3462: a clean issue has provenance, a Simplest design section and a review line", () => {
-  const out = stateOf({ body: withSection, comments: [grilled(REVIEW_LINE)] });
+  const out = stateOf({ body: REFINED, comments: [grilled(REVIEW_LINE)] });
   assert.equal(out.state, GRILL_STATE.GRILL_CLEAN);
 });
 
-test("3462: each missing fact blocks the zero-iteration exit, and the repaired issue reaches grill_clean", () => {
-  const never = stateOf({ body: withSection, comments: [] });
+test("3462: each missing fact blocks the zero-iteration exit with its recovery text, and the repaired issue reaches grill_clean", () => {
+  const never = stateOf({ body: REFINED, comments: [] });
   assert.deepEqual([never.state, never.reason], [GRILL_STATE.DETECT_GAPS, "provenance_missing"]);
-  const noSection = stateOf({ body: "## Problem\n", comments: [grilled(REVIEW_LINE)] });
+  const noSection = stateOf({ body: MATRIX, comments: [grilled(REVIEW_LINE)] });
   assert.deepEqual([noSection.state, noSection.reason], [GRILL_STATE.DETECT_GAPS, "simplest_design_missing"]);
-  const noLine = stateOf({ body: withSection, comments: [grilled()] });
+  const noLine = stateOf({ body: REFINED, comments: [grilled()] });
   assert.deepEqual([noLine.state, noLine.reason], [GRILL_STATE.DETECT_GAPS, "simplicity_review_missing"]);
-  assert.equal(stateOf({ body: withSection, comments: [grilled(REVIEW_LINE)] }).state, GRILL_STATE.GRILL_CLEAN);
+  for (const out of [noSection, noLine]) assert.match(out.nextAction, /^Re-grill: add the "## Simplest design" section .* "simplicity-review: <n> findings, <n> corrected, <n> rejected" line$/);
+  assert.match(never.nextAction, /^Run the semantic gap pass/);
+  assert.equal(stateOf({ body: REFINED, comments: [grilled(REVIEW_LINE)] }).state, GRILL_STATE.GRILL_CLEAN);
 });
 
-test("3462: only the latest results comment carries the review line; a bypass line needs the facts too", () => {
-  const older = { ...grilled(REVIEW_LINE), createdAt: BEFORE };
-  assert.equal(detectSimplicityReview([older, grilled()]), false);
-  assert.equal(detectSimplicityReview([grilled(), older]), true);
+test("3462: the review line is read from the latest results comment by createdAt, not by array position", () => {
+  const older = grilled(REVIEW_LINE, BEFORE);
+  const newer = grilled("", AFTER);
+  assert.equal(detectSimplicityReview([older, newer]), false);
+  assert.equal(detectSimplicityReview([newer, older]), false);
+  assert.equal(detectSimplicityReview([grilled("", BEFORE), grilled(REVIEW_LINE, AFTER)]), true);
+  assert.equal(detectSimplicityReview([grilled(REVIEW_LINE, AFTER), grilled("", BEFORE)]), true);
   assert.equal(detectSimplicityReview([{ body: REVIEW_LINE }]), false);
-  const bypass = stateOf({ body: "## Problem\n", comments: [grilled("bypass: operator-authorized by mfittko")] });
+  const bypass = stateOf({ body: MATRIX, comments: [grilled("bypass: operator-authorized by mfittko")] });
   assert.equal(bypass.state, GRILL_STATE.DETECT_GAPS);
+});
+
+test("3462: the review line is accepted only when findings equal corrected plus rejected", () => {
+  const lineOf = (f, c, r) => [grilled(`simplicity-review: ${f} findings, ${c} corrected, ${r} rejected`)];
+  assert.equal(detectSimplicityReview(lineOf(3, 2, 1)), true);
+  assert.equal(detectSimplicityReview(lineOf(0, 0, 0)), true);
+  assert.equal(detectSimplicityReview(lineOf(3, 0, 0)), false);
+  assert.equal(detectSimplicityReview(lineOf(1, 1, 1)), false);
+});
+
+test("3462: a fenced Simplest design heading and a matrix-less body do not reach grill_clean", () => {
+  const fenced = stateOf({ body: `${MATRIX}\n\`\`\`md\n## Simplest design\n\nQuoted template.\n\`\`\`\n`, comments: [grilled(REVIEW_LINE)] });
+  assert.deepEqual([fenced.state, fenced.reason], [GRILL_STATE.DETECT_GAPS, "simplest_design_missing"]);
+  const noMatrix = stateOf({ body: "## Simplest design\n\nOne predicate.\n", comments: [grilled(REVIEW_LINE)] });
+  assert.equal(noMatrix.state, GRILL_STATE.AWAIT_ANSWERS);
+});
+
+test("3462: the pr surface keeps its zero-iteration exit without the two simplicity facts", () => {
+  const out = stateOf({ body: MATRIX, comments: [grilled()], surface: "pr" });
+  assert.equal(out.state, GRILL_STATE.GRILL_CLEAN);
 });

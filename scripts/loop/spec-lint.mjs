@@ -12,7 +12,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { loadDevLoopConfigStrict } from "@dev-loops/core/config";
-import { extractSection } from "@dev-loops/core/loop/markdown-sections";
+import { extractSection, stripFencedCode } from "@dev-loops/core/loop/markdown-sections";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { detectAcDodMatrix } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { pathsMissingFromMatrix } from "../github/waive-adr-tripwire.mjs";
@@ -66,22 +66,10 @@ const BODY_ADR_RE = /\bADR[\s-]+(\d{4,})\b|docs\/decisions\/(\d{4,})-[\w-]*\.md/
 // Status sections also hold dates and issue numbers, so adrNumbersIn keeps only indexed record numbers.
 const STATUS_ADR_RE = /\b(\d{4,})\b/g;
 
+export { stripFencedCode };
+
 function isMissing(error) {
   return error?.code === "ENOENT" || error?.code === "ENOTDIR";
-}
-
-export function stripFencedCode(body) {
-  // A fence closes only on a bare run of its own character at least as long as the opener.
-  let fence = null;
-  return body.split(/\r?\n/).filter((line) => {
-    const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
-    if (!fence) {
-      if (marker) fence = marker;
-      return !marker;
-    }
-    if (marker && marker[0] === fence[0] && marker.length >= fence.length && /^\s*[`~]+\s*$/.test(line)) fence = null;
-    return false;
-  }).join("\n");
 }
 
 export async function loadKnownRuleIds(repoRoot) {

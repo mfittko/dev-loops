@@ -128,7 +128,7 @@ test("AC2 (3127): --repo/--number pass the GraphQL body lastEditedAt through to 
       const calls = [];
       const runChild = async (cmd, args) => {
         calls.push(args);
-        return { code: 0, stdout: JSON.stringify({ body: REFINED_BODY, lastEditedAt }), stderr: "" };
+        return { code: 0, stdout: JSON.stringify({ body: REFINED_BODY, lastEditedAt, comments: { nodes: [{ body: NO_GAPS_COMMENT, createdAt: "2026-11-06T10:00:00Z" }] } }), stderr: "" };
       };
       const stdout = makeCapture();
       await runCli(["--body-file", bodyPath, "--surface", "pr", "--comments-file", commentsPath, "--repo", "o/r", "--number", "7"], { stdout, stderr: makeCapture(), runChild });
@@ -142,6 +142,26 @@ test("AC2 (3127): --repo/--number pass the GraphQL body lastEditedAt through to 
     assert.equal(edited.snapshot.specChangedSinceGrill, true);
     assert.equal((await detectWithEdit(null)).state, "grill_clean");
     assert.equal((await detectWithEdit("2026-11-06T09:00:00Z")).state, "grill_clean");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("3462: --repo/--number take the fetched comment window over --comments-file, as startup does", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-window-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    const commentsPath = path.join(tempDir, "comments.json");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+    // The file holds the results comment; the truncated last-100 window holds only newer notes.
+    await writeFile(commentsPath, JSON.stringify([{ body: NO_GAPS_COMMENT, createdAt: "2026-11-06T10:00:00Z" }]), "utf8");
+    const window = Array.from({ length: 100 }, (_, i) => ({ body: `note ${i}`, createdAt: "2026-11-06T11:00:00Z" }));
+    const runChild = async () => ({ code: 0, stdout: JSON.stringify({ body: REFINED_BODY, lastEditedAt: null, comments: { pageInfo: { hasPreviousPage: true }, nodes: window } }), stderr: "" });
+    const stdout = makeCapture();
+    await runCli(["--body-file", bodyPath, "--comments-file", commentsPath, "--repo", "o/r", "--number", "7"], { stdout, stderr: makeCapture(), runChild });
+    const out = JSON.parse(stdout.text());
+    assert.equal(out.state, "detect_gaps");
+    assert.equal(out.reason, "provenance_missing");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
