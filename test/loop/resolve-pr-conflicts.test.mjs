@@ -609,10 +609,31 @@ describe("resolvePrConflicts (real git)", () => {
         await rm(tempDir, { recursive: true, force: true });
       }
     });
+
+    test("a resolved CHANGELOG merge whose base also changes bun.lock installs before the base command", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        git(workDir, ["checkout", "-q", "main"]);
+        await writeFile(path.join(workDir, "bun.lock"), "v2\n", "utf8");
+        await writeFile(path.join(workDir, ".gitignore"), "node_modules/\n", "utf8");
+        git(workDir, ["add", "."]);
+        git(workDir, ["commit", "-q", "-m", "base moves lockfile"]);
+        git(workDir, ["push", "-q", "origin", "main"]);
+        git(workDir, ["checkout", "-q", "feature"]);
+        const calls = [];
+        const installDeps = () => { calls.push("install"); return { ok: true }; };
+        const runVerification = async (command, args) => { calls.push([command, ...args].join(" ")); return { code: 0, stdout: "", stderr: "" }; };
+        const result = await resolvePrConflicts(opts(workDir), { env: GIT_ENV, runVerification, installDeps, readBase: baseWith(["base-cmd"]) });
+        assert.equal(result.action, "resolved");
+        assert.deepEqual(calls, ["install", "sh -c base-cmd"]);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
   });
 
   for (const { title, lockChanged } of [
-    { title: "a base merge that changes bun.lock installs once in the worktree before verification", lockChanged: true },
+    { title: "a base merge that changes bun.lock installs once in the worktree", lockChanged: true },
     { title: "a base merge that leaves bun.lock unchanged does not install", lockChanged: false },
   ]) {
     test(title, async () => {
