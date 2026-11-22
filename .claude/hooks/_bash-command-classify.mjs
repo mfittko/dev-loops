@@ -1675,7 +1675,7 @@ function interpreterFlag(head, t) {
   // perl and ruby: walk the short-flag cluster; a letter that takes an argument ends it
   const argLetters = head === "perl" ? "IMmxdD" : "IrCEFxT";
   for (let k = 1; k < t.length; k++) {
-    if (head === "perl" && "CF".includes(t[k])) return null; // -C and -F take an attached value (`-Cio`, `-Fi`): its letters are no `e`/`i` flags
+    if (head === "perl" && "CFV".includes(t[k])) return null; // -C, -F and -V take an attached value (`-Cio`, `-Fi`, `-V:intsize`): its letters are no `e`/`i` flags
     if (head === "ruby" && t[k] === "W") { k += /^(?:\d+|:[\w-]+)?/.exec(t.slice(k + 1))[0].length; continue; } // `-W2`, `-W:no-deprecated`: the level or category ends, the cluster goes on (`-We`)
     if (head === "ruby" && t[k] === "K") { k++; continue; } // `-Ku`: one encoding letter, then the cluster goes on (`-Kue`)
     if (argLetters.includes(t[k])) return k === t.length - 1 && "IMmrCEF".includes(t[k]) ? "value" : null;
@@ -1758,7 +1758,7 @@ function wordOf(word) {
   // a brace needs a comma or `..` inside to expand, so a literal `{}` stays a name
   const bare = word.parts.map((p) => (p.type === "Lit" ? p.value.replace(/\\./gs, "") : "\0")).join("");
   const expandsToName = word.parts.some((p) => p.type === "SglQuoted" && p.dollar) || /[*?[]|\{[^}]*(?:,|\.\.)[^}]*\}/.test(bare);
-  return { value: word.parts.map(text).join(""), start: word.start, quoted: word.parts.some((p) => p.type === "SglQuoted" || p.type === "DblQuoted"), expandsToName, dynamic: word.parts.some(dynamic) };
+  return { value: word.parts.map(text).join(""), start: word.start, procSubsts: word.parts.filter((p) => p.type === "ProcSubst"), quoted: word.parts.some((p) => p.type === "SglQuoted" || p.type === "DblQuoted"), expandsToName, dynamic: word.parts.some(dynamic) };
 }
 
 /** Whether WORDS is `env` with a split-string option (`-S`, a cluster holding `S`, `--split-string`): env runs its operand as a command line the gate cannot read, so it denies. */
@@ -1853,7 +1853,9 @@ function inspectShell(command, report = false, skipFirst = false) {
   const isStdinText = (r) => isHeredoc(r) || r.op === R.WordHdoc; // a heredoc or here-string: the text a cat/tee writes
   const formIn = (text, skip) => inspectShell(text, false, skip).deny;
   const alone = parsed.file.stmts.length === 1 && parsed.file.stmts[0].cmd?.type === "CallExpr"; // the whole command is one simple command
-  const later = new Map(); // statement -> its write-then-run checks, run at its exit
+  const runChecks = []; // write-then-run checks, run once the walk ends: a backgrounded or piped runner before the write runs after it
+  // a `<(...)` holding a heredoc or here-string, among an interpreter's words, is text it runs as a script or preload (origin/main denied every such word)
+  const procHeredoc = (w) => (w?.procSubsts ?? []).some((p) => { let hit = false; walkShell(p, (n) => { if (n.type === "Stmt" && (n.redirs ?? []).some(isStdinText)) hit = true; return !hit; }); return hit; });
   let depth = 0; // open substitutions
   let skipping = skipFirst;
   const visit = (node, stmt) => {
@@ -1863,8 +1865,6 @@ function inspectShell(command, report = false, skipFirst = false) {
     for (const r of redirs) { if (isHeredoc(r)) stdin.heredoc ??= r.start; else if (r.op === R.WordHdoc) stdin.herestring ??= r.start; }
     const tails = [stripWordWrappers(words), stripExecPrefix(words)].filter((t) => t.length);
     if (skipping) { skipping = false; return; }
-    const runChecks = later.get(stmt) ?? [];
-    later.set(stmt, runChecks);
     if (tails.some(envSplitString)) out.deny = true;
     for (const tail of tails) {
       // a head that bash expands first (ANSI-C quote, brace/glob) can name any binary: deny. A parameter expansion or substitution in the head is a reported ceiling.
@@ -1877,7 +1877,7 @@ function inspectShell(command, report = false, skipFirst = false) {
       if (form === "dash" || form === "herestring" || (form === "stdin" && pipeSource.has(stmt))) out.ceiling = true;
       // only the script word of a runner runs the file; a written file later in the args is data (`node s.mjs --body-file tmp/b.md`)
       const script = { loaded: [] };
-      if (INTERPRETER_HEAD_RE.test(head)) interpreterForm(head, args, stdin, script);
+      if (INTERPRETER_HEAD_RE.test(head)) { interpreterForm(head, args, stdin, script); if (args.some(procHeredoc)) out.deny = true; }
       else if (FILE_RUNNER_HEAD_RE.test(head)) { // sh/bash/zsh: skip `-o`/`-O`/`+o`/`+O` option values and `+x` words
         for (let k = 0; k < args.length; k++) {
           if (/^[-+][A-Za-z]*[oO]$/.test(args[k].value)) { k++; continue; } // a cluster ending in o (`-euo pipefail`) takes the next word as its value
@@ -1934,9 +1934,9 @@ function inspectShell(command, report = false, skipFirst = false) {
     },
     exit(node) {
       if (node.type === "CmdSubst" || node.type === "ProcSubst") depth--;
-      for (const check of later.get(node) ?? []) check(); // a Stmt's exit: its redirect substitutions are children of the Stmt, not of the CallExpr
     },
   });
+  for (const check of runChecks) check();
   return out;
 }
 
