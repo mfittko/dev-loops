@@ -45,7 +45,7 @@ node scripts/loop/resolve-pr-conflicts.mjs [--base <branch>] [--push]
 It merges `origin/<base>` into the PR branch and resolves **only the safe additive
 case**: a `CHANGELOG.md` conflict where both sides only ADD list/section entries
 (keep BOTH sides, in order). It then runs the commands that the default-branch `.devloops` `validation.paths`
-select for the resolved files (never the checkout's own block) and (with `--push`)
+select for the resolved files (never the checkout's own block), deduplicated and sorted rather than in config order, and (with `--push`)
 pushes. `verified: false` means no base `validation.paths` command applies to the resolved
 files (a clean merge always reports it). A failing command or an unreadable base config resets the
 branch to its pre-merge head and fails closed. `--no-verify` skips the commands. **Any other conflicted path, or a non-additive CHANGELOG edit, FAILS

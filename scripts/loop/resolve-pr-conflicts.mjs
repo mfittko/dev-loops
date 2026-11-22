@@ -9,7 +9,7 @@ import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { resolveTargetedValidation } from "@dev-loops/core/loop/validation-classify";
-import { readBaseValidation } from "./resolve-validation.mjs";
+import { commandEnv, readBaseValidation } from "./resolve-validation.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { defaultInstallDeps, refreshDepsIfChanged } from "./_worktree-deps.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -24,7 +24,8 @@ CHANGELOG edit — FAILS CLOSED, naming the conflicted paths. Never guesses.
 
 After an auto-resolved additive CHANGELOG it runs the commands that the default-branch
 \`validation.paths\` in \`.devloops\` select for the resolved files (unless --no-verify)
-and, with --push, pushes the branch. A failed command or an unreadable base config resets
+and, with --push, pushes the branch. The selected commands run deduplicated and sorted
+(as resolveTargetedValidation returns them), not in config order. A failed command or an unreadable base config resets
 the branch to its pre-merge head and fails closed. A clean merge runs no command.
 
 Options:
@@ -310,7 +311,11 @@ async function abortMerge({ cwd, env }) {
 
 export async function resolvePrConflicts(options, { env = process.env, runVerification = run, installDeps = defaultInstallDeps, readBase = readBaseValidation } = {}) {
   const cwd = options.repoRoot;
-  const preMergeHead = (await run("git", ["rev-parse", "HEAD"], { cwd, env })).stdout.trim();
+  const headResult = await run("git", ["rev-parse", "HEAD"], { cwd, env });
+  const preMergeHead = headResult.stdout.trim();
+  if (headResult.code !== 0 || !preMergeHead) {
+    throw new Error(`git rev-parse HEAD failed: ${headResult.stderr.trim() || `exit ${headResult.code}`}`);
+  }
 
   // Resolve base branch: explicit flag, else `gh pr view`, else "main".
   let base = options.base;
@@ -414,8 +419,13 @@ async function afterResolve(result, options, { cwd, env, runVerification, instal
     if (result.resolvedFiles.length > 0) {
       const failVerify = async (message) => {
         // Drop the unverified merge commit so a re-run repeats the merge and the verification.
-        await run("git", ["reset", "--keep", preMergeHead], { cwd, env });
-        const err = new Error(message);
+        const reset = await run("git", ["reset", "--keep", preMergeHead], { cwd, env });
+        let full = message;
+        if (reset.code !== 0) {
+          const current = (await run("git", ["rev-parse", "HEAD"], { cwd, env })).stdout.trim();
+          full = `${message}; ${reset.stderr.trim() || `git reset exit ${reset.code}`}; rollback failed; HEAD left at ${current}`;
+        }
+        const err = new Error(full);
         err.verifyFailed = true;
         throw err;
       };
@@ -426,7 +436,7 @@ async function afterResolve(result, options, { cwd, env, runVerification, instal
       const selected = resolveTargetedValidation(result.resolvedFiles, base.validation.paths);
       if (selected.profile === "targeted") {
         for (const command of selected.commands) {
-          const verify = await runVerification("sh", ["-c", command], { cwd, env });
+          const verify = await runVerification("sh", ["-c", command], { cwd, env: commandEnv(env) });
           if (verify.code !== 0) await failVerify(`Post-resolve verification (${command}) failed: ${verify.stderr.trim() || verify.stdout.trim() || `exit ${verify.code}`}`);
         }
         result.verified = true;

@@ -124,7 +124,7 @@ export function validationDifferenceRefusal(checkout, base) {
 const SECRET_ENV = /token|secret|password|passwd|credential|api_?key|^gh_|^github_|^npm_/i;
 // Inherited Git repository pointers would aim a Git command at another repository.
 const GIT_POINTER_ENV = /^git_(dir|work_tree|index_file)$/i;
-const commandEnv = (env) => Object.fromEntries(Object.entries(env).filter(([key]) => !SECRET_ENV.test(key) && !GIT_POINTER_ENV.test(key)));
+export const commandEnv = (env) => Object.fromEntries(Object.entries(env).filter(([key]) => !SECRET_ENV.test(key) && !GIT_POINTER_ENV.test(key)));
 
 // Run the declared full command (the base branch's `validation.fullCommand`,
 // never PR content) through `sh -c` and shape its result like a package suite.

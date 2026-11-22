@@ -466,6 +466,36 @@ describe("resolvePrConflicts (real git)", () => {
       }
     });
 
+    test("an empty command list reports verified false and still pushes", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        git(workDir, ["push", "-q", "-u", "origin", "feature"]);
+        const { calls, runVerification } = recorder();
+        const result = await resolvePrConflicts(opts(workDir, { push: true }), { env: GIT_ENV, runVerification, readBase: baseWith([]) });
+        assert.equal(result.verified, false);
+        assert.equal(result.pushed, true);
+        assert.deepEqual(calls, []);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a refused rollback still fails with verifyFailed and names the head left behind", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        const runVerification = async () => {
+          await writeFile(path.join(workDir, "CHANGELOG.md"), "edited by the command\n", "utf8");
+          return { code: 1, stdout: "", stderr: "boom" };
+        };
+        await assert.rejects(
+          () => resolvePrConflicts(opts(workDir), { env: GIT_ENV, runVerification, readBase: baseWith(["x"]) }),
+          (error) => error.verifyFailed === true && /boom/.test(error.message) && /rollback failed; HEAD left at [0-9a-f]{40}/.test(error.message),
+        );
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
     test("a failing command rolls back to the pre-merge head and a re-run repeats the merge and the command", async () => {
       const { tempDir, workDir } = await setupChangelog();
       try {
