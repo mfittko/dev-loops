@@ -6,7 +6,9 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
+import { renderCliText } from "@dev-loops/core/loop/cli-command";
 import { replacementPrOperatorRecovery } from "@dev-loops/core/loop/pr-gate-coordination";
+import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
 
 import { resolveCapRoundFixed } from "../../scripts/github/write-gate-context.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
@@ -114,7 +116,8 @@ test("refuses a PR head that is not the worktree HEAD and a PR with no cap-round
     await commit(root, { "docs/y.md": "y\n" }, "docs");
     const mismatch = await extend(root, "9".repeat(40));
     assert.equal(mismatch.reason, "head_mismatch");
-    assert.match(mismatch.recovery, /^gh pr checkout \d+ --repo \S+$/u); // RECOVERY-COMMAND-REQUIRED (issue 3437)
+    // RECOVERY-COMMAND-REQUIRED (issue 3437): the fast-forward runs against the resolved --worktree, never the caller's cwd.
+    assert.equal(mismatch.recovery, `git -C ${shellQuote(path.resolve(root))} pull --ff-only origin ${"9".repeat(40)}`);
     // An unpushed local commit ahead of the PR head, or a worktree diverged from it: checkout cannot fast-forward, so the recovery is the operator form.
     const ahead = await extend(root, String(runGitFixture(root, ["rev-parse", "HEAD~1"])).trim());
     assert.equal(ahead.reason, "head_mismatch");
@@ -122,7 +125,7 @@ test("refuses a PR head that is not the worktree HEAD and a PR with no cap-round
     const side = String(runGitFixture(root, ["commit-tree", "-p", "HEAD~1", "-m", "side", "HEAD^{tree}"])).trim();
     const diverged = await extend(root, side);
     assert.equal(diverged.reason, "head_mismatch");
-    assert.match(diverged.recovery, /^operator: push the local commits to the PR branch/u, "a diverged worktree is not fixed by gh pr checkout");
+    assert.match(diverged.recovery, /^operator: push the local commits to the PR branch/u, "a diverged worktree is not fixed by a fast-forward");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -195,9 +198,27 @@ test("a rebase that orphans the cap-round head refuses with the replacement-PR r
     assert.equal(refused.reason, "baseline_orphaned");
     assert.match(refused.detail, /--allow-replacement-pr/);
     // RECOVERY-COMMAND-REQUIRED: the restart is an operator decision, so the recovery is the operator form with the full procedure.
-    assert.equal(refused.recovery, replacementPrOperatorRecovery(PR));
+    assert.equal(refused.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
     assert.match(refused.recovery, /^operator: .*git push origin HEAD:<new-branch>.*loop pre-pr-review.*pr create --head <new-branch> --allow-replacement-pr 70.*close PR #70$/u);
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("under CLAUDECODE every extend-cap-round-chain recovery is rendered in the launcher form and matches the reviewer-only replacement recovery", async () => {
+  const { root } = await capFixture();
+  const saved = process.env.CLAUDECODE;
+  process.env.CLAUDECODE = "1";
+  try {
+    runGitFixture(root, ["checkout", "-q", "--orphan", "rebased"]);
+    const R = await commit(root, { "docs/r.md": "r\n" }, "rebased");
+    const refused = await extend(root, R);
+    assert.equal(refused.reason, "baseline_orphaned");
+    assert.equal(refused.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
+    assert.doesNotMatch(refused.recovery, /<dev-loops-package-root>/u);
+    assert.match(refused.recovery, /dev-loops-run --repo-root <checkout> cli\/index\.mjs pr create/u);
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDECODE; else process.env.CLAUDECODE = saved;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -236,7 +257,7 @@ test("runCli maps a refusal and a thrown failure to a stderr JSON with exit 1", 
     const stderr = sink();
     const code = await runCli(["--repo", REPO, "--pr", String(PR), "--worktree", root], { stdout, stderr, detectOriginSlug: () => REPO, fetchPr: async () => { throw new Error("gh down"); } });
     assert.equal(code, 1);
-    assert.deepEqual(JSON.parse(stderr.chunks.join("")), { ok: false, refused: true, reason: "writer_error", detail: "gh down", recovery: `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo ${REPO} --pr ${PR}` });
+    assert.deepEqual(JSON.parse(stderr.chunks.join("")), { ok: false, refused: true, reason: "writer_error", detail: "gh down", recovery: renderCliText(`node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo ${REPO} --pr ${PR}`) });
     const refusedErr = sink();
     assert.equal(await runCli(["--repo", REPO, "--pr", String(PR), "--worktree", root], { stdout, stderr: refusedErr, detectOriginSlug: () => REPO, fetchPr: async () => ({}) }), 1);
     assert.equal(JSON.parse(refusedErr.chunks.join("")).reason, "pr_state_unreadable");
@@ -1257,7 +1278,7 @@ test("issue 3437 ac:3: no_cap_round_chain names a replacement PR for a non-cover
     writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: B, actSetId: "other", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "unrelated", status: "resolved" }] });
     const refused = await extend(root, head);
     assert.equal(refused.reason, "no_cap_round_chain");
-    assert.equal(refused.recovery, replacementPrOperatorRecovery(PR));
+    assert.equal(refused.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
     assert.doesNotMatch(refused.recovery, /pre-push-delta/u, "a run at the cap-round head refuses and names this command again");
     rmSync(gateDeltaRecordPath(tmp, A), { force: true });
     rmSync(`${gateDeltaRecordPath(tmp, A)}.seal`, { force: true });

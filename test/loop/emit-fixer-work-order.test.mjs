@@ -1552,6 +1552,16 @@ for (const [name, setup] of [
   });
 }
 
+// A same-head write-gate-findings-log unlinks the live ledger after copying it: the guard decides existence once, so a vanished ledger reaches readGateFindingsLedger (ENOENT refuses round_cap_reached) and never reads as no findings.
+test("issue 3437: the cap-round guard decides ledger existence once and the read never substitutes an empty list", () => {
+  const source = readFileSync(new URL("../../scripts/loop/emit-fixer-work-order.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("const ledgerExists = existsSync(ledgerFile);");
+  assert.notEqual(start, -1);
+  const block = source.slice(start, source.indexOf("const blockers = pastCapBlockers", start));
+  assert.equal(block.match(/existsSync\(ledgerFile\)/g).length, 1, "one existence decision");
+  assert.match(block, /= !ledgerExists \? \{ findings: \[\] \} : await readGateFindingsLedger\(ledgerFile/);
+});
+
 // The resolveCapRound onFailClosed input: the last closed round composes no verdict, so the cap-round authority could be an earlier round.
 test("issue 3437: missingCapLedgerRefusal fails closed when resolveCapRound fails closed", async () => {
   await withFixture(async ({ root, wt, head }) => {

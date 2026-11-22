@@ -10,6 +10,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { rmSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -18,6 +19,7 @@ import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
 import { ghJson } from "@dev-loops/core/github/gh";
+import { renderCliText } from "@dev-loops/core/loop/cli-command";
 import { CAP_ROUND_REFUSAL, replacementPrOperatorRecovery } from "@dev-loops/core/loop/pr-gate-coordination";
 import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
@@ -69,7 +71,8 @@ export function parseExtendCapRoundChainCliArgs(argv) {
 }
 
 // RECOVERY-COMMAND-REQUIRED: `recovery` is the one command to run next, or `operator: <action>` when only the operator may act.
-const refuse = (reason, detail, recovery) => ({ ok: false, refused: true, reason, detail, recovery });
+// The one render site: every recovery names CLI calls in the active harness's launcher form, as check-pre-push-delta does.
+const refuse = (reason, detail, recovery) => ({ ok: false, refused: true, reason, detail, recovery: renderCliText(recovery) });
 // The command that reruns this tool for the PR once its refusal cause is fixed.
 const rerun = (repo, pr) => `${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}`;
 // RECOVERY-COMMAND-REQUIRED: a rerun at an unchanged head refuses again, so a refusal that only a new commit clears names that head-moving step, then the rerun.
@@ -96,9 +99,9 @@ export async function extendCapRoundChain(options, {
   if (!/^[0-9a-f]{40}$/u.test(prHead) || !baseRefName) return refuse("pr_state_unreadable", `cannot read PR #${pr} head and base; check \`gh auth status\` and rerun with --repo ${repo} --pr ${pr}`, "gh auth status");
   const head = git(cwd, ["rev-parse", "HEAD"]).toLowerCase();
   if (head !== prHead) {
-    // `gh pr checkout` fast-forwards only a worktree HEAD that the PR head contains (or fetches an absent PR head). An ahead or diverged worktree holds local commits: the operator pushes or reconciles them.
+    // `git pull --ff-only` fast-forwards only a worktree HEAD that the PR head contains (or fetches an absent PR head). An ahead or diverged worktree holds local commits: the operator pushes or reconciles them.
     const checkoutFixes = (() => { try { git(cwd, ["merge-base", "--is-ancestor", head, prHead]); return true; } catch (error) { return error?.status === 128; } })();
-    return refuse("head_mismatch", `the worktree HEAD ${head.slice(0, 7)} is not the PR head ${prHead.slice(0, 7)}; check out and push the PR head, then rerun`, checkoutFixes ? `gh pr checkout ${pr} --repo ${repo}` : "operator: push the local commits to the PR branch, or reset the worktree to the PR head if they are unwanted, then rerun");
+    return refuse("head_mismatch", `the worktree HEAD ${head.slice(0, 7)} is not the PR head ${prHead.slice(0, 7)}; check out and push the PR head, then rerun`, checkoutFixes ? `git -C ${shellQuote(resolvePath(cwd))} pull --ff-only origin ${prHead}` : "operator: push the local commits to the PR branch, or reset the worktree to the PR head if they are unwanted, then rerun");
   }
 
   // The proof, the chain-end discovery and the range all read origin/<base>: fetch it fresh (bounded, prompt-free) first or refuse.

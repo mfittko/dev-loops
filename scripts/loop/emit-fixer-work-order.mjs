@@ -734,11 +734,13 @@ async function emitPlan({
       let ledgerFile = ledgerPath(capRoundHead);
       if (!existsSync(ledgerFile)) { const origin = await carryOriginHead(); if (origin) ledgerFile = ledgerPath(origin); }
       // Issue 3437: a missing ledger skips the refusal only for the round being posted: no cap round closed, no unreadable prior ledger and no blocked verdict posted at this head. A posted blocked verdict has its ledger, so ledger-only blockers still apply.
-      if (!existsSync(ledgerFile)) {
+      // One existence decision: a ledger that vanishes after this check reaches readGateFindingsLedger, whose ENOENT refuses round_cap_reached.
+      const ledgerExists = existsSync(ledgerFile);
+      if (!ledgerExists) {
         const refusal = await missingCapLedgerRefusal({ repo, pr, gate, headSha, tmpRoot, repoRoot: resolveRepoRoot(cwd), probeVerdict: () => fetchVerdictMarkers({ repo, pr, headSha: capRoundHead, gate, runtime: { env, ghCommand, runChild } }) });
         if (refusal !== undefined) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist${refusal}; failing closed at the cap round`);
       }
-      const { findings: ledgerFindings } = !existsSync(ledgerFile) ? { findings: [] } : await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
+      const { findings: ledgerFindings } = !ledgerExists ? { findings: [] } : await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
       // A later cap-round pass fixes only the cap round's findings: an act item outside the cap-round ledger would open a new round past the cap.
       // The bound limits the act items of each pass. The fixer route's own pre-push delta seals the next chain link, so the number of passes has no separate bound. The ADR 0197 base-only merge path skips this bound.
       if (laterPass) {
