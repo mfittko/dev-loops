@@ -14,6 +14,7 @@ const DOCS = path.join(ROOT, "skills/docs");
 const contract = readFileSync(path.join(DOCS, CONTRACT_FILE), "utf8");
 const built = buildGateRunbook();
 const runbook = built.runbook;
+const RULE_ID = /\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+){2,}\b/g;
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [path.join(ROOT, "scripts/loop/gate-runbook.mjs"), ...args], { encoding: "utf8", ...options });
@@ -52,38 +53,54 @@ test("AC1: the runbook is registered, pins the command sequence, dispatches in w
   assert.match(agent, /only required read/);
 });
 
-test("AC2: no agent definition links the contract as the round procedure", () => {
+test("AC2: the gate coordinator never references the contract, and no agent links it as the round procedure", () => {
+  const coordinator = readFileSync(path.join(ROOT, "agents/gate-coordinator.agent.md"), "utf8");
+  assert.doesNotMatch(coordinator, /gate-review-sub-loop-contract/);
   for (const file of readdirSync(path.join(ROOT, "agents")).filter((f) => f.endsWith(".agent.md"))) {
-    const text = readFileSync(path.join(ROOT, "agents", file), "utf8");
-    for (const line of text.split("\n")) {
-      if (/\]\([^)]*gate-review-sub-loop-contract\.md/.test(line) && /GATE-EXEC-GATE-COORDINATOR|round procedure/.test(line)) assert.fail(`${file}: relative contract link as round procedure: ${line.slice(0, 120)}`);
+    for (const line of readFileSync(path.join(ROOT, "agents", file), "utf8").split("\n")) {
+      if (!/\]\([^)]*gate-review-sub-loop-contract/.test(line)) continue;
+      // A contract link may cite a rule or section; it may not name the coordinator's rule or the round procedure.
+      assert.doesNotMatch(line, /GATE-EXEC-GATE-COORDINATOR|gate[- ]coordinator.{0,80}(?:procedure|steps|round)|(?:procedure|steps|round).{0,80}gate[- ]coordinator|round procedure/i, `${file}: contract link as the round procedure: ${line.slice(0, 120)}`);
     }
   }
-  const coordinator = readFileSync(path.join(ROOT, "agents/gate-coordinator.agent.md"), "utf8");
-  assert.doesNotMatch(coordinator, /\]\([^)]*gate-review-sub-loop-contract\.md/);
 });
 
-test("AC3: every rule ID in the runbook resolves to a rule marker, and the round obligations stay named", () => {
+// Obligations the contract assigns to the coordinator that the runbook deliberately omits (none today).
+const OUT_OF_SCOPE = new Map();
+
+test("AC3: every rule ID in the runbook resolves to a rule marker, and every coordinator-owned GATE-EXEC rule is named", () => {
   const marked = new Set();
   for (const f of readdirSync(DOCS).filter((n) => n.endsWith(".md"))) {
     for (const m of readFileSync(path.join(DOCS, f), "utf8").matchAll(/<!--\s*rule:\s*([A-Z0-9-]+)\s*-->/g)) marked.add(m[1]);
   }
   for (const id of runbookRuleIds(runbook)) assert.ok(marked.has(id), `${id} has no rule marker`);
-  for (const id of ["GATE-EXEC-GATE-COORDINATOR", "GATE-EXEC-HARNESS-JOIN", "GATE-EXEC-BOUNDED-WAIT-CAP", "GATE-EXEC-JUDGE-PHASE", "GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED", "GATE-EXEC-DISPOSITION-LEDGER", "GATE-EXEC-RECURRENCE-ESCALATION", "RECOVERY-COMMAND-REQUIRED"]) assert.ok(runbook.includes(id), `${id} dropped from the runbook`);
-  for (const word of ["units_stalled", "round_retired", "ci_not_green", "head_changed", "FANOUT_UNAVAILABLE", "judgeSkipped", "escalationsSkipped"]) assert.ok(runbook.includes(word), `${word} dropped from the runbook`);
+  // Owned by the coordinator: named in its own rule body, in its agent definition, or listed here.
+  const body = contract.split("<!-- rule: GATE-EXEC-GATE-COORDINATOR -->")[1].split(/<!-- rule: /)[0];
+  const agent = readFileSync(path.join(ROOT, "agents/gate-coordinator.agent.md"), "utf8");
+  const listed = ["GATE-EXEC-OPERATOR-FOCUS", "GATE-EXEC-REVIEWER-BUDGET-PREFLIGHT", "GATE-EXEC-BUILD-ONCE-SEED", "GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK", "GATE-EXEC-COLLECTABLE-DISPATCH", "GATE-EXEC-EXECUTION-RECORD", "GATE-EXEC-FANOUT-CAPACITY", "GATE-EXEC-FIRST-WAVE-RELEASE", "GATE-EXEC-FANOUT-DISPATCH-EMIT", "GATE-EXEC-VALIDATION-RESOLUTION", "GATE-EXEC-ANGLE-CARRY-FORWARD", "GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED", "GATE-EXEC-ARTIFACT-HEAD-STAMP", "GATE-EXEC-DISPOSITION-LEDGER", "GATE-EXEC-PROPORTIONALITY", "GATE-EXEC-LIGHT-ESCALATION", "GATE-EXEC-ROUND-RETIREMENT", "GATE-EXEC-NO-DEAD-END", "RECOVERY-COMMAND-REQUIRED"];
+  const owned = new Set([...`${body}\n${agent}`.match(RULE_ID), ...listed].filter((id) => id.startsWith("GATE-EXEC-") || id === "RECOVERY-COMMAND-REQUIRED"));
+  for (const id of owned) {
+    if (OUT_OF_SCOPE.has(id)) continue;
+    assert.ok(marked.has(id), `${id} has no rule marker`);
+    assert.ok(runbook.includes(id), `${id} is a coordinator obligation but dropped from the runbook`);
+  }
+  for (const word of ["units_stalled", "round_retired", "ci_not_green", "head_changed", "FANOUT_UNAVAILABLE", "judgeSkipped", "escalationsSkipped", "budget_shortfall", "inline_single_agent", "--available-reviewers", "--operator-focus-file"]) assert.ok(runbook.includes(word), `${word} dropped from the runbook`);
 });
 
 test("AC4: every runbook command flag appears in its CLI usage, and the runbook stays within 16,000 characters", () => {
   assert.ok(runbook.length <= 16000, `runbook is ${runbook.length} characters`);
   const usage = new Map();
-  for (const { script, flags } of runbookCommands()) {
+  const commands = runbookCommands();
+  for (const { script, flags } of commands) {
     if (!usage.has(script)) {
       const result = spawnSync(process.execPath, [path.join(ROOT, script), "--help"], { encoding: "utf8" });
       usage.set(script, `${result.stdout}${result.stderr}`);
     }
-    for (const flag of flags) assert.ok(usage.get(script).includes(flag), `${script} usage lacks ${flag}`);
+    // A flag counts only as a whole token, not as the prefix of a longer flag.
+    for (const flag of flags) assert.match(usage.get(script), new RegExp(`${flag}(?![\\w-])`), `${script} usage lacks ${flag}`);
   }
-  assert.ok(usage.size >= 10);
+  assert.equal(usage.size, new Set(commands.map((c) => c.script)).size);
+  assert.ok(usage.size >= 13, `only ${usage.size} distinct scripts`);
 });
 
 test("AC5: a missing contract or an unresolved rule marker fails closed with a named recovery", () => {
@@ -111,7 +128,12 @@ test("AC5: a missing contract or an unresolved rule marker fails closed with a n
 test("AC6: Pi, Claude Code and Codex read the same runbook through the agent definition and its generated asset", () => {
   const source = readFileSync(path.join(ROOT, "agents/gate-coordinator.agent.md"), "utf8");
   const claude = readFileSync(path.join(ROOT, ".claude/agents/gate-coordinator.md"), "utf8");
+  // Pi and Codex read agents/gate-coordinator.agent.md directly; no generated Pi or Codex asset is tracked. Claude Code reads the generated copy.
   for (const text of [source, claude]) assert.match(text, /cli\/index\.mjs gate runbook/);
+  assert.match(source, /^tools: .*\bsubagent\b/m, "Pi dispatches through the subagent tool");
+  const tracked = spawnSync("git", ["-C", ROOT, "ls-files", ".codex", ".pi/agents", "codex"], { encoding: "utf8" }).stdout;
+  assert.doesNotMatch(tracked, /gate-coordinator/, "a generated Pi or Codex gate-coordinator asset is now tracked: assert it here");
+  assert.doesNotMatch(runbook, /--harness claude/);
   const cli = spawnSync(process.execPath, [path.join(ROOT, "cli/index.mjs"), "gate", "runbook"], { encoding: "utf8" });
   assert.equal(cli.stdout, runbook);
   // The Pi step on the same runbook keeps the blocking join, and the harness-neutral dispatch rules stay named.
