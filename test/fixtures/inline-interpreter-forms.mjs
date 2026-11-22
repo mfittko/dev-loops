@@ -169,6 +169,8 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("env --argv0 x -S 'node -e x'"),
   // any env split-string form denies: env runs its operand as a command line the gate cannot read
   deny("env -iS 'node -e x'"),
+  deny("env -S'node -e x'"),
+  deny("env -iS'node -e x'"),
   deny("env -vS 'node -e x'"),
   deny("env -S '-i node -e x'"),
   deny("env -S 'A=1 node -e x'"),
@@ -307,6 +309,8 @@ export const INLINE_INTERPRETER_FORMS = [
   allow("node scripts/x.mjs"),
   allow("node scripts/x.mjs -e"),
   allow("node --no-warnings scripts/x.mjs --eval x"),
+  allow("node --no-warnings bin/cli -"),
+  allow("cat -EOF"),
   allow("python3 -m json.tool f"),
   allow("python3 -W error script.py"),
   allow("sed -n 's/a/b/p' f"),

@@ -1768,11 +1768,13 @@ function envSplitString(words) {
   if ((w[0]?.value ?? "").split("/").pop() !== "env") return false;
   for (let i = 1; i < w.length; i++) {
     const { value } = w[i];
-    if (/^-[A-Za-z]+$/.test(value)) {
-      // walk the cluster: `S` before a value-taking letter splits; the rest of the word after `u`, `C`, `P` or `a` is that option's value (`-uSSH_AUTH_SOCK`)
-      const stop = value.slice(1).search(/[uCPa]/);
-      if (value.slice(1, stop < 0 ? undefined : stop).includes("S")) return true;
-      if (stop === value.length - 2) i++; // the value letter ends the word: its value is the next word
+    const cluster = /^-([A-Za-z]+)(.*)$/s.exec(value);
+    if (cluster) {
+      // walk the leading letter run: `S` before a value-taking letter splits (it takes the rest of the word, `-S'node -e x'`); the rest of the word after `u`, `C`, `P` or `a` is that option's value (`-uSSH_AUTH_SOCK`)
+      const letters = cluster[1];
+      const stop = letters.search(/[uCPa]/);
+      if (letters.slice(0, stop < 0 ? undefined : stop).includes("S")) return true;
+      if (stop === letters.length - 1 && !cluster[2]) i++; // the value letter ends the word: its value is the next word
       continue;
     }
     if (/^--split-string(=|$)/.test(value)) return true;
