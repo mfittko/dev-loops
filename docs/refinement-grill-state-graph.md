@@ -39,7 +39,7 @@ Terminal states with no outgoing transitions: `grill_clean`, `needs_human_handof
 - `detect_gaps` -> `await_answers`
   - one or more answerable gaps were found
 - `detect_gaps` -> `grill_clean`
-  - detection found no open gaps AND provenance is recorded — a `plan` surface (shape-only, no comment surface), or a posted `🔬 Grill / refinement results` comment on the target (with or without a recorded bypass line). Zero open gaps with no recorded provenance stays at `detect_gaps`: the semantic pass is still owed, and it records its own provenance, including a zero-gap outcome (ADR 0084, amends ADR 0029). A spec change after the latest results comment also stays at `detect_gaps` (`GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL`).
+  - detection found no open gaps AND provenance is recorded — a `plan` surface (shape-only, no comment surface), or a posted `🔬 Grill / refinement results` comment on the target (with or without a recorded bypass line). Zero open gaps with no recorded provenance stays at `detect_gaps`: the semantic pass is still owed, and it records its own provenance, including a zero-gap outcome (ADR 0084, amends ADR 0029). A spec change after the latest results comment also stays at `detect_gaps` (`GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL`), and so does a body without a `## Simplest design` section (`simplest_design_missing`) or a latest results comment without a `simplicity-review:` line (`simplicity_review_missing`, `GRILL-SUBLOOP-SIMPLICITY-REVIEW`).
 - `detect_gaps` -> `needs_human_handoff`
   - detection surfaced an uncitable gap
 - `await_answers` -> `synthesize`

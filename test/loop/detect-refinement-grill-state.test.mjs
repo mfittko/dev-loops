@@ -30,6 +30,10 @@ const REFINED_BODY = [
   "## Non-goals",
   "",
   "- none",
+  "",
+  "## Simplest design",
+  "",
+  "One predicate.",
 ].join("\n");
 
 const PROSE_BODY = [
@@ -47,6 +51,8 @@ const NO_GAPS_COMMENT = [
   "source: auto (codebase, docs)",
   "",
   "No gaps were found on this pass. Verdict: grill-clean.",
+  "",
+  "simplicity-review: 0 findings, 0 corrected, 0 rejected",
 ].join("\n");
 
 const GAP_FILLING_COMMENT = [
@@ -59,6 +65,8 @@ const GAP_FILLING_COMMENT = [
   "1. Missing scope boundary — filled from the codebase.",
   "",
   "Verdict: grill-clean.",
+  "",
+  "simplicity-review: 1 findings, 1 corrected, 0 rejected",
 ].join("\n");
 
 test("--input snapshot mode returns the interpreted state", async () => {
@@ -166,7 +174,7 @@ test("--body-file with a bypass-recorded results comment seeds grill_clean flagg
     await writeFile(bodyPath, REFINED_BODY, "utf8");
     await writeFile(
       commentsPath,
-      JSON.stringify([{ body: `## ${RESULTS_TITLE}\n\nbypass: operator-authorized by mfittko\n\nRan anyway; no gaps found.`, createdAt: "2026-11-06T10:00:00Z" }]),
+      JSON.stringify([{ body: `## ${RESULTS_TITLE}\n\nbypass: operator-authorized by mfittko\n\nRan anyway; no gaps found.\n\nsimplicity-review: 0 findings, 0 corrected, 0 rejected`, createdAt: "2026-11-06T10:00:00Z" }]),
       "utf8",
     );
     const { stdout } = await runDetect(["--body-file", bodyPath, "--comments-file", commentsPath]);
@@ -290,7 +298,7 @@ test("the documented view-issue.mjs --jq extraction bridges the real wrapper env
           url: "https://github.com/mfittko/dev-loops/issues/2364#issuecomment-1",
           author: { login: "mfittko" },
           createdAt: "2026-09-23T12:00:00Z",
-          body: `## ${RESULTS_TITLE}\n\nsource: auto (codebase, docs)\n\nNo gaps were found on this pass. Verdict: grill-clean.`,
+          body: `## ${RESULTS_TITLE}\n\nsource: auto (codebase, docs)\n\nNo gaps were found on this pass. Verdict: grill-clean.\n\nsimplicity-review: 0 findings, 0 corrected, 0 rejected`,
         },
       ],
     },

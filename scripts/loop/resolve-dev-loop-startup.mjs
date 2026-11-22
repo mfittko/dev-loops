@@ -53,9 +53,10 @@ import {
 } from "@dev-loops/core/loop/plan-file-intake-contract";
 import { evaluateSpikeIntakeState } from "@dev-loops/core/loop/spike-intake-contract";
 import {
-  SPEC_CHANGED_SINCE_GRILL_REASON,
+  GRILL_STATE,
+  buildGrillFactsSnapshot,
   buildSpecChangeFactsGhArgs,
-  detectSpecChangedSinceGrill,
+  interpretRefinementGrillState,
   parseSpecChangeFacts,
 } from "@dev-loops/core/loop/refinement-grill-state";
 import { loadBoardConfig } from "@dev-loops/core/loop/queue-board-sync";
@@ -955,9 +956,15 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     {
       try {
         const facts = parseSpecChangeFacts(ghJson(buildSpecChangeFactsGhArgs({ repo, number: issue }), repoRoot, env));
-        if (detectSpecChangedSinceGrill({ comments: facts.comments, bodyLastEditedAt: facts.lastEditedAt, commentsTruncated: facts.commentsTruncated })) {
+        const grill = interpretRefinementGrillState(buildGrillFactsSnapshot({
+          body: facts.body,
+          comments: facts.comments,
+          bodyLastEditedAt: facts.lastEditedAt,
+          commentsTruncated: facts.commentsTruncated,
+        }));
+        if (grill.state !== GRILL_STATE.GRILL_CLEAN) {
           issueReadiness = "needs_clarification";
-          issueReadinessReason = SPEC_CHANGED_SINCE_GRILL_REASON;
+          issueReadinessReason = grill.reason ?? grill.state;
         }
       } catch (error) {
         issueReadiness = "needs_clarification";
@@ -1026,7 +1033,8 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     // (read-only inspection, e.g. info.mjs) skips enforcement entirely,
     // regardless of strategy — resolveAuthoritativeStartupResumeBundle itself
     // never shells out, so this peek costs no extra gh calls.
-    if (!ownershipGateBypassed(env)) {
+    // A grill stop with --claim returns before the claim write; without --claim the gate still runs.
+    if (!(issueReadinessReason && claim) && !ownershipGateBypassed(env)) {
       const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
       if (ownershipGateAppliesToStrategy(peekedStrategy)) {
         // --claim only claims an OPEN issue; the extra state read runs only
@@ -1558,7 +1566,7 @@ export function buildResolveDevLoopStartupResult(input, {
     return {
       ...buildNeedsReconcileStartupResult(
         bundle,
-        `The spec-change read for issue #${issue} failed (${SPEC_CHANGE_READ_FAILED_REASON}). Retry startup; check the warnings for the read error (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
+        `The spec-change read for issue #${issue} failed (${SPEC_CHANGE_READ_FAILED_REASON}). Retry with \`loop startup --issue ${issue}\`; check the warnings for the read error (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
         pendingRetrospectives,
       ),
       issueReadiness: input.issueReadiness,
@@ -1566,12 +1574,12 @@ export function buildResolveDevLoopStartupResult(input, {
       ...(input.warnings ? { warnings: input.warnings } : {}),
     };
   }
-  if (issueReadinessReason === SPEC_CHANGED_SINCE_GRILL_REASON) {
+  if (issueReadinessReason) {
     const issue = input.currentState?.target?.issue;
     return {
       ...buildNeedsReconcileStartupResult(
         bundle,
-        `Issue #${issue} changed after its latest "🔬 Grill / refinement results" comment (${SPEC_CHANGED_SINCE_GRILL_REASON}). Re-grill it with \`/dev-loops:loop-grill ${issue} --auto\` (or \`/loop-grill ${issue} --auto\` in the dev-loops repo itself), then re-run startup (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
+        `Issue #${issue} has no clean grill (${issueReadinessReason}): it needs a "🔬 Grill / refinement results" comment that is newer than every spec change, a "## Simplest design" section and a "simplicity-review:" line. Run the grill with \`/dev-loops:loop-grill ${issue} --auto\` (or \`/loop-grill ${issue} --auto\` in the dev-loops repo itself), then re-run startup (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
         pendingRetrospectives,
       ),
       issueReadiness: input.issueReadiness,

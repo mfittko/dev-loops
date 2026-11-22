@@ -4,8 +4,7 @@ import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import {
-  detectGrillProvenance,
-  detectSpecChangedSinceGrill,
+  buildGrillFactsSnapshot,
   fetchSpecChangeFacts,
   interpretRefinementGrillState,
   normalizeGrillSnapshot,
@@ -143,7 +142,6 @@ export async function runCli(
   } else {
     const body = await readFile(options.bodyFilePath, "utf8");
     const surface = options.surface ?? "issue";
-    let provenance = { provenanceRecorded: false, bypass: false };
     let comments = [];
     if (options.commentsFilePath) {
       const commentsText = await readFile(options.commentsFilePath, "utf8");
@@ -156,27 +154,20 @@ export async function runCli(
       if (comments === undefined) {
         throw new Error('--comments-file must be a JSON array or { "comments": [...] }');
       }
-      provenance = detectGrillProvenance(comments);
     }
-    const bodyLastEditedAt = options.repo !== undefined
-      ? (await fetchSpecChangeFacts({ repo: options.repo, number: options.number, env, runChild: run })).lastEditedAt
+    // --repo/--number read through the same facts reader as startup, so both see the same comment window.
+    const facts = options.repo !== undefined
+      ? await fetchSpecChangeFacts({ repo: options.repo, number: options.number, env, runChild: run })
       : null;
+    if (facts && !options.commentsFilePath) comments = facts.comments;
+    const bodyLastEditedAt = facts?.lastEditedAt ?? null;
     // Deterministic seed for the already-refined / zero-iteration path only: the full
     // semantic gap detection (scope/actor/decision) is the agent-layer bounded input consumed
     // at await_answers. This body-file mode computes ONLY the deterministic AC-presence signal
     // via the single is-it-refined source of truth, detectIssueRefinementArtifact, plus the
     // recorded-provenance signal from --comments-file (ADR 0084).
     const artifact = detectIssueRefinementArtifact({ body });
-    snapshot = normalizeGrillSnapshot({
-      loaded: true,
-      detectRan: true,
-      surface,
-      openGapCount: artifact.finding ? 1 : 0,
-      unresolvedGapCount: 0,
-      provenanceRecorded: provenance.provenanceRecorded,
-      provenanceBypass: provenance.bypass,
-      specChangedSinceGrill: detectSpecChangedSinceGrill({ comments, bodyLastEditedAt }),
-    });
+    snapshot = buildGrillFactsSnapshot({ body, comments, bodyLastEditedAt, commentsTruncated: facts?.commentsTruncated, surface, openGapCount: artifact.finding ? 1 : 0 });
   }
 
   const interpretation = interpretRefinementGrillState(snapshot);

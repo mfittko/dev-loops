@@ -3,6 +3,8 @@ import { test } from "bun:test";
 import {
   buildSpecChangeFactsGhArgs,
   detectGrillProvenance,
+  detectSimplicityReview,
+  buildGrillFactsSnapshot,
   detectSpecChangedSinceGrill,
   parseSpecChangeFacts,
   SPEC_CHANGED_SINCE_GRILL_REASON,
@@ -39,7 +41,7 @@ test("interpret returns each of the eight states for its fixture", () => {
     [{ loaded: true, detectRan: true, openGapCount: 2 }, GRILL_STATE.AWAIT_ANSWERS],
     [{ loaded: true, detectRan: true, answersReady: true }, GRILL_STATE.SYNTHESIZE],
     [{ loaded: true, synthesized: true, reGrillRan: false }, GRILL_STATE.RE_GRILL],
-    [{ loaded: true, detectRan: true, openGapCount: 0, provenanceRecorded: true }, GRILL_STATE.GRILL_CLEAN],
+    [{ loaded: true, detectRan: true, openGapCount: 0, provenanceRecorded: true, simplestDesign: true, simplicityReview: true }, GRILL_STATE.GRILL_CLEAN],
     [{ loaded: true, detectRan: true, unresolvedGapCount: 1 }, GRILL_STATE.NEEDS_HUMAN_HANDOFF],
     [{ loadFailed: true }, GRILL_STATE.BLOCKED_NEEDS_USER_DECISION],
   ];
@@ -83,7 +85,7 @@ test("already-refined body with recorded provenance reaches grill_clean in zero 
     loaded: true,
     detectRan: true,
     openGapCount: 0,
-    provenanceRecorded: true,
+    provenanceRecorded: true, simplestDesign: true, simplicityReview: true,
   });
   assert.equal(result.state, GRILL_STATE.GRILL_CLEAN);
   assert.equal(result.reason, "provenance_recorded");
@@ -104,7 +106,7 @@ test("a recorded bypass line reaches grill_clean and is flagged as bypass", () =
     loaded: true,
     detectRan: true,
     openGapCount: 0,
-    provenanceRecorded: true,
+    provenanceRecorded: true, simplestDesign: true, simplicityReview: true,
     provenanceBypass: true,
   });
   assert.equal(result.state, GRILL_STATE.GRILL_CLEAN);
@@ -137,7 +139,7 @@ test("a normal recorded comment (no bypass line) reaches grill_clean with bypass
     loaded: true,
     detectRan: true,
     openGapCount: 0,
-    provenanceRecorded: true,
+    provenanceRecorded: true, simplestDesign: true, simplicityReview: true,
     provenanceBypass: false,
   });
   assert.equal(result.state, GRILL_STATE.GRILL_CLEAN);
@@ -165,7 +167,7 @@ test("an existing results comment on a re-run reaches the zero-iteration clean e
     loaded: true,
     detectRan: true,
     openGapCount: 0,
-    provenanceRecorded: provenance.provenanceRecorded,
+    provenanceRecorded: provenance.provenanceRecorded, simplestDesign: true, simplicityReview: true,
     provenanceBypass: provenance.bypass,
   });
   assert.equal(result.state, GRILL_STATE.GRILL_CLEAN);
@@ -177,7 +179,7 @@ test("open gaps outrank recorded provenance and bypass: never a false grill_clea
     loaded: true,
     detectRan: true,
     openGapCount: 2,
-    provenanceRecorded: true,
+    provenanceRecorded: true, simplestDesign: true, simplicityReview: true,
     provenanceBypass: true,
   });
   assert.equal(result.state, GRILL_STATE.AWAIT_ANSWERS);
@@ -191,7 +193,7 @@ test("a plan surface with a bypass flag set still resolves to plan_shape_only wi
     detectRan: true,
     openGapCount: 0,
     surface: "plan",
-    provenanceRecorded: true,
+    provenanceRecorded: true, simplestDesign: true, simplicityReview: true,
     provenanceBypass: true,
   });
   assert.equal(result.state, GRILL_STATE.GRILL_CLEAN);
@@ -315,7 +317,7 @@ test("allowedTransitions equals GRILL_TRANSITIONS for the current state", () => 
     loaded: true,
     detectRan: true,
     openGapCount: 0,
-    provenanceRecorded: true,
+    provenanceRecorded: true, simplestDesign: true, simplicityReview: true,
   });
   assert.deepEqual(clean.allowedTransitions, GRILL_TRANSITIONS[GRILL_STATE.GRILL_CLEAN]);
   const detect = interpretRefinementGrillState({ loaded: true, detectRan: false });
@@ -326,7 +328,7 @@ test("allowedTransitions equals GRILL_TRANSITIONS for the current state", () => 
 const GRILL_AT = "2026-11-06T10:00:00Z";
 const BEFORE = "2026-11-06T09:00:00Z";
 const AFTER = "2026-11-06T11:00:00Z";
-const resultsComment = (createdAt, extra = "") => ({ body: `## ${RESULTS_TITLE}\n\nNo gaps were found.${extra}`, createdAt });
+const resultsComment = (createdAt, extra = "") => ({ body: `## ${RESULTS_TITLE}\n\nNo gaps were found.\n\nsimplicity-review: 0 findings, 0 corrected, 0 rejected${extra}`, createdAt });
 
 function grillStateFor({ comments, bodyLastEditedAt = null, surface = "issue" }) {
   const provenance = detectGrillProvenance(comments);
@@ -337,6 +339,8 @@ function grillStateFor({ comments, bodyLastEditedAt = null, surface = "issue" })
     openGapCount: 0,
     provenanceRecorded: provenance.provenanceRecorded,
     provenanceBypass: provenance.bypass,
+    simplestDesign: true,
+    simplicityReview: detectSimplicityReview(comments),
     specChangedSinceGrill: detectSpecChangedSinceGrill({ comments, bodyLastEditedAt }),
   });
 }
@@ -448,4 +452,34 @@ test("parseSpecChangeFacts reads the GraphQL node and tolerates a body-only payl
   for (const repo of ["foo", "a/b/c", "mfittko/dev-loops/extra"]) {
     assert.throws(() => buildSpecChangeFactsGhArgs({ repo, number: 7 }), /repo must match <owner\/name>/);
   }
+});
+
+// DESIGN-SIMPLEST-FIRST (issue 3462): grill_clean needs a `## Simplest design` section and a latest-comment review line.
+const REVIEW_LINE = "simplicity-review: 2 findings, 2 corrected, 0 rejected";
+const withSection = "## Simplest design\n\nOne predicate.\n";
+const grilled = (extra = "") => ({ body: `## ${RESULTS_TITLE}\n\nVerdict: grill-clean.\n\n${extra}`, createdAt: GRILL_AT });
+const stateOf = (input) => interpretRefinementGrillState(buildGrillFactsSnapshot({ openGapCount: 0, ...input }));
+
+test("3462: a clean issue has provenance, a Simplest design section and a review line", () => {
+  const out = stateOf({ body: withSection, comments: [grilled(REVIEW_LINE)] });
+  assert.equal(out.state, GRILL_STATE.GRILL_CLEAN);
+});
+
+test("3462: each missing fact blocks the zero-iteration exit, and the repaired issue reaches grill_clean", () => {
+  const never = stateOf({ body: withSection, comments: [] });
+  assert.deepEqual([never.state, never.reason], [GRILL_STATE.DETECT_GAPS, "provenance_missing"]);
+  const noSection = stateOf({ body: "## Problem\n", comments: [grilled(REVIEW_LINE)] });
+  assert.deepEqual([noSection.state, noSection.reason], [GRILL_STATE.DETECT_GAPS, "simplest_design_missing"]);
+  const noLine = stateOf({ body: withSection, comments: [grilled()] });
+  assert.deepEqual([noLine.state, noLine.reason], [GRILL_STATE.DETECT_GAPS, "simplicity_review_missing"]);
+  assert.equal(stateOf({ body: withSection, comments: [grilled(REVIEW_LINE)] }).state, GRILL_STATE.GRILL_CLEAN);
+});
+
+test("3462: only the latest results comment carries the review line; a bypass line needs the facts too", () => {
+  const older = { ...grilled(REVIEW_LINE), createdAt: BEFORE };
+  assert.equal(detectSimplicityReview([older, grilled()]), false);
+  assert.equal(detectSimplicityReview([grilled(), older]), true);
+  assert.equal(detectSimplicityReview([{ body: REVIEW_LINE }]), false);
+  const bypass = stateOf({ body: "## Problem\n", comments: [grilled("bypass: operator-authorized by mfittko")] });
+  assert.equal(bypass.state, GRILL_STATE.DETECT_GAPS);
 });

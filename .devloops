@@ -88,6 +88,15 @@ gates:
         enabled: false
       - name: renderer-security
         enabled: false
+      # DESIGN-SIMPLEST-FIRST (issue 3462): kiss and yagni run from round 1, not only at pre-approval.
+      - name: kiss
+        mandatory: true
+        persona: review
+        prompt: Flag over-engineering and unnecessary complexity. Prefer simple solutions. Question extra layers, abstractions, and indirection that do not earn their keep.
+      - name: yagni
+        mandatory: true
+        persona: review
+        prompt: Flag speculative features, future-proofing, and compatibility shims not required by the current acceptance criteria. YAGNI = You Aren't Gonna Need It.
     requireCi: true
     # Draft gate blocks on high only. With medium also blocking,
     # this gate did not converge on a non-trivial change: correctness settled

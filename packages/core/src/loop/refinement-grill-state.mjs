@@ -29,6 +29,7 @@
  */
 
 import { trimmedOrNull } from "./normalize.mjs";
+import { extractSection } from "./markdown-sections.mjs";
 import { findOperatorOwnedLineRefusal } from "../github/operator-owned-lines.mjs";
 import { parseRepoSlugParts } from "../github/repo-slug.mjs";
 
@@ -104,6 +105,9 @@ const RESULTS_COMMENT_HEADING = `## ${RESULTS_COMMENT_TITLE}`;
 // A results comment's recorded bypass line: "bypass: operator-authorized by <handle>",
 // with an optional leading @ before the handle and a case-insensitive "bypass:" key.
 const BYPASS_LINE_RE = /^bypass: operator-authorized by @?([A-Za-z0-9][A-Za-z0-9-]{0,38})\s*$/i;
+
+// DESIGN-SIMPLEST-FIRST: the latest results comment records the simplicity review.
+const SIMPLICITY_REVIEW_LINE_RE = /^simplicity-review: \d+ findings, \d+ corrected, \d+ rejected\s*$/m;
 
 function normalizeCount(value) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
@@ -285,6 +289,34 @@ export function detectGrillProvenance(comments) {
   return { provenanceRecorded, bypass, bypassBy };
 }
 
+/** True when the latest results comment (comments arrive oldest first) has the `simplicity-review:` line. */
+export function detectSimplicityReview(comments) {
+  const results = (Array.isArray(comments) ? comments : []).map(commentBody).filter((body) => body !== null && isResultsComment(body));
+  return results.length > 0 && SIMPLICITY_REVIEW_LINE_RE.test(results.at(-1));
+}
+
+/**
+ * The one reader of grill facts: startup and the grill detector both build
+ * their snapshot here, so both see the same comments. Pure.
+ *
+ * @param {{body?: string, comments?: Array, bodyLastEditedAt?: string|null, commentsTruncated?: boolean, surface?: string, openGapCount?: number}} input
+ */
+export function buildGrillFactsSnapshot({ body = "", comments = [], bodyLastEditedAt = null, commentsTruncated = false, surface = "issue", openGapCount = 0 } = {}) {
+  const provenance = detectGrillProvenance(comments);
+  return normalizeGrillSnapshot({
+    loaded: true,
+    detectRan: true,
+    surface,
+    openGapCount,
+    unresolvedGapCount: 0,
+    provenanceRecorded: provenance.provenanceRecorded,
+    provenanceBypass: provenance.bypass,
+    simplestDesign: Boolean(extractSection(body, "Simplest design")),
+    simplicityReview: detectSimplicityReview(comments),
+    specChangedSinceGrill: detectSpecChangedSinceGrill({ comments, bodyLastEditedAt, commentsTruncated }),
+  });
+}
+
 /**
  * Canonicalize a raw grill snapshot into a deterministic shape.
  *
@@ -328,11 +360,17 @@ export function normalizeGrillSnapshot(raw) {
     // a counted comment or a body edit after the latest results comment
     // (detectSpecChangedSinceGrill); meaningless without recorded provenance.
     specChangedSinceGrill: Boolean(raw.provenanceRecorded) && Boolean(raw.specChangedSinceGrill),
+    // DESIGN-SIMPLEST-FIRST: a `## Simplest design` body section and a
+    // `simplicity-review:` line in the latest results comment.
+    simplestDesign: Boolean(raw.simplestDesign),
+    simplicityReview: Boolean(raw.simplicityReview),
   };
 }
 
 const PROVENANCE_MISSING_NEXT_ACTION =
   "Run the semantic gap pass on the loaded spec, then post the \"🔬 Grill / refinement results\" comment recording the outcome — including a zero-gap pass, which states that no gaps were found";
+const SIMPLICITY_NEXT_ACTION =
+  "Re-grill: add the \"## Simplest design\" section to the body, run the fresh simplicity review, then post a results comment with the \"simplicity-review: <n> findings, <n> corrected, <n> rejected\" line";
 const SPEC_CHANGED_NEXT_ACTION =
   "Re-grill: read the comments and body edits after the latest \"🔬 Grill / refinement results\" comment, fold the accepted content into the body and its AC / DoD matrix, then post a new results comment";
 
@@ -383,19 +421,25 @@ export function interpretRefinementGrillState(snapshot) {
       // with or without a bypass line on an earlier results comment.
       state = GRILL_STATE.DETECT_GAPS;
       reason = SPEC_CHANGED_SINCE_GRILL_REASON;
+    } else if (!s.provenanceRecorded) {
+      // Zero open gaps but no recorded provenance: the semantic pass is still
+      // owed (ADR 0084) — stay at detect_gaps rather than short-circuiting.
+      state = GRILL_STATE.DETECT_GAPS;
+      reason = "provenance_missing";
+    } else if (!s.simplestDesign) {
+      state = GRILL_STATE.DETECT_GAPS;
+      reason = "simplest_design_missing";
+    } else if (!s.simplicityReview) {
+      state = GRILL_STATE.DETECT_GAPS;
+      reason = "simplicity_review_missing";
     } else if (s.provenanceBypass) {
       // A recorded bypass line still counts as recorded provenance.
       state = GRILL_STATE.GRILL_CLEAN;
       reason = "provenance_bypass_recorded";
       bypass = true;
-    } else if (s.provenanceRecorded) {
+    } else {
       state = GRILL_STATE.GRILL_CLEAN;
       reason = "provenance_recorded";
-    } else {
-      // Zero open gaps but no recorded provenance: the semantic pass is still
-      // owed (ADR 0084) — stay at detect_gaps rather than short-circuiting.
-      state = GRILL_STATE.DETECT_GAPS;
-      reason = "provenance_missing";
     }
   } else {
     state = GRILL_STATE.DETECT_GAPS;
@@ -403,7 +447,9 @@ export function interpretRefinementGrillState(snapshot) {
 
   const nextAction = reason === "provenance_missing"
     ? PROVENANCE_MISSING_NEXT_ACTION
-    : reason === SPEC_CHANGED_SINCE_GRILL_REASON
+    : reason === "simplest_design_missing" || reason === "simplicity_review_missing"
+      ? SIMPLICITY_NEXT_ACTION
+      : reason === SPEC_CHANGED_SINCE_GRILL_REASON
       ? SPEC_CHANGED_NEXT_ACTION
       : GRILL_NEXT_ACTIONS[state];
 

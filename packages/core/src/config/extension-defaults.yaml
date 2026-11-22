@@ -15,10 +15,8 @@ refinement:
   mode: parallel
   maxCopilotRounds: 5
   roles:
-    - scope
-    - coverage
-    - dry
     - kiss
+    - yagni
 
 # Gate review angle definitions for all consumers. A bare string angle is
 # sugar for `{ name }`; `mandatory: true` marks an angle that always runs
