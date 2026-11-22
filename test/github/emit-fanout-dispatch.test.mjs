@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { spawnSyncTrusted as spawnSync } from "../_helpers.mjs";
 import os from "node:os";
 import path from "node:path";
@@ -2785,6 +2785,98 @@ test("the unit prompt describes the optional bundle files and their fields, unde
       assert.ok(section.includes(field), field);
     }
     assert.ok(unit.promptBytes < REVIEWER_WORK_ORDER_MAX_BYTES);
+  });
+});
+
+// A finished reviewer's findings artifact for the sentinel scope used by the 3416 tests.
+async function writeAngleArtifact(tmpDir, tmpRoot) {
+  const dir = path.join(tmpDir, buildGateReviewsDir({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot }));
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "contradiction-lens.json"), JSON.stringify({ angle: "contradiction-lens", verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+}
+
+test("issue 3416: with a distinct --tmp-root the sentinels under cwd/tmp still retire and the findings follow --tmp-root", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    await cp(path.join(tmpDir, "tmp", "gate-context"), path.join(tmpDir, "other-tmp", "gate-context"), { recursive: true });
+    const args = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--tmp-root", "other-tmp"];
+    assert.equal(runEmitCli(args, { cwd: tmpDir }).status, 0);
+    const sentinel = path.join(tmpDir, "tmp", `${CHECKPOINT_SENTINEL_PREFIX}pre-approval-gate-contradiction-lens-${HEAD_SHA}.json`);
+    await writeFile(sentinel, "{}", "utf8");
+    await writeAngleArtifact(tmpDir, "other-tmp");
+    const second = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(second.status, 0, second.stderr || second.stdout);
+    assert.equal(JSON.parse(second.stdout).retiredRound.findingsDirRetired, true);
+    assert.equal(JSON.parse(second.stdout).retiredRound.dispatchPromptRecords.length, 3); // the records follow --tmp-root
+    assert.equal(existsSync(sentinel), false);
+  });
+});
+
+test("issue 3416: an exit-2 failure after the retirement still reports retiredRound on stderr", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const contextDir = await seedBundle(tmpDir);
+    const args = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+    assert.equal(runEmitCli(args, { cwd: tmpDir }).status, 0);
+    // A directory where the angle-suffix file belongs makes the suffix write fail with exit 2 after the retirement.
+    const suffixDir = path.join(contextDir, `${GATE}-${HEAD_SHA}.angle-suffix-pre-approval-gate-contradiction-lens.txt`);
+    await rm(suffixDir, { force: true });
+    await mkdir(suffixDir, { recursive: true });
+    const second = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(second.status, 2, second.stderr || second.stdout);
+    assert.equal(JSON.parse(second.stderr.trim().split("\n").at(-1)).retiredRound.dispatchPromptRecords.length, 3);
+  });
+});
+
+test("issue 3416: re-emission at the same head retires the prior partial round and reports retiredRound; a posted verdict refuses", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const args = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+    const first = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(JSON.parse(first.stdout).retiredRound, undefined);
+    // A reviewer started on the first round: its sentinel stays at this head.
+    const sentinel = path.join(tmpDir, "tmp", `${CHECKPOINT_SENTINEL_PREFIX}pre-approval-gate-contradiction-lens-${HEAD_SHA}.json`);
+    await writeFile(sentinel, "{}", "utf8");
+    // The reviewer has not written its findings: a full re-emission refuses and points to --pending.
+    const planPath = path.join(tmpDir, buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: "tmp" }));
+    const livePlan = await readFile(planPath, "utf8");
+    const live = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(live.status, 1, live.stderr);
+    assert.match(JSON.parse(live.stdout).error, /may still be running/);
+    assert.match(JSON.parse(live.stdout).recovery, /--pending/);
+    assert.equal(existsSync(sentinel), true);
+    assert.equal(await readFile(planPath, "utf8"), livePlan, "the refused emission leaves the live round's keyed emit plan in place");
+    // Once it finished (a valid artifact newer than the sentinel) the round retires.
+    await writeAngleArtifact(tmpDir, "tmp");
+    const second = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(second.status, 0, second.stderr);
+    const retired = JSON.parse(second.stdout).retiredRound;
+    assert.equal(retired.retired, 1);
+    assert.equal(retired.dispatchPromptRecords.length, 3);
+    assert.equal(existsSync(sentinel), false);
+    // A recorded verdict at the head is never retired.
+    const ledger = path.join(tmpDir, buildGateFaninLedgerPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(ledger), { recursive: true });
+    await writeFile(ledger, "{}", "utf8");
+    await writeFile(sentinel, "{}", "utf8");
+    const third = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(third.status, 1);
+    assert.match(JSON.parse(third.stdout).recovery, /retire-gate-round\.mjs/);
+    assert.equal(existsSync(sentinel), true);
+  });
+});
+
+test("issue 3416: a refusal after a full emission retired the stale round still reports retiredRound", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const contextDir = await seedBundle(tmpDir);
+    const args = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+    assert.equal(runEmitCli(args, { cwd: tmpDir }).status, 0);
+    await writeFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.briefing-prefix.txt`), `${PREFIX_BYTES}diff --git a/x b/x\n`, "utf8");
+    const second = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(second.status, 1, second.stderr || second.stdout);
+    const payload = JSON.parse(second.stdout);
+    assert.match(payload.error, /inline diff/);
+    assert.equal(payload.retiredRound.dispatchPromptRecords.length, 3);
   });
 });
 
