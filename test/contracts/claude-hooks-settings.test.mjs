@@ -924,6 +924,23 @@ test("the Agent|Task dispatch guard is registered in settings.json and hooks.jso
   assert.match(plugin.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/pre-tool-use-agent-guard\.mjs/);
 });
 
+test("the approval guard and the ask-approval hook are registered in hooks.json (MERGE-ASK-APPROVAL)", () => {
+  const hooks = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude", "hooks", "hooks.json"), "utf8")).hooks;
+  const guard = hooks.PreToolUse.find((h) => h.hooks.some((x) => x.command.includes("pre-tool-use-approval-guard.mjs")));
+  assert.ok(guard, "the approval guard must be registered under PreToolUse in hooks.json");
+  assert.match(guard.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/pre-tool-use-approval-guard\.mjs/);
+  const ask = hooks.PostToolUse.find((h) => h.matcher === "AskUserQuestion");
+  assert.ok(ask, "the AskUserQuestion PostToolUse matcher must be registered in hooks.json");
+  assert.match(ask.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/post-tool-use-ask-approval\.mjs/);
+  const answersGuard = hooks.PreToolUse.find((h) => h.matcher === "AskUserQuestion");
+  assert.ok(answersGuard, "the AskUserQuestion PreToolUse answers guard must be registered in hooks.json");
+  assert.match(answersGuard.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/pre-tool-use-ask-answers-guard\.mjs/);
+  const settings = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude", "settings.json"), "utf8")).hooks;
+  const projectGuard = settings.PreToolUse.find((h) => h.matcher === "AskUserQuestion");
+  assert.ok(projectGuard, "the AskUserQuestion PreToolUse answers guard must be registered in settings.json");
+  assert.match(projectGuard.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/pre-tool-use-ask-answers-guard\.mjs/);
+});
+
 test("agent-guard hook denies a dev-loop gate-pointer review dispatch, allows a prose-briefed one and the main session (e2e)", () => {
   const run = (prompt, agent_type) => runHook("pre-tool-use-agent-guard.mjs", {
     tool_name: "Agent",

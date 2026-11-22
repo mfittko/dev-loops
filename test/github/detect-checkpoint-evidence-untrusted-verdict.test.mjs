@@ -9,6 +9,7 @@ import { addLocalOrigin, initGitFixture, runGitFixture, runIdFreeEnv, runNode as
 // ADR 0238/0248: a gate-formatted comment from a stranger must not become evidence text.
 
 const scriptPath = path.resolve("scripts/github/detect-checkpoint-evidence.mjs");
+const preloadPath = path.resolve("test/github/ask-approval-userinfo-preload.mjs");
 const HEAD = "a".repeat(40);
 
 const verdict = ({ id, login, association, type = "User" }) => ({
@@ -49,8 +50,10 @@ async function runFull(comments, { viewer = "gate-bot-user", reviews = [], trust
       runGitFixture(tempDir, ["commit", "-q", "-m", "devloops"]);
       addLocalOrigin(tempDir);
     }
+    // The child resolves the approval directory from the account home and ignores the directory override, so a host hook key would make it drop a plain approve-merge line (MERGE-ASK-APPROVAL). The preload points the account home at the empty temp dir.
     const result = await runNodeHelper(scriptPath, ["--repo", "owner/repo", "--pr", "17", "--skip-fanout-ledger-check"], {
-      env: runIdFreeEnv({ ...env, DEVLOOPS_RUN_ID: "" }),
+      env: runIdFreeEnv({ ...env, DEVLOOPS_RUN_ID: "", NODE_OPTIONS: `--import ${preloadPath}`, DEVLOOPS_TEST_HOME: tempDir }),
+      execPath: "node",
       cwd: tempDir,
     });
     const out = JSON.parse(result.code === 0 ? result.stdout : result.stderr.trim().split("\n").at(-1));

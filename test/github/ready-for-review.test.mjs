@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { initSizeBudgetFixtureRepo, makeGhMock, trustGhEntries, repeatedLinesContent, runIdFreeEnv, runNode as runNodeHelper } from "../_helpers.mjs";
+import { initSizeBudgetFixtureRepo, makeGhMock, trustGhEntries, repeatedLinesContent, runIdFreeEnv, runNode as runNodeHelper, NO_APPROVAL_KEY_ENV } from "../_helpers.mjs";
 
 // A stub evaluatePrSizeBudget that always passes — for tests exercising
 // OTHER readyForReview() logic (board sync, etc.) via direct function calls,
@@ -958,7 +958,7 @@ async function readyWithPolicyChange(comments) {
         evaluatePrSizeBudget: passingSizeBudget,
         evaluateAdrTripwire: policyChangeTripwire,
         evaluateCommentDiscipline: passingCommentDiscipline,
-        verifyPolicyChangeApproval: (a, rt) => realVerifyPolicyChangeApproval(a, { ...rt, runChild: approvalReadsRunChild(comments) }),
+        verifyPolicyChangeApproval: (a, rt) => realVerifyPolicyChangeApproval(a, { ...rt, env: { ...rt.env, ...NO_APPROVAL_KEY_ENV }, runChild: approvalReadsRunChild(comments) }),
       },
     );
   } finally {
@@ -988,7 +988,7 @@ test("a differently cased --repo owner resolves the canonical owner login for th
     };
     const approval = await realVerifyPolicyChangeApproval(
       { repo: "OWNER/repo", pr: 17, headSha: "abc123def4561234567890abcdef1234567890ab", adrTripwire: policyChangeTripwire() },
-      { env, runChild },
+      { env: { ...env, ...NO_APPROVAL_KEY_ENV }, runChild },
     );
     assert.equal(approval.satisfied, true);
     assert.equal(approval.approvedBy, "owner");

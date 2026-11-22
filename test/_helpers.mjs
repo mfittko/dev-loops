@@ -9,6 +9,9 @@ import { ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER, ensureLaneRunContext 
 import { writePrePrReviewRecord } from "../scripts/loop/_pre-pr-review-record.mjs";
 import { dispatchPromptLayoutRecordPath } from "../scripts/github/record-dispatch-prompt-layout.mjs";
 
+// Env overrides that point the ask-approval directory at an absent path, so a host hook key never makes a plain approve-merge comment need a record (MERGE-ASK-APPROVAL). Spread into an injected env object, never process.env.
+export const NO_APPROVAL_KEY_ENV = { DEVLOOPS_APPROVAL_TEST_MODE: "1", DEVLOOPS_APPROVAL_DIR: path.join(os.tmpdir(), `dev-loops-no-approval-key-${process.pid}`) };
+
 export function ensureWritableNpmCacheEnv(env, { run = execFileSync, fs = cacheFs } = {}) {
   if (Object.hasOwn(env, "npm_config_cache")) return env;
   let defaultCache = "unresolved default";

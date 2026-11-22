@@ -172,6 +172,8 @@ const HOOK_BUNDLE = [
   { source: "packages/core/src/loop/work-order-digest.mjs", target: ".claude/hooks/_work-order-digest.mjs", rewrites: [] },
   // One retirement predicate for the pull and the fixer hooks (ADR 0107).
   { source: "packages/core/src/loop/gate-round-retirement.mjs", target: ".claude/hooks/_gate-round-retirement.mjs", rewrites: [] },
+  // Ask-dialog merge approval record and its path guard (ADR 0315).
+  { source: "packages/core/src/github/ask-merge-approval.mjs", target: ".claude/hooks/_ask-merge-approval.mjs", rewrites: [] },
 ];
 
 /** Generated hook-mirror paths; the size budget counts their `packages/core` sources instead. */

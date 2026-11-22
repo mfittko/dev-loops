@@ -6,6 +6,7 @@
  */
 import { ghJson } from "@dev-loops/core/github/gh";
 import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
+import { filterAskApprovalComments, ASK_APPROVAL_RECOVERY } from "@dev-loops/core/github/ask-merge-approval";
 import { flattenPaginatedSlurp } from "./post-gate-findings.mjs";
 
 export const STANDING_AUTHORIZATIONS_TRIGGER = "standing-authorizations-change";
@@ -23,13 +24,15 @@ export async function verifyPolicyChangeApproval({ repo, pr, headSha, adrTripwir
   const approvedBy = (await ghJson(["api", `repos/${repo}`], { env, ghCommand, runChild }))?.owner?.login ?? repo.split("/")[0];
   const reviews = flattenPaginatedSlurp(await read(`pulls/${pr}/reviews`));
   const comments = flattenPaginatedSlurp(await read(`issues/${pr}/comments`));
-  const result = verifyFreshHumanApproval({ approvedBy, currentHeadSha: headSha, reviews, comments });
-  return { required: true, approvedBy, ...result };
+  // One approval rule for every reader: a hook-marked or (with the hook key) any approve-merge comment counts only with its harness record (MERGE-ASK-APPROVAL).
+  const askApproval = filterAskApprovalComments({ comments, repo, pr: Number(pr), currentHeadSha: headSha, env });
+  const result = verifyFreshHumanApproval({ approvedBy, currentHeadSha: headSha, reviews, comments: askApproval.comments });
+  return { required: true, approvedBy, ...result, ...(result.satisfied || askApproval.refusals.length === 0 ? {} : { reason: [result.reason, ...askApproval.refusals].filter(Boolean).join(" ") }) };
 }
 
 export function policyChangeApprovalRefusal({ pr, headSha, approval }) {
   return (
     `PR #${pr} changes the .devloops standingAuthorizations block and cannot become ready without a fresh human approval at the current head ${headSha.slice(0, 7)}: ` +
-    `${approval.reason ?? "no approval found"}. The repo owner (${approval.approvedBy}) must leave an APPROVED review or an \`approve merge ${headSha}\` comment.`
+    `${approval.reason ?? "no approval found"}. The repo owner (${approval.approvedBy}) must leave an APPROVED review, or answer the approval question under Claude Code (MERGE-ASK-APPROVAL: ${ASK_APPROVAL_RECOVERY}), or, on a machine without the hook key, leave an \`approve merge ${headSha}\` comment.`
   );
 }
