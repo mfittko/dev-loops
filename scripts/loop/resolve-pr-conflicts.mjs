@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from "node:child_process";
+import { takeGhSlot } from "@dev-loops/core/github/gh-throttle";
+import { withSecondaryLimitBackoff } from "@dev-loops/core/github/gh";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -122,6 +124,13 @@ export function parseResolvePrConflictsCliArgs(argv) {
 }
 
 function run(command, args, { cwd, env = process.env } = {}) {
+  const attempt = async () => {
+    if (command === "gh") await takeGhSlot({ env, cwd });
+    return spawnChild(command, args, { cwd, env });
+  };
+  return command === "gh" ? withSecondaryLimitBackoff(attempt) : attempt();
+}
+function spawnChild(command, args, { cwd, env }) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";

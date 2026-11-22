@@ -40,7 +40,7 @@ async function installedFixture() {
   runGitFixture(consumer, ["push", "-q", "origin", `HEAD:refs/heads/${baseBranch}`]);
   runGitFixture(consumer, ["fetch", "-q", "origin"]);
   runGitFixture(consumer, ["remote", "set-head", "origin", baseBranch]);
-  const env = runIdFreeEnv({ PATH: bin, FIXTURE_ROOT: root });
+  const env = runIdFreeEnv({ PATH: bin, FIXTURE_ROOT: root, DEV_LOOPS_GH_STUB: "1" });
   delete env.DEVLOOPS_PRE_PR_READY_GATE_SCRIPT; delete env.DEVLOOPS_PRE_MERGE_GATE_SCRIPT;
   const write = (rel, body) => { fs.mkdirSync(path.dirname(path.join(pkg, rel)), { recursive: true }); fs.writeFileSync(path.join(pkg, rel), body); };
   const run = (verb = "ready", extraEnv = {}) => {

@@ -584,7 +584,7 @@ test("a padded --repo reaches fetchPr trimmed: gh is called with the normalized 
     const bin = path.join(dir, "bin");
     mkdirSync(bin);
     writeFileSync(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' "$*" > '${log}'\nprintf '%s\\n' '{"headRefOid":"${MOVED}","headRefName":"feat"}'\n`, { mode: 0o755 });
-    const run = spawnSync("node", [cli, "--head", HEAD, "--repo", " o/r ", "--pr", "7"], { cwd: dir, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+    const run = spawnSync("node", [cli, "--head", HEAD, "--repo", " o/r ", "--pr", "7"], { cwd: dir, encoding: "utf8", env: { ...process.env, DEV_LOOPS_GH_STUB: "1", PATH: `${bin}:${process.env.PATH}` } });
     assert.equal(run.status, 0, run.stderr + run.stdout);
     assert.equal(readFileSync(log, "utf8").trim(), "pr view 7 --repo o/r --json headRefOid,headRefName");
   });
@@ -654,7 +654,7 @@ test("the CLI forwards --fields and --silent on a successful close", async () =>
     const bin = path.join(dir, "bin");
     mkdirSync(bin);
     writeFileSync(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' '{"headRefOid":"${MOVED}","headRefName":"feat"}'\n`, { mode: 0o755 });
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    const env = { ...process.env, DEV_LOOPS_GH_STUB: "1", PATH: `${bin}:${process.env.PATH}` };
     const args = [cli, "--head", HEAD, "--repo", "o/r", "--pr", "7"];
     writeSequenceMarker({ tmpRoot: path.join(dir, "tmp"), baselineHead: HEAD, branch: "feat", execution: execution(dir) });
     const fields = spawnSync("node", [...args, "--fields", "condition"], { cwd: dir, encoding: "utf8", env });
