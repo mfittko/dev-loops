@@ -5,7 +5,8 @@ import path from "node:path";
 
 import { evaluatePrGateCoordination } from "@dev-loops/core/loop/pr-gate-coordination";
 import { DISPOSITION, STATE } from "@dev-loops/core/loop/copilot-loop-state";
-import { resolveDraftCapRoundFact } from "../../scripts/github/write-gate-context.mjs";
+import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
+import { resolveDraftCapRoundFact, resolveDraftRoundCap } from "../../scripts/github/write-gate-context.mjs";
 import { readGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { extendCapRoundChain } from "../../scripts/loop/extend-cap-round-chain.mjs";
 import { runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
@@ -40,12 +41,14 @@ export async function reviewerOnlyRoute(root, { baseline, head, ledgerPath, stat
 /** The coordinator's view of a draft PR at `head`: the proof as detect-pr-gate-coordination-state computes it, then the real evaluator. */
 export async function coordinationAt(root, { repo, pr, head, ready = false }) {
   const { capRoundFixed: fixed, failure } = await resolveDraftCapRoundFact({ repo, pr, currentHeadSha: head, prData: { isDraft: !ready, baseRefName: "main" } }, { repoRoot: root, requirePostedCleanCap: false }); // these scenarios exercise the chain-extension exits, not the posted-verdict check
+  const { round, cap } = await resolveDraftRoundCap({ repo, pr, gate: "draft_gate", headSha: head }, { repoRoot: root, includeLiveCurrentHead: true });
   const marker = { visible: true, headSha: "abc1234", verdict: "blocked", contractComplete: true };
   const result = evaluatePrGateCoordination({
     pr, repo, currentHeadSha: head, prDraft: !ready, lifecycleState: ready ? STATE.READY_TO_REREQUEST_REVIEW : STATE.PR_DRAFT_NO_FEEDBACK, loopDisposition: ready ? DISPOSITION.CLEAN_CONVERGED : DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
     maxCopilotRounds: 0, copilotReviewRoundCount: 0, unresolvedThreadCount: 0, unresolvedGateThreadCount: 0, prTitle: "feat: x",
     ...(ready ? { sameHeadCleanConverged: true, draftGate: marker, draftGateMarker: marker, preApprovalGate: { visible: false }, preApprovalGateMarker: { visible: false } } : {}),
-    draftCapRoundFixed: fixed, draftRoundRefused: !ready && !fixed, draftCapRoundFailure: failure,
+    // The detector refuses the draft round only past the cap (round > cap): below it the next draft_gate round runs.
+    draftCapRoundFixed: fixed, draftRoundRefused: !ready && !fixed && isRoundRefused(round, cap), draftCapRoundFailure: failure,
   });
   return { fixed, failure, nextAction: result.nextAction, remedy: result.agentRemedy?.command ?? null, blockedOn: result.blockedOn ?? null, reason: result.reason };
 }
@@ -64,8 +67,16 @@ export async function followRemedy(root, { repo, pr, head, baseline, ledgerPath,
   if (end.fixed) return { trace: ["already proven"], end };
   const extended = await step("extend", () => extendRoute(root, { repo, pr, head }));
   if (!extended.ok) {
-    await step("reviewer-only", () => reviewerOnlyRoute(root, { baseline, head, ledgerPath, status: reviewerStatus }));
-    await step("extend", () => extendRoute(root, { repo, pr, head }));
+    // Execute the one command the refusal names (RECOVERY-COMMAND-REQUIRED): a wrong recovery fails the caller's end-state assertion.
+    // A reviewer-only recovery runs at the baseline it names, then the extension again; any other recovery (gate-coordination) is the coordinator check below.
+    // A refusal that names no recovery keeps the baseline the caller hands in.
+    const recovery = extended.recovery ?? "";
+    trace.push(`recovery: ${recovery}`);
+    const named = /loop pre-push-delta --reviewer-only .*--baseline (\S+) /u.exec(recovery);
+    if (named || !recovery) {
+      await step("reviewer-only", () => reviewerOnlyRoute(root, { baseline: named?.[1] ?? baseline, head, ledgerPath, status: reviewerStatus }));
+      await step("extend", () => extendRoute(root, { repo, pr, head }));
+    }
   }
   end = await coordinationAt(root, { repo, pr, head });
   return { trace, end };
