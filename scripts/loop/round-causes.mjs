@@ -52,7 +52,7 @@ Both counters skip the extra draft_gate read of the round 1 checklist; a ledger 
 
 Checklist split (checklist): the first completed draft_gate round of each change (the earliest one stamped
 first, else the earliest by loggedAt), whatever --gate says, counts each finding as covered when its angle
-has a developer-checklist id in the gates.draft.angles config resolved from the repository root (an invalid
+has a developer-checklist id in the gates.draft.angles config resolved from the checkout that contains the working directory (an invalid
 config exits 1 with config_load_failed), and as uncovered otherwise. Changes group before and after
 2026-11-21T17:03Z (the checklist merge) by the loggedAt of that round. A change without such a round has round1 null.
 
