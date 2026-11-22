@@ -872,6 +872,13 @@ test("the approval guard and the ask-approval hook are registered in hooks.json 
   const ask = hooks.PostToolUse.find((h) => h.matcher === "AskUserQuestion");
   assert.ok(ask, "the AskUserQuestion PostToolUse matcher must be registered in hooks.json");
   assert.match(ask.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/post-tool-use-ask-approval\.mjs/);
+  const answersGuard = hooks.PreToolUse.find((h) => h.matcher === "AskUserQuestion");
+  assert.ok(answersGuard, "the AskUserQuestion PreToolUse answers guard must be registered in hooks.json");
+  assert.match(answersGuard.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/pre-tool-use-ask-answers-guard\.mjs/);
+  const settings = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude", "settings.json"), "utf8")).hooks;
+  const projectGuard = settings.PreToolUse.find((h) => h.matcher === "AskUserQuestion");
+  assert.ok(projectGuard, "the AskUserQuestion PreToolUse answers guard must be registered in settings.json");
+  assert.match(projectGuard.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/pre-tool-use-ask-answers-guard\.mjs/);
 });
 
 test("agent-guard hook denies a dev-loop gate-pointer review dispatch, allows a prose-briefed one and the main session (e2e)", () => {

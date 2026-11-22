@@ -54,7 +54,7 @@ The standing authorization never waives a `packages/core/src/config/extension-de
 
 The writer emits one line, `adr-tripwire:allow standing-authorization head=<40-hex> issue=<n> granted-by=<login> expires=<date> paths=<comma-separated paths>`, and replaces an earlier standing-authorization line. The tripwire treats a line whose reason starts with `standing-authorization` as valid only when its `head=` equals the evaluated head, its `expires=` day (UTC) has not passed, and every current trigger is a contract-doc listed in its `paths=`, so a later push blocks again until the writer re-runs. A hand-written `adr-tripwire:allow <reason>` line (an operator edit in the GitHub UI) keeps its meaning.
 
-A diff that changes the `standingAuthorizations` block is a tripwire trigger that only a decision record satisfies. `ready-for-review.mjs` and `pre-pr-ready-gate.mjs` also refuse the ready flip of such a PR until the repo owner has left an `APPROVED` review or an `approve merge <headSha>` comment at the current head. ADR 0119 records this rule and amends ADR 0052.
+A diff that changes the `standingAuthorizations` block is a tripwire trigger that only a decision record satisfies. `ready-for-review.mjs` and `pre-pr-ready-gate.mjs` also refuse the ready flip of such a PR until the repo owner has left an `APPROVED` review or an `approve merge <headSha>` comment at the current head. Under Claude Code the owner answers the approval question (`MERGE-ASK-APPROVAL`) next to the `APPROVED` review; the plain comment counts only on a machine without the hook key. ADR 0119 records this rule and amends ADR 0052.
 
 ## What is ADR-worthy
 

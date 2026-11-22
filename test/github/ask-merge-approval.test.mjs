@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 import {
   approvalDir, buildApprovalQuestion, extractYesApproval, writeApprovalRecord, buildApprovalComment,
@@ -16,15 +17,18 @@ import { NO_APPROVAL_KEY_ENV } from "../_helpers.mjs";
 import { buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
 
+// Paths resolve from this file, so the test runs from any working directory.
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const REPO = "example/fixture";
 const HEAD = "a".repeat(40);
 const OTHER_HEAD = "b".repeat(40);
 const PATCH = "c".repeat(40);
 const OTHER_PATCH = "d".repeat(40);
-const POST_HOOK = path.resolve(".claude/hooks/post-tool-use-ask-approval.mjs");
-const GUARD_HOOK = path.resolve(".claude/hooks/pre-tool-use-approval-guard.mjs");
-const BASH_HOOK = path.resolve(".claude/hooks/pre-tool-use-bash-gate.mjs");
-const PRELOAD = path.resolve("test/github/ask-approval-userinfo-preload.mjs");
+const POST_HOOK = path.join(repoRoot, ".claude/hooks/post-tool-use-ask-approval.mjs");
+const GUARD_HOOK = path.join(repoRoot, ".claude/hooks/pre-tool-use-approval-guard.mjs");
+const ANSWERS_GUARD = path.join(repoRoot, ".claude/hooks/pre-tool-use-ask-answers-guard.mjs");
+const BASH_HOOK =path.join(repoRoot, ".claude/hooks/pre-tool-use-bash-gate.mjs");
+const PRELOAD = path.join(repoRoot, "test/github/ask-approval-userinfo-preload.mjs");
 const SKIP_UNDER_ROOT = process.getuid?.() === 0;
 
 // The in-process functions take f.env (override). The hook subprocesses ignore the override, like the merge
@@ -169,14 +173,14 @@ test("the bash gate denies an agent post of the approve-merge line", () => {
   const f = fixture();
   const command = `gh pr comment 7 --repo ${REPO} --body "approve merge ${HEAD} patch-id ${PATCH}"`;
   for (const agent_type of [undefined, "developer", "dev-loop"]) {
-    const input = { tool_name: "Bash", tool_input: { command }, cwd: path.resolve("."), ...(agent_type ? { agent_type } : {}) };
+    const input = { tool_name: "Bash", tool_input: { command }, cwd: repoRoot, ...(agent_type ? { agent_type } : {}) };
     assert.equal(decision(runHook(BASH_HOOK, input, f.env)), "deny", String(agent_type));
   }
 });
 
 test("the default approval directory is outside the checkout", () => {
   const dir = approvalDir({});
-  assert.equal(dir.startsWith(path.resolve(".")), false);
+  assert.equal(dir.startsWith(repoRoot), false);
 });
 
 // ac:5: the Pi comment-line path has no harness check and no record
@@ -274,6 +278,7 @@ test("a 0-byte key and a wrong-size key each refuse with the key recovery", () =
     assert.equal(refusals.length, 2);
     for (const r of refusals) assert.ok(r.includes(ASK_APPROVAL_KEY_RECOVERY) && !r.includes(ASK_APPROVAL_RECOVERY), r);
     assert.match(refusals[0], /exactly 32/);
+    assert.match(refusals[0], /removes `<approval directory>\/\.key`/, "a wrong-size key is recovered by removing the key");
   }
   fs.rmSync(keyPath);
   assert.equal(approvalKeyPresent(f.env), false, "ENOENT is absent");
@@ -430,7 +435,7 @@ test("the guard denies case-folded, symlinked, Glob, Grep glob and MCP arguments
 });
 
 test("the shipped settings deny the record directory to Read, Edit, Write and the sandbox, and guard MCP tools", () => {
-  const settings = JSON.parse(fs.readFileSync(path.resolve(".claude/settings.json"), "utf8"));
+  const settings = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude/settings.json"), "utf8"));
   const dir = "~/.config/dev-loops/merge-approvals";
   for (const tool of ["Read", "Edit", "Write"]) assert.ok(settings.permissions.deny.includes(`${tool}(${dir}/**)`), tool);
   assert.ok(settings.sandbox.filesystem.denyRead.includes(dir));
@@ -671,22 +676,37 @@ test("the standing-authorization refusal names the approval question next to the
 test("the contracts cite MERGE-ASK-APPROVAL and the question template buildApprovalQuestion produces", () => {
   const template = buildApprovalQuestion({ repo: "<owner/name>", pr: "<n>", headSha: "<40-hex>", patchId: "<40-hex>" });
   for (const doc of ["skills/docs/main-agent-contract.md", "skills/docs/merge-preconditions.md"]) {
-    const text = fs.readFileSync(path.resolve(doc), "utf8");
+    const text = fs.readFileSync(path.join(repoRoot, doc), "utf8");
     assert.ok(text.includes("MERGE-ASK-APPROVAL"), doc);
     assert.ok(text.includes(template), `${doc} states the question template`);
   }
 });
 
-// Cluster 11: the guard fails closed at its recursion bound
-test("the guard denies an argument nested deeper than six levels and allows a shallow one", () => {
+// The guard scans the whole argument tree at any depth and fails closed only past its node bound
+test("the guard scans a deep argument tree, allows realistic nested MCP payloads and denies one over the node limit", () => {
   const f = fixture();
   const nest = (leaf, levels) => { let v = leaf; for (let i = 0; i < levels; i += 1) v = { a: v }; return v; };
   const key = { path: "~/.config/dev-loops/merge-approvals/.key" };
-  const deep = runHook(GUARD_HOOK, { tool_name: "mcp__files__read", tool_input: nest(key, 7), cwd: f.root }, f.env);
-  assert.equal(deep.status, 2);
-  assert.match(deep.stderr, /nested deeper than 6 levels/);
-  assert.equal(runHook(GUARD_HOOK, { tool_name: "mcp__files__read", tool_input: nest({ path: "x" }, 3), cwd: f.root }, f.env).status, 0);
-  assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "mcp__files__read", tool_input: nest(key, 3), cwd: f.root }, f.env)), "deny");
+  const call = (tool_input) => runHook(GUARD_HOOK, { tool_name: "mcp__files__read", tool_input, cwd: f.root }, f.env);
+  // The record directory is denied at any depth.
+  assert.equal(decision(call(nest(key, 3))), "deny");
+  assert.equal(decision(call(nest(key, 7))), "deny", "named below depth six");
+  // Realistic payloads that nest past six levels and name no approval path pass.
+  for (const payload of [
+    { definition: { params: { segments: [{ conditions: [{ op: "is" }] }] } } },
+    { blocks: [{ type: "rich_text", elements: [{ type: "rich_text_section", elements: [{ type: "text", text: "hi" }] }] }] },
+    nest({ path: "x" }, 20),
+    {},
+  ]) {
+    const r = call(payload);
+    assert.equal(r.status, 0, JSON.stringify(payload));
+    assert.equal(decision(r), "allow", JSON.stringify(payload));
+  }
+  // More nodes than the limit: denied with a message that states the limit and a recovery.
+  const over = call({ items: Array.from({ length: 10001 }, () => "x") });
+  assert.equal(over.status, 2);
+  assert.match(over.stderr, /more than 10000 nodes/);
+  assert.match(over.stderr, /split or shrink the arguments/);
 });
 
 // Cluster 16: the gh stub applies only under the test flag
@@ -701,4 +721,68 @@ test("the post hook ignores DEVLOOPS_GH_COMMAND without the test flag", () => {
   runHook(POST_HOOK, askPayload(question()), { ...noFlag, PATH: `${bin}${path.delimiter}${process.env.PATH}` });
   assert.equal(fs.existsSync(f.out), false, "the stub did not run");
   assert.equal(fs.existsSync(viaPath), true, "gh from PATH ran");
+});
+
+// verifyRecord fail-closed branches: a symlinked record, an unparseable record and a record without a mac
+test("a symlinked, unparseable or mac-less record file is refused with the ask-again recovery", () => {
+  const f = fixture();
+  const { id, record } = ask(f.env);
+  const file = path.join(f.dir, `${id}.json`);
+  const valid = fs.readFileSync(file, "utf8");
+  const { mac: _mac, ...noMac } = record;
+  const copy = path.join(f.root, "record-copy.json");
+  const cases = {
+    symlink: () => { fs.writeFileSync(copy, valid); fs.symlinkSync(copy, file); },
+    "non-JSON": () => fs.writeFileSync(file, "not json"),
+    "no mac": () => fs.writeFileSync(file, JSON.stringify(noMac)),
+  };
+  for (const [name, plant] of Object.entries(cases)) {
+    fs.rmSync(file, { force: true });
+    plant();
+    const { comments, refusals } = filter(f.env, [comment(id)]);
+    assert.equal(comments.length, 0, name);
+    assert.equal(refusals.length, 1, name);
+    assert.ok(refusals[0].includes(ASK_APPROVAL_RECOVERY), name);
+  }
+});
+
+// Current facts compare trimmed and case-folded, like verifyFreshHumanApproval
+test("filterAskApprovalComments matches the current patch-id and head case-insensitively after a head change", () => {
+  const f = fixture();
+  const { id } = ask(f.env);
+  const base = { currentHeadSha: OTHER_HEAD };
+  for (const patch of [PATCH, PATCH.toUpperCase(), ` ${PATCH} `]) {
+    assert.equal(filter(f.env, [comment(id)], { ...base, currentPatchId: patch }).comments.length, 1, JSON.stringify(patch));
+  }
+  for (const patch of [OTHER_PATCH, "", null]) {
+    assert.equal(filter(f.env, [comment(id)], { ...base, currentPatchId: patch }).comments.length, 0, JSON.stringify(patch));
+  }
+  assert.equal(filter(f.env, [comment(id)], { currentHeadSha: ` ${HEAD.toUpperCase()} ` }).comments.length, 1, "uppercase current head");
+});
+
+// Key creation: only the link may meet an existing key
+test("a stale temp key file does not block key creation", () => {
+  const f = fixture();
+  fs.mkdirSync(f.dir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(f.dir, `.key.${process.pid}.tmp`), "stale", { mode: 0o600 });
+  const { id } = ask(f.env);
+  assert.equal(filter(f.env, [comment(id)]).comments.length, 1, "the key and record were created");
+  assert.equal(fs.readFileSync(path.join(f.dir, ".key")).length, 32);
+});
+
+// A model-supplied answers map on an approval question is denied before the dialog
+test("the AskUserQuestion guard denies a pre-filled answers map on an approval question only", () => {
+  const f = fixture();
+  const text = question();
+  const q = { question: text, options: YES_NO, multiSelect: false };
+  const call = (tool_input) => runHook(ANSWERS_GUARD, { tool_name: "AskUserQuestion", tool_input, cwd: f.root }, f.env);
+  const denied = call({ questions: [q], answers: { [text]: "Yes" } });
+  assert.equal(decision(denied), "deny");
+  assert.match(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecisionReason, /answered in the dialog/);
+  assert.equal(decision(call({ questions: [q], answers: { other: "No" } })), "deny", "any non-empty answers map");
+  assert.equal(decision(call({ questions: [q] })), "allow", "no answers");
+  assert.equal(decision(call({ questions: [q], answers: {} })), "allow", "empty answers");
+  const color = { question: "Which color?", options: [{ label: "Red" }, { label: "Blue" }] };
+  assert.equal(decision(call({ questions: [color], answers: { "Which color?": "Red" } })), "allow", "non-approval question");
+  assert.equal(decision(call({})), "allow", "unknown shape");
 });

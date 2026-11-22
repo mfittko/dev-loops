@@ -10,7 +10,8 @@
  * A plugin consumer gets this hook alone. It also denies arguments naming the record signing
  * functions (writeApprovalRecord, createKey, loadKey) as whole identifiers, so `uploadKey` or
  * `createKeyPair` pass. A bare mention in a commit message or body flag is denied too. An
- * error in this hook denies (exit 2), and so does an argument nested deeper than 6 levels. Only the PostToolUse hook touches the directory. Agent posts of
+ * error in this hook denies (exit 2), and so does a tool_input with more than 10000 nodes (the whole
+ * tree is scanned at any depth). Only the PostToolUse hook touches the directory. Agent posts of
  * the `approve merge` line stay denied by the raw comment write deny and the comment writers
  * (OPERATOR-OWNED-LINE).
  */
@@ -21,13 +22,20 @@ import { isApprovalPath, approvalNameHit, ASK_APPROVAL_RECOVERY } from "./_ask-m
 // File bodies are written, not addressed: scanning them would block a doc that mentions the directory.
 const BODY_KEYS = new Set(["content", "new_string", "old_string", "new_source", "description"]);
 
-const MAX_DEPTH = 6;
+const MAX_NODES = 10000;
 
-function stringArgs(value, key = "", depth = 0, out = []) {
-  if (typeof value === "string") { if (!BODY_KEYS.has(key)) out.push(value); } else if (value && typeof value === "object") {
-    // An unscanned deeper value could name the record: fail closed (the catch below denies with exit 2).
-    if (depth >= MAX_DEPTH && Object.keys(value).length > 0) throw new Error(`a tool argument is nested deeper than ${MAX_DEPTH} levels and cannot be scanned`);
-    for (const [k, v] of Object.entries(value)) stringArgs(v, k, depth + 1, out);
+// Scan the whole argument tree, bounded by a total node count (not depth): ordinary nested MCP payloads pass.
+function stringArgs(root) {
+  const out = [];
+  const stack = [["", root]];
+  let nodes = 0;
+  while (stack.length > 0) {
+    const [key, value] = stack.pop();
+    // An unscanned value could name the record: fail closed (the catch below denies with exit 2).
+    if ((nodes += 1) > MAX_NODES) throw new Error(`a tool argument has more than ${MAX_NODES} nodes and cannot be scanned; split or shrink the arguments`);
+    if (typeof value === "string") { if (!BODY_KEYS.has(key)) out.push(value); } else if (value && typeof value === "object") {
+      for (const entry of Object.entries(value)) stack.push(entry);
+    }
   }
   return out;
 }
@@ -47,7 +55,7 @@ try {
     emitDeny(`MERGE-ASK-APPROVAL: the merge approval record directory is written by the harness hook only. No agent tool reads, writes or names it. The call names \`${hit.slice(0, 80)}\`; rephrase it without that name or path. ${ASK_APPROVAL_RECOVERY}`);
   }
 } catch (error) {
-  process.stderr.write(`MERGE-ASK-APPROVAL: the approval guard failed (${error?.message ?? error}), so the call is denied. Retry the call; if it keeps failing, report it to the operator.\n`);
+  process.stderr.write(`MERGE-ASK-APPROVAL: the approval guard failed (${error?.message ?? error}), so the call is denied. If the message names the node limit, split or shrink the arguments and call again; otherwise report it to the operator.\n`);
   process.exit(2);
 }
 emitAllow();

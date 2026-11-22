@@ -30,7 +30,7 @@ const APPROVE_LINE_RE = /^[ \t>*-]*approve[ \t]+merge\b/gimu;
 const RECOVERY = "Recovery: ask the operator the approval question again with the current facts and the options Yes and No: `Approve merge of <owner/name> PR #<n> at head <40-hex> with patch-id <40-hex>?` (leave out ` with patch-id <40-hex>` when the merge check prints no patch-id). The hook then records the yes answer and posts the line.";
 // Pi has no ask dialog and no hook, so a Pi session on a machine that holds the key needs one of these (ADR 0315, H1).
 const NO_DIALOG_RECOVERY = "Without the ask dialog (Pi): an APPROVED review by the operator on the current head satisfies the approval, or run the merge under Claude Code.";
-const KEY_RECOVERY = "Recovery: the approval key or directory is unusable. The operator removes `<approval directory>/.key` (the default directory is `~/.config/dev-loops/merge-approvals`) or fixes its mode to 0600 and the directory mode to 0700, then answers the approval question again so the hook creates a fresh key. If the directory cannot be read at all, run the merge where the verifier can read the approval directory (Claude Code outside a sandbox that denies it).";
+const KEY_RECOVERY = "Recovery: the approval key or directory is unusable. For a wrong-size, symlinked or foreign-owned key, the operator removes `<approval directory>/.key` (the default directory is `~/.config/dev-loops/merge-approvals`), then answers the approval question again so the hook creates a fresh key. For a loose mode, the operator removes the group and other bits from `.key` and sets the directory mode to 0700, then answers again. If the directory cannot be read at all, run the merge where the verifier can read the approval directory (Claude Code outside a sandbox that denies it).";
 const ASK_AGAIN = `${RECOVERY} ${NO_DIALOG_RECOVERY}`;
 export const APPROVAL_PARENT_NAME = ".config/dev-loops";
 
@@ -180,9 +180,11 @@ export function approvalKeyPresent(env = process.env) {
 
 function createKey(dir, keyPath) {
   // Write a temp file and link it into place: a partial key never appears at the key path, and link refuses an existing key.
-  const tmp = path.join(dir, `.key.${process.pid}.tmp`);
+  // A random suffix: an orphaned temp file from a crashed hook never collides with this write.
+  const tmp = path.join(dir, `.key.${randomBytes(8).toString("hex")}.tmp`);
   fs.writeFileSync(tmp, randomBytes(32), { flag: "wx", mode: 0o600 });
-  try { fs.linkSync(tmp, keyPath); } finally { fs.rmSync(tmp, { force: true }); }
+  // Only the link may meet an existing key (EEXIST): the caller reads the winner's key.
+  try { fs.linkSync(tmp, keyPath); } catch (error) { if (error?.code !== "EEXIST") throw error; } finally { fs.rmSync(tmp, { force: true }); }
 }
 
 function loadKey(dir, { create }) {
@@ -195,7 +197,7 @@ function loadKey(dir, { create }) {
     }
     assertSafeDir(dir);
     if (create) {
-      try { createKey(dir, keyPath); } catch (error) { if (error?.code !== "EEXIST") throw error; }
+      createKey(dir, keyPath);
     }
     return readKey(keyPath);
   } catch (error) {
@@ -267,7 +269,11 @@ function verifyRecord(id, { repo, pr }, env, key) {
  * Each refusal names its recovery.
  * @returns {{ comments: object[], refusals: string[] }}
  */
-export function filterAskApprovalComments({ comments, repo, pr, currentHeadSha, currentPatchId = null, env = process.env }) {
+export function filterAskApprovalComments({ comments, repo, pr, currentHeadSha: rawHead, currentPatchId: rawPatchId = null, env = process.env }) {
+  // Trim and lower-case the current facts, like verifyFreshHumanApproval does; records and comment lines hold lower-case hex.
+  const norm = (v) => (typeof v === "string" ? v.trim().toLowerCase() : v);
+  const currentHeadSha = norm(rawHead);
+  const currentPatchId = norm(rawPatchId) || null;
   const kept = [];
   const refusals = [];
   const keyed = approvalKeyPresent(env);
