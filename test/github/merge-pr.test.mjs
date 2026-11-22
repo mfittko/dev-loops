@@ -1723,7 +1723,7 @@ async function askApprovalRuntime({ mode }) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "pr-ask-merge-"));
   const env = { ...process.env, DEVLOOPS_APPROVAL_TEST_MODE: "1", DEVLOOPS_APPROVAL_DIR: path.join(dir, "approvals") };
   const text = buildApprovalQuestion({ repo: "mfittko/dev-loops", pr: 5, headSha: OLD_HEAD, patchId: PATCH_ID });
-  const q = { question: text, options: [{ label: "Yes" }, { label: "No" }], multiSelect: false };
+  const q = { question: text, options: [{ label: "Yes", description: "Approve this merge" }, { label: "No", description: "Do not merge" }], multiSelect: false };
   const approval = extractYesApproval({ tool_input: { questions: [q] }, tool_response: { answers: { [text]: "Yes" } } });
   // Every mode writes one record, so the hook key exists: a made-up id or a typed line is then refused. Without a key a reader passes the comment through.
   const written = writeApprovalRecord({ approval }, env);

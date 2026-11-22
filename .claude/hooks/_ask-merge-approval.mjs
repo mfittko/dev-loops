@@ -27,7 +27,7 @@ export const APPROVAL_DIR_NAME = "merge-approvals";
 export const COMMENT_MARKER_PREFIX = "<!-- dev-loops:ask-approval id=";
 const MARKER_RE = /<!-- dev-loops:ask-approval id=([0-9a-f]{64}) -->/u;
 const APPROVE_LINE_RE = /^[ \t>*-]*approve[ \t]+merge\b/gimu;
-const RECOVERY = "Recovery: ask the operator the approval question again with the current facts and the options Yes and No: `Approve merge of <owner/name> PR #<n> at head <40-hex> with patch-id <40-hex>?` (leave out ` with patch-id <40-hex>` when the merge check prints no patch-id). The hook then records the yes answer and posts the line.";
+const RECOVERY = "Recovery: ask the operator the approval question again with the current facts and the options Yes (description `Approve this merge`) and No (description `Do not merge`), with no other option field: `Approve merge of <owner/name> PR #<n> at head <40-hex> with patch-id <40-hex>?` (leave out ` with patch-id <40-hex>` when the merge check prints no patch-id). The hook then records the yes answer and posts the line.";
 // Pi has no ask dialog and no hook, so a Pi session on a machine that holds the key needs one of these (ADR 0315, H1).
 const NO_DIALOG_RECOVERY = "Without the ask dialog (Pi): an APPROVED review by the operator on the current head satisfies the approval, or run the merge under Claude Code.";
 const KEY_RECOVERY = "Recovery: the approval key or directory is unusable. For a wrong-size, symlinked or foreign-owned key, the operator removes `<approval directory>/.key` (the default directory is `~/.config/dev-loops/merge-approvals`), then answers the approval question again so the hook creates a fresh key. For a loose mode, the operator removes the group and other bits from `.key` and sets the directory mode to 0700, then answers again. If the directory cannot be read at all, run the merge where the verifier can read the approval directory (Claude Code outside a sandbox that denies it).";
@@ -133,9 +133,13 @@ export function hasApprovalQuestion(payload) {
   return Array.isArray(questions) && questions.some((q) => parseApprovalQuestion(q?.question) !== null);
 }
 
+// The operator sees the option text, so the agent may not reword it: each option carries exactly a label and its fixed description.
+const OPTION_DESCRIPTIONS = { Yes: "Approve this merge", No: "Do not merge" };
+const isFixedOption = (o, label) => o !== null && typeof o === "object" && o.label === label && o.description === OPTION_DESCRIPTIONS[label] && Object.keys(o).length === 2;
 const isYesNoSingleSelect = (q) => {
-  const labels = Array.isArray(q?.options) ? q.options.map((o) => o?.label).sort() : [];
-  return q?.multiSelect !== true && labels.length === 2 && labels[0] === "No" && labels[1] === "Yes";
+  const o = q?.options;
+  if (q?.multiSelect === true || !Array.isArray(o) || o.length !== 2) return false;
+  return (isFixedOption(o[0], "Yes") && isFixedOption(o[1], "No")) || (isFixedOption(o[0], "No") && isFixedOption(o[1], "Yes"));
 };
 
 /**

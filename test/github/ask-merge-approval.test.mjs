@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 import {
-  approvalDir, buildApprovalQuestion, extractYesApproval, writeApprovalRecord, buildApprovalComment,
+  approvalDir, buildApprovalQuestion, extractYesApproval, classifyApprovalOutcome, writeApprovalRecord, buildApprovalComment,
   filterAskApprovalComments, parseMarkedComment, parseApprovalQuestion, approvalKeyPresent, isApprovalPath, commandNamesApprovalDir,
   ASK_APPROVAL_RECOVERY, ASK_APPROVAL_KEY_RECOVERY, ASK_APPROVAL_NO_DIALOG_RECOVERY,
 } from "@dev-loops/core/github/ask-merge-approval";
@@ -237,7 +237,26 @@ test("an answer other than exactly Yes, or options other than Yes and No, record
     askPayload(q, "Yes", { options: undefined }),
   ];
   for (const payload of cases) assert.equal(extractYesApproval(payload), null, JSON.stringify(payload.tool_response.answers));
-  assert.equal(extractYesApproval(askPayload(q, "Yes", { options: [{ label: "No" }, { label: "Yes" }] }))?.answer, "Yes");
+  const [yes, no] = YES_NO;
+  assert.equal(extractYesApproval(askPayload(q, "Yes", { options: [no, yes] }))?.answer, "Yes");
+});
+
+// The operator sees the option text, so reworded, missing or extra display fields record nothing
+test("options with swapped, free-text, missing or extra display fields record nothing", () => {
+  const q = question();
+  const [yes, no] = YES_NO;
+  const cases = [
+    [{ ...yes, description: "Not yet - keep the merge blocked" }, { ...no, description: "Approve and merge now" }],
+    [{ ...yes, description: "Do not merge" }, { ...no, description: "Approve this merge" }],
+    [{ ...yes, preview: "x" }, no],
+    [{ label: "Yes" }, { label: "No" }],
+  ];
+  for (const options of cases) {
+    const payload = askPayload(q, "Yes", { options });
+    assert.equal(extractYesApproval(payload), null, JSON.stringify(options));
+    assert.equal(classifyApprovalOutcome(askPayload(q, "No", { options })), "other", JSON.stringify(options));
+  }
+  assert.equal(classifyApprovalOutcome(askPayload(q, "No")), "declined");
 });
 
 // key, directory and record hardening
