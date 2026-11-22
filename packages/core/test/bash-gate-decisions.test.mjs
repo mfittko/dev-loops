@@ -851,7 +851,7 @@ test("the canonical recorder with a trailing redirection is a prompt for the mai
   assert.match(decideBashGateDeny({ ...BASE, role: "developer", command }).reason, /^OPERATOR-DECISION-RECORDER/);
 });
 
-test("a redirection inserted at any word gap of a shell-built recorder spelling stays denied", () => {
+test("a redirection inserted at any word gap after the entrypoint of a shell-built recorder spelling stays denied", () => {
   const allowed = [];
   for (const spelling of SHELL_BUILT_RECORDER_SPELLINGS) {
     const words = spelling.split(" ");
