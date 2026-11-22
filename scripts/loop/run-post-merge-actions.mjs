@@ -22,7 +22,7 @@
  * verify output into a command string.
  */
 import { execFileSync, spawn } from "node:child_process";
-import { ghExecFileSync } from "@dev-loops/core/github/gh-throttle";
+import { ghSync } from "@dev-loops/core/github/gh-call-log";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
@@ -110,7 +110,7 @@ const GH_PR_DIFF_TIMEOUT_MS = 30_000;
 function resolveChangedPaths(cwd, pr) {
   if (pr === undefined) return { changedPaths: null, reason: "no PR number" };
   try {
-    const out = ghExecFileSync("gh", ["pr", "diff", String(pr), "--name-only"], {
+    const out = ghSync(["pr", "diff", String(pr), "--name-only"], {
       cwd,
       encoding: "utf8",
       timeout: GH_PR_DIFF_TIMEOUT_MS,

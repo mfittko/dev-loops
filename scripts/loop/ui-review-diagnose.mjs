@@ -12,7 +12,7 @@
  * parsing/mapping/ranking decisions live in core.
  */
 import { execFileSync } from "node:child_process";
-import { ghExecFileSync } from "@dev-loops/core/github/gh-throttle";
+import { ghSync } from "@dev-loops/core/github/gh-call-log";
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -119,7 +119,7 @@ function loadPrInfo(pr, repo, cwd) {
 /** Fetch the PR's unified diff. A bounded read: the diff is the head-vs-base
  * patch the anchor mapping needs; no ad-hoc file/hunk API stitching. */
 function loadPrDiff(pr, repo, cwd) {
-  return ghExecFileSync("gh", ["pr", "diff", String(pr), "--repo", repo], {
+  return ghSync(["pr", "diff", String(pr), "--repo", repo], {
     cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024,
   });
 }

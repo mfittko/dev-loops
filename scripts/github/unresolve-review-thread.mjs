@@ -1,18 +1,13 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
-import { takeGhSlot } from "@dev-loops/core/github/gh-throttle";
-import { withSecondaryLimitBackoff } from "@dev-loops/core/github/gh";
 import process from "node:process";
 import { parseArgs } from "node:util";
-import { promisify } from "node:util";
+import { ghAsync } from "@dev-loops/core/github/gh-call-log";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
 import { parsePositiveInteger } from "@dev-loops/core/cli/primitives";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { isCopilotLogin, isGateMachineArtifactBody, matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightFieldsSpec, preflightJqFilter } from "../lib/jq-output.mjs";
 import { formatCliError } from "../_core-helpers.mjs";
-
-const execFileAsync = promisify(execFile);
 
 const USAGE = `Usage: dev-loops-run scripts/github/unresolve-review-thread.mjs --repo <owner/name> --pr <n> --thread-id <id>
 
@@ -38,11 +33,8 @@ export class UnresolveRefusal extends Error {
   }
 }
 
-function ghRun(args) {
-  return withSecondaryLimitBackoff(async () => {
-    await takeGhSlot({ env: process.env });
-    return (await execFileAsync("gh", args, { env: process.env })).stdout;
-  });
+async function ghRun(args) {
+  return (await ghAsync(args, { env: process.env })).stdout;
 }
 
 async function gql(run, query, id) {
