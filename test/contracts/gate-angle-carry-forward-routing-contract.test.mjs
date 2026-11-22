@@ -146,6 +146,8 @@ test("Phase 3 writer-flag matcher accepts sanctioned forms and rejects --provena
   ]) assert.match(bad, WRITER_FORBIDDEN_FLAGS);
 });
 
+const ACT_LIST_OUT = "tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<head>/act-list.json";
+
 function assertJudgeBridge(step) {
   const commands = [...step.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
   const writer = commands.find((command) => command.startsWith("write-gate-findings-log.mjs ") && command.includes("--judge-verdict"));
@@ -154,10 +156,10 @@ function assertJudgeBridge(step) {
   assert.match(writer, /--judge-verdict\s+<judge-verdict-path>/);
   for (const [flag, value] of [
     ["head-sha", "current_head_sha"], ["findings-file", "ledger-path"],
-    ["judge-verdict", "judge-verdict-path"], ["out", "act-list-path"],
+    ["judge-verdict", "judge-verdict-path"], ["out", ACT_LIST_OUT],
     ["ledger-out", "enriched-ledger-path"], ["spec-file", "spec-path"],
     ["content-digest", "content-digest"], ["spec-authority-verdict", "spec-authority-verdict-path"],
-  ]) assert.match(bridge, new RegExp(`--${flag}\\s+<${value}>`));
+  ]) assert.match(bridge, new RegExp(`--${flag}\\s+${value === ACT_LIST_OUT ? ACT_LIST_OUT.replace(".", "\\.") : `<${value}>`}`));
   assert.ok(step.indexOf(bridge) < step.indexOf(writer), "durable judged write follows the bridge");
 }
 
@@ -168,7 +170,7 @@ test("fan-in routes judged findings through the spec-bound act-list bridge", asy
   assertRuleOwned("GATE-EXEC-JUDGE-AUTHORITY-SPLIT", SUB_LOOP_CONTRACT);
   assertJudgeBridge(step.replace("Before the durable write", "Before persisting findings").replace(/\. /g, ".\n   "));
   for (const changed of [
-    step.replace("--out <act-list-path>", "--out <ledger-path>"),
+    step.replace(`--out ${ACT_LIST_OUT}`, "--out <ledger-path>"),
     step.replaceAll("--judge-verdict <judge-verdict-path>", ""),
     step.replace("--spec-authority-verdict <spec-authority-verdict-path>", "") + "\n`other-command --spec-authority-verdict <spec-authority-verdict-path>`",
   ]) assert.throws(() => assertJudgeBridge(changed));

@@ -158,12 +158,15 @@ test("carry-forward uses the real emitter's pending plan for fresh-only provenan
         ],
       },
     }), "utf8");
+    const ciFile = path.join(repoRoot, "green-ci.json");
+    await writeFile(ciFile, JSON.stringify({ ok: true, status: "success", settled: true, ciStatus: "success", headSha }), "utf8");
     const emitted = await runNodeHelper(emitFanoutDispatchScript, [
       "--repo", "owner/repo",
       "--pr", "42",
       "--gate", "draft_gate",
       "--head-sha", headSha,
       "--pending",
+      "--ci-file", ciFile,
     ], { cwd: repoRoot });
     assert.equal(emitted.code, 0, emitted.stderr);
     const planPath = path.join(contextDir, `draft_gate-${headSha}.emit-plan.json`);

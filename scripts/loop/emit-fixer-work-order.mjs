@@ -48,7 +48,7 @@ import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mj
 import { findHeadCiRun, isRerunnableAttempt, isSmokeOnly, isSmokeTimeoutOnlyRun } from "../github/rerun-failed-ci.mjs";
 import { readPrViewOnce } from "../github/_pr-view-memo.mjs";
 
-const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path> | --review-id <review node id> | --ci-file <path>) [--completion-only] [--delta-result <path>] [--allowed-path <repo-relative path>]... [--operator-focus-file <path>] [--tmp-root <path>]
+const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path> | --review-id <review node id> | --ci-file <path> [--act-list-file <path> --gate <draft_gate|pre_approval_gate>]) [--completion-only] [--delta-result <path>] [--allowed-path <repo-relative path>]... [--operator-focus-file <path>] [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
 or the unresolved review threads (list-review-threads.mjs --unresolved-only, or capture-review-threads.mjs --repo --pr --unresolved --bodies for full thread text), plus the
 optional pre-push delta result (dev-loops loop pre-push-delta). --review-id <node id> takes the body of one PR
@@ -58,7 +58,7 @@ and takes no --gate or --delta-result. A review-body source has no delta-review 
 takes only --phase full, needs no delta decision, ignores any delta record for the head, and
 refuses --phase commit_only. --ci-file <path> takes the wait-pr-checks.mjs JSON of a red head (status and ciStatus
 "failure", headSha equal to --head-sha, non-blank failedChecks[].name; the order carries the first 50 names cut at 200 characters and the omitted count) as a ci-failure source with the same shape:
---phase full only, no delta record, no --gate or --delta-result; its handoff is { headSha } and joinRef is the outputRef.
+--phase full only, no delta record, no --delta-result; its handoff is { headSha } and joinRef is the outputRef. --gate applies only with --act-list-file, which may accompany --ci-file: the round's unposted act list (its verdict post was refused for red CI) then rides as a second act-list read and the fixer fixes both.
 When every failed check is a smoke job (viewer-smoke, deck-smoke, article-smoke; the verify aggregator is ignored, a lone failed verify also takes the live read, because wait-pr-checks omits a cancelled job-timeout smoke job from failedChecks), the emitter reads the head CI run from GitHub: it refuses and names scripts/github/rerun-failed-ci.mjs when every failed job timed out; it refuses and names scripts/github/rerun-failed-ci.mjs (which waits boundedly for the run) when the head CI run is not completed; at the third attempt or on a failed GitHub read it emits the fixer order.
 --completion-only (--phase full, one --act-list-file or --threads-file source; no --delta-result, --allowed-path or --operator-focus-file, the plan pins them) re-enters the incomplete full plan on disk for delivery only: it applies when the plan was pulled and its report is missing or predates the pull, and the plan candidate is the live head or (act-list source only) an ancestor of it, and it emits an operation: complete order with empty allowedPaths and no push marker. Drift of the plan, its receipt, the source bytes, the branch or the tree refuses and writes nothing. A --phase commit_only emission refuses while such a pulled plan, or an unpulled completion order for it, is active at its candidate with no new commit. A plan that is unpulled, whose pinned required read drifted, whose gate sequence is closed or whose review round is retired is superseded without a refusal. --completion-only over an unpulled completion order refuses and names pulling its workOrderRef.
 On the threads source a commit_only emission carries the delta record's findings[] as deltaFindings act items.
@@ -69,13 +69,13 @@ check-pre-push-delta --result), and any non-clearing record for the head refuses
 --phase commit_only first. The mutation authority is
 the PR's own head branch (gh pr view headRefName) and the --allowed-path selectors
 (default "." = the whole repository). A PR head other than --head-sha refuses.
-An --act-list-file source also refuses with verdict_not_posted until the --gate verdict review for --head-sha is posted on the PR (GATE-EXEC-POST-BEFORE-FIX; post it with dev-loops gate upsert-verdict --findings-ledger).
+An --act-list-file source without --ci-file also refuses with verdict_not_posted until the --gate verdict review for --head-sha is posted on the PR (GATE-EXEC-POST-BEFORE-FIX; post it with dev-loops gate upsert-verdict --findings-ledger).
 An --act-list-file of only PR-body items refuses --phase commit_only with delta_body_only_act_set and writes no marker.
 A commit_only or full emission writes its sequence marker under the head's sequence lock (the keyed no-commit re-emission below writes none); while a concurrent close or pull holds that lock it refuses with sequence_lock_busy (retryable: no work order was made current, re-run the same emit once the close or pull finishes).
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
 (default: the main checkout's tmp/; an explicit --tmp-root inside a linked worktree is refused) and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef }.
-A refusal prints { ok: false, refusal?, error } with a typed refusal code; ledger_appeared means a gate round ledger appeared at the current head during a carried emit, so re-run the emit.
+A refusal prints { ok: false, refusal?, error, recovery? } with a typed refusal code (including ambiguous_source, invalid_act_list and stale_act_list on the --ci-file plus --act-list-file path; recovery names the next command there); ledger_appeared means a gate round ledger appeared at the current head during a carried emit, so re-run the emit.
 joinRef is the path for gate wait-for-units --artifact (with --after <planPath>): a full-phase fixer's final-on-write report (<outputRef>.report), else the outputRef.
 Each run supersedes the previous emission for this PR, except a same-head no-commit commit_only re-emission with a locally_clear --delta-result sealed for the canonical plan's execution: it writes fixer-emit-plan.<executionIdentity>.json beside the canonical plan, writes no sequence marker and prints that keyed path as planPath (a join target, never a delta --fixer-plan). Dispatch the printed
 dispatchPayload (the --harness adapter call carrying dispatchPrompt, plus the config-resolved model on the Claude payload when non-null) unchanged; an
@@ -117,14 +117,16 @@ class Refusal extends Error {
   constructor(message, refusal, recovery) { super(message); if (refusal) this.refusal = refusal; if (recovery) this.recovery = recovery; }
 }
 
-async function readSource(kind, filePath, capture) {
+const CI_ACT_RETRY = "Re-run dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo <owner/name> --pr <n> --head-sha <sha> --harness <claude|pi|codex> --phase full --ci-file <wait-pr-checks JSON> --act-list-file <judge-pass --out> --gate <gate> with valid inputs (issue 3420).";
+
+async function readSource(kind, filePath, capture, recovery) {
   const bytes = await capture.read(filePath);
-  if (bytes === null) throw new Refusal(`required fixer source ${kind} is missing or unreadable: ${filePath}`);
+  if (bytes === null) throw new Refusal(`required fixer source ${kind} is missing or unreadable: ${filePath}`, undefined, recovery);
   let parsed;
   try { parsed = JSON.parse(bytes.toString("utf8")); } catch {
     // An empty or truncated delta result gets the one typed evidence refusal and its producer-rerun remedy (GATE-EXEC-EVIDENCE-SEALED).
     if (kind === "delta-result") throw new Refusal(`delta result ${filePath} refused (GATE-EXEC-EVIDENCE-SEALED): ${new EvidenceSealError("evidence_malformed", `${filePath} is empty or not valid JSON; re-run the producer`).message}`);
-    throw new Refusal(`required fixer source ${kind} is not JSON: ${filePath}`);
+    throw new Refusal(`required fixer source ${kind} is not JSON: ${filePath}`, undefined, recovery);
   }
   return { read: { kind, path: filePath, sha256: sha256(bytes), bytes: bytes.length, required: true }, parsed };
 }
@@ -234,7 +236,8 @@ const CI_UNSETTLED_HANDBACK = "hand back `ci_pending` (`ci_unknown` when the che
 function ciFailureFullTask(workOrder, dispositionPath) {
   const { branch, wait } = branchAndWait(workOrder);
   const checks = workOrder.requiredReads.find((read) => read.kind === "ci-failure");
-  return `Fix only what the failing checks report (${workOrder.failedChecks.map((name) => JSON.stringify(name)).join(", ")}${workOrder.failedChecksOmitted ? `, and ${workOrder.failedChecksOmitted} more failing checks not listed; the \`ci-failure\` read lists all of them` : ""}), per agents/fixer.agent.md; the \`ci-failure\` read (${JSON.stringify(checks.path)}) holds the wait-pr-checks result. No thread exists: post no reply and resolve no thread.
+  const actRead = workOrder.requiredReads.find((read) => read.kind === "act-list");
+  return `Fix only what the failing checks report (${workOrder.failedChecks.map((name) => JSON.stringify(name)).join(", ")}${workOrder.failedChecksOmitted ? `, and ${workOrder.failedChecksOmitted} more failing checks not listed; the \`ci-failure\` read lists all of them` : ""}), per agents/fixer.agent.md; the \`ci-failure\` read (${JSON.stringify(checks.path)}) holds the wait-pr-checks result. No thread exists: post no reply and resolve no thread.${actRead ? ` Also fix every act item in the \`act-list\` read (${JSON.stringify(actRead.path)}): its round's verdict could not post while CI was red, so these items ride with the CI fix.` : ""}
 Do these steps in this order; none may be skipped or reordered:
 1. Commit the fixes and push them to branch ${JSON.stringify(branch)}.
 2. Confirm the remote head equals the pushed commit: run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}; it must print the pushed commit SHA. If it does not, stop and report.
@@ -587,11 +590,14 @@ async function emitPlan({
   if (reviewId !== undefined && !REVIEW_NODE_ID_PATTERN.test(reviewId)) throw new Refusal(`--review-id ${reviewId} is not a review node id (PRR_...); pass the id that scripts/github/view-pr.mjs --json reviews reports`);
   if (reviewId && phase === "commit_only") throw new Refusal("--review-id takes only --phase full: a review body has no delta-review route, so there is no commit_only continuation; re-run with --phase full");
   if (ciFile && phase === "commit_only") throw new Refusal("--ci-file takes only --phase full: a CI failure has no delta-review route, so there is no commit_only continuation; re-run with --phase full");
-  if ([actListFile, threadsFile, reviewId, ciFile].filter(Boolean).length !== 1) throw new Refusal("pass exactly one of --act-list-file, --threads-file, --review-id and --ci-file");
+  // A --ci-file source may carry the act list of a round whose verdict post was refused for red CI (the act list then rides as a second read).
+  if ([ciFile ? undefined : actListFile, threadsFile, reviewId, ciFile].filter(Boolean).length !== 1) throw new Refusal("pass exactly one of --act-list-file, --threads-file, --review-id and --ci-file (--act-list-file may accompany --ci-file)", "ambiguous_source", "Pass one source flag; to fix an unposted act list together with red CI, pass --ci-file <wait-pr-checks JSON> --act-list-file <judge-pass --out> --gate <gate>.");
   if (completionOnly && (phase !== "full" || reviewId || ciFile || deltaResult || allowedPaths.length || operatorFocusFile)) throw new Refusal("--completion-only takes --phase full and one --act-list-file or --threads-file source, with no --review-id, --ci-file, --delta-result, --allowed-path or --operator-focus-file: the incomplete plan pins them");
   if (actListFile && !GATE_NAMES.includes(gate)) throw new Refusal(`--act-list-file needs --gate ${GATE_NAMES.join("|")}, got ${gate}`);
   if (!actListFile && gate) throw new Refusal("--gate applies only to an --act-list-file source");
   if ((reviewId || ciFile) && deltaResult) throw new Refusal("--delta-result applies only to an --act-list-file source");
+  const ciActFile = ciFile ? actListFile : undefined;
+  if (ciActFile) actListFile = undefined;
   tmpRoot ??= resolveGateArtifactTmpRoot(cwd);
   const dir = path.resolve(buildFixerDir({ repo, pr, tmpRoot }));
   const paths = [...new Set((allowedPaths.length > 0 ? allowedPaths : ["."]).map(normalizeAllowedPath))].sort();
@@ -627,9 +633,11 @@ async function emitPlan({
   }
   if (ciFile) {
     const ci = source.parsed, next = "run scripts/github/wait-pr-checks.mjs on the PR head and pass its JSON";
-    if (ci?.ok !== true || ci.status !== "failure" || ci.ciStatus !== "failure") throw new Refusal(`ci file ${ciFile} is not a red wait-pr-checks result (status ${JSON.stringify(ci?.status)}, ciStatus ${JSON.stringify(ci?.ciStatus)}); a green, pending or failed read has nothing to fix; ${next}`);
-    if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`);
-    if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`);
+    // The act-list retry names inputs only the combined --ci-file plus --act-list-file path has.
+    const recover = (lead = next) => ciActFile ? `${next}, then ${CI_ACT_RETRY}` : `${lead}, then re-run dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo <owner/name> --pr <n> --head-sha <sha> --harness <claude|pi|codex> --phase full --ci-file <that JSON>`;
+    if (ci?.ok !== true || ci.status !== "failure" || ci.ciStatus !== "failure") throw new Refusal(`ci file ${ciFile} is not a red wait-pr-checks result (status ${JSON.stringify(ci?.status)}, ciStatus ${JSON.stringify(ci?.ciStatus)}); a green, pending or failed read has nothing to fix; ${next}`, undefined, ciActFile || ci?.ciStatus !== "success" ? recover() : "CI is green at this head: re-run gate coordination (detect-pr-gate-coordination-state.mjs); there is nothing to fix.");
+    if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`, undefined, recover());
+    if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`, undefined, recover());
     // A smoke-only red head is re-run, never fixed, when GitHub's live annotations show every failed job timed out (issue 3251).
     // A run at the re-run cap, or a failed live read, keeps the fixer route so the loop never dead-ends.
     if (isSmokeOnly(ci.failedChecks)) {
@@ -644,15 +652,26 @@ async function emitPlan({
     }
   }
   const isActItem = (f) => f?.judgeDisposition === "act" && (gate === "draft_gate" ? hasSeverityText(f) : typeof f.severity === "string" && VALID_SEVERITIES.has(f.severity)) && typeof f.summary === "string" && f.summary.trim() !== "";
+  let ciActRead, ciActParsed;
+  if (ciActFile) {
+    const act = await readSource("act-list", abs(ciActFile), capture, CI_ACT_RETRY);
+    if (!GATE_NAMES.includes(gate) || !(Array.isArray(act.parsed) && act.parsed.length > 0 && act.parsed.every(isActItem))) throw new Refusal(`act list ${ciActFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings for --gate ${GATE_NAMES.join("|")}`, "invalid_act_list", "Pass the round's judge-pass --out file and its --gate.");
+    // Pin the emitter's own copy, as the plain act-list source does.
+    const copyPath = path.join(dir, executionIdentity, "act-list.json");
+    await capture.write(copyPath, await capture.read(act.read.path));
+    ciActRead = { ...act.read, path: copyPath };
+    ciActParsed = act.parsed;
+  }
+  const guardFile = actListFile ?? ciActFile, guardParsed = actListFile ? source.parsed : ciActParsed;
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   }
   // ADR 0188: at pre_approval_gate, low and nit findings never reach the fixer (backstop for hand-built or legacy ledgers). At the draft gate a low act is fixed in every round.
   // A nit-only list is fixable in draft round 1 only; any other round, and any gate without a round count, refuses it (the judge pass would have rejected it).
   // A deduped cluster carries every member severity in `clusterSeverities`; the guard reads those, not the representative's.
-  const badCluster = actListFile ? source.parsed.find((f) => f.clusterSeverities !== undefined && !(Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 && f.clusterSeverities.every((s) => VALID_SEVERITIES.has(s)))) : undefined;
+  const badCluster = guardFile ? guardParsed.find((f) => f.clusterSeverities !== undefined && !(Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 && f.clusterSeverities.every((s) => VALID_SEVERITIES.has(s)))) : undefined;
   if (badCluster) throw new WorkOrderRefusal("invalid_cluster_severities", `invalid_cluster_severities: act item ${JSON.stringify(badCluster.summary)} has clusterSeverities that is not a non-empty array of known severities; re-run judge-pass to regenerate the act list`);
-  const actSeverities = actListFile ? source.parsed.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity])) : [];
+  const actSeverities = guardFile ? guardParsed.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity])) : [];
   const lowNitOnly = actSeverities.every((s) => ["low", "nit"].includes(normalizeSeverity(s)));
   let capRoundHead = headSha; // the head whose ledger and posted verdict the act list belongs to (ADR 0197)
   // Fixer-emit carry seam (issue 2752 slice 4, ADR 0282): the origin head is the head of the latest closed earlier ledger. It is returned only when the gate's
@@ -683,7 +702,7 @@ async function emitPlan({
       return currentHeadLedgerExists() ? null : originHead;
     } catch { return null; }
   })();
-  if (actListFile && (gate === "draft_gate" || lowNitOnly)) {
+  if (guardFile && (gate === "draft_gate" || lowNitOnly)) {
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
     let { lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot },{ repoRoot: resolveRepoRoot(cwd) });
     // Slice 4: when the seam accepts, the act list belongs to the origin head's round, so the round and cap are counted there, not one round late at the ledger-less head.
@@ -724,7 +743,7 @@ async function emitPlan({
     }
     // GATE-EXEC-ROUND-CAP: a round after the cap round is refused (a blocked ledger does not count, so a further round is again cap+1) and gets no fixer order, until a later slice of issue 3105 opens the past-cap path.
     if (cap > 0 && round > cap) {
-      throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): act list ${actListFile} belongs to draft_gate round ${round}, after the cap round (cap ${cap}); the verdict is blocked and no fixer order follows it${!chainMiss ? "" : `; a commit after the cap round's sealed fixer passes is not proven: run dev-loops gate extend-cap-round-chain --repo ${repo} --pr ${pr} (GATE-EXEC-ROUND-CAP-CHAIN-EXTEND) and re-emit at the PR head`}`);
+      throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): act list ${guardFile} belongs to draft_gate round ${round}, after the cap round (cap ${cap}); the verdict is blocked and no fixer order follows it${!chainMiss ? "" : `; a commit after the cap round's sealed fixer passes is not proven: run dev-loops gate extend-cap-round-chain --repo ${repo} --pr ${pr} (GATE-EXEC-ROUND-CAP-CHAIN-EXTEND) and re-emit at the PR head`}`);
     }
     // At the cap round the current-head round can still compose blocked (a high act item without a judgeFix, a question act item, a closed finding naming a human decision): no fixer order follows a blocked verdict. An unreadable ledger fails closed.
     if (cap > 0 && round === cap) {
@@ -737,23 +756,35 @@ async function emitPlan({
       // The bound limits the act items of each pass. The fixer route's own pre-push delta seals the next chain link, so the number of passes has no separate bound. The ADR 0197 base-only merge path skips this bound.
       if (laterPass) {
         const capRefs = new Set(ledgerFindings.filter((f) => f.judgeDisposition === "act").map(fingerprintFinding));
-        const extra = source.parsed.find((f) => !capRefs.has(fingerprintFinding(f)));
+        const extra = guardParsed.find((f) => !capRefs.has(fingerprintFinding(f)));
         if (extra) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): act item ${JSON.stringify(extra.summary)} is not a finding of the cap-round ledger ${ledgerFile}; a later cap-round pass fixes only the cap round's act list`);
       }
-      const blockers = pastCapBlockers([...ledgerFindings, ...source.parsed], { round, cap });
+      const blockers = pastCapBlockers([...ledgerFindings, ...guardParsed], { round, cap });
       if (blockers.length > 0) {
         throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-SOFT-CAP): the cap round (cap ${cap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
       }
     }
     if (lowNitOnly && (lowFixCapped || (actSeverities.every((s) => normalizeSeverity(s) === "nit") && round !== 1))) {
       const where = lowFixCapped ? "at pre_approval_gate" : "outside draft_gate round 1";
-      throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${actListFile} holds only low or nit items ${where}; low and nit findings no longer reach the fixer`);
+      throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${guardFile} holds only low or nit items ${where}; low and nit findings no longer reach the fixer`);
     }
   }
+  // A carried act list is bound to this head's round: its findings ledger must exist here (or at the carry origin), so an older-head or foreign list refuses.
+  if (ciActFile) {
+    const staleRecovery = "re-run judge-pass at the PR head, then re-run dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo <owner/name> --pr <n> --head-sha <sha> --harness <claude|pi|codex> --phase full --ci-file <wait-pr-checks JSON> --act-list-file <judge-pass --out> --gate <gate>";
+    let ledgerFile = ledgerPath(capRoundHead);
+    if (!existsSync(ledgerFile)) { const origin = await carryOriginHead(); if (origin) ledgerFile = ledgerPath(origin); }
+    if (!existsSync(ledgerFile)) throw new Refusal(`stale_act_list: no ${gate} findings ledger exists for this head (${ledgerPath(capRoundHead)}); act list ${ciActFile} is not this head's round; ${staleRecovery}`, "stale_act_list", staleRecovery);
+    // Existence alone does not bind the list to the round: every carried act item must be an act finding of that ledger.
+    const { findings: roundFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new Refusal(`stale_act_list: ${m}; ${staleRecovery}`, "stale_act_list", staleRecovery) });
+    const roundRefs = new Set(roundFindings.filter((f) => f.judgeDisposition === "act").map(fingerprintFinding));
+    const foreign = ciActParsed.find((f) => !roundRefs.has(fingerprintFinding(f)));
+    if (foreign) throw new Refusal(`stale_act_list: act item ${JSON.stringify(foreign.summary)} is not an act finding of the ${gate} findings ledger ${ledgerFile}; act list ${ciActFile} is not this head's round; ${staleRecovery}`, "stale_act_list", staleRecovery);
+  }
   // The verify-time act-thread guard matches open gate threads by fingerprint, so a missing or wrong one would let a matching thread pass as threadless.
-  const badFingerprint = actListFile ? source.parsed.find((f) => f.fingerprint !== fingerprintFinding(f)) : undefined;
+  const badFingerprint = guardFile ? guardParsed.find((f) => f.fingerprint !== fingerprintFinding(f)) : undefined;
   if (badFingerprint) {
-    throw new Refusal(`act list ${actListFile} has an act item (${JSON.stringify(badFingerprint.summary)}) whose fingerprint is ${badFingerprint.fingerprint === undefined ? "missing" : "not the canonical fingerprintFinding value"}; re-run judge-pass to regenerate it`);
+    throw new Refusal(`act list ${guardFile} has an act item (${JSON.stringify(badFingerprint.summary)}) whose fingerprint is ${badFingerprint.fingerprint === undefined ? "missing" : "not the canonical fingerprintFinding value"}; re-run judge-pass to regenerate it`);
   }
   // An all-body act list has no delta review (ADR 0286), so its commit_only marker could never be closed by an agent step: refuse before any marker write.
   if (actListFile && phase === "commit_only" && source.parsed.every(isDeltaBodyItem)) {
@@ -858,7 +889,7 @@ async function emitPlan({
     try { markers = await fetchVerdictMarkers({ repo, pr, headSha: capRoundHead, gate, runtime: { env, ghCommand, runChild } }); } catch (error) {
       throw new Refusal(`verdict_not_posted: could not read the PR's posted verdicts (${error?.message ?? error}); post the ${gate} verdict review at ${capRoundHead} before fixing: ${upsert}`, "verdict_not_posted");
     }
-    if (!verdictPosted(markers) && !(await carryOriginHead())) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${capRoundHead}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`, "verdict_not_posted");
+    if (!verdictPosted(markers) && !(await carryOriginHead())) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${capRoundHead}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`, "verdict_not_posted", `${upsert}; when the post is refused for red current-head CI, run wait-pr-checks.mjs for the head, save its JSON, and emit with --ci-file <that file> --act-list-file ${actListFile} --gate ${gate} so the act items and the CI failure share one fixer order`);
   }
 
   let completion, completionRead, candidateHead = headSha, recheckCandidate = () => {}, rejectOriginalRetirement = () => {};
@@ -949,7 +980,7 @@ async function emitPlan({
     phase,
     source: source.read.kind,
     ...(threadsFile && listed !== source.parsed ? { threadsShape: "capture" } : {}),
-    gate: actListFile ? gate : undefined,
+    gate: actListFile || ciActFile ? gate : undefined,
     ...(ciFile ? { failedChecks: source.parsed.failedChecks.slice(0, 50).map((check) => check.name.slice(0, 200)), ...(source.parsed.failedChecks.length > 50 ? { failedChecksOmitted: source.parsed.failedChecks.length - 50 } : {}) } : {}),
     ...(deltaFindings?.length ? { deltaFindings: deltaFindings.map(({ severity, summary, evidence, residueOf, site, lifecycle }) => ({ severity, summary, evidence, ...(lifecycle === true ? { lifecycle: true } : {}),...(residueOf === undefined ? {} : { residueOf }), ...(site === undefined ? {} : { site }) })) } : {}),
     ...(operatorFocus ? { operatorFocus, ...operatorFocusDigestEntry(operatorFocus) } : {}),
@@ -958,9 +989,10 @@ async function emitPlan({
       ...(completion ? { reviewBaselineHead: headSha, completionInputDigest: jsonContentDigest(completion), completionInputBytesDigest: completionRead.sha256 } : {}) },
     mutationAuthority: { repo, pr: Number(pr), branch: prState.headRefName, allowedPaths: paths },
     contracts,
-    requiredReads: [source.read, ...(delta ? [delta.read] : []), ...(completionRead ? [completionRead] : [])],
+    requiredReads: [source.read, ...(ciActRead ? [ciActRead] : []), ...(delta ? [delta.read] : []), ...(completionRead ? [completionRead] : [])],
     outputRefs: [outputRef],
-    siteCoverage: actListFile && !completion ? buildSiteCoverageSkeleton(source.parsed) : undefined,
+    // A ci-failure order has no commit_only handback that writes or checks site coverage, so it carries no skeleton (ADR 0311).
+    siteCoverage: actListFile && !ciFile && !completion ? buildSiteCoverageSkeleton(source.parsed) : undefined,
     handbackCheck: phase === "commit_only" && actListFile
       ? `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(actListCopy)} --baseline ${headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(outputRef)} --repo ${repo} --pr ${Number(pr)}`
       : undefined,
@@ -1184,7 +1216,7 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
   try { baseline = assertFixerReviewBaseline(order, bytesByRead); }
   catch (error) { return { stale: error.message }; }
   let retired = null;
-  if (order.source === "act-list") {
+  if (order.source === "act-list" || (order.source === "ci-failure" && order.gate)) {
     for (const head of new Set([headSha, ...(baseline ? [baseline.reviewBaselineHead] : [])])) {
       for (const tmpRoot of tmpRoots) retired ??= await findRetirementAfter(tmpRoot, order.gate, head, emittedAt(executionIdentity));
     }
