@@ -21,7 +21,7 @@
  * not contamination. Output shape and role/relatedTo semantics are documented
  * on {@link buildAdjacentBundle} below.
  */
-import { lstat, open, readFile, readdir, stat } from "node:fs/promises";
+import { lstat, open, readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -258,6 +258,8 @@ export function resolveSafeRepoPath(repoRoot, relPath) {
  *
  * Path safety: unsafe relPaths (absolute, `..` segments, or escaping repoRoot)
  * are NOT read — they are recorded with strip reason "unsafe-path".
+ * A symlink leaf or a path under a symlinked directory is NOT read either: it is
+ * recorded with strip reason "symlink".
  * @param {string} repoRoot
  * @param {string} relPath
  * @returns {Promise<{ relPath: string, bytes: number, missing: boolean, strip: string|null }>}
@@ -274,6 +276,14 @@ async function readGuardedFile(repoRoot, relPath) {
   const abs = safe.abs;
   let handle;
   try {
+    const link = await lstat(abs);
+    // A symlink leaf, or a symlinked ancestor, resolves outside the repo: never read it.
+    if (
+      link.isSymbolicLink() ||
+      (await realpath(abs)) !== path.join(await realpath(repoRoot), relPath)
+    ) {
+      return { relPath, bytes: 0, missing: false, strip: "symlink" };
+    }
     const info = await stat(abs);
     if (!info.isFile()) {
       return { relPath, bytes: 0, missing: true, strip: null };

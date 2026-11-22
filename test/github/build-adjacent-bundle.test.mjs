@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -283,5 +283,27 @@ test("buildAdjacentBundle returns empty structures for no changed files", async 
     assert.deepEqual(bundle.missing, []);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("buildAdjacentBundle strips a changed symlink, a path under a symlinked dir and a dangling symlink", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "bundle-symlink-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "bundle-outside-"));
+  try {
+    await writeFile(path.join(outside, "t.mjs"), Buffer.from([0x61, 0x00, 0x62]));
+    await writeFile(path.join(outside, "a.mjs"), "export const a = 1;\n");
+    await symlink(path.join(outside, "t.mjs"), path.join(root, "link.mjs"));
+    await symlink(outside, path.join(root, "dir"));
+    await symlink(path.join(outside, "nope.mjs"), path.join(root, "dangling.mjs"));
+    const changedFiles = ["link.mjs", "dir/a.mjs", "dangling.mjs"];
+    const bundle = await buildAdjacentBundle({ changedFiles, repoRoot: root });
+    for (const p of changedFiles) {
+      assert.equal(bundle.stripped.find((s) => s.path === p)?.reason, "symlink", p);
+      assert.equal(fileByPath(bundle, p), undefined, p);
+    }
+    assert.deepEqual(bundle.missing, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   }
 });
