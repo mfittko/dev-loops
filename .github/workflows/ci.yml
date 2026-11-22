@@ -262,15 +262,19 @@ jobs:
     # Playwright 1.60.0 has no WebKit build for ubuntu-26.04 (what ubuntu-latest now resolves to).
     # Revisit when Playwright supports WebKit on Ubuntu 26.04.
     runs-on: ubuntu-24.04
+    # Passing runs (2026-11-15..18): setup up to 26 min on a slow WebKit install, run step up to 2.3 min (issue 3251).
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
 
       - name: Set up Playwright WebKit
+        timeout-minutes: 35
         uses: ./.github/actions/playwright-webkit
 
       - name: Run inspect-run viewer WebKit smoke
+        timeout-minutes: 10
         run: bun run test:playwright:viewer
 
   deck-smoke:
@@ -280,15 +284,19 @@ jobs:
     # Playwright 1.60.0 has no WebKit build for ubuntu-26.04 (what ubuntu-latest now resolves to).
     # Revisit when Playwright supports WebKit on Ubuntu 26.04.
     runs-on: ubuntu-24.04
+    # Passing runs (2026-11-15..18): setup up to 26 min on a slow WebKit install, run step up to 2.3 min (issue 3251).
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
 
       - name: Set up Playwright WebKit
+        timeout-minutes: 35
         uses: ./.github/actions/playwright-webkit
 
       - name: Run presentation deck fit smoke (WebKit)
+        timeout-minutes: 10
         run: |
           bun run test:playwright:intro-deck
           bun run test:playwright:deep-dive
@@ -303,15 +311,19 @@ jobs:
     # Playwright 1.60.0 has no WebKit build for ubuntu-26.04 (what ubuntu-latest now resolves to).
     # Revisit when Playwright supports WebKit on Ubuntu 26.04.
     runs-on: ubuntu-24.04
+    # Passing runs (2026-11-15..18): setup up to 26 min on a slow WebKit install, run step up to 2.3 min (issue 3251).
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
 
       - name: Set up Playwright WebKit
+        timeout-minutes: 35
         uses: ./.github/actions/playwright-webkit
 
       - name: Run article fit smoke (WebKit)
+        timeout-minutes: 10
         run: |
           bun run test:playwright:intro-article
           bun run test:playwright:deep-dive-article
