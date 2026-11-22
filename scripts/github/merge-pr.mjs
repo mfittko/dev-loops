@@ -86,7 +86,9 @@ Optional:
                                "approve merge <headSha>" line for comment_marker,
                                with " patch-id <id>" appended when the head
                                contains origin/<base>), approvalMatch (head |
-                               patch_id | null), sizeClass, and EVERY failing precondition. Exit 0
+                               patch_id | null), sizeClass, and EVERY failing precondition
+                               (an active or failed Gate evidence run is a gate_evidence_run
+                               entry; --check reads the runs once and never waits). Exit 0
                                whenever the preconditions could be evaluated
                                (ok:false carries the failures; under
                                autonomy.humanMergeOnly it carries a
@@ -734,27 +736,49 @@ const GATE_EVIDENCE_POLL_MS = 15_000;
 const GATE_EVIDENCE_TIMEOUT_MS = 10 * 60_000;
 const GATE_EVIDENCE_OK_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 
-// Waits for the newest Gate evidence run of the head to complete (one `gh run list` per poll). The pull_request and
-// pull_request_review events each start a run and the newer cancels the older, so only the newest run decides.
-// Returns a refusal reason, or null when the newest run succeeded or none exists.
-async function resolveGateEvidenceRunRefusal({ repo, headSha }, { env, ghCommand, runChild, ghJson, sleep, intervalMs, timeoutMs }) {
-  const readNewest = async () => {
-    const runs = await ghJson(
-      ["run", "list", "--repo", repo, "--workflow", GATE_EVIDENCE_WORKFLOW, "--commit", headSha, "--limit", "20", "--json", "databaseId,status,conclusion,createdAt"],
-      { env, ghCommand, runChild, label: "gh run list" },
-    );
-    // shortcut: a non-array payload reads as no runs; ghJson already throws on unparseable output.
-    return (Array.isArray(runs) ? runs : []).reduce((a, r) => (a === null || String(r?.createdAt ?? "") > String(a.createdAt ?? "") ? r : a), null);
-  };
-  const recovery = (id) => `wait for or re-run Gate evidence run ${id} (gh run rerun ${id} --repo ${repo}), or edit the current-head gate-verdict comment to re-fire it, then call merge-pr again`;
-  for (let waited = 0; ; waited += intervalMs) {
-    const run = await readNewest();
-    if (run === null) return null;
-    if (run.status === "completed") {
-      return GATE_EVIDENCE_OK_CONCLUSIONS.has(run.conclusion) ? null
-        : `the newest Gate evidence run ${run.databaseId} for head ${headSha} completed as ${run.conclusion ?? "unknown"}; ${recovery(run.databaseId)}`;
+// Reads the Gate evidence runs of the head with one `gh run list` per poll and waits (wall-clock deadline) while any run is
+// queued or in progress. A cancelled run never decides: cancellation order follows concurrency-group join order and
+// createdAt ties at one second, so only the newest (highest id) NON-cancelled completed run can refuse. When every run is
+// cancelled or none exists the result is null and the `gate_evidence` precondition reads the commit status. A run that
+// concluded success can still have posted a failure status: that stays the `gate_evidence` precondition's job.
+// shortcut: issue_comment-triggered runs carry the default-branch SHA, so `--commit <head>` never lists them and they are
+// not waited on; upgrade by listing without --commit only if that read stays one call per poll.
+// `check` reads once and never sleeps. Returns { reason: string|null, waited: boolean }.
+async function resolveGateEvidenceRunRefusal({ repo, pr, headSha, check }, { env, ghCommand, runChild, ghJson, sleep, now, intervalMs, timeoutMs }) {
+  const readRuns = async () => {
+    let runs;
+    try {
+      runs = await ghJson(
+        ["run", "list", "--repo", repo, "--workflow", GATE_EVIDENCE_WORKFLOW, "--commit", headSha, "--limit", "100", "--json", "databaseId,status,conclusion"],
+        { env, ghCommand, runChild, label: "gh run list" },
+      );
+    } catch (error) {
+      // A repo without the workflow has no Gate evidence run to wait for; every other error stays fail-closed.
+      if (/HTTP 404/.test(String(error?.message ?? ""))) return null;
+      throw error;
     }
-    if (waited >= timeoutMs) return `Gate evidence run ${run.databaseId} for head ${headSha} is still ${run.status} after ${Math.round(timeoutMs / 1000)}s; ${recovery(run.databaseId)}`;
+    if (!Array.isArray(runs)) throw new Error("gh run list returned a non-array payload");
+    return runs;
+  };
+  const newestFirst = (a, b) => Number(b?.databaseId) - Number(a?.databaseId);
+  const reconcileCmd = `dev-loops-run --repo-root <checkout> scripts/github/reconcile-gate-evidence-status.mjs --repo ${repo} --pr ${pr}`;
+  const deadline = now() + timeoutMs;
+  let waited = false;
+  for (;;) {
+    const runs = await readRuns();
+    if (runs === null) return { reason: null, waited };
+    // A missing status counts as active-unknown: it waits until the deadline, then refuses with that status named.
+    const active = runs.filter((r) => r?.status !== "completed").sort(newestFirst)[0];
+    if (active === undefined) {
+      const decided = runs.filter((r) => r?.conclusion !== "cancelled").sort(newestFirst)[0];
+      if (decided === undefined || GATE_EVIDENCE_OK_CONCLUSIONS.has(decided.conclusion)) return { reason: null, waited };
+      return { reason: `the newest non-cancelled Gate evidence run ${decided.databaseId} for head ${headSha} completed as ${decided.conclusion ?? "unknown"}; run \`${reconcileCmd}\` (it re-fires the run when the evidence is satisfied), then call merge-pr again`, waited };
+    }
+    const status = typeof active.status === "string" && active.status.length > 0 ? active.status : "an unknown status";
+    if (check || now() >= deadline) {
+      return { reason: `Gate evidence run ${active.databaseId} for head ${headSha} is still ${status}${check ? " (--check does not wait)" : ` after ${Math.round(timeoutMs / 1000)}s`}; wait for it to complete, then call merge-pr again`, waited };
+    }
+    waited = true;
     await sleep(intervalMs);
   }
 }
@@ -782,17 +806,43 @@ export async function mergePr(options, runtime = {}) {
     postMergeComment = defaultPostMergeComment,
     checkpointDir = undefined,
     sleep = delay,
+    now = Date.now,
     gateEvidenceWait = {},
   } = runtime;
 
   assertGithubWriteStubbedInTestMode(runChild, "pr merge", { env });
 
-  const prView = await ghJson(
+  const readPrView = () => ghJson(
     ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "mergeable,mergeStateStatus,title,headRefOid,headRefName,baseRefName,body,url,statusCheckRollup"],
     { env, ghCommand, runChild },
   );
-  const currentHeadSha = typeof prView?.headRefOid === "string" && prView.headRefOid.trim().length > 0 ? prView.headRefOid.trim() : null;
-  if (!currentHeadSha) throw new Error("Invalid gh pr view payload: missing headRefOid");
+  const headOf = (view) => {
+    const sha = typeof view?.headRefOid === "string" && view.headRefOid.trim().length > 0 ? view.headRefOid.trim() : null;
+    if (!sha) throw new Error("Invalid gh pr view payload: missing headRefOid");
+    return sha;
+  };
+  let prView = await readPrView();
+  let currentHeadSha = headOf(prView);
+  // The wait comes right after the first head read, so every other read below is taken after it (a wait can last minutes).
+  // --check records the run state as a failure instead of refusing; a real run refuses before any other read.
+  const gateRun = await resolveGateEvidenceRunRefusal(
+    { repo: options.repo, pr: options.pr, headSha: currentHeadSha, check: options.check === true },
+    { env, ghCommand, runChild, ghJson, sleep, now, intervalMs: gateEvidenceWait.intervalMs ?? GATE_EVIDENCE_POLL_MS, timeoutMs: gateEvidenceWait.timeoutMs ?? GATE_EVIDENCE_TIMEOUT_MS },
+  );
+  const gateRunReason = gateRun.reason;
+  if (gateRun.waited) {
+    // The head facts are minutes old after a wait: read them again.
+    prView = await readPrView();
+    currentHeadSha = headOf(prView);
+  }
+  if (gateRunReason !== null && !options.check) {
+    const error = new Error(`Merge preconditions not satisfied: gate_evidence_run (${gateRunReason})`);
+    error.mergePrFailure = {
+      ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
+      failures: [{ precondition: "gate_evidence_run", reason: gateRunReason }],
+    };
+    throw error;
+  }
   if (hasSpikePrMarker(prView?.body)) {
     const reason = spikePrRefusal(options.pr);
     const failure = {
@@ -861,21 +911,6 @@ export async function mergePr(options, runtime = {}) {
         currentPatchId = computePatchId({ base: `origin/${baseRefName}`, head: currentHeadSha, repoRoot });
       }
     } catch { currentPatchId = null; }
-  }
-
-  const gateRunReason = await resolveGateEvidenceRunRefusal(
-    { repo: options.repo, headSha: currentHeadSha },
-    { env, ghCommand, runChild, ghJson, sleep, intervalMs: gateEvidenceWait.intervalMs ?? GATE_EVIDENCE_POLL_MS, timeoutMs: gateEvidenceWait.timeoutMs ?? GATE_EVIDENCE_TIMEOUT_MS },
-  );
-  if (gateRunReason !== null) {
-    const failure = {
-      ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
-      failures: [{ precondition: "gate_evidence_run", reason: gateRunReason }],
-    };
-    if (options.check) return { ...failure, check: true };
-    const error = new Error(`Merge preconditions not satisfied: gate_evidence_run (${gateRunReason})`);
-    error.mergePrFailure = failure;
-    throw error;
   }
 
   const evidence = await detectEvidence({ repo: options.repo, pr: options.pr, env, cwd, baseRefName, readOnly: options.check === true, patchId: currentPatchId });
@@ -1000,6 +1035,7 @@ export async function mergePr(options, runtime = {}) {
     // and every failure is collected instead of stopping at the first.
     // The sentinel approver is not a failure: the report names the approval path instead.
     const checkFailures = failures.filter((f) => !(f.precondition === "human_approver" && approverAssumed));
+    if (gateRunReason !== null) checkFailures.push({ precondition: "gate_evidence_run", reason: gateRunReason });
     // GitHub blocks the merge (required check or ruleset) even when the CI projection is green; --check cannot know which rule, so it must not report ok.
     if (prView?.mergeStateStatus === "BLOCKED") checkFailures.push({ precondition: "merge_state_blocked", reason: "GitHub reports mergeStateStatus BLOCKED (a required check or ruleset is unmet)" });
     if (humanMergeOnly) checkFailures.push({ precondition: "human_merge_only", reason: "autonomy.humanMergeOnly is set — merge is a human-only action; the agent hands off and does not run the merge" });
