@@ -6,7 +6,7 @@ import { test } from "bun:test";
 
 import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { capRoundActList, countCompletedRounds, readClosedPriorRoundLogs, resolveCapRound } from "../../scripts/github/write-gate-context.mjs";
-import { writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
+import { readSealedCoverRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 import { coordinationAt, extendRoute, followRemedy, reviewerOnlyRoute } from "./_cap-round-route.mjs";
 
@@ -221,8 +221,10 @@ test("the remaining clean-cap needs_fix dead ends clear with the remedy ADR 0255
   }
 });
 
-// Issue 3443 AC3: a cap round with three act refs, covered by a commit_only fixer record (two refs, baseline A) and a record keyed by the escalated act ref (one ref, baseline F), needs no replacement PR.
-test("issue 3443: act refs covered by two locally_clear records reach ready, and a genuinely uncovered ref blocks naming it", async () => {
+// Issue 3443 AC3 (ADR 0255 amendment): a cap round with three act refs, covered by a commit_only fixer record (two refs, baseline A) and a cover record of the escalated act ref
+// (the reviewer-only cover run over A..head, no new commit), needs no replacement PR. The cover record is sealed by the real CLI, not written by the test. Only the fixer's partial record is a fixture:
+// the act-list producer needs a pulled commit_only plan, which this driver does not emulate.
+test("issue 3443: act refs covered by the fixer record and a cover run reach ready, and a genuinely uncovered ref blocks naming it", async () => {
   const s = scenario({ clean: false, sequence: "lost", merges: 0, fix: true, docs: true });
   try {
     const findings = [ACT, { ...ACT, summary: "second defect", line: 2 }, { ...ACT, summary: "escalated defect", line: 3 }];
@@ -239,10 +241,21 @@ test("issue 3443: act refs covered by two locally_clear records reach ready, and
     assert.deepEqual({ next: blocked.nextAction, failure: blocked.failure }, { next: "report_blocked", failure: "items_do_not_cover" });
     assert.match(blocked.reason, new RegExp(`Uncovered act refs: ${escalated}\\.`), "the refusal names the uncovered ref");
     assert.match(blocked.reason, new RegExp(`Records on the chain: ${s.A.slice(0, 7)}\\.\\.${F.slice(0, 7)} \\[${one}, ${two}\\]`), "and the record that exists");
-    record(F, s.head, [escalated]);
-    const end = await coordinationAt(s.root, ctx);
-    assert.ok(READY.includes(end.nextAction), `${end.failure}: ${end.reason}`);
+    const recordAtA = readFileSync(path.join(tmpRoot, "gate-delta", `${s.A}.json`), "utf8");
+    const route = { repo: REPO, pr: PR, head: s.head, baseline: s.A, ledgerPath: s.ledgerPath };
+    // A reviewer that does not resolve the escalated ref leaves it uncovered: the route stays blocked and names it.
+    const failed = await followRemedy(s.root, { ...route, reviewerStatus: "not_resolved" });
+    assert.equal(failed.end.nextAction, "report_blocked");
+    assert.equal(failed.end.failure, "items_do_not_cover");
+    assert.match(failed.end.reason, new RegExp(`Uncovered act refs: ${escalated}\\.`));
+    // The recovery the refusal names is the cover run, and it is the step that covers the ref.
+    const { trace, end } = await followRemedy(s.root, route);
+    assert.match(trace.join("\n"), /recovery: .*loop pre-push-delta --reviewer-only --cover-uncovered /u, trace.join("\n"));
+    assert.ok(READY.includes(end.nextAction), `${end.failure}: ${end.reason}\n${trace.join("\n")}`);
     assert.doesNotMatch(String(end.remedy), /replacement|allow-replacement-pr/u, "no replacement PR");
+    assert.equal(readFileSync(path.join(tmpRoot, "gate-delta", `${s.A}.json`), "utf8"), recordAtA, "the cover run never overwrites the sealed record at the cap-round head");
+    const cover = readSealedCoverRecord(tmpRoot, s.A, escalated);
+    assert.deepEqual({ ref: cover.ref, status: cover.status, outcome: cover.outcome, candidateHead: cover.candidateHead }, { ref: escalated, status: "resolved", outcome: "locally_clear", candidateHead: s.head });
   } finally { rmSync(s.root, { recursive: true, force: true }); }
 });
 

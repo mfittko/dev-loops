@@ -64,7 +64,7 @@ import { draftGatePostedHeads, fingerprintFinding, resolveTrustedEvidencePredica
 import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
-import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readGateDeltaRecord, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
+import { DELTA_CLEARING_NEXT_STEPS, isClearingCoverRecord, listGateDeltaRecords, readGateDeltaRecord, readSealedCoverRecord, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince, runGitCommand } from "../lib/git-delta.mjs";
 import { existsSync } from "node:fs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
@@ -2260,8 +2260,11 @@ const isUnsealedDeltaRecord = (tmpRoot, head) => {
   try { return readSealedGateDeltaRecord(tmpRoot, sha) === null; } catch { return true; }
 };
 
+// The record a chain continues with after the candidate `next`: the record bound to it, else the record of a proven base-only merge of it (`bridge`, from capRoundChainStarts).
+const chainLink = (tmpRoot, next, bridge) => clearingDeltaRecord(tmpRoot, next) ?? bridge?.get(next) ?? null;
+
 /** The last candidate head of the sealed clearing chain that begins at `start`. */
-function clearingChainEnd(tmpRoot, start, visited, { allowUnsealedEnd = false } = {}) {
+function clearingChainEnd(tmpRoot, start, visited, { allowUnsealedEnd = false, bridge } = {}) {
   const seen = new Set();
   let last;
   for (let record = start; record;) {
@@ -2271,7 +2274,7 @@ function clearingChainEnd(tmpRoot, start, visited, { allowUnsealedEnd = false } 
     seen.add(next);
     last = next;
     visited?.add(next);
-    record = clearingDeltaRecord(tmpRoot, next);
+    record = chainLink(tmpRoot, next, bridge);
     // A record at the candidate that exists but is not verifiably sealed (corrupt or seal removed) breaks the chain: its end is not trusted.
     if (!record && isUnsealedDeltaRecord(tmpRoot, next)) { return allowUnsealedEnd ? last : undefined; } // allowUnsealedEnd: extend-cap-round-chain needs the end of the sealed prefix to refuse record_not_clearing
   }
@@ -2288,8 +2291,11 @@ async function capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, re
   const direct = clearingDeltaRecord(tmpRoot, capHead);
   const starts = direct ? [direct] : [];
   const seedHeads = new Set();
+  // chain end -> the record of its proven base-only merge: the link that carries the coverage union across the merge.
+  // shortcut: one bridge per chain end (the first merge record in sorted order); a second merge record stays a separate start. Upgrade when two sealed merge records of one chain end occur.
+  const bridge = new Map();
   let baseOnlyUnsealed = false;
-  if (typeof baseRefName !== "string" || !baseRefName) return { starts, baseOnlyUnsealed, seedHeads };
+  if (typeof baseRefName !== "string" || !baseRefName) return { starts, baseOnlyUnsealed, seedHeads, bridge };
   const records = listGateDeltaRecords(tmpRoot).sort((a, b) => (String(a.reviewBaselineHead) < String(b.reviewBaselineHead) ? -1 : 1));
   const seeded = new Set(direct ? [capHead] : []);
   const fromHeads = [capHead];
@@ -2308,11 +2314,12 @@ async function capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, re
       seeded.add(merged);
       seedHeads.add(merged);
       starts.push(candidate);
+      if (i > 0 && !bridge.has(fromHead)) bridge.set(fromHead, candidate);
       const end = clearingChainEnd(tmpRoot, candidate, seedHeads);
       if (end && !fromHeads.includes(end)) fromHeads.push(end);
     }
   }
-  return { starts, baseOnlyUnsealed, seedHeads };
+  return { starts, baseOnlyUnsealed, seedHeads, bridge };
 }
 
 /**
@@ -2325,19 +2332,20 @@ export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, 
 
 /** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk: each start's end is collected in the same loop that fills the heads, so a record rewrite cannot split them. `candidates` is the subset of record candidate heads from that loop. */
 export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true, allowUnsealedEnd = false }) {
-  const { starts, seedHeads } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
+  const { starts, seedHeads, bridge } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
   const ends = [];
   // The heads the seed proof visited stay in the set even if a concurrent rewrite changes a record before the traversal below.
   const heads = new Set(seedHeads);
   // `candidates` holds only record candidate heads; `heads` also holds the seeded base-only merges (record baselines).
   const candidates = new Set();
-  // `covering` drops a start that does not name every act item of the cap round (the emitter seam passes none).
-  for (const start of starts.filter(covering)) {
+  // `covering` drops a start that does not name every act item of the cap round (the emitter seam passes none); it reads the start with the bridge, as the proof does.
+  for (const start of starts.filter((s) => covering(s, bridge))) {
     const seededFrom = normalizeSha(start.reviewBaselineHead);
     if (seededFrom && seededFrom !== normalizeSha(capHead)) heads.add(seededFrom);
-    // The end and the visited heads come from one read of each record, in the shared clearingChainEnd.
+    // The end and the visited heads come from one read of each record, in the shared clearingChainEnd. The end the bridge extends the chain to follows the chain's own end.
     const last = clearingChainEnd(tmpRoot, start, candidates, { allowUnsealedEnd });
-    if (last) ends.push(last);
+    const bridged = clearingChainEnd(tmpRoot, start, candidates, { allowUnsealedEnd, bridge });
+    for (const end of [last, bridged]) if (end && !ends.includes(end)) ends.push(end);
   }
   for (const head of candidates) heads.add(head);
   return { ends, heads: [...heads], candidates: [...candidates] };
@@ -2349,7 +2357,7 @@ const CLEAN_CAP_EXTENSIONS = new Set(["docs_tests_only", "delta_covered"]);
  * The `covers` check of resolveCapRoundFixed, shared with the chain-extension tool so the two cannot disagree:
  * the union of the item refs of the traversed clearing chain (`capRoundCoverage`) must name every act ref of the cap round. Pass it as `covering` to clearingChainLastCandidates.
  */
-export const capRoundCovers = (capRound, tmpRoot, bound) => (record) => {
+export const capRoundCovers = (capRound, tmpRoot, bound) => (record, bridge) => {
   // A clean cap round has no act item, so only a record whose extension is in CLEAN_CAP_EXTENSIONS proves it (ADR 0250 for docs_tests_only):
   // the first record carries one, or a clearing chain over later heads reaches one.
   if (isCleanCapRound(capRound)) {
@@ -2363,18 +2371,19 @@ export const capRoundCovers = (capRound, tmpRoot, bound) => (record) => {
     }
     return CLEAN_CAP_EXTENSIONS.has(record.extension);
   }
-  return capRoundCoverage(capRound, tmpRoot, record, bound).uncovered.length === 0;
+  return capRoundCoverage(capRound, tmpRoot, record, { ...bound, bridge }).uncovered.length === 0;
 };
 
 /**
- * Issue 3443: the act refs of a non-clean cap round may be split across the sealed clearing chain that starts at `record` (a commit_only fixer record, then the thread-route fix of an escalated item at a later baseline),
- * so the union of every clearing record on the chain counts. Each link's baseline is the previous link's candidate head, so it is an ancestor of the head the chain reaches.
+ * Issue 3443: the act refs of a non-clean cap round may be split across the sealed clearing chain that starts at `record` (a commit_only fixer record, then an act-list record keyed by the act ref of an escalated item at a later baseline),
+ * so the union of every clearing record on the chain counts, across the `bridge` link from a chain end to its proven base-only merge. Each link's baseline is the previous link's candidate head, so it is an ancestor of the head the chain reaches.
+ * A sealed cover record (ADR 0255 amendment: a reviewer-only `--cover-uncovered` run) of an act ref counts when it resolved the ref and its candidate is the head or `coverOnHistory` admits it.
  * Returns the act refs no record names and the records read (baseline, candidate, refs), so a refusal can name both.
  */
-export const capRoundCoverage = (capRound, tmpRoot, record, { head, onHistory } = {}) => {
+export const capRoundCoverage = (capRound, tmpRoot, record, { head, onHistory, coverOnHistory, bridge } = {}) => {
   // A PR-body act item never enters a delta record (startDeltaSequence drops it), so the record cannot name its ref.
   // The delta act list carries each cluster's kept representative only, so the body-item filter reads that representative, as startDeltaSequence does.
-  const actRefs = [...new Set(capRoundActList(capRound.log.findings, capRound.log.headSha).filter((e) => !isDeltaBodyItem(e)).map((e) => e.ref))];
+  const actRefs = capRoundCoverableRefs(capRound);
   const records = [];
   const seen = new Set();
   // Only the links the proof traverses count: the walk stops after the link whose candidate is the head, and a later link counts only when `onHistory` (anyHead: its candidate is an ancestor of the head) admits it and it resolved its items.
@@ -2385,14 +2394,37 @@ export const capRoundCoverage = (capRound, tmpRoot, record, { head, onHistory } 
     records.push({ baseline: normalizeSha(r.reviewBaselineHead), candidate: next, refs: (first ? items : items.filter((i) => i?.status === "resolved")).map((i) => String(i?.ref)) });
     if (!tmpRoot || !next || seen.has(next) || (head && next === head)) break;
     seen.add(next);
-    r = clearingDeltaRecord(tmpRoot, next);
+    r = chainLink(tmpRoot, next, bridge);
   }
   const named = new Set(records.flatMap((r) => r.refs));
+  const capHead = normalizeSha(capRound.log.headSha);
+  for (const ref of actRefs.filter((a) => !named.has(a))) {
+    const cover = coverRecordOf(tmpRoot, capHead, ref);
+    const candidate = normalizeSha(cover?.candidateHead);
+    if (!isClearingCoverRecord(cover) || !candidate || !((head && candidate === head) || coverOnHistory?.(candidate))) continue;
+    named.add(ref);
+    records.push({ baseline: capHead, candidate, refs: [ref] });
+  }
   return { uncovered: actRefs.filter((a) => !named.has(a)), records };
 };
 
+// The sealed cover record of `ref` at `capHead`; an unreadable or unsealed one is no evidence.
+const coverRecordOf = (tmpRoot, capHead, ref) => { if (!tmpRoot || !capHead) return null; try { return readSealedCoverRecord(tmpRoot, capHead, ref); } catch { return null; } };
+
 // The coverage of the start that leaves the fewest act refs uncovered, the closest chain to a proof.
 const fewestUncovered = (coverages) => coverages.reduce((best, c) => (c.uncovered.length < best.uncovered.length ? c : best));
+
+/**
+ * The one coverage read shared by the cap-round proof, extend-cap-round-chain and the reviewer-only refusals: the coverage (`{ uncovered, records }`) of the start that leaves the fewest act refs uncovered, or null when no sealed clearing record starts a chain.
+ * `chain` is an already read `{ starts, bridge }`; without it the starts are read here (seeding base-only merges needs `baseRefName`).
+ */
+export async function capRoundChainCoverage({ capRound, tmpRoot, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, bound = {}, chain }) {
+  const { starts, bridge } = chain ?? await capRoundChainStarts({ tmpRoot, capHead: capRound.log.headSha, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
+  return starts.length === 0 ? null : fewestUncovered(starts.map((s) => capRoundCoverage(capRound, tmpRoot, s, { ...bound, bridge })));
+}
+
+/** The act refs a cover record can name: the cap round's open act refs minus the PR-body items no record carries. */
+export const capRoundCoverableRefs = (capRound) => [...new Set(capRoundActList(capRound.log.findings, capRound.log.headSha).filter((e) => !isDeltaBodyItem(e)).map((e) => e.ref))];
 
 /**
  * "Cap round fixed" (ADR 0208): the cap round exists, and a sealed pre-push delta record bound to the cap-round head cleared (or bounded out) the current head.
@@ -2408,11 +2440,10 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   if (!capRound) { onFailure(failClosed ? "cap_round_unresolved" : "no_cap_round"); return null; }
   // The delta record is main-anchored like the findings ledger: never read it from a relocated --tmp-root.
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
-  const clearing = (headSha) => clearingDeltaRecord(tmpRoot, headSha);
   const capHead = capRound.log.headSha;
   const head = normalizeSha(options.headSha);
   // The chain ends at the last clearing record's candidate B; a head that is a base-only merge since B (ADR 0218) is still covered by the chain.
-  const reaches = async (start) => {
+  const reaches = async (start, bridge) => {
     const seen = new Set();
     for (let record = start; record;) {
       const next = normalizeSha(record.candidateHead);
@@ -2420,7 +2451,7 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
       if (options.anyHead || next === head) return true;
       if (seen.has(next)) return false;
       seen.add(next);
-      const following = clearing(next);
+      const following = chainLink(tmpRoot, next, bridge);
       if (!following) return !isUnsealedDeltaRecord(tmpRoot, next) && Boolean(head && typeof options.baseRefName === "string" && options.baseRefName && await baseOnlyMerge({ fromHead: next, head, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false));
       record = following;
     }
@@ -2432,12 +2463,23 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   const gitProbe = (args) => runGitCommand([...DIFF_ISOLATION_FLAGS, ...args], { repoRoot }).catch(() => ({ code: 128 }));
   // Probe only the candidates a start's chain reaches (memoized), not every record under tmp/gate-delta.
   const onHistoryMemo = new Map();
+  // Only merge-base exit 1 without a signal proves a candidate off the head's history. Any other failure (exit 128 for a commit this clone never fetched, a signal, a spawn error) leaves the history unresolved:
+  // the candidate does not count (the proof fails closed), but the failure detail asks for a fetch and never presents a covered ref as uncovered.
+  const unresolvedHistory = new Set();
   const probeOnHistory = async (candidate) => {
-    if (!onHistoryMemo.has(candidate)) onHistoryMemo.set(candidate, Boolean(head) && (candidate === head || (await gitProbe(["merge-base", "--is-ancestor", candidate, head])).code === 0));
+    if (!onHistoryMemo.has(candidate)) {
+      let on = Boolean(head) && candidate === head;
+      if (head && !on) {
+        const probe = await gitProbe(["merge-base", "--is-ancestor", candidate, head]);
+        on = probe.code === 0;
+        if (!on && !(probe.code === 1 && !probe.signal)) unresolvedHistory.add(candidate);
+      }
+      onHistoryMemo.set(candidate, on);
+    }
     return onHistoryMemo.get(candidate);
   };
   // Mirrors the capRoundCoverage walk: the first link is always counted, a later link only while its candidate is on the head's history.
-  const primeOnHistory = async (startRecords) => {
+  const primeOnHistory = async (startRecords, bridge) => {
     if (!options.anyHead) return;
     for (const start of startRecords) {
       const seen = new Set();
@@ -2446,21 +2488,36 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
         if (!first && (!next || !(await probeOnHistory(next)))) break;
         if (!next || seen.has(next) || next === head) break;
         seen.add(next);
-        r = clearing(next);
+        r = chainLink(tmpRoot, next, bridge);
       }
     }
   };
-  const bound = { head, onHistory: options.anyHead ? (candidate) => onHistoryMemo.get(candidate) === true : undefined };
+  // A cover record counts when its candidate is the head or on its history, in both modes: probe each act ref's cover candidate once.
+  const primeCover = async () => {
+    for (const ref of capRoundCoverableRefs(capRound)) {
+      const candidate = normalizeSha(coverRecordOf(tmpRoot, normalizeSha(capHead), ref)?.candidateHead);
+      if (candidate) await probeOnHistory(candidate);
+    }
+  };
+  const onMemo = (candidate) => onHistoryMemo.get(candidate) === true;
+  const bound = { head, onHistory: options.anyHead ? onMemo : undefined, coverOnHistory: onMemo };
   const covers = capRoundCovers(capRound, tmpRoot, bound);
+  await primeCover();
   // The direct chain is tried first: merge-seeded starts (a directory scan and Git probes) are discovered only when it does not prove the round fixed.
+  // Each start's coverage and reachability read its chain in one loop step with no await between them, so a record rewritten during an earlier start's probe cannot prove a round that no single chain state proves.
   const chainArgs = { tmpRoot, capHead, repo: options.repo, pr: options.pr, repoRoot, baseOnlyMerge };
-  const directStarts = (await capRoundChainStarts({ ...chainArgs, baseRefName: undefined })).starts;
-  await primeOnHistory(directStarts);
-  for (const start of directStarts.filter(covers)) if (await reaches(start)) return capRound;
-  const { starts, baseOnlyUnsealed } = await capRoundChainStarts({ ...chainArgs, baseRefName: options.baseRefName });
-  await primeOnHistory(starts);
-  const covering = starts.filter(covers);
-  for (const start of covering) if (await reaches(start)) return capRound;
+  const direct = await capRoundChainStarts({ ...chainArgs, baseRefName: undefined });
+  await primeOnHistory(direct.starts, direct.bridge);
+  for (const start of direct.starts) if (covers(start, direct.bridge) && await reaches(start, direct.bridge)) return capRound;
+  const chain = await capRoundChainStarts({ ...chainArgs, baseRefName: options.baseRefName });
+  const { starts, baseOnlyUnsealed } = chain;
+  await primeOnHistory(starts, chain.bridge);
+  let covering = 0;
+  for (const start of starts) {
+    if (!covers(start, chain.bridge)) continue;
+    covering += 1;
+    if (await reaches(start, chain.bridge)) return capRound;
+  }
   // ADR 0218: report the one condition that failed, so the refusal names its own remedy.
   const unsealed = starts.length === 0 && (isUnsealedDeltaRecord(tmpRoot, capHead) || baseOnlyUnsealed);
   // A rebase orphans the baseline: with the cap-round head no longer an ancestor of the head, no clearing record can ever be rebound, so name the restart.
@@ -2469,9 +2526,10 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   const mergeBase = Boolean(probeCapHead && head) ? await gitProbe(["merge-base", "--is-ancestor", probeCapHead, head]) : null;
   const orphaned = mergeBase?.code === 1 && !mergeBase.signal
     && (await gitProbe(["cat-file", "-e", `${probeCapHead}^{commit}`])).code === 0 && (await gitProbe(["cat-file", "-e", `${head}^{commit}`])).code === 0;
-  const condition = orphaned ? "baseline_orphaned" : starts.length === 0 ? (unsealed ?"unsealed_record" : "no_clearing_record") : covering.length === 0 ? "items_do_not_cover" : "chain_does_not_reach_head";
-  // Issue 3443: items_do_not_cover also names the act refs no record on the chain covers and the records that exist.
-  onFailure(condition, condition === "items_do_not_cover" && !isCleanCapRound(capRound) ? fewestUncovered(starts.map((s) => capRoundCoverage(capRound, tmpRoot, s, bound))) : undefined);
+  const condition = orphaned ? "baseline_orphaned" : starts.length === 0 ? (unsealed ? "unsealed_record" : "no_clearing_record") : covering === 0 ? "items_do_not_cover" : "chain_does_not_reach_head";
+  // Issue 3443: items_do_not_cover also names the act refs no record on the chain covers and the records that exist. An unresolved history (a commit this clone lacks) is named with it, and the refs are then not proven uncovered.
+  const coverage = condition === "items_do_not_cover" && !isCleanCapRound(capRound) ? await capRoundChainCoverage({ capRound, tmpRoot, bound, chain }) : null;
+  onFailure(condition, coverage ? { ...coverage, ...(unresolvedHistory.size > 0 ? { unresolved: [...unresolvedHistory] } : {}) } : undefined);
   return null;
 }
 

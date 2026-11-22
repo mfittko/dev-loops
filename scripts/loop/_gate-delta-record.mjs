@@ -41,14 +41,39 @@ const sha256 = (text) => createHash("sha256").update(text).digest("hex");
  * is not evidence. Throws on an unreadable record.
  */
 export function readSealedGateDeltaRecord(tmpRoot, reviewBaselineHead) {
-  const recordPath = gateDeltaRecordPath(tmpRoot, reviewBaselineHead);
+  const record = readSealedFile(gateDeltaRecordPath(tmpRoot, reviewBaselineHead));
+  return record?.reviewBaselineHead === reviewBaselineHead ? record : null;
+}
+
+// The parsed record at `recordPath` when its bytes match the seal beside it, else null. Throws on an unreadable record.
+function readSealedFile(recordPath) {
   let text;
   let seal;
   try { text = readFileSync(recordPath, "utf8"); } catch (error) { if (error?.code === "ENOENT") return null; throw error; }
   try { seal = readFileSync(`${recordPath}.seal`, "utf8").trim().toLowerCase(); } catch { return null; }
-  if (seal !== sha256(text)) return null;
-  const record = JSON.parse(text);
-  return record?.reviewBaselineHead === reviewBaselineHead ? record : null;
+  return seal === sha256(text) ? JSON.parse(text) : null;
+}
+
+export const gateCoverDir = (tmpRoot) => path.join(tmpRoot, "gate-cover");
+/** The cover record of one cap-round act ref (ADR 0255 amendment): keyed by the cap-round head and the ref, never by a baseline, so it takes no baseline record slot. */
+export const gateCoverRecordPath = (tmpRoot, capHead, ref) => path.join(gateCoverDir(tmpRoot), `${capHead}-${sha256(String(ref)).slice(0, 24)}.json`);
+
+/** The sealed cover record of `ref` at `capHead`, or null unless its bytes match its seal and it names that cap head and ref. A hand edit or a foreign record is not evidence. Throws on an unreadable record. */
+export function readSealedCoverRecord(tmpRoot, capHead, ref) {
+  const record = readSealedFile(gateCoverRecordPath(tmpRoot, capHead, ref));
+  return record?.capHead === capHead && record.ref === ref ? record : null;
+}
+
+/** A cover record that counts toward coverage: a locally_clear run that resolved the ref. */
+export const isClearingCoverRecord = (record) => record?.outcome === "locally_clear" && record.status === "resolved" && DELTA_CLEARING_NEXT_STEPS.includes(record.nextStep);
+
+/**
+ * Write the cover record of one act ref. A sealed clearing cover record is never replaced (the call throws), so a later run cannot overwrite the evidence coverage counts.
+ * A non-clearing or unsealed leftover is replaced: the caller continues its invocation count.
+ */
+export function writeCoverRecord(tmpRoot, record) {
+  if (isClearingCoverRecord(readSealedCoverRecord(tmpRoot, record.capHead, record.ref))) throw new Error(`the cover record for act ref ${record.ref} at ${record.capHead} is sealed locally_clear and is never overwritten`);
+  return writeSealedFile(gateCoverRecordPath(tmpRoot, record.capHead, record.ref), record, {});
 }
 
 /** Every record under the tmp root. A malformed file is skipped: it carries no decision. */
@@ -92,8 +117,11 @@ export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocat
  * Write one record and its seal for a baseline head. Returns the record path.
  * `exclusive: true` creates the record only when none exists (hard link, fails with EEXIST) and leaves an existing record and seal untouched.
  */
-export function writeSealedGateDeltaRecord(tmpRoot, reviewBaselineHead, record, { exclusive = false } = {}) {
-  const recordPath = gateDeltaRecordPath(tmpRoot, reviewBaselineHead);
+export function writeSealedGateDeltaRecord(tmpRoot, reviewBaselineHead, record, options = {}) {
+  return writeSealedFile(gateDeltaRecordPath(tmpRoot, reviewBaselineHead), record, options);
+}
+
+function writeSealedFile(recordPath, record, { exclusive = false }) {
   mkdirSync(path.dirname(recordPath), { recursive: true });
   const tempPath = `${recordPath}.tmp-${process.pid}`;
   const text = `${JSON.stringify(record, null, 2)}\n`;

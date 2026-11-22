@@ -7,7 +7,7 @@ import { evaluatePrGateCoordination } from "@dev-loops/core/loop/pr-gate-coordin
 import { DISPOSITION, STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { resolveDraftCapRoundFact, resolveDraftRoundCap } from "../../scripts/github/write-gate-context.mjs";
-import { readGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
+import { readGateDeltaRecord, readSealedCoverRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { extendCapRoundChain } from "../../scripts/loop/extend-cap-round-chain.mjs";
 import { runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
@@ -19,12 +19,13 @@ export const extendRoute = (root, { repo, pr, head }) => extendCapRoundChain({ r
 });
 
 /** The reviewer-only delta for baseline..head: the input run, a sealed reviewer result marking every derived act item `status`, then the result run. */
-export async function reviewerOnlyRoute(root, { baseline, head, ledgerPath, status = "resolved", extraResult = {} }) {
+export async function reviewerOnlyRoute(root, { baseline, head, ledgerPath, status = "resolved", extraResult = {}, cover = false }) {
   const tmp = path.join(root, "tmp");
   const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
   const logPath = ledgerPath; // the canonical ledger itself: the route refuses any other file
   writeFileSync(logPath, JSON.stringify({ ...ledger, provenance: ledger.provenance?.perAngle?.length ? ledger.provenance : { perAngle: [{ angle: "correctness" }] } }));
-  const args = ["--reviewer-only", "--repo", ledger.repo, "--pr", String(ledger.pr), "--baseline", baseline, "--pr-head", head, "--findings-log", logPath, "--worktree", root];
+  // `cover`: the cover run (ADR 0255 amendment): the same reviewer-only CLI limited to the uncovered act refs, sealing one cover record per ref instead of a baseline record.
+  const args = ["--reviewer-only", ...(cover ? ["--cover-uncovered"] : []), "--repo", ledger.repo, "--pr", String(ledger.pr), "--baseline", baseline, "--pr-head", head, "--findings-log", logPath, "--worktree", root];
   const resultPath = path.join(root, "reviewer-result.json");
   const { input } = await runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", resultPath], seam);
   const actionableItems = input.actItems.map((item) => ({ ref: item.ref, status, evidence: ["src/x.mjs:1"] }));
@@ -32,8 +33,8 @@ export async function reviewerOnlyRoute(root, { baseline, head, ledgerPath, stat
   const newFindings = [...new Set((input.staleSurfaceHits ?? []).map((hit) => hit.file ?? hit.site?.split(":")[0]))].map((file) => ({ severity: "nit", summary: `${file}: the removed wording is reworded, not stale`, evidence: [`${file}:1`], site: file }));
   writeFileSync(resultPath, JSON.stringify({ ...input.resultShape, actionableItems, newFindings, widenedReads: [], outcome: status === "resolved" ? "locally_clear" : "needs_fix", ...extraResult }));
   sealDeltaFixture(tmp, resultPath);
-  const prior = readGateDeltaRecord(tmp, baseline);
-  const invocation = (Number.isInteger(prior?.invocation) ? prior.invocation : 0) + 1;
+  const priorCount = cover ? Math.max(0, ...input.actItems.map((item) => readSealedCoverRecord(tmp, baseline, item.ref)?.invocation ?? 0)) : readGateDeltaRecord(tmp, baseline)?.invocation;
+  const invocation = (Number.isInteger(priorCount) ? priorCount : 0) + 1;
   const decision = await runDeltaCli([...args, "--result", resultPath, "--invocation", String(invocation)], seam);
   return { input, decision };
 }
@@ -74,7 +75,7 @@ export async function followRemedy(root, { repo, pr, head, baseline, ledgerPath,
     trace.push(`recovery: ${recovery}`);
     const named = /loop pre-push-delta --reviewer-only .*--baseline (\S+) /u.exec(recovery);
     if (named || !recovery) {
-      await step("reviewer-only", () => reviewerOnlyRoute(root, { baseline: named?.[1] ?? baseline, head, ledgerPath, status: reviewerStatus }));
+      await step(recovery.includes("--cover-uncovered") ? "cover-run" : "reviewer-only", () => reviewerOnlyRoute(root, { baseline: named?.[1] ?? baseline, head, ledgerPath, status: reviewerStatus, cover: recovery.includes("--cover-uncovered") }));
       await step("extend", () => extendRoute(root, { repo, pr, head }));
     }
   }

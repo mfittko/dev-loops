@@ -1,3 +1,3 @@
 ### Fixed
 
-- Cap-round coverage accepts the union of sealed clearing records up to the head, so a thread-route fix no longer forces a replacement PR; refusal names uncovered refs and records (#3443)
+- Cap-round coverage is the clearing chain's union; reviewer-only `--cover-uncovered` seals a record per uncovered act ref, so no replacement PR; a thread-route record covers none (#3443)

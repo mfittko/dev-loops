@@ -16,7 +16,8 @@ import { initGitFixture, runGitFixture, spawnSyncTrusted as spawnSync } from "..
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
 import { runDocsValidators } from "../../scripts/docs/docs-validators.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
-import { gateDeltaRecordPath, isLifecycleFinding, readGateDeltaRecord, readSealedGateDeltaRecord, writeGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
+import { gateDeltaRecordPath, isClearingCoverRecord, isLifecycleFinding, readGateDeltaRecord, readSealedCoverRecord, readSealedGateDeltaRecord, writeGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
+import { capRoundActList } from "../../scripts/github/write-gate-context.mjs";
 import { decidePiToolCall } from "../../extension/readonly-role-gate.ts";
 import { replacementPrOperatorRecovery } from "@dev-loops/core/loop/pr-gate-coordination";
 import { renderCliText } from "@dev-loops/core/loop/cli-command";
@@ -1588,8 +1589,8 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
     ["carries an extension", { outcome: "locally_clear", extension: "delta_covered", sameActSet: true }, false, /gate extend-cap-round-chain/],
     ["is locally_clear for another act set", { outcome: "locally_clear", candidateHead: "ORPHAN" }, false, /pr create .*--allow-replacement-pr/],
     ["carries an extension", { outcome: "locally_clear", extension: "delta_covered", sameActSet: true, candidateHead: "ORPHAN" }, false, /pr create .*--allow-replacement-pr/],
-    // Issue 3139 AC3: a locally_clear record of another act set and ref set stays protected and names the replacement-PR restart, on or off the PR head's history.
-    ["is locally_clear for another act set and covers another set of act refs", { outcome: "locally_clear", items: [{ ref: "other", status: "resolved" }] }, false, /pr create .*--allow-replacement-pr/],
+    // Issue 3139 AC3: a locally_clear record of another act set and ref set stays protected. Issue 3443 (ADR 0255 amendment): on the PR head's history its recovery is the cover run, with the replacement PR as the named alternative; off the history only the replacement PR.
+    ["is locally_clear for another act set and covers another set of act refs", { outcome: "locally_clear", items: [{ ref: "other", status: "resolved" }] }, false, /--cover-uncovered .*or restart on a replacement PR: .*pr create .*--allow-replacement-pr/, true],
     ["is locally_clear for another act set and covers another set of act refs", { outcome: "locally_clear", items: [{ ref: "other", status: "resolved" }], candidateHead: "ORPHAN" }, false, /pr create .*--allow-replacement-pr/],
     ["bounded_out", { sameActSet: true, outcome: "locally_clear", invocation: 3, candidateHead: "ORPHAN" }, false, /pr create .*--allow-replacement-pr/],
     ["bounded_out", { sameActSet: true, outcome: "locally_clear", invocation: 3, candidateHead: "HEAD" }, false, /pr create .*--allow-replacement-pr/], // a symbolic candidate at the bound
@@ -1599,7 +1600,7 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
     // ADR 0255 decision 7: an unsealed non-clearing record over another ref set is not taken over.
     ["unsealed_record: .*covers another set of act refs.*rm -f \\S+\\.json \\S+\\.seal", { outcome: "needs_fix", items: [{ ref: "other", status: "not_resolved" }] }, true],
   ];
-  for (const [message, patch, unsealed, remedy] of cases) {
+  for (const [message, patch, unsealed, remedy, coverRun] of cases) {
     const repo = reviewerOnlyRepo();
     try {
       await reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], status: "not_resolved" });
@@ -1616,6 +1617,7 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
         assert.doesNotMatch(error.message, /\$\{/, "no uninterpolated placeholder");
         // Issue 3437 ac:3: the recovery is the one runnable command of the printed remedy, with the real PR number; an unsealed record names the rm step and carries none.
         if (unsealed || message === "bounded_out") assert.equal(error.recovery, undefined, "no recovery contradicts the printed remedy");
+        else if (coverRun) assert.match(error.recovery, /loop pre-push-delta --reviewer-only --cover-uncovered --repo owner\/repo --pr 70 --baseline \S+ --pr-head \S+ --findings-log \S+ --spec-identity <id> --result-path <result-file>$/u);
         else if (/extend-cap-round-chain/.test(String(remedy))) assert.match(error.recovery, /gate extend-cap-round-chain --repo owner\/repo --pr 70$/u);
         else assert.equal(error.recovery, renderCliText(replacementPrOperatorRecovery(70)), "the off-history and other-refs recovery is the shared operator form");
         return true;
@@ -2336,4 +2338,67 @@ test("issue 3364: the ACT --result run without --repo/--pr seals the live body d
   const file = path.join(dir, "act-result-mismatch.json");
   fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(result, "utf8")), newFindings: [finding()], outcome: "needs_fix" }));
   await assert.rejects(runCli(["--act-list", actList, "--baseline", A, "--result", file, "--invocation", "1", "--repo", "o/r", "--pr", "8"], { ...headAt(B), fetchPr: async () => ({ body: "x" }) }), /target_mismatch|Delta coverage binding: wrong role, target/);
+});
+
+// Issue 3443 (ADR 0255 amendment): the cover run. A fresh reviewer verifies only the cap round's uncovered act refs over baseline..PR head and seals one cover record per ref, keyed by the cap-round head and the ref.
+const SECOND_ACT = { ...CAP_ACT, summary: "second defect", line: 2 };
+async function coverRun(repo, findings, { invocation = 1, status = "resolved" } = {}) {
+  const args = [...reviewerOnlyArgs(repo, findings), "--cover-uncovered"];
+  const resultPath = path.join(repo.dir, "reviewer-result.json");
+  const { input } = await runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", resultPath], seam);
+  const actionableItems = input.actItems.map((item) => ({ ref: item.ref, status, evidence: ["a.mjs:1"] }));
+  fs.writeFileSync(resultPath, JSON.stringify({ ...input.resultShape, actionableItems, newFindings: [], widenedReads: [], outcome: status === "resolved" ? "locally_clear" : "needs_fix" }));
+  sealDeltaFixture(repo.tmpRoot, resultPath);
+  const decision = await runDeltaCli([...args, "--result", resultPath, "--invocation", String(invocation)], seam);
+  return { input, decision };
+}
+const seedPartialRecord = (repo, refs, patch = {}) => writeSealedGateDeltaRecord(repo.tmpRoot, repo.baseline, { reviewBaselineHead: repo.baseline, candidateHead: repo.fix, actSetId: "fixer-act-set", invocation: 1, outcome: "locally_clear", nextStep: "push_to_gate", items: refs.map((ref) => ({ ref, status: "resolved" })), ...patch });
+
+test("--cover-uncovered is a --reviewer-only run", () => {
+  assert.throws(() => parseCheckPrePushDeltaArgs(["--cover-uncovered", "--act-list", "x.json", "--baseline", "a".repeat(40), "--spec-identity", "s"]), /--cover-uncovered is a --reviewer-only run/);
+});
+
+test("the cover run verifies only the uncovered refs, seals a cover record per ref and never touches the baseline record", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    const findings = [CAP_ACT, SECOND_ACT];
+    const [one, two] = capRoundActList(findings, repo.baseline).map((entry) => entry.ref);
+    seedPartialRecord(repo, [one]);
+    const recordPath = gateDeltaRecordPath(repo.tmpRoot, repo.baseline);
+    const before = [fs.readFileSync(recordPath, "utf8"), fs.readFileSync(`${recordPath}.seal`, "utf8")];
+    const { input, decision } = await coverRun(repo, findings);
+    assert.deepEqual(input.actItems.map((item) => item.ref), [two], "only the uncovered ref is verified");
+    assert.equal(decision.outcome, "locally_clear");
+    const cover = readSealedCoverRecord(repo.tmpRoot, repo.baseline, two);
+    assert.deepEqual({ ref: cover.ref, capHead: cover.capHead, status: cover.status, outcome: cover.outcome, candidateHead: cover.candidateHead }, { ref: two, capHead: repo.baseline, status: "resolved", outcome: "locally_clear", candidateHead: repo.head });
+    assert.equal(readSealedCoverRecord(repo.tmpRoot, repo.baseline, one), null, "a covered ref gets no cover record");
+    assert.deepEqual([fs.readFileSync(recordPath, "utf8"), fs.readFileSync(`${recordPath}.seal`, "utf8")], before, "the baseline record slot is untouched");
+    await assert.rejects(coverRun(repo, findings), /every act ref of the cap round is covered/, "nothing is left to cover");
+  } finally { cleanup(repo); }
+});
+
+test("the cover run fails closed: a clean cap round, no sealed clearing record and a non-clearing record refuse", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    await assert.rejects(coverRun(repo, []), /the cap round is clean and has no act ref to cover/);
+    await assert.rejects(coverRun(repo, [CAP_ACT, SECOND_ACT]), /no sealed clearing record starts a chain at the cap-round head/);
+    seedPartialRecord(repo, [], { outcome: "needs_fix", nextStep: "fix_and_rereview" });
+    await assert.rejects(coverRun(repo, [CAP_ACT, SECOND_ACT]), /no sealed clearing record starts a chain at the cap-round head/);
+  } finally { cleanup(repo); }
+});
+
+test("the cover run counts its own invocations per ref, seals no clearing record on a non-resolving reviewer and refuses a fourth run", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    const findings = [CAP_ACT, SECOND_ACT];
+    const [one, two] = capRoundActList(findings, repo.baseline).map((entry) => entry.ref);
+    seedPartialRecord(repo, [one]);
+    for (const invocation of [1, 2, 3]) {
+      const { decision } = await coverRun(repo, findings, { invocation, status: "not_resolved" });
+      assert.notEqual(decision.outcome, "locally_clear");
+      assert.equal(readSealedCoverRecord(repo.tmpRoot, repo.baseline, two).invocation, invocation);
+      assert.equal(isClearingCoverRecord(readSealedCoverRecord(repo.tmpRoot, repo.baseline, two)), false, "a non-resolving run is no coverage");
+    }
+    await assert.rejects(coverRun(repo, findings, { invocation: 4 }), /invocation bound of 3 is reached/);
+  } finally { cleanup(repo); }
 });

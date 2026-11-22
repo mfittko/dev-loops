@@ -59,7 +59,7 @@ test("the cap-round refusal names its failed condition and the remedy for that c
     ["baseline_orphaned", /not an ancestor of the current head.*Remedy: push the head to a new branch.*--head <new-branch> --allow-replacement-pr <this PR number>/],
     ["no_clearing_record", /no sealed clearing delta record exists.*Remedy: run `node <dev-loops-package-root>\/cli\/index\.mjs loop pre-push-delta --reviewer-only`.*node <dev-loops-package-root>\/cli\/index\.mjs gate extend-cap-round-chain --repo <owner\/name> --pr <number>/],
     ["unsealed_record", /carries no valid seal.*Remedy: rerun .*loop pre-push-delta --reviewer-only.*never edit the record/],
-    ["items_do_not_cover", /do not cover the cap round's act refs.*Remedy: run .*loop pre-push-delta --reviewer-only.* so every act ref/],
+    ["items_do_not_cover", /act refs of the cap round are not all named by the union of the sealed clearing records.*Remedy: run .*gate extend-cap-round-chain --repo <owner\/name> --pr <number>.*--cover-uncovered/],
     ["cap_round_unresolved", /could not be resolved.*Remedy: repair or quarantine the unreadable ledger or config/],
     ["chain_does_not_reach_head", /ends before the current head.*Remedy: run .*loop pre-push-delta --reviewer-only.* for the current head, or fetch origin\/<base>.*node <dev-loops-package-root>\/cli\/index\.mjs gate extend-cap-round-chain --repo <owner\/name> --pr <number>/],
   ];
@@ -80,6 +80,26 @@ test("items_do_not_cover names the uncovered act refs and the records that exist
   assert.equal(named.agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 10");
   assert.ok(!draftAt({ draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record", draftCapRoundDetail }).reason.includes("Uncovered act refs"), "only items_do_not_cover carries the detail");
   assert.ok(!draftAt({ draftRoundRefused: true, draftCapRoundFailure: "items_do_not_cover" }).reason.includes("Uncovered act refs"), "no detail, no suffix");
+  // A partial chain's reason never prescribes the plain reviewer-only run for the uncovered ref: that run refuses at the cap-round head and a chain-end baseline derives no items.
+  assert.doesNotMatch(named.reason, /so every act ref|reviewer-only` so/u);
+  assert.match(named.reason, /extend-cap-round-chain.*--cover-uncovered/u);
+});
+
+// Issue 3443 AC2 (review): the ready-PR report_blocked reason carries the same detail, so a revert to the bare CAP_ROUND_REFUSAL text drops the uncovered ref and fails here.
+test("a ready PR with items_do_not_cover names the uncovered act ref and the records, or the unresolved history", () => {
+  const ready = (overrides = {}) => evaluatePrGateCoordination({
+    pr: 10, repo: "o/r", currentHeadSha: "fedcba987654", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true, ciStatus: "success", draftGate: marker("blocked"), draftGateMarker: marker("blocked"),
+    preApprovalGate: { visible: false }, preApprovalGateMarker: { visible: false }, draftCapRoundFixed: false, draftCapRoundFailure: "items_do_not_cover", ...overrides,
+  });
+  const draftCapRoundDetail = { uncovered: ["ref-escalated"], records: [{ baseline: "a".repeat(40), candidate: "b".repeat(40), refs: ["ref-one"] }] };
+  const named = ready({ draftCapRoundDetail });
+  assert.equal(named.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(named.reason, /Uncovered act refs: ref-escalated\. Records on the chain: aaaaaaa\.\.bbbbbbb \[ref-one\]\./);
+  assert.ok(!ready().reason.includes("Uncovered act refs"), "no detail, no suffix");
+  const unresolved = ready({ draftCapRoundDetail: { ...draftCapRoundDetail, unresolved: ["c".repeat(40)] } });
+  assert.match(unresolved.reason, new RegExp(`git fetch origin ${"c".repeat(40)}`, "u"));
+  assert.ok(!unresolved.reason.includes("Uncovered act refs"), "an unreadable history proves no ref uncovered");
 });
 
 test("no source file contains the catch-all 'legacy unsealed delta record' refusal text", () => {

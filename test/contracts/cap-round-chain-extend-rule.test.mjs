@@ -39,5 +39,9 @@ test("GATE-EXEC-ROUND-CAP-CHAIN-EXTEND describes the CI-failed cap-round path wi
   assert.match(rule, /`no_cap_round_chain` \(five cases, listed once in the CI-failed paragraph below; the unfetched cap-round head runs `git rev-parse --is-shallow-repository`/);
   assert.match(rule, /the head-moving `operator:` form \(push one docs or tests commit to the PR branch, then rerun this command\) when the cap-round head is the PR head/);
   assert.match(rule, /the `no_cap_round_chain` case with no resolved cap round is the exception: coordination does not route back from it/);
-  assert.match(rule, /A replacement PR is the operator recovery for an orphaned baseline, for a candidate or cap-round head outside the PR head's history, and for that non-covering record/);
+  assert.match(rule, /A replacement PR is the operator recovery for an orphaned baseline, for a candidate or cap-round head outside the PR head's history, and, as the alternative to the cover run, for a non-covering record/);
+  // Issue 3443 (ADR 0255 amendment): the cover run names the uncovered refs' recovery, and the empty-act-list statement is limited to the chain-end reviewer-only run.
+  assert.match(rule, /the cover run \(`loop pre-push-delta --reviewer-only --cover-uncovered` over the cap-round head\.\.PR head, below\) when a sealed record at the cap-round head leaves act refs uncovered/);
+  assert.match(rule, /A reviewer-only run with a chain-end baseline derives an empty act list \(ADR 0255\) and covers no act ref, so it is not the recovery for an uncovered ref/);
+  assert.match(rule, /`history_unresolved`/);
 });
