@@ -3713,6 +3713,7 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
       "input-validation", "determinism", "no-op", "link-check",
       "packaging-runtime", "state-concurrency", "config-drift", "gate-evidence",
       "pr-description", "pr-comments", "contradiction-lens", "code-conformance",
+      "kiss", "yagni", // #3462 — DESIGN-SIMPLEST-FIRST mandatory draft angles
       "semantic-drift", "deslop", // #1442 (ADR 0041 prose half) — deliberate addition atop the pre-#1404 pinned baseline
       "holistic", // #2307 — independent, un-briefed holistic reviewer added atop the pre-#1404 pinned baseline
     ],
@@ -3725,7 +3726,7 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     spike: ["scope", "docs"],
   };
   const PRE_1404_MANDATORY_SETS = {
-    draft: ["pr-description", "holistic"],
+    draft: ["pr-description", "holistic", "kiss", "yagni"], // #3462 — DESIGN-SIMPLEST-FIRST: kiss and yagni run from draft round 1
     preApproval: ["pr-checklist", "acceptance-criteria", "yagni", "contradiction-lens", "holistic"],
     spike: [],
   };

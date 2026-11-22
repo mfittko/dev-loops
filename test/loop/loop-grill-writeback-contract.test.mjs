@@ -259,13 +259,13 @@ test("Step 1 names the deterministic comments fetch, the detector invocation, an
   const step1 = skill.split("## Step 1 — Load the target")[1]?.split("## Step 1b")[0] ?? "";
   assert.match(
     step1,
-    /view-issue\.mjs --repo <owner\/repo> --issue <n> --json comments --jq '\.issue\.comments' > <comments-path>/,
-    "Step 1 must name the exact view-issue.mjs --jq extraction into a comments file",
+    /view-issue\.mjs --repo <owner\/repo> --issue <n> --json comments --jq '\.issue\.comments'/,
+    "Step 1 must name the exact view-issue.mjs --jq extraction for the spec_changed_since_grill branch",
   );
   assert.match(
     step1,
-    /view-pr\.mjs.*--jq '\.pr\.comments' > <comments-path>/,
-    "Step 1 must name the exact view-pr.mjs --jq extraction into a comments file",
+    /view-pr\.mjs.*--jq '\.pr\.comments'/,
+    "Step 1 must name the exact view-pr.mjs --jq extraction for the spec_changed_since_grill branch",
   );
   assert.match(
     step1,
@@ -279,7 +279,7 @@ test("Step 1 names the deterministic comments fetch, the detector invocation, an
   );
   assert.match(
     step1,
-    /node scripts\/loop\/detect-refinement-grill-state\.mjs --body-file <body-path> --surface <issue\|pr> --comments-file <comments-path>/,
+    /node scripts\/loop\/detect-refinement-grill-state\.mjs --body-file <body-path> --surface <issue\|pr>/,
     "Step 1 must name the exact detector invocation",
   );
   assert.match(
@@ -289,7 +289,7 @@ test("Step 1 names the deterministic comments fetch, the detector invocation, an
   );
 });
 
-// Operator-authorized bypass exception (#2364 round 4): Step 1 item 4 and
+// Operator-authorized bypass exception (#2364 round 4): Step 1 item 3 and
 // Step 4's bypass definition must not contradict each other. The exit is
 // unconditional UNLESS the operator explicitly authorizes a re-grill of an
 // already-provenanced target (a bypass), in which case Steps 2-4 run and the

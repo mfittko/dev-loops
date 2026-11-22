@@ -190,7 +190,7 @@ const RefinementConfig = z.strictObject({
   maxCopilotRounds: z.number().int().nonnegative().default(5).describe("Automated Copilot review rounds before converging; 0 disables Copilot review."),
   requireCopilotConvergenceAtLatestHead: z.boolean().default(false).describe("Require a converged Copilot review at the latest head. False (default): one converged Copilot review stands for later heads, which pre_approval_gate covers. True: a significant change after convergence opens a new Copilot cycle."),
   lowSignal: LowSignalConfig.optional().describe("Early-stop policy for low-signal Copilot rounds."),
-  roles: z.array(z.string().trim().min(1)).describe("Review lenses the refinement fan-out dispatches.").optional(),
+  roles: z.array(z.string().trim().min(1)).describe("Angle names whose prompts the grill gives to its one fresh review agent (the simplicity review).").optional(),
 });
 
 // Per-angle surface scope: how much of the gate-context bundle an angle needs

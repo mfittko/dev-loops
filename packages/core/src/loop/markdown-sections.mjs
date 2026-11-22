@@ -38,3 +38,18 @@ export function extractSection(body, headingText) {
     : body.length;
   return body.slice(start, end).trim();
 }
+
+/** Drop fenced code blocks, so a quoted heading never counts as a section. */
+export function stripFencedCode(body) {
+  // A fence closes only on a bare run of its own character at least as long as the opener.
+  let fence = null;
+  return body.split(/\r?\n/).filter((line) => {
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (!fence) {
+      if (marker) fence = marker;
+      return !marker;
+    }
+    if (marker && marker[0] === fence[0] && marker.length >= fence.length && /^\s*[`~]+\s*$/.test(line)) fence = null;
+    return false;
+  }).join("\n");
+}

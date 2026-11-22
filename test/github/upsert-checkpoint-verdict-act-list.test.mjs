@@ -14,6 +14,8 @@ import { deliverJudge, seedJudgeSources, writeVerdictAfterPull } from "../loop/_
 // a non-empty act list keeps the round from clean, whatever the severities.
 
 const HEAD = "abc1234000000000000000000000000000000000";
+// The repo draft gate also mandates kiss and yagni (issue 3462).
+const KISS_YAGNI_CLEAN = ["kiss", "yagni"].map((angle) => ({ angle, verdict: "clean", findings: [] }));
 
 let gitStubDir = null;
 let originalPath = null;
@@ -360,6 +362,8 @@ test("a fan-out ledger plus a judge-enriched --findings-json with an act item de
       { angle: "correctness", findings: [{ ...preJudgeFinding, judgeDisposition: "act", judgeRationale: "r" }] },
       { angle: "pr-description", verdict: "clean", findings: [] },
       { angle: "holistic", verdict: "clean", findings: [] },
+      { angle: "kiss", verdict: "clean", findings: [] },
+      { angle: "yagni", verdict: "clean", findings: [] },
     ]), "utf8");
     const derived = await postWithJson(ledgerPath, jsonPath, ["--execution-mode", "fanout_fanin"]);
     assert.equal(derived.error, undefined);
@@ -382,7 +386,7 @@ test("a fan-out ledger with unjudged findings and a same-summary defer-judged --
     const padded = { ...preJudgeFinding, summary: "  pre-judge finding  " };
     const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [padded], executionMode: "fanout_fanin" });
     const jsonPath = path.join(tempDir, "deferred.json");
-    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ ...preJudgeFinding, judgeDisposition: "defer", judgeRationale: "r" }] }, { angle: "pr-description", verdict: "clean", findings: [] }, { angle: "holistic", verdict: "clean", findings: [] }]), "utf8");
+    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ ...preJudgeFinding, judgeDisposition: "defer", judgeRationale: "r" }] }, { angle: "pr-description", verdict: "clean", findings: [] }, { angle: "holistic", verdict: "clean", findings: [] }, ...KISS_YAGNI_CLEAN]), "utf8");
     const derived = await postWithJson(ledgerPath, jsonPath);
     assert.equal(derived.error, undefined);
     assert.match(derived.body, /\*\*Verdict:\*\* clean/);
@@ -541,7 +545,7 @@ for (const { name, jsonFile, refused } of [
       const ledgerFinding = { severity: "high", angle: "correctness", summary: "shared summary", files: ["src/b.mjs"] };
       const ledgerPath = await writeLedger(tempDir, { overallVerdict: "findings_present", findings: [ledgerFinding], executionMode: "fanout_fanin" });
       const jsonPath = path.join(tempDir, "rejected.json");
-      await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ severity: "high", angle: "correctness", summary: "shared summary", file: jsonFile, judgeDisposition: "reject", judgeRationale: "r" }] }, { angle: "pr-description", verdict: "clean", findings: [] }, { angle: "holistic", verdict: "clean", findings: [] }]), "utf8");
+      await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ severity: "high", angle: "correctness", summary: "shared summary", file: jsonFile, judgeDisposition: "reject", judgeRationale: "r" }] }, { angle: "pr-description", verdict: "clean", findings: [] }, { angle: "holistic", verdict: "clean", findings: [] }, ...KISS_YAGNI_CLEAN]), "utf8");
       const out = await postWithJson(ledgerPath, jsonPath, ["--verdict", "clean"]);
       if (refused) assert.match(out.error, unjudgedLedgerMsg);
       else assert.equal(out.error, undefined);
@@ -552,10 +556,11 @@ for (const { name, jsonFile, refused } of [
 // The 3297 order: fan-in, emit and pull the judge, judge-pass --ledger-out, then the durable log from that file, then the poster.
 async function postAfterJudgePassLedgerOut(tempDir, { copilotBody, coerce, tamper }) {
   const tmp = path.join(tempDir, "tmp");
+  await writeFile(path.join(tempDir, ".devloops"), await readFile(path.join(repoRoot, ".devloops"), "utf8"), "utf8"); // the writer must see the same mandatory angles as the poster
   const contextDir = path.join(tmp, "gate-context", "owner-repo", "pr-17");
   await mkdir(contextDir, { recursive: true });
-  await writeFile(path.join(contextDir, `draft_gate-${HEAD}.emit-plan.json`), JSON.stringify({ ok: true, repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, roundId: "r2000-aa", count: 2, units: [{ angles: ["pr-description"], group: null }, { angles: ["holistic"], group: null }] }), "utf8");
-  await writeFile(path.join(contextDir, `draft_gate-${HEAD}.fanin-ledger.json`), JSON.stringify({ overallVerdict: "findings_present", findings: [], provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "review-a" }, { angle: "holistic", reviewer: "review-b" }] } }), "utf8");
+  await writeFile(path.join(contextDir, `draft_gate-${HEAD}.emit-plan.json`), JSON.stringify({ ok: true, repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, roundId: "r2000-aa", count: 4, units: [{ angles: ["pr-description"], group: null }, { angles: ["holistic"], group: null }, { angles: ["kiss"], group: null }, { angles: ["yagni"], group: null }] }), "utf8");
+  await writeFile(path.join(contextDir, `draft_gate-${HEAD}.fanin-ledger.json`), JSON.stringify({ overallVerdict: "findings_present", findings: [], provenance: { distinctReviewers: 4, perAngle: [{ angle: "pr-description", reviewer: "review-a" }, { angle: "holistic", reviewer: "review-b" }, { angle: "kiss", reviewer: "review-b-k" }, { angle: "yagni", reviewer: "review-b-y" }] } }), "utf8");
   const raw = [{ severity: "medium", angle: "holistic", summary: "medium finding", clusterId: 0 }, { severity: "low", angle: "holistic", summary: "low finding", clusterId: 1 }];
   await writeFile(path.join(tempDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: raw }), "utf8");
   if (copilotBody) {
