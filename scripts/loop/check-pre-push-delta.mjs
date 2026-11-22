@@ -18,7 +18,7 @@
  * - with --result: validates the reviewer's DeltaPrePushReviewResult against
  *   the current worktree head, prints the next step and records the decision at
  *   <tmp-root>/gate-delta/<baseline>.json (last write wins; local evidence only,
- *   PRE-PUSH-DELTA-NOT-GATE-EVIDENCE).
+ *   PRE-PUSH-DELTA-NOT-GATE-EVIDENCE). The --cover-uncovered run records at <tmp-root>/gate-cover/<cap-round head>-<ref hash>.json instead (below).
  *
  * The reviewer-input run without --result (except --handback, which writes nothing and omits patchPath and evidenceRule) writes only the cumulative patch (PRE-PUSH-DELTA-PATCH-ARTIFACT) at
  * <tmp-root>/gate-delta/<baseline>-<candidate>-<runId>.patch: it reads the act list (or the
@@ -26,6 +26,7 @@
  * --findings-log file, `git rev-parse HEAD` and (with --reviewer-only) the PR baseRefName (`gh pr view`), runs the stale-surface reads
  * (`git cat-file`, `git diff`, `git grep`), and authenticates ACT coverage without further writes.
  * With --reviewer-only (ADR 0255) both runs apply to baseline..PR head with the act list derived from the cap-round ledger (--findings-log), no fixer plan or coverage record.
+ * With --reviewer-only --cover-uncovered (ADR 0255 amendment, ADR 0317) the act list is only the cap round's uncovered act refs, the baseline is the cap-round head, and the result seals one cover record per ref under <tmp-root>/gate-cover/ instead of a baseline record.
  * Pure result checks live in @dev-loops/core/loop/pre-push-delta-review.
  */
 import { execFile, spawnSync } from "node:child_process";
@@ -58,14 +59,14 @@ import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { promptEndsWithWorkOrder } from "../github/_fixer-emission-evidence.mjs";
 import { assertPlanSourceHasNoThreads, fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
-import { capRoundActList, clearingChainWalk } from "../github/write-gate-context.mjs";
+import { capRoundActList, capRoundChainCoverage, capRoundChainStarts, clearingChainWalk, coverRunReachesHead, isCleanCapRound } from "../github/write-gate-context.mjs";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { prBodySha256 } from "../github/write-gate-context.mjs";
-import { gateDeltaRecordPath, isLifecycleFinding, readGateDeltaRecord, readSealedGateDeltaRecord, writeGateDeltaRecord } from "./_gate-delta-record.mjs";
+import { DELTA_CLEARING_NEXT_STEPS, coverRecordBlocker, coverRecordsSnapshot, gateDeltaRecordPath, isLifecycleFinding, readGateDeltaRecord, readSealedCoverRecord, readSealedGateDeltaRecord, writeCoverRecord, writeGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { runDocsValidators } from "../docs/docs-validators.mjs";
 import { defaultFetchOrigin } from "./standing-authorization.mjs";
 import { createGitClient, main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
@@ -80,6 +81,7 @@ const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha
        check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list; with no unresolved thread the --fixer-plan's operator focus round is the one act item)
        check-pre-push-delta.mjs --reviewer-only --repo <owner/name> --pr <n> --baseline <sha> --pr-head <sha> --findings-log <cap-round log> --spec-identity <id> --result-path <path> [--worktree <dir>]   (code-range clearing, act list derived from the ledger)
        check-pre-push-delta.mjs --reviewer-only --repo <owner/name> --pr <n> --baseline <sha> --pr-head <sha> --findings-log <cap-round log> --result <path> --invocation <1-3> [--worktree <dir>]
+       check-pre-push-delta.mjs --reviewer-only --cover-uncovered ...   (the cover run: same flags, --baseline is the cap-round head; see --cover-uncovered)
 
 Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
 
@@ -102,6 +104,8 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
                           <base> is the PR's baseRefName read from GitHub with gh pr view; an unreadable PR base refuses, with no fallback to the configured branch.
                           Base-only merges of origin/<base> are excluded from the patch, the changed files and the stale-surface scan; a merge that is not base-only is reviewed through its PR-own commits and its resolution diff (git show --remerge-diff, appended to the patch under a "# Resolution diff of merge" heading); an octopus merge refuses (non_base_only_merge), and a PR-own gitlink path that the patch does not name refuses (gitlink_not_in_patch). A sealed non-clearing record (needs_fix) at the baseline is taken over whatever its ref set or candidate, and its invocation count continues; a sealed locally_clear record of another act set and a record with an extension are refused with no deletion remedy (ADR 0261). An unsealed non-clearing record over the same act refs, with no extension and a candidate on the PR head history, is taken over as before; any other unsealed record refuses unsealed_record with the rm -f remedy.
                           The reviewer reports ALL findings; the record is locally_clear only when the result has no medium-or-higher finding and no open residueOf finding (no skipReason) at any severity (PRE-PUSH-DELTA-RESIDUE). Run git fetch origin <PR baseRefName> first.
+  --cover-uncovered       The cover run (ADR 0255 amendment, issue 3443), with --reviewer-only: for a non-clean cap round whose sealed clearing chain (started by a record at the cap-round head or at a sealed base-only merge of it) leaves act refs uncovered, a fresh reviewer verifies only those refs over the cap-round head..PR head, with no new commit. --baseline is the cap-round head and the ledger the --findings-log. The act list is the cap round's act entries that no record on the sealed clearing chain and no sealed cover record names. Every result run seals one cover record per verified ref, keyed by the cap-round head and the ref under <tmp-root>/gate-cover/ ({ capHead, ref, candidateHead, actSetId, invocation, outcome, nextStep, status, findings? }), and prints the same capped findings in its payload (a lifecycle refusal first, then the reviewer's, at most 20); cap-round coverage counts a locally_clear record that resolved its ref while its candidate is the PR head or on its history. The run never takes the baseline record slot, never overwrites a gate-delta record and trusts no thread text. A cover record is never replaced when it is clearing, unsealed, unreadable or at the last invocation; the next invocation supersedes only its own sealed non-clearing cover record below the bound, under the sequence lock and against the snapshot of its own first locked read (a change before the write writes nothing and names the input run; the evidence run pointer and invocation checks bound a change between the two runs). Each refusal carries a recovery: a clean cap round or a round whose refs are all covered (the extension command), a baseline that is not the cap-round head (the cover run at the cap-round head), a cap round with no sealed clearing chain start (the plain reviewer-only run), an active sequence marker at the cap-round head (close it with gate close-sequence), a cover record that can take no further run, a draft PR whose chain never visits the head and has no end on its history (both the replacement PR) and an unresolved history (git -C <worktree> fetch origin <sha>, the replacement PR for a commit that stays absent). The invocation bound of 3 counts the cover records of the refs.
+
   --handback              The fixer handbackCheck run: waives the --findings-log requirement (it validates --site-coverage, no reviewer input is used)
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
   --result-path <path>    Required on the reviewer-input run: the absolute path briefed to the delta reviewer for its result; the run record binds it and seal-evidence refuses any other path (GATE-EXEC-EVIDENCE-SEALED)
@@ -143,6 +147,8 @@ Result JSON (--result, DeltaPrePushReviewResult):
   with --result:    also writes <tmp-root>/gate-delta/<baseline>.json { reviewBaselineHead, candidateHead, actSetId,
                     invocation, outcome, nextStep, items: [{ ref, status }],
                     coverageProtocol, siteCoverageDigest, handbackBytesDigest, origin } (last four ACT-only).
+                    With --reviewer-only --cover-uncovered it writes one <tmp-root>/gate-cover/<cap-round head>-<ref hash>.json { capHead, ref, candidateHead, actSetId,
+                    invocation, outcome, nextStep, status, findings? } per verified act ref instead, and no gate-delta record (a sealed cover record is read only by readSealedCoverRecord); findings is the capped list a gate-delta record seals, and the cover-run stdout carries it too.
                     { "ok": true, "outcome": "locally_clear|needs_fix|bounded_out",
                       "nextStep": "push|fix_and_rereview|rereview_current_head|push_to_gate",
                       "locallyClear": bool, "fresh": bool, "errors": [...],
@@ -176,6 +182,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
         "findings-log": { type: "string" },
         handback: { type: "boolean" },
         "reviewer-only": { type: "boolean" },
+        "cover-uncovered": { type: "boolean" },
         result: { type: "string" },
         "result-path": { type: "string" },
         invocation: { type: "string" },
@@ -189,6 +196,8 @@ export function parseCheckPrePushDeltaArgs(argv) {
   }
   if (values.help) return { help: true };
   const reviewerOnly = values["reviewer-only"] === true;
+  const coverUncovered = values["cover-uncovered"] === true;
+  if (coverUncovered && !reviewerOnly) throw parseError("--cover-uncovered is a --reviewer-only run: pass both");
   if (reviewerOnly) {
     for (const flag of ["fixer-plan", "site-coverage", "act-list", "threads-file"]) if (values[flag]) throw parseError(`--reviewer-only refuses --${flag}: the act list is derived from the cap-round ledger, with no fixer plan or coverage record`);
     if (!values["findings-log"]) throw parseError("--reviewer-only requires --findings-log <cap-round findings log>: the act list is derived from it");
@@ -232,6 +241,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
     resultPath: values["result-path"] ?? null,
     handback: values.handback === true,
     reviewerOnly,
+    coverUncovered,
     invocation,
     worktree: values.worktree ?? process.cwd(),
     jq: values.jq,
@@ -432,8 +442,10 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
 // Refreshes origin/<base> and requires it to resolve: a stale or absent base ref fails here, before any measurement against it.
 function fetchAndResolveBase(worktree, base, { revParse, fetchBase }) {
   const repoRoot = resolveRepoRoot(worktree);
-  try { fetchBase(base, { repoRoot }); } catch (error) { throw new Error(`reviewer-only: git fetch origin ${base} failed (${error?.message}); cannot trust the local origin/${base} ref. Run \`git fetch origin ${base}\` and rerun`); }
-  try { revParse(worktree, `origin/${base}`); } catch { throw new Error(`reviewer-only: origin/${base} does not exist in ${worktree}; run \`git fetch origin ${base}\` and rerun`); }
+  // RECOVERY-COMMAND-REQUIRED: the fetch acts on the repository this run read (the resolved worktree), never on the caller's cwd.
+  const gitC = `git -C ${shellQuote(path.resolve(worktree))}`;
+  try { fetchBase(base, { repoRoot }); } catch (error) { throw new Error(`reviewer-only: git fetch origin ${base} failed (${error?.message}); cannot trust the local origin/${base} ref. Run \`${gitC} fetch origin ${base}\` and rerun`); }
+  try { revParse(worktree, `origin/${base}`); } catch { throw new Error(`reviewer-only: origin/${base} does not exist in ${worktree}; run \`${gitC} fetch origin ${base}\` and rerun`); }
 }
 // The PR-own commit count of baseline..head under the reviewer-only rules: non-merge commits origin/<base> lacks plus non-base-only merges whose remerge diff names a path.
 // A clean merge whose parents overlap adds review paths and counts as one PR-own commit: the body-only post must not carry a verdict across it unreviewed.
@@ -541,13 +553,13 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   return { target, coverageBinding: options.threadsFile ? null : { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex(raw.siteCoverage).slice(7), handbackBytesDigest: sha256Hex(reportBytes).slice(7), origin } };
 }
 
-const defaultFetchPr = ({ repo, pr }, { env, ghCommand }) => ghJson(["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,baseRefName,body"], { env, ghCommand });
-// The PR's own base branch, read from GitHub: the configured or default branch is no fallback (fail closed).
+const defaultFetchPr = ({ repo, pr }, { env, ghCommand }) => ghJson(["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,baseRefName,body,isDraft"], { env, ghCommand });
+// The PR's own base branch and draft state, read from GitHub: the configured or default branch is no fallback (fail closed). A draft state that is not the boolean false reads as a draft, so the stricter cover-run rule applies.
 async function readPrBase(fetchPr, { repo, pr }) {
   let state, failure;
   try { state = await fetchPr({ repo, pr }, { env: process.env, ghCommand: "gh" }); } catch (error) { failure = error?.message; }
   if (typeof state?.baseRefName !== "string" || !state.baseRefName) throw new Error(`reviewer-only: cannot read the base branch of ${repo}#${pr}${failure ? ` (${failure})` : ""}; check \`gh auth status\` and rerun. The configured default branch is no fallback`);
-  return state.baseRefName;
+  return { base: state.baseRefName, isDraft: state.isDraft !== false };
 }
 
 // Remedies the reviewer-only refusals name (each command exists in the CLI registry; the conformance walk checks it).
@@ -556,7 +568,8 @@ const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit i
 // A locally_clear record or an extension at the baseline means the act items are cleared: the next range starts at the chain end.
 // Both render at use time so the form follows CLAUDECODE at the refusal, like the sibling call-time cliError.
 // Issue 3437: the extension command is this refusal's one recovery; its own refusal names a reviewer-only run at the cleared candidate, never this baseline.
-const chainEndRecovery = ({ repo, pr }) => renderCliText(`dev-loops gate extend-cap-round-chain --repo ${repo} --pr ${pr}`);
+// RECOVERY-COMMAND-REQUIRED: the resolved worktree is part of the command (the extension defaults to the caller cwd and refuses head_mismatch from another checkout).
+const chainEndRecovery = ({ repo, pr, worktree }) => renderCliText(`dev-loops gate extend-cap-round-chain --repo ${repo} --pr ${pr} --worktree ${shellQuote(path.resolve(worktree))}`);
 const chainEndRemedy = () => renderCliText(`The cap round's act items are already cleared: run dev-loops gate extend-cap-round-chain --repo <owner/name> --pr <n> (its refusal names the reviewer-only delta and the baseline to use, the cleared candidate and not this baseline)`);
 const replacementRemedy = () => renderCliText("node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number> while this PR is still open");
 // RECOVERY-COMMAND-REQUIRED: the replacement-PR restart is an operator decision (ADR 0255): the shared operator form names the full procedure.
@@ -566,17 +579,24 @@ const replacementRecovery = ({ pr }) => renderCliText(replacementPrOperatorRecov
 // (the fixer's needs_fix) is taken over whatever its ref set or candidate: it is never clearing evidence, and the takeover continues its invocation count. Only a locally_clear
 // record of another act set stays protected, and no protected sealed record names a deletion. An unsealed record keeps the decision 6 and 7 rule: it is taken over only when it is
 // non-clearing over the same refs with no extension and a candidate on the PR head's history; otherwise it refuses unsealed_record (the caller names the rm step).
-function priorRecordRefusal(prior, { sequence, currentHead, isAncestor, isSealed = () => true, target }) {
+// Issue 3443: `unionCovers` is the shared chain coverage predicate (the union of the sealed clearing chain's records and the cover records names every act ref), `coverRemedy` and `coverRecovery` name the cover run for a union that leaves a ref uncovered.
+function priorRecordRefusal(prior, { sequence, currentHead, isAncestor, isSealed = () => true, target, unionCovers = false, coverRemedy, coverRecovery, ready = false }) {
   if (!prior) return null;
   const offHistory = typeof prior.candidateHead !== "string" || !isAncestor(prior.candidateHead, currentHead);
   // No chain end remains when the cleared record's candidate is off the PR head's history (decision 6). A refusal without a remedy names the rm step (the caller adds it).
-  const cleared = (reason) => ({ reason, remedy: offHistory ? replacementRemedy() : chainEndRemedy(), recovery: offHistory ? replacementRecovery(target) : chainEndRecovery(target) });
+  // Issue 3443: the cover run's candidate rule. A ready PR (its anyHead proof accepts the first record whatever its candidate) keeps the cover run and the chain-end command for a candidate git proves off the history; a draft PR gets the replacement PR. An unreadable history is refused with the fetch by the caller.
+  const noChain = offHistory && !ready;
+  const cleared = (reason) => ({ reason, remedy: noChain ? replacementRemedy() : chainEndRemedy(), recovery: noChain ? replacementRecovery(target) : chainEndRecovery(target) });
   if (prior.extension) return cleared("carries an extension");
   if (prior.actSetId === sequence.actSetId) return null;
   if (prior.outcome !== "locally_clear" && isSealed()) return null;
   const refs = (list) => [...new Set((list ?? []).map((item) => item?.ref))].sort().join("\n");
-  // The chain-end remedy fits only a record whose items cover the derived refs (both empty at a chain end): another ref set leaves the cap round uncovered, so extend-cap-round-chain would refuse it.
-  if (prior.outcome === "locally_clear") return refs(prior.items) === refs(sequence.actItems) ? cleared("is locally_clear for another act set") : { reason: "is locally_clear for another act set and covers another set of act refs", remedy: replacementRemedy(), recovery: replacementRecovery(target) };
+  // The chain-end remedy fits a record whose chain covers the cap round: the record's items equal the derived refs (both empty at a chain end), or the union of the chain's records and the cover records names every act ref.
+  // A union that leaves a ref uncovered names the cover run while the candidate is on the head's history, else the replacement PR.
+  if (prior.outcome === "locally_clear") {
+    if (refs(prior.items) === refs(sequence.actItems) || (unionCovers && !noChain)) return cleared("is locally_clear for another act set");
+    return { reason: "is locally_clear for another act set and covers another set of act refs", remedy: !noChain && coverRemedy ? coverRemedy : replacementRemedy(), recovery: !noChain && coverRecovery ? coverRecovery : replacementRecovery(target) };
+  }
   if (refs(prior.items) !== refs(sequence.actItems) || offHistory) return { reason: offHistory ? "names a candidate that is not on the PR head's history" : "covers another set of act refs" };
   return null;
 }
@@ -689,19 +709,85 @@ export async function runCli(
   }
   const baselineSha = revParse(options.worktree, options.baseline);
   // ADR 0255: the reviewer-only act list is derived from the cap-round ledger of the plan target, or --repo/--pr on the reviewer-only route; a chain-end baseline needs no covering, so its list stays empty.
-  let derivedActList = [], prBase;
+  let derivedActList = [], prBase, capLog, chainCoverage, headOnHistory, refuseUnresolvedHistory = () => {}, coverReachesHead = true, refreshChain, reviewerCommand, coverGuard, nextCoverInvocation, uncoveredAtInput, startRecordsChanged, prReady = false;
   if (options.reviewerOnly) {
     const log = JSON.parse(readFileSync(options.findingsLog, "utf8"));
+    capLog = log;
     if (log.repo !== options.repo || log.pr !== options.pr) throw new Error(`reviewer-only: findings log ${options.findingsLog} is for ${log.repo}#${log.pr}, not ${options.repo}#${options.pr}; pass the cap-round log of this PR`);
     // The act list and its id derive from this file, so it must be the canonical draft_gate ledger at its own head: not another gate's log, not a copy.
     const canonicalLog = buildLogPath({ repo: log.repo, pr: log.pr, gate: "draft_gate", headSha: log.headSha, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree) });
     const sameFile = (() => { try { return realpathSync(options.findingsLog) === realpathSync(canonicalLog); } catch { return false; } })();
     if (log.gate !== "draft_gate" || !sameFile) throw new Error(`reviewer-only: findings log ${options.findingsLog} is not the draft_gate cap-round ledger ${canonicalLog}; pass that file`);
     const route = {};
-    prBase = await readPrBase(fetchPr, { repo: options.repo, pr: options.pr });
+    const prState = await readPrBase(fetchPr, { repo: options.repo, pr: options.pr });
+    prBase = prState.base;
+    prReady = !prState.isDraft;
     fetchAndResolveBase(options.worktree, prBase, { revParse, fetchBase });
     await roundAnglesOf(options.findingsLog, baselineSha, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target: { repo: options.repo, pr: options.pr }, route, prBase });
     if (!route.chainEnd) derivedActList = capRoundActList(log.findings, log.headSha);
+    // Issue 3443: the shared chain coverage (the union of the sealed clearing chain's records and the sealed cover records) at the PR head, for the cover run's act list and for the refusals that name a recovery.
+    // A git or record read failure is an unproven coverage: it never admits a run. Only merge-base exit 1 proves a candidate off the head's history (ADR 0317): any other failure leaves the history unresolved, and the run asks for the fetch of the commit this clone lacks.
+    const prHeadSha = revParse(options.worktree, options.prHead);
+    const unresolved = new Set();
+    const onHistory = headOnHistory = (candidate) => {
+      if (!HEAD_SHA_RE.test(candidate)) return false;
+      try { return isAncestor(options.worktree, candidate, prHeadSha); } catch {
+        const lacking = [prHeadSha, candidate].filter((sha) => { try { revParse(options.worktree, sha); return false; } catch { return true; } });
+        for (const sha of lacking.length > 0 ? lacking : [candidate]) unresolved.add(sha);
+        return false;
+      }
+    };
+    refuseUnresolvedHistory = () => {
+      if (unresolved.size === 0) return;
+      const shas = [...unresolved];
+      // RECOVERY-COMMAND-REQUIRED: the fetch acts on the repository this run read (the resolved worktree), never on the caller's cwd.
+      const gitC = `git -C ${shellQuote(path.resolve(options.worktree))}`;
+      throw Object.assign(new Error(`reviewer-only: git could not prove whether ${shas.map((sha) => sha.slice(0, 7)).join(", ")} is on the history of the PR head ${prHeadSha.slice(0, 7)} (merge-base failed for a reason other than exit 1: usually a commit this clone has not fetched), so no act ref is proven uncovered. Run ${shas.map((sha) => `${gitC} fetch origin ${sha}`).join(" and ")} (${gitC} fetch --unshallow for a shallow clone) and rerun; if a commit is still absent, restart on a replacement PR: ${replacementRemedy()}`), { recovery: `${gitC} fetch origin ${shas[0]}` });
+    };
+    const capRound = { log };
+    // The ready-PR candidate rule needs the anyHead proof to accept the record: a clean cap round needs an extension that a plain record at the last invocation lacks, so it keeps the draft rule (the baseline ends in bounded_out).
+    prReady &&= !isCleanCapRound(capRound);
+    // Read again under the sequence lock by the plain run: a cover run that completes during the lock wait changes the coverage and the blockers read under that lock.
+    // The chain starts, the bridges and the seeded merges are scanned once, before any sequence lock (a directory scan and a base-only probe per clearing record can outlast the lock wait).
+    // Under a lock only the linked records and the cover records are read again from this scan.
+    let scannedChain = null;
+    // The sealed clearing records at the cap-round head and at the baseline (a base-only merge of the cap-round head) as read just before the scan: a start the scan did not list is compared with its record here.
+    let scannedStarts = new Map();
+    const startNow = (root, sha) => { try { const record = readSealedGateDeltaRecord(root, sha); return record && DELTA_CLEARING_NEXT_STEPS.includes(record.nextStep) ? record : null; } catch { return null; } };
+    const watched = () => [String(log.headSha ?? "").trim().toLowerCase(), baselineSha];
+    const scanChain = async () => {
+      scannedStarts = new Map(watched().map((sha) => [sha, startNow(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sha)]));
+      scannedChain = isCleanCapRound(capRound) ? null : await capRoundChainStarts({ tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), capHead: log.headSha, repo: options.repo, pr: options.pr, baseRefName: prBase, repoRoot: resolveRepoRoot(options.worktree), baseOnlyMerge }).catch(() => null);
+    };
+    startRecordsChanged = (root) => {
+      if (!scannedChain) return false;
+      const keyOf = (start) => String(start.reviewBaselineHead).trim().toLowerCase();
+      const scannedAt = (sha) => scannedChain.starts.find((start) => keyOf(start) === sha) ?? scannedStarts.get(sha) ?? null;
+      return [...new Set([...watched(), ...scannedChain.starts.map(keyOf)])].some((sha) => JSON.stringify(startNow(root, sha)) !== JSON.stringify(scannedAt(sha)));
+    };
+    refreshChain = async () => {
+      chainCoverage = scannedChain ? await capRoundChainCoverage({ capRound, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), bound: { head: prHeadSha, onHistory, coverOnHistory: onHistory }, chain: scannedChain }).catch(() => null) : null;
+      // The cover run is useful on a draft PR only while some chain visits the head or ends on its history (ready PRs keep it): the probe runs before the unresolved-history refusal, so a failed probe asks for the fetch.
+      coverReachesHead = true;
+      if (chainCoverage && chainCoverage.uncovered.length > 0) coverReachesHead = await coverRunReachesHead({ isDraft: prState.isDraft, head: prHeadSha, onHistory, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), capHead: log.headSha, chain: scannedChain });
+    };
+    await scanChain();
+    await refreshChain();
+    // RECOVERY-COMMAND-REQUIRED: the reviewer-only commands the refusals name carry the resolved worktree and the canonical ledger, so they run from any caller directory.
+    reviewerCommand = (cover) => renderCliText(`dev-loops loop pre-push-delta --reviewer-only${cover ? " --cover-uncovered" : ""} --repo ${options.repo} --pr ${options.pr} --baseline ${log.headSha} --pr-head ${prHeadSha} --findings-log ${shellQuote(path.resolve(canonicalLog))} --spec-identity <id> --result-path <result-file> --worktree ${shellQuote(path.resolve(options.worktree))}`);
+    if (options.coverUncovered) {
+      const refuseCover = (why, recovery) => { throw Object.assign(new Error(`reviewer-only --cover-uncovered: ${why}`), { recovery }); };
+      if (baselineSha !== String(log.headSha ?? "").trim().toLowerCase()) refuseCover(`--baseline ${baselineSha} is not the cap-round head ${log.headSha}; the cover run reviews the cap-round head..PR head`, reviewerCommand(true));
+      const extension = chainEndRecovery({ repo: options.repo, pr: options.pr, worktree: options.worktree });
+      if (isCleanCapRound(capRound)) refuseCover(`the cap round is clean and has no act ref to cover; run ${extension}`, extension);
+      refuseUnresolvedHistory();
+      if (!chainCoverage) refuseCover(`no sealed clearing chain start (a record at the cap-round head ${log.headSha} or at a base-only merge of it) exists, or its coverage cannot be read: run the plain reviewer-only delta for that baseline: ${reviewerCommand(false)}`, reviewerCommand(false));
+      if (chainCoverage.uncovered.length === 0) refuseCover(`every act ref of the cap round is covered; run ${extension}`, extension);
+      if (!coverReachesHead) refuseCover(`this PR is a draft and no sealed clearing chain visits the PR head or ends on its history, so a cover run cannot make the chain reach the head. Only the replacement-PR restart remains: ${replacementRemedy()}`, replacementRecovery({ pr: options.pr }));
+      uncoveredAtInput = [...chainCoverage.uncovered].sort().join("\n");
+      derivedActList = derivedActList.filter((entry) => chainCoverage.uncovered.includes(entry.ref));
+      if (derivedActList.length === 0) refuseCover(`none of the uncovered act refs is a code act item the reviewer can verify; no cover record applies. Only the replacement-PR restart remains: ${replacementRemedy()}`, replacementRecovery({ pr: options.pr }));
+    }
   }
   // The plan is read only when no unresolved thread exists, so a non-empty thread route never gates on --fixer-plan.
   let threadActList = null;
@@ -729,29 +815,73 @@ export async function runCli(
     if (currentHead === baselineHead) throw new Error(`reviewer-only: worktree HEAD ${currentHead} equals the baseline; there is no code range to clear. ${FIXER_REMEDY}`);
     const root = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
     // Checked under the sequence lock the fixer emission writes its marker under, here and again before the result write.
-    noMarker = () => { if (readSequenceMarker(root, baselineHead)) throw cliError(`reviewer-only: an active sequence marker exists for baseline ${baselineHead}; the fixer closes it when it pushes its commit; close an abandoned one with dev-loops gate close-sequence --head ${baselineHead} --repo <owner/name> --pr <n> and rerun`); };
+    // RECOVERY-COMMAND-REQUIRED: the refusal carries the rendered close command with the real repo and PR.
+    noMarker = () => { if (readSequenceMarker(root, baselineHead)) { const close = renderCliText(`dev-loops gate close-sequence --head ${baselineHead} --repo ${options.repo} --pr ${options.pr}`); throw Object.assign(cliError(`reviewer-only: an active sequence marker exists for baseline ${baselineHead}; the fixer closes it when it pushes its commit; close an abandoned one with ${close} and rerun`), { recovery: close }); } };
     // Read and classify under the sequence lock the result run and extend-cap-round-chain take: a record mid-write (seal removed, new record renamed) is never taken for an unsealed one.
     // A record that is not JSON (a crash during its write) refuses like any other unsealed leftover.
     // A candidate missing from the clone is not on the PR head's history.
     // An unsealed record is untrusted: only a hex SHA reaches git, never HEAD, a branch name or an option.
-    const onHistory = (a, b) => { try { return HEAD_SHA_RE.test(a) && isAncestor(options.worktree, a, b); } catch { return false; } };
-    await withSequenceLock(root, [baselineHead], () => {
+    // The worktree HEAD is the PR head here, so this is the shared probe that records an unresolved history for the fetch request (ADR 0317), also for the prior record's own candidate.
+    const onHistory = (candidate) => headOnHistory(candidate);
+    // The cover run touches no baseline record: its records are keyed by the cap-round head and the act ref, so it neither reads, takes over nor refuses on the record at the baseline.
+    // The marker and the cover records are read under the sequence lock of the baseline (the cap-round head) that the plain run and the result write take.
+    // A cover record that cannot take another run is a dead end for this PR: a sealed locally_clear record whose candidate left the head's history (coverage ignores it, the write would never replace it), an unsealed one (its count cannot be trusted) and one that used the last invocation.
+    // The same read snapshots every cover record of the run: the result write compares against it under the lock (compare-and-swap).
+    if (options.coverUncovered) await withSequenceLock(root, [baselineHead], async () => {
       noMarker();
+      // The coverage read above ran before this lock: a concurrent cover run that sealed a ref in the meantime changes the uncovered set (and a clearing cover record would read below as an off-history blocker, a replacement-PR refusal for a covered round).
+      // Read it again under the lock from the chain scanned before it: a different uncovered set writes nothing and refuses with the input-run rerun.
+      await refreshChain();
+      // The reread probes history too: a history that became unresolved under the lock (the uncovered set unchanged, a clearing cover record's candidate unreadable) asks for the fetch, never a blocker refusal below.
+      refuseUnresolvedHistory();
+      if (!chainCoverage || [...chainCoverage.uncovered].sort().join("\n") !== uncoveredAtInput) throw Object.assign(new Error(`reviewer-only --cover-uncovered: the cover records of the cap round changed while this run waited for the sequence lock of ${baselineHead} (a concurrent cover run), so the uncovered act refs it read are stale; nothing was written. Rerun the input run: ${reviewerCommand(true)}`), { recovery: reviewerCommand(true) });
+      for (const item of sequence.actItems) {
+        const blocker = coverRecordBlocker(root, baselineHead, item.ref);
+        if (blocker) throw Object.assign(new Error(`reviewer-only --cover-uncovered: the cover record for act ref ${item.ref} at ${baselineHead} is ${blocker === "clearing" ? "sealed locally_clear but its candidate is not on the PR head's history" : blocker === "bounded" ? `sealed with the last invocation used (bound ${DELTA_MAX_INVOCATIONS})` : "unsealed, hand-edited or unreadable"}, and a cover record is never overwritten or restarted, so no cover run can cover this ref. Only the replacement-PR restart remains: ${replacementRemedy()}`), { recovery: replacementRecovery({ pr: options.pr }) });
+      }
+      coverGuard = { snapshot: coverRecordsSnapshot(root, baselineHead, sequence.actItems.map((item) => item.ref)) };
+    });
+    // Cover records are keyed by the cap-round head, which differs from the baseline when the plain run takes a base-only merge of it: read them under that head's lock too.
+    const capHeadSha = String(capLog.headSha ?? "").trim().toLowerCase();
+    if (!options.coverUncovered) await withSequenceLock(root, [baselineHead, capHeadSha], async () => {
+      noMarker();
+      // The chain starts were scanned before this lock: a start record (the cap-round head's or a scanned merge's) that was sealed, resealed or removed since is absent from or stale in that scan, so the coverage below would read a partial record as covering another set of refs.
+      // Compare each start record now with the scanned one and return the input-run rerun when it differs; a failed scan (no chain) keeps its unproven coverage.
+      if (startRecordsChanged(root)) throw Object.assign(new Error(`reviewer-only: the sealed clearing record of the cap-round head ${capHeadSha.slice(0, 7)} or of a base-only merge of it changed while this run waited for the sequence lock, so the chain coverage read before the lock is stale; nothing was written. Rerun the input run: ${reviewerCommand(false)}`), { recovery: reviewerCommand(false) });
+      await refreshChain();
+      // The cover run is offered only for a readable coverage that leaves an act ref uncovered, on a chain it can bring to the head, and while no uncovered ref's cover record is a dead end (read under this lock, as the cover run does): any other state names the replacement PR.
+      const coverable = Boolean(chainCoverage) && chainCoverage.uncovered.length > 0 && coverReachesHead && !chainCoverage.uncovered.some((ref) => coverRecordBlocker(root, capHeadSha, ref));
       let refusal;
       try { priorRecord = readRecord(root, baselineHead); } catch { refusal = { reason: "is unreadable or not JSON" }; }
       // One seal read per run under the lock, only when the rule needs it.
       let sealedRead;
       const isSealed = () => (sealedRead ??= Boolean(priorRecord && readSealedRecord(root, baselineHead)));
-      refusal ??= priorRecordRefusal(priorRecord, { sequence, currentHead, isAncestor: onHistory, isSealed, target: { repo: options.repo, pr: options.pr } });
+      refusal ??= priorRecordRefusal(priorRecord, {
+        sequence, currentHead, isAncestor: onHistory, isSealed, target: { repo: options.repo, pr: options.pr, worktree: options.worktree }, unionCovers: chainCoverage?.uncovered.length === 0, ready: prReady,
+        coverRemedy: coverable ? `The cap round's act refs are not all covered: run the cover run (a fresh reviewer verifies only the uncovered refs over ${String(capLog.headSha).slice(0, 7)}..${currentHead.slice(0, 7)} and seals a separate record per ref; this record is never overwritten): ${reviewerCommand(true)} (then --result <result-file> --invocation <1-3>), or restart on a replacement PR: ${replacementRemedy()}` : undefined,
+        coverRecovery: coverable ? reviewerCommand(true) : undefined,
+      });
       if (refusal) {
         const unsealed = priorRecord === undefined || !isSealed();
-        throw Object.assign(new Error(`reviewer-only: ${unsealed ? "unsealed_record: " : ""}the delta record for baseline ${baselineHead} ${refusal.reason} and is never overwritten. ${unsealed || !refusal.remedy ? `${unsealed ? "Its seal does not match; if it is a leftover" : "If it is stale"}${refusal.reason.includes("history") ? " (run git fetch origin <candidate> first; if it is still absent)" : ""}, run \`rm -f ${shellQuote(gateDeltaRecordPath(root, baselineHead))} ${shellQuote(`${gateDeltaRecordPath(root, baselineHead)}.seal`)}\` and rerun (this restarts the invocation count), or restart on a replacement PR: ${replacementRemedy()}` : refusal.remedy}`), !unsealed && refusal.remedy && refusal.recovery ? { recovery: refusal.recovery } : {});
+        // The refusal of a sealed record may rest on a coverage a failed history probe left unproven: ask for the fetch, never name a recovery from it. An unsealed record keeps its fetch hint and its rm remedy: its candidate is never read as evidence.
+        if (!unsealed) refuseUnresolvedHistory();
+        throw Object.assign(new Error(`reviewer-only: ${unsealed ? "unsealed_record: " : ""}the delta record for baseline ${baselineHead} ${refusal.reason} and is never overwritten. ${unsealed || !refusal.remedy ? `${unsealed ? "Its seal does not match; if it is a leftover" : "If it is stale"}${refusal.reason.includes("history") ? ` (run \`git -C ${shellQuote(path.resolve(options.worktree))} fetch origin <candidate>\` first; if it is still absent)` : ""}, run \`rm -f ${shellQuote(gateDeltaRecordPath(root, baselineHead))} ${shellQuote(`${gateDeltaRecordPath(root, baselineHead)}.seal`)}\` and rerun (this restarts the invocation count), or restart on a replacement PR: ${replacementRemedy()}` : refusal.remedy}`), !unsealed && refusal.remedy && refusal.recovery ? { recovery: refusal.recovery } : {});
       }
     });
-    // The invocation bound of 3 counts the reviewer-only records at this baseline; a takeover continues the prior record's count.
-    const expected = (Number.isInteger(priorRecord?.invocation) ? priorRecord.invocation : 0) + 1;
+    // The invocation bound of 3 counts the reviewer-only records at this baseline; a takeover continues the prior record's count. The cover run counts the sealed cover records of the refs it verifies (an unsealed or unreadable one was refused above, so none is read as 0).
+    const coverCount = (ref) => { try { const record = readSealedCoverRecord(root, baselineHead, ref); return Number.isInteger(record?.invocation) ? record.invocation : 0; } catch { return 0; } };
+    nextCoverInvocation = () => Math.max(0, ...sequence.actItems.map((item) => coverCount(item.ref))) + 1;
+    const expected = options.coverUncovered ? nextCoverInvocation() : (Number.isInteger(priorRecord?.invocation) ? priorRecord.invocation : 0) + 1;
+    if (coverGuard) coverGuard.expected = expected;
     // A locally_clear record that used the last invocation cleared its act items: the chain-end route applies, not the replacement-PR restart.
-    if (expected > DELTA_MAX_INVOCATIONS) throw new Error(priorRecord?.outcome === "locally_clear" && onHistory(priorRecord.candidateHead, currentHead) ? `reviewer-only: the locally_clear record for baseline ${baselineHead} used the last invocation and is never overwritten. ${chainEndRemedy()}` : `reviewer-only: the invocation bound of ${DELTA_MAX_INVOCATIONS} is reached for baseline ${baselineHead}; bounded_out, restart_on_replacement_pr: ${replacementRemedy()}`);
+    // The one candidate rule (ADR 0317): a sealed locally_clear record that used the last invocation keeps the chain-end command on a ready PR whatever its candidate (its anyHead proof accepts it), on a draft PR only while the candidate is on the head's history. A history git could not read asks for the fetch first, never the replacement PR.
+    const lastClearing = expected > DELTA_MAX_INVOCATIONS && priorRecord?.outcome === "locally_clear";
+    const lastOnHistory = lastClearing && onHistory(priorRecord.candidateHead);
+    if (lastClearing && !lastOnHistory && (() => { try { return Boolean(readSealedRecord(root, baselineHead)); } catch { return false; } })()) refuseUnresolvedHistory();
+    if (expected > DELTA_MAX_INVOCATIONS) {
+      if (lastClearing && (lastOnHistory || prReady)) throw Object.assign(new Error(`reviewer-only: the locally_clear record for baseline ${baselineHead} used the last invocation and is never overwritten. ${chainEndRemedy()}`), { recovery: chainEndRecovery({ repo: options.repo, pr: options.pr, worktree: options.worktree }) });
+      throw new Error(`reviewer-only: the invocation bound of ${DELTA_MAX_INVOCATIONS} is reached for baseline ${baselineHead}; bounded_out, restart_on_replacement_pr: ${replacementRemedy()}`);
+    }
     if (options.result && options.invocation !== expected) throw new Error(`reviewer-only: --invocation ${options.invocation} is not the next invocation ${expected} for baseline ${baselineHead}`);
     const { base, resolvedPaths, resolvedMerges } = await reviewerOnlyBase(options.worktree, baselineHead, currentHead, { revParse, baseOnlyMerge, revList, base: prBase });
     baseBranch = base;
@@ -884,8 +1014,27 @@ export async function runCli(
       tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree),
       sequence, candidateHead: currentHead, invocation: options.invocation, decision, result, lifecycleFindings, bodySha256, bodyTarget: sealedTarget,
     });
+    // The cover run seals one cover record per verified act ref, keyed by the cap-round head and the ref: no baseline record is read, taken or written.
+    // The write takes the baseline's sequence lock and rechecks the marker and every cover record first, so a concurrent run or a marker opened since the input run never lets a result replace a record (writeCoverRecord refuses a record the blocker names).
+    // The capped findings that writeGateDeltaRecord seals (lifecycle findings first, then the reviewer's, at most 20): a cover record seals them too and the cover-run payload prints them, so a refused cover run names its cause (PRE-PUSH-DELTA-EXIT-BOUND).
+    const coverFindings = options.coverUncovered ? [...lifecycleFindings, ...deltaFixerFindings(result)].slice(0, 20) : [];
+    if (options.coverUncovered) {
+      const root = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
+      await withSequenceLock(root, [baselineHead], () => {
+        noMarker();
+        // Compare-and-swap: a cover record (or the next invocation) that differs from the snapshot every check above judged is a concurrent run's write; this run writes nothing and the input run is rerun.
+        if (coverRecordsSnapshot(root, baselineHead, sequence.actItems.map((item) => item.ref)) !== coverGuard.snapshot || nextCoverInvocation() !== coverGuard.expected) throw Object.assign(new Error(`reviewer-only --cover-uncovered: a cover record for baseline ${baselineHead} changed on disk between this run's read and its write (a concurrent cover run); nothing was written. Rerun the input run (without --result)`), { recovery: reviewerCommand(true) });
+        for (const item of sequence.actItems) {
+          const blocker = coverRecordBlocker(root, baselineHead, item.ref);
+          if (blocker) throw Object.assign(new Error(`reviewer-only --cover-uncovered: the cover record for act ref ${item.ref} at ${baselineHead} is ${blocker === "clearing" ? "sealed locally_clear" : blocker === "bounded" ? "sealed with the last invocation used" : "unsealed or unreadable"} and is never overwritten; nothing was written. Restart on a replacement PR: ${replacementRemedy()}`), { recovery: replacementRecovery({ pr: options.pr }) });
+        }
+        for (const item of sequence.actItems) {
+          const status = result.actionableItems?.find((i) => i?.ref === item.ref)?.status ?? "not_resolved";
+          writeCoverRecord(root, { capHead: baselineHead, ref: item.ref, candidateHead: currentHead, actSetId: sequence.actSetId, invocation: options.invocation, outcome: decision.outcome, nextStep: decision.nextStep, status, ...(coverFindings.length > 0 ? { findings: coverFindings } : {}) });
+        }
+      });
     // The reviewer-only route read its prior record before the fetch, the scans and the changelog check: write only when the record is still the snapshot every check above judged.
-    if (options.reviewerOnly) {
+    } else if (options.reviewerOnly) {
       const root = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
       await withSequenceLock(root, [baselineHead], () => {
         noMarker();
@@ -895,7 +1044,7 @@ export async function runCli(
         write();
       });
     } else write();
-    payload = { ok: true, ...decision };
+    payload = { ok: true, ...decision, ...(coverFindings.length > 0 ? { findings: coverFindings } : {}) };
   } else {
     // Validate the input first: a failed input run must not open a record or move the current-run pointer (GATE-EXEC-EVIDENCE-SEALED).
     const target = options.reviewerOnly ? { repo: options.repo, pr: options.pr } : authenticatedTarget;

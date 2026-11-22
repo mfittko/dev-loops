@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
 import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { capRoundActList, countCompletedRounds, readClosedPriorRoundLogs, resolveCapRound } from "../../scripts/github/write-gate-context.mjs";
-import { writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
+import { readSealedCoverRecord, writeGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
-import { coordinationAt, extendRoute, followRemedy, reviewerOnlyRoute } from "./_cap-round-route.mjs";
+import { coordinationAt, extendRoute, followRemedy, reviewerOnlyRoute, threadRoute } from "./_cap-round-route.mjs";
 
 // Issue 3122 / ADR 0255: a draft PR past the cap round never dead-ends. Every combination of cap round, sequence state, base refreshes and later commits
 // reaches mark_ready_for_review, or is an explicit expected block with its reason. Real functions throughout; only the network seams are injected (_cap-round-route.mjs).
@@ -221,6 +222,44 @@ test("the remaining clean-cap needs_fix dead ends clear with the remedy ADR 0255
   }
 });
 
+// Issue 3443 AC3 (ADR 0255 amendment): a cap round with three act refs, covered by a commit_only fixer record (two refs, baseline A) and a cover record of the escalated act ref
+// (the reviewer-only cover run over A..head, no new commit), needs no replacement PR. The cover record is sealed by the real CLI, not written by the test. Only the fixer's partial record is a fixture:
+// the act-list producer needs a pulled commit_only plan, which this driver does not emulate.
+test("issue 3443: act refs covered by the fixer record and a cover run reach ready, and a genuinely uncovered ref blocks naming it", async () => {
+  const s = scenario({ clean: false, sequence: "lost", merges: 0, fix: true, docs: true });
+  try {
+    const findings = [ACT, { ...ACT, summary: "second defect", line: 2 }, { ...ACT, summary: "escalated defect", line: 3 }];
+    const ledger = JSON.parse(readFileSync(s.ledgerPath, "utf8"));
+    writeFileSync(s.ledgerPath, JSON.stringify({ ...ledger, findings }));
+    const [one, two, escalated] = capRoundActList(findings, s.A).map((item) => item.ref);
+    assert.equal(new Set([one, two, escalated]).size, 3, "three distinct act refs");
+    const F = String(runGitFixture(s.root, ["rev-parse", "HEAD~1"])).trim();
+    const tmpRoot = path.join(s.root, "tmp");
+    const record = (baseline, candidateHead, refs) => writeSealedGateDeltaRecord(tmpRoot, baseline, { reviewBaselineHead: baseline, candidateHead, actSetId: `set-${baseline.slice(0, 7)}`, invocation: 1, outcome: "locally_clear", nextStep: "push_to_gate", items: refs.map((ref) => ({ ref, status: "resolved" })) });
+    const ctx = { repo: REPO, pr: PR, head: s.head };
+    record(s.A, F, [one, two]);
+    const blocked = await coordinationAt(s.root, ctx);
+    assert.deepEqual({ next: blocked.nextAction, failure: blocked.failure }, { next: "report_blocked", failure: "items_do_not_cover" });
+    assert.match(blocked.reason, new RegExp(`Uncovered act refs: ${escalated}\\.`), "the refusal names the uncovered ref");
+    assert.match(blocked.reason, new RegExp(`Records on the chain: ${s.A.slice(0, 7)}\\.\\.${F.slice(0, 7)} \\[${one}, ${two}\\]`), "and the record that exists");
+    const recordAtA = readFileSync(path.join(tmpRoot, "gate-delta", `${s.A}.json`), "utf8");
+    const route = { repo: REPO, pr: PR, head: s.head, baseline: s.A, ledgerPath: s.ledgerPath };
+    // A reviewer that does not resolve the escalated ref leaves it uncovered: the route stays blocked and names it.
+    const failed = await followRemedy(s.root, { ...route, reviewerStatus: "not_resolved" });
+    assert.equal(failed.end.nextAction, "report_blocked");
+    assert.equal(failed.end.failure, "items_do_not_cover");
+    assert.match(failed.end.reason, new RegExp(`Uncovered act refs: ${escalated}\\.`));
+    // The recovery the refusal names is the cover run, and it is the step that covers the ref.
+    const { trace, end } = await followRemedy(s.root, route);
+    assert.match(trace.join("\n"), /recovery: .*loop pre-push-delta --reviewer-only --cover-uncovered /u, trace.join("\n"));
+    assert.ok(READY.includes(end.nextAction), `${end.failure}: ${end.reason}\n${trace.join("\n")}`);
+    assert.doesNotMatch(String(end.remedy), /replacement|allow-replacement-pr/u, "no replacement PR");
+    assert.equal(readFileSync(path.join(tmpRoot, "gate-delta", `${s.A}.json`), "utf8"), recordAtA, "the cover run never overwrites the sealed record at the cap-round head");
+    const cover = readSealedCoverRecord(tmpRoot, s.A, escalated);
+    assert.deepEqual({ ref: cover.ref, status: cover.status, outcome: cover.outcome, candidateHead: cover.candidateHead }, { ref: escalated, status: "resolved", outcome: "locally_clear", candidateHead: s.head });
+  } finally { rmSync(s.root, { recursive: true, force: true }); }
+});
+
 // Issue 3139 AC5: the PR 3138 sequence under one toolchain: a cap round with findings, the fixer's needs_fix record, a base-only merge and a half-stamped earlier ledger.
 test("PR 3138 sequence: each step runs the command the previous result named, the walk reaches run_pre_approval_gate, and the round numbers agree at every step", async () => {
   // otherRefs: the sealed needs_fix record holds another ref set, so only the AC3 takeover lets the walk through.
@@ -268,3 +307,43 @@ test("PR 3138 sequence: each step runs the command the previous result named, th
     for (const text of texts) assert.doesNotMatch(text, /\brm\b/, "no step names a record deletion");
   } finally { rmSync(s.root, { recursive: true, force: true }); }
 });
+
+// Issue 3443 AC1 and AC3, the failing sequence end to end with the real writers: the cap round has three act refs p, q and r (r escalated). The commit_only fixer's record A..F names p and q (the real record writer).
+// The operator fixes the escalated item in the PR: a code commit G after F, sealed by the REAL thread-route delta CLI as F..G, a record whose item ref is the thread id and which covers no act ref.
+// The head G is stuck on items_do_not_cover; the printed recovery is the cover run, which a fresh reviewer runs over A..G, and the route then reaches ready with no replacement PR and no changed record.
+test("issue 3443: the fixer record, a thread-route record for the escalated item's fix and a cover run rescue the stuck head G", async () => {
+  const s = scenario({ clean: false, sequence: "lost", merges: 0, fix: true, docs: false });
+  try {
+    const findings = [ACT, { ...ACT, summary: "second defect", line: 2 }, { ...ACT, summary: "escalated defect", line: 3 }];
+    const ledger = JSON.parse(readFileSync(s.ledgerPath, "utf8"));
+    writeFileSync(s.ledgerPath, JSON.stringify({ ...ledger, findings }));
+    const entries = capRoundActList(findings, s.A);
+    const [p, q, r] = entries.map((item) => item.ref);
+    const tmpRoot = path.join(s.root, "tmp");
+    const F = s.head;
+    // The commit_only fixer's partial record A..F for p and q, written by the real record writer.
+    const sequence = startDeltaSequence({ reviewBaselineHead: s.A, actList: entries.filter((item) => item.ref !== r) });
+    writeGateDeltaRecord({ tmpRoot, sequence, candidateHead: F, invocation: 1, decision: { outcome: "locally_clear", nextStep: "push_to_gate", locallyClear: true }, result: { actionableItems: [p, q].map((ref) => ({ ref, status: "resolved" })), newFindings: [] } });
+    // G: the fix of the escalated item (a logic file), sealed as the thread-route record F..G.
+    writeFileSync(path.join(s.root, "src", "a.mjs"), "export const a = 4;\n");
+    runGitFixture(s.root, ["add", "src"]);
+    runGitFixture(s.root, ["commit", "-q", "-m", "fix the escalated defect"]);
+    const G = String(runGitFixture(s.root, ["rev-parse", "HEAD"])).trim();
+    const threadDecision = await threadRoute(s.root, { repo: REPO, pr: PR, baseline: F, threadId: "PRRT_escalated" });
+    assert.equal(threadDecision.outcome, "locally_clear");
+    const sealedRecord = (baseline) => ({ record: readFileSync(path.join(tmpRoot, "gate-delta", `${baseline}.json`), "utf8"), seal: readFileSync(path.join(tmpRoot, "gate-delta", `${baseline}.json.seal`), "utf8") });
+    const priorRecords = { A: sealedRecord(s.A), F: sealedRecord(F) };
+    assert.deepEqual(JSON.parse(priorRecords.F.record).items, [{ ref: "PRRT_escalated", status: "resolved" }], "the thread-route record names the thread id and no act ref");
+    // The stuck head: the thread-id link covers no act ref, so r is uncovered and the coordinator blocks.
+    const stuck = await coordinationAt(s.root, { repo: REPO, pr: PR, head: G });
+    assert.deepEqual({ next: stuck.nextAction, failure: stuck.failure }, { next: "report_blocked", failure: "items_do_not_cover" });
+    assert.match(stuck.reason, new RegExp(`Uncovered act refs: ${r}\\.`));
+    const { trace, end } = await followRemedy(s.root, { repo: REPO, pr: PR, head: G, baseline: s.A, ledgerPath: s.ledgerPath });
+    assert.match(trace.join("\n"), /recovery: .*loop pre-push-delta --reviewer-only --cover-uncovered /u, trace.join("\n"));
+    assert.ok(READY.includes(end.nextAction), `${end.failure}: ${end.reason}\n${trace.join("\n")}`);
+    assert.doesNotMatch(String(end.remedy), /replacement|allow-replacement-pr/u, "no replacement PR");
+    assert.deepEqual({ A: sealedRecord(s.A), F: sealedRecord(F) }, priorRecords, "no prior record is overwritten");
+    const cover = readSealedCoverRecord(tmpRoot, s.A, r);
+    assert.deepEqual({ ref: cover.ref, status: cover.status, candidateHead: cover.candidateHead }, { ref: r, status: "resolved", candidateHead: G });
+  } finally { rmSync(s.root, { recursive: true, force: true }); }
+}, 60000);

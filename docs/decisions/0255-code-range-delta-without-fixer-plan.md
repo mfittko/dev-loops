@@ -10,6 +10,8 @@ Amended by [ADR 0261](./0261-sealed-delta-record-never-deleted.md), which replac
 
 Amended by [ADR 0298](./0298-clean-overlapping-merge-is-not-base-only.md), which adds the overlap paths of a clean merge to decision 3.
 
+Amended by [ADR 0317](./0317-cap-round-coverage-is-the-chain-union.md), which adds the cover run (`--reviewer-only --cover-uncovered`): a reviewer-only run at the cap-round head that verifies only the uncovered act refs and seals a separate record per ref.
+
 ## Context
 
 ADR 0254 names a `locally_clear` pre-push delta for the start of the logic range as the remedy for a code commit past the cap round. The act-list delta needs a fixer plan and a coverage record bound to that baseline. Only a fixer emission creates them, and the emitter refuses a head other than the PR head. After a `head_moved` closure removes the sequence marker and supersedes the plan, no command re-creates the binding. Every base refresh moves the head, so the remedy worked only for a PR that never refreshed its base (issue 3122, PR 3087). The thread-route delta needs an unresolved review thread, which a PR may not have.
