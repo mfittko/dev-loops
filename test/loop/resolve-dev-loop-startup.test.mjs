@@ -1628,6 +1628,23 @@ test("AC5 (3127): the freshness check runs when the issue body has no AC heading
   assert.equal(changed.issueReadinessReason, "spec_changed_since_grill");
 });
 
+test("3462: a clean linked-doc body without an AC heading is ready", async () => {
+  const results = { body: "## 🔬 Grill / refinement results\n\nNo gaps were found.\n\n" + GRILL_REVIEW_LINE, createdAt: "2026-11-06T10:00:00Z" };
+  const ready = await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const stub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
+      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: PROSE_BODY }) },
+      { assertArgs: ["api", "graphql", "number=735", ".data.repository.issueOrPullRequest"],
+        stdout: JSON.stringify({ body: PROSE_BODY, lastEditedAt: null, comments: { nodes: [results] } }) },
+      { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+    ], { matchMode: "claims" });
+    return buildAutoResolvedInput({ issue: 735, cwd: tempDir, env: { ...stub.env, ...resolverTestEnv() } });
+  }, { prefix: "resolve-dev-loop-prose-ready-" });
+  assert.equal(ready.issueReadiness, "ready");
+  assert.equal(ready.issueReadinessReason, undefined);
+});
+
 // DESIGN-SIMPLEST-FIRST (issue 3462): startup stops every issue pickup without a clean grill, before any claim write.
 const GRILL_REVIEW_LINE = "simplicity-review: 1 findings, 1 corrected, 0 rejected";
 const GRILL_MATRIX = "## AC / DoD matrix\n\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the feature works end to end | a focused test proves the feature works |\n\n## Non-goals\n\n- none\n";
@@ -1770,11 +1787,11 @@ test("3462 AC3: --plan-file startup makes no gh call and does not stop at the gr
   }, { prefix: "resolve-dev-loop-grill-plan-file-" });
 });
 
-test("3462: startup and the documented grill invocation return the same state above 100 comments", async () => {
+test("3462: startup and the detector CLI return the same state above 100 comments", async () => {
   const filler = Array.from({ length: 100 }, (_, i) => ({ body: `note ${i}`, createdAt: "2026-11-06T11:00:00Z" }));
   const node = { ...grilledFacts({ comments: filler }), comments: { pageInfo: { hasPreviousPage: true }, nodes: filler } };
   const results = grilledFacts().comments.nodes;
-  // Startup reads the last-100 window; the skill's Step 1 also passes the full comment list with --comments-file.
+  // Startup reads the last-100 window; the detector CLI is given the full comment list with --comments-file.
   const startup = await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
     const stub = await writeGhStubHelper(tempDir, [

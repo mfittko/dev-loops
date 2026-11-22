@@ -301,14 +301,13 @@ test("detector round-trip: a hand-authored matrix with no comments gets a real s
   }
 });
 
-test("the documented view-issue.mjs --jq extraction bridges the real wrapper envelope into --comments-file", async () => {
+test("the view-issue.mjs --jq extraction bridges the real wrapper envelope into --comments-file", async () => {
   // Real-shaped view-issue.mjs --json comments stdout: { ok, issue: { comments: [...] } },
   // each comment carrying the fields `gh issue view --json comments` actually returns
-  // (author, body, createdAt, id, url), not just `body`. Step 1 documents extracting past
-  // this envelope with `--jq '.issue.comments'` before handing the file to --comments-file
-  // (the wrapper's raw output fails closed there) -- this proves that documented path,
-  // using the SAME evaluateJqFilter engine emitResult's own --jq option runs, actually
-  // reaches grill_clean end to end.
+  // (author, body, createdAt, id, url), not just `body`. Extracting past this envelope with
+  // `--jq '.issue.comments'` before handing the file to --comments-file (the wrapper's raw
+  // output fails closed there), using the SAME evaluateJqFilter engine emitResult's own
+  // --jq option runs, reaches grill_clean end to end.
   const viewIssueWrapperOutput = {
     ok: true,
     issue: {
@@ -324,7 +323,7 @@ test("the documented view-issue.mjs --jq extraction bridges the real wrapper env
     },
   };
   const [extractedComments] = evaluateJqFilter(viewIssueWrapperOutput, ".issue.comments");
-  assert.ok(Array.isArray(extractedComments), "the documented .issue.comments extraction yields the comments array");
+  assert.ok(Array.isArray(extractedComments), "the .issue.comments extraction yields the comments array");
 
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-real-envelope-"));
   try {

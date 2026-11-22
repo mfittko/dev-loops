@@ -89,7 +89,7 @@ Use --spike to start a time-boxed exploratory loop from a local spike
 artifact (read-only: no tracker mutation, no issue/PR number).
 Required (exactly one):
   --issue <n>    Target an issue by number (auto-resolves all state;
-                 without an open PR it needs a clean grill: a results comment, an AC / DoD matrix, Non-goals, a "## Simplest design" section and a "simplicity-review:" line, else it stops and prints the grill command)
+                 without an open PR it needs a clean grill: a results comment, a valid AC / DoD matrix (or linked refinement doc), Non-goals, a "## Simplest design" section and a "simplicity-review:" line, else it stops and prints the grill command)
   --pr <n>       Target a PR by number (auto-resolves all state)
   --input <path>  Path to a JSON file with canonical-state payload
   --plan-file <path>  Path to a phase-doc-format plan to start locally
