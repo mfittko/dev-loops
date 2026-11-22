@@ -1562,7 +1562,6 @@ test("AC5 (3127): --issue reports needs_clarification / spec_changed_since_grill
     await initRepoWithOrigin(tempDir);
     const stub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
-      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: acBody }) },
       { assertArgs: ["api", "graphql", "number=735", ".data.repository.issueOrPullRequest"],
         stdout: JSON.stringify({ body: acBody, lastEditedAt: null, comments: { nodes: comments } }) },
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
@@ -1593,7 +1592,6 @@ test("AC5 (3127): a failed spec-change read stops startup on prefer_local with a
     await initRepoWithOrigin(tempDir);
     const stub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
-      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: acBody }) },
       { assertArgs: ["api", "graphql", "number=735", ".data.repository.issueOrPullRequest"], exitCode: 1, stderr: "gh: network error\n" },
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
     ], { matchMode: "claims" });
@@ -1618,7 +1616,6 @@ test("AC5 (3127): the freshness check runs when the issue body has no AC heading
     await initRepoWithOrigin(tempDir);
     const stub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
-      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: noAcBody }) },
       { assertArgs: ["api", "graphql", "number=735", ".data.repository.issueOrPullRequest"],
         stdout: JSON.stringify({ body: noAcBody, lastEditedAt: null, comments: { nodes: [results, { body: "Decision: widen scope.", createdAt: "2026-11-06T11:00:00Z" }] } }) },
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
@@ -1634,7 +1631,6 @@ test("3462: a clean linked-doc body without an AC heading is ready", async () =>
     await initRepoWithOrigin(tempDir);
     const stub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
-      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: PROSE_BODY }) },
       { assertArgs: ["api", "graphql", "number=735", ".data.repository.issueOrPullRequest"],
         stdout: JSON.stringify({ body: PROSE_BODY, lastEditedAt: null, comments: { nodes: [results] } }) },
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
@@ -1672,7 +1668,6 @@ for (const preference of ["prefer_local", "prefer_github_first"]) {
         await initRepoWithOrigin(tempDir);
         const stub = await writeGhStubHelper(tempDir, [
           noLinkedPrGraphqlEntry(),
-          { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: grilledFacts(facts ?? {}).body }) },
           grillGraphqlEntry(facts),
           { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [] }) },
         ], { matchMode: "claims", logCalls: true });
@@ -1699,7 +1694,6 @@ test("3462: a clean grill proceeds on prefer_local, with and without --lightweig
     await initRepoWithOrigin(tempDir);
     const stub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
-      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: grilledFacts({}).body }) },
       grillGraphqlEntry({}),
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
     ], { matchMode: "claims" });
@@ -1722,7 +1716,6 @@ for (const [label, facts, reason] of GRILL_STOP_CASES) {
       await initRepoWithOrigin(tempDir);
       const stub = await writeGhStubHelper(tempDir, [
         noLinkedPrGraphqlEntry(),
-        { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: grilledFacts(facts ?? {}).body }) },
         grillGraphqlEntry(facts),
         { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [] }) },
       ], { matchMode: "claims", logCalls: true });
@@ -1742,7 +1735,6 @@ test("3462: a clean grill proceeds on prefer_github_first with a viewer-owned is
     await initRepoWithOrigin(tempDir);
     const stub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
-      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: grilledFacts().body }) },
       grillGraphqlEntry({}),
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
@@ -1796,7 +1788,6 @@ test("3462: startup and the detector CLI return the same state above 100 comment
     await initRepoWithOrigin(tempDir);
     const stub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
-      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: node.body }) },
       { assertArgs: ["api", "graphql", "number=735", ".data.repository.issueOrPullRequest"], stdout: JSON.stringify(node) },
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
     ], { matchMode: "claims" });
@@ -1821,7 +1812,6 @@ test("3462: an ungrilled issue assigned to another human keeps the ownership ref
     await initRepoWithOrigin(tempDir);
     const stub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
-      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: grilledFacts({ comments: [] }).body }) },
       grillGraphqlEntry({ comments: [] }),
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "someone-else" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
@@ -1979,7 +1969,6 @@ test("buildAutoResolvedInput detects Copilot authorship from linked PR author", 
       { assertArgs: ["api", "graphql"], stdout: linkedPrGraphql(740) },
       { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", assignees: [{ login: "test-viewer" }], closingIssuesReferences: [{ number: 735 }] }) },
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
-      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: "" }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "735"], {
@@ -2006,7 +1995,6 @@ test("buildAutoResolvedInput detects external_human authorship from linked PR au
       { assertArgs: ["api", "graphql"], stdout: linkedPrGraphql(740) },
       { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ author: { login: "some-human-dev" }, state: "OPEN", assignees: [{ login: "test-viewer" }], closingIssuesReferences: [{ number: 735 }] }) },
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
-      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: "" }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "735"], {
