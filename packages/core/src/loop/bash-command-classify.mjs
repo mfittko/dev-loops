@@ -1637,7 +1637,15 @@ const INTERPRETER_HEAD_RE = /^(?:node|bun|python3?|perl|ruby)$/;
 /** Heads that run a file: a heredoc-written file run by one of them in the same command is denied. */
 const FILE_RUNNER_HEAD_RE = /^(?:node|bun|python3?|perl|ruby|sh|bash|dash|ksh|zsh|\.|source)$/;
 /** A path in its comparison form: lowercased (a case-insensitive file system), `//` and `/./` collapsed, no leading `./`. */
-const normPath = (p) => p.toLowerCase().replace(/\/+/g, "/").replace(/(^|\/)(?:\.\/)+/g, "$1");
+const normPath = (p) => {
+  const out = [];
+  for (const seg of p.toLowerCase().split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === ".." && out.length && out.at(-1) !== "..") out.pop();
+    else out.push(seg);
+  }
+  return (p.startsWith("/") ? "/" : "") + out.join("/");
+};
 /** TEXT without its line continuations: a backslash-newline joins lines unless its backslash is itself escaped (an even run before it). */
 const joinContinuations = (text) => text.replace(/(?<!\\)((?:\\\\)*)\\\n/g, "$1");
 /** node and bun flags whose next word is the flag's value, never the script (the origin/main 99bb8b3ce lists). */
@@ -1844,7 +1852,7 @@ function inspectShell(command, report = false, skipFirst = false) {
   const isStdinText = (r) => isHeredoc(r) || r.op === R.WordHdoc; // a heredoc or here-string: the text a cat/tee writes
   const formIn = (text, skip) => inspectShell(text, false, skip).deny;
   const alone = parsed.file.stmts.length === 1 && parsed.file.stmts[0].cmd?.type === "CallExpr"; // the whole command is one simple command
-  const later = new Map(); // simple command -> its write-then-run checks, run at its exit
+  const later = new Map(); // statement -> its write-then-run checks, run at its exit
   let depth = 0; // open substitutions
   let skipping = skipFirst;
   const visit = (node, stmt) => {
@@ -1854,8 +1862,8 @@ function inspectShell(command, report = false, skipFirst = false) {
     for (const r of redirs) { if (isHeredoc(r)) stdin.heredoc ??= r.start; else if (r.op === R.WordHdoc) stdin.herestring ??= r.start; }
     const tails = [stripWordWrappers(words), stripExecPrefix(words)].filter((t) => t.length);
     if (skipping) { skipping = false; return; }
-    const runChecks = [];
-    later.set(node, runChecks);
+    const runChecks = later.get(stmt) ?? [];
+    later.set(stmt, runChecks);
     if (tails.some(envSplitString)) out.deny = true;
     for (const tail of tails) {
       // a head that bash expands first (ANSI-C quote, brace/glob) can name any binary: deny. A parameter expansion or substitution in the head is a reported ceiling.
@@ -1874,10 +1882,10 @@ function inspectShell(command, report = false, skipFirst = false) {
           if (/^[-+][A-Za-z]*[oO]$/.test(args[k].value)) { k++; continue; } // a cluster ending in o (`-euo pipefail`) takes the next word as its value
           if (!/^[-+]/.test(args[k].value)) { script.script = args[k]; break; }
         }
-        // `sh < tmp/r.sh`: with no script word, a stdin redirect is the script
-        const stdinFile = redirs.find((r) => r.op === R.RdrIn && (!r.n || r.n.value === "0"));
-        if (!script.script && stdinFile) script.script = wordOf(stdinFile.word);
       }
+      // `sh < tmp/r.sh`, `node < tmp/r.mjs`: with no script word, a stdin redirect is the script, for every runner
+      const stdinFile = redirs.find((r) => r.op === R.RdrIn && (!r.n || r.n.value === "0"));
+      if (FILE_RUNNER_HEAD_RE.test(head) && !script.script && stdinFile) script.script = wordOf(stdinFile.word);
       // compared when the command ends: bash expands the substitutions in its words first, so a heredoc write in one of them comes before the run
       const isWritten = (w) => !!w && written.includes(normPath(w.value));
       runChecks.push(() => { if (isWritten(tail[0]) || isWritten(script.script) || script.loaded.some(isWritten)) out.deny = true; });
@@ -1925,7 +1933,7 @@ function inspectShell(command, report = false, skipFirst = false) {
     },
     exit(node) {
       if (node.type === "CmdSubst" || node.type === "ProcSubst") depth--;
-      for (const check of later.get(node) ?? []) check();
+      for (const check of later.get(node) ?? []) check(); // a Stmt's exit: its redirect substitutions are children of the Stmt, not of the CallExpr
     },
   });
   return out;

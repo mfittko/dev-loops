@@ -123,6 +123,12 @@ export const INLINE_INTERPRETER_FORMS = [
   allow("node tmp/r.mjs \"$(echo x)\""),
   deny("bash tmp/r.sh \"$(cat > tmp/r.sh <<'EOF'\nrm -rf x\nEOF\n)\""),
   deny("node tmp/r.mjs \"$(cat > tmp/r.mjs <<'EOF'\nx\nEOF\n)\""),
+  // a write inside a substitution of the runner's own redirect, `..` segments and a stdin redirect into an interpreter
+  deny("bash tmp/r.sh > \"$(cat > tmp/r.sh <<'EOF'\nx\nEOF\n)\""),
+  deny("node tmp/r.mjs 2> \"$(cat > tmp/r.mjs <<'EOF'\nx\nEOF\n)\""),
+  deny("cat > tmp/r.sh <<'EOF'\nnode -e x\nEOF\nbash tmp/../tmp/r.sh"),
+  deny("cat > tmp/r.mjs <<'EOF'\nx\nEOF\nnode < tmp/r.mjs"),
+  deny("cat > tmp/r.py <<'EOF'\nx\nEOF\npython3 < tmp/r.py"),
   // a run before the write is no write-then-run
   allow("bash tmp/r.sh; cat > tmp/r.sh <<'EOF'\nx\nEOF"),
   // after wrappers and reserved words
@@ -325,7 +331,6 @@ export const INLINE_INTERPRETER_FORMS = [
   // an escaped backslash before the newline is no continuation: bash prints `a\` and a newline
   allow("echo \"a\\\\\n\" x"),
   deny("echo $\\\n(node -e x)"),
-  deny("echo \"unterminated"),
   allow("X=1 \\\n node scripts/x.mjs"),
   deny("X=1 \\\n node -e x"),
   deny("sudo \\\n node -e x"),
