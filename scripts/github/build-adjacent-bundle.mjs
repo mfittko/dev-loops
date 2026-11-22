@@ -277,7 +277,7 @@ async function readGuardedFile(repoRoot, relPath) {
   let handle;
   try {
     const link = await lstat(abs);
-    // A symlink leaf, or a symlinked ancestor, resolves outside the repo: never read it.
+    // Never read through a symlink leaf or a symlinked ancestor; only a real path inside the repo is read.
     if (
       link.isSymbolicLink() ||
       (await realpath(abs)) !== path.join(await realpath(repoRoot), relPath)
