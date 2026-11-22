@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
+import { recordGhCall } from "../github/gh-call-log.mjs";
 import { assertWritableBody } from "../github/issue-ops.mjs";
 
 /**
@@ -170,6 +171,7 @@ export async function runChild(command, args, env = process.env, stdinText = und
 
 function spawnChild(command, args, env, stdinText, timeoutMs) {
   return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
     const child = spawn(command, args, { env, timeout: timeoutMs, killSignal: "SIGKILL", stdio: [stdinText === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
@@ -179,7 +181,10 @@ function spawnChild(command, args, env, stdinText, timeoutMs) {
       child.stdin.end(stdinText);
     }
     child.on("error", reject);
-    child.on("close", (code) => { resolve({ code, stdout, stderr }); });
+    child.on("close", (code) => {
+      resolve({ code, stdout, stderr });
+      if (command === "gh") recordGhCall(args, { durationMs: Date.now() - startedAt, status: code ?? 1, stderr });
+    });
   });
 }
 

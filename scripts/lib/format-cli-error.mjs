@@ -11,7 +11,7 @@
 // test/docs/format-cli-error.test.mjs (parity against the core export), the
 // same drift-guard pattern direct-run.mjs uses.
 //
-// Renders the one shared { ok: false, error, hint? } envelope every
+// Renders the one shared { ok: false, error, hint?, recovery? } envelope every
 // JSON-emitting gate CLI's main() catch block prints to stderr. `usage` is a
 // PRESENCE check only: when the error carries a usage string (or a caller
 // passes one), a one-line `hint` points at --help rather than inlining the
@@ -24,6 +24,8 @@ export function formatCliError(error, { usage } = {}) {
   } else if (error instanceof Error && error.code === "gate_artifact_out_of_band_write") {
     payload.code = error.code;
   }
+  // RECOVERY-COMMAND-REQUIRED: a refusal's one next command reaches the CLI output.
+  if (error instanceof Error && typeof error.recovery === "string") payload.recovery = error.recovery;
   const hasUsage = (error instanceof Error && typeof error.usage === "string") || typeof usage === "string";
   if (hasUsage) {
     payload.hint = "run with --help for usage";

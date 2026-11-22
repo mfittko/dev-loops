@@ -15,6 +15,7 @@ import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath,
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
+import { retireStaleRound } from "./_stale-round-retirement.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveGateConfig, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
@@ -126,11 +127,17 @@ Output (stdout, JSON):
   "unitBound" is present only when the round's recorded bound (fanout.unitBound)
   differs from 5; its absence means 5. "budget.maxAngles" carries the round's
   resolved unit bound.
+  "retiredRound" ({ "retirementDir", "retired", "sentinels", "dispatchPromptRecords",
+  "findingsDirRetired" }) is present only when a full emission retired a stale round at
+  this head; a --pending emission never retires, so it omits the key. A refusal (exit 1, stdout) or
+  failure (exit 2, stderr) after that retirement carries the same "retiredRound" key. A full emission
+  refuses (exit 1, with a "recovery") when a reviewer sentinel at this head has no findings artifact newer
+  than it, because that reviewer may still be running: resume with --pending instead of re-emitting.
   Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
   gates.fanout.sequential is set). Do NOT use the artifact's fanout.wavePlan to
   bound this step: that plan is computed over the UNSPLIT resolveFanoutGroups
   units and no longer matches this step's split unit set.
-  A fail-closed refusal (exit 1) emits { "ok": false, "error": "..." } on STDOUT
+  A fail-closed refusal (exit 1) emits { "ok": false, "error": "...", "recovery"?: "..." } on STDOUT
   (via the shared jq-output emitter); a usage/parse error (exit 2) emits
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" } on STDERR.
   On success this step ALSO persists its emitted round plan to the keyed
@@ -153,8 +160,13 @@ Exit codes:
      suffix could not be composed, an angle has no resolvable prompt, or a
      composed work order exceeds REVIEWER_WORK_ORDER_MAX_BYTES (30 KB) or
      carries an inline "diff --git" line, a draft_gate run has no --ci-file
-     (ci_file_required), or the --ci-file result is not settled green at
-     --head-sha (ci_not_green)
+     (ci_file_required), the --ci-file result is not settled green at
+     --head-sha (ci_not_green), a full emission finds a posted verdict
+     (a fan-in ledger or findings log) at the head and refuses to retire that round
+     (the "recovery" field names the operator step), or a reviewer sentinel at the
+     head has no newer valid findings artifact for its unit and the full emission
+     refuses to retire a round whose reviewer may still run (resume with
+     --pending; the "recovery" field names the step)
   2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, an empty,
      missing, unreadable or non-JSON --ci-file, filesystem error, or invalid
      --jq filter)`.trim();
@@ -493,6 +505,8 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       }
     }
   }
+  // A full emission keeps the bytes it removes, so a retirement refusal (the round is live or has a verdict) can put the live round's plan back.
+  const removedPlanText = pendingOnly ? null : await readFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), "utf8").catch(() => null);
   try {
     await rm(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), { force: true });
   } catch (err) {
@@ -509,7 +523,15 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   }
   const jq = jqArg === null ? undefined : jqArg;
   const silent = argv.includes("--silent") || argv.includes("-s");
-  const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
+  // A full emission retires the stale round before its later steps, so every failure after that reports what moved.
+  let retiredRound = null;
+  const finish = (payload, ok) => emitResult(retiredRound && !ok ? { ...payload, retiredRound } : payload, { jq, silent, ok });
+  // An exit-2 failure writes the error JSON to stderr; after a retirement it carries retiredRound too.
+  const failAfterRetirement = (err) => {
+    const cli = JSON.parse(formatCliError(err));
+    process.stderr.write(`${JSON.stringify(retiredRound ? { ...cli, retiredRound } : cli)}\n`);
+    return 2;
+  };
   // Pre-fan-out CI re-check (GATE-EXEC-GATE-COORDINATOR): a round that fans out on unsettled CI loses its verdict.
   const ciFileArg = resolveFlagValue(argv, "--ci-file");
   if (ciFileArg === "") {
@@ -793,9 +815,6 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     return finish({ ok: false, error: err.message }, false);
   }
   const findingsDir = path.resolve(buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot }));
-  // This emission's round identity. Its ms timestamp lets the pull tool tell a
-  // round retired after it (GATE-EXEC-ROUND-RETIREMENT record) from a typo.
-  const roundId = injectedRoundId ?? `r${Date.now()}-${randomBytes(4).toString("hex")}`;
   // Each unit's budget scales with the filtered diff it reads. A thin briefing
   // records no diff read, so every unit gets the floor.
   const diffReads = artifact.scope?.diffSource === "none" ? [] : sharedReads.filter((read) => read?.kind === "diff");
@@ -810,6 +829,27 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       return 2;
     }
   }
+  // Issue 3416: a full emission mints a new round, so the undispatched or partial round at this head is retired first
+  // (GATE-EXEC-ROUND-RETIREMENT). A --pending emission resumes the round and keeps it. A posted verdict is never retired.
+  if (!pendingOnly) {
+    let stale;
+    try {
+      // Sentinels always live under <cwd>/tmp (verify-fresh-review-context); the round's findings and dispatch records follow --tmp-root;
+      // a verdict marker may sit under --tmp-root, the ledger root or the main worktree's tmp.
+      stale = await retireStaleRound({ repo, pr, gate, headSha, tmpRoot: tmpRootDefault, findingsTmpRoot: tmpRoot, recordsTmpRoot: tmpRoot, verdictRoots: [...new Set([tmpRoot, ledgerTmpRoot, ledgerTmpRootDefault])] });
+    } catch (err) {
+      process.stderr.write(`${formatCliError(err)}\n`);
+      return 2;
+    }
+    if (stale.refusal) {
+      if (removedPlanText !== null) await writeFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), removedPlanText, "utf8");
+      return finish({ ok: false, error: stale.refusal.error, recovery: stale.refusal.recovery }, false);
+    }
+    retiredRound = stale.retiredRound;
+  }
+  // This emission's round identity, minted after the retirement above. Its ms timestamp lets the pull tool tell a
+  // round retired after it (GATE-EXEC-ROUND-RETIREMENT record) from a typo, so the new round must not predate the retirement.
+  const roundId = injectedRoundId ?? `r${Date.now() + 1}-${randomBytes(4).toString("hex")}`;
   let prefixSha256 = null;
   const emitted = [];
   const seenScopes = new Set();
@@ -842,8 +882,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       await mkdir(path.dirname(suffixPath), { recursive: true });
       await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound, resolutionDeltaPaths, resolutionDeltaMerges, resolutionDeltaFullPaths), "utf8");
     } catch (err) {
-      process.stderr.write(`${formatCliError(err)}\n`);
-      return 2;
+      return failAfterRetirement(err);
     }
 
     let result;
@@ -855,8 +894,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
         prefixSha256 ??= createHash("sha256").update(await readFile(result.prefixPath)).digest("hex");
       }
     } catch (err) {
-      process.stderr.write(`${formatCliError(err)}\n`);
-      return 2;
+      return failAfterRetirement(err);
     }
     if (!result.composed || !result.recorded) {
       return finish({ ok: false, error: `failed to compose reviewer prompt for unit ${JSON.stringify(unit?.name)} (scope ${scope}): ${result.reason}` }, false);
@@ -937,6 +975,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // each earlier finish call, all of which run before the persist) is the one
   // complete seam.
   const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, roundId, count: emitted.length, maxConcurrent, ...(unitBound !== REVIEWER_UNIT_MAX_ANGLES ? { unitBound } : {}), units: emitted };
+  if (retiredRound) payload.retiredRound = retiredRound;
   if (carryProof !== undefined) payload.carried = carryProof;
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
   // Units of the prior plan whose angles all completed in this round and are not re-emitted keep their fan-in
@@ -964,8 +1003,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     } catch {
       // Best-effort clear only — never mask the original persist failure.
     }
-    process.stderr.write(`${formatCliError(err)}\n`);
-    return 2;
+    return failAfterRetirement(err);
   }
   try {
     const result = finish(payload, true);

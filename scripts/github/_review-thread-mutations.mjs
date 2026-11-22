@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnRecorded } from "@dev-loops/core/github/gh-call-log";
 import { takeGhSlot } from "@dev-loops/core/github/gh-throttle";
 import { withSecondaryLimitBackoff } from "@dev-loops/core/github/gh";
 import { isCopilotLogin, parseReviewThreads, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
@@ -156,7 +156,7 @@ export function runChildWithInput(command, args, env, stdinText) {
 }
 function spawnChild(command, args, env, stdinText) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnRecorded(command, args, {
       env,
       stdio: ["pipe", "pipe", "pipe"],
     });

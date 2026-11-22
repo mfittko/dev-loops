@@ -55,7 +55,6 @@
   "scripts/loop/emit-fixer-work-order.mjs": 1,
   "scripts/loop/emit-judge-work-order.mjs": 2,
   "scripts/loop/ensure-worktree.mjs": 2,
-  "scripts/loop/extend-cap-round-chain.mjs": 1,
   "scripts/loop/inspect-run-viewer/server.mjs": 3,
   "scripts/loop/judge-pass.mjs": 1,
   "scripts/loop/pre-commit-branch-guard.mjs": 3,

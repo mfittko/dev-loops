@@ -24,3 +24,21 @@ test("ADR 0255 amends the remedy of ADR 0254 and the pre-push delta contract nam
     assert.match(line, /reviewer-only/, `${rule} names the reviewer-only route`);
   }
 });
+
+// Issue 3437 DoD dod:2: the contract describes the CI-failed cap-round path.
+test("GATE-EXEC-ROUND-CAP-CHAIN-EXTEND describes the CI-failed cap-round path with distinct recoveries", () => {
+  const rule = read("skills/docs/gate-review-sub-loop-contract.md").split("\n").find((line) => line.startsWith("`GATE-EXEC-ROUND-CAP-CHAIN-EXTEND`"));
+  assert.match(rule, /CI-failed cap-round path \(issue 3437\)/);
+  assert.match(rule, /`ci_failed`/);
+  assert.match(rule, /MUST start at that candidate, never at the cap-round head/);
+  assert.match(rule, /`logic_commit_in_range` and `delta_range_mismatch` refusals return `recovery` naming the reviewer-only run at the start of the logic range/);
+  assert.match(rule, /`no_cap_round_chain` returns `recovery` by case: `loop gate-coordination` when no cap round resolves/);
+  assert.match(rule, /`git fetch origin <cap-round-head-sha>` when the cap-round head is not in this clone/);
+  assert.match(rule, /Its `recovery` is `operator:` followed by the full procedure/);
+  // The refusal list names the same five cases (the cap-round head equal to the PR head and the unfetched cap-round head are the fourth and fifth), so the rule does not contradict itself.
+  assert.match(rule, /`no_cap_round_chain` \(five cases, as in the CI-failed paragraph below: no resolved cap round names `loop gate-coordination`[^;]*does not route back; no record at the cap-round head names the reviewer-only delta[^;]*; a non-covering sealed record at the cap-round head names only the replacement-PR restart;/);
+  assert.match(rule, /a cap-round head equal to the PR head names the head-moving operator recovery \(`operator: push one docs or tests commit to the PR branch, then rerun`\)/);
+  assert.match(rule, /the head-moving `operator:` form \(push one docs or tests commit to the PR branch, then rerun this command\) when the cap-round head is the PR head/);
+  assert.match(rule, /the `no_cap_round_chain` case with no resolved cap round is the exception: coordination does not route back from it/);
+  assert.match(rule, /A replacement PR is the operator recovery for an orphaned baseline, for a candidate or cap-round head outside the PR head's history, and for that non-covering record/);
+});
