@@ -30,6 +30,10 @@ const REFINED_BODY = [
   "## Non-goals",
   "",
   "- none",
+  "",
+  "## Simplest design",
+  "",
+  "One predicate.",
 ].join("\n");
 
 const PROSE_BODY = [
@@ -47,6 +51,8 @@ const NO_GAPS_COMMENT = [
   "source: auto (codebase, docs)",
   "",
   "No gaps were found on this pass. Verdict: grill-clean.",
+  "",
+  "simplicity-review: 0 findings, 0 corrected, 0 rejected",
 ].join("\n");
 
 const GAP_FILLING_COMMENT = [
@@ -59,6 +65,8 @@ const GAP_FILLING_COMMENT = [
   "1. Missing scope boundary — filled from the codebase.",
   "",
   "Verdict: grill-clean.",
+  "",
+  "simplicity-review: 1 findings, 1 corrected, 0 rejected",
 ].join("\n");
 
 test("--input snapshot mode returns the interpreted state", async () => {
@@ -120,7 +128,7 @@ test("AC2 (3127): --repo/--number pass the GraphQL body lastEditedAt through to 
       const calls = [];
       const runChild = async (cmd, args) => {
         calls.push(args);
-        return { code: 0, stdout: JSON.stringify({ body: REFINED_BODY, lastEditedAt }), stderr: "" };
+        return { code: 0, stdout: JSON.stringify({ body: REFINED_BODY, lastEditedAt, comments: { nodes: [{ body: NO_GAPS_COMMENT, createdAt: "2026-11-06T10:00:00Z" }] } }), stderr: "" };
       };
       const stdout = makeCapture();
       await runCli(["--body-file", bodyPath, "--surface", "pr", "--comments-file", commentsPath, "--repo", "o/r", "--number", "7"], { stdout, stderr: makeCapture(), runChild });
@@ -134,6 +142,26 @@ test("AC2 (3127): --repo/--number pass the GraphQL body lastEditedAt through to 
     assert.equal(edited.snapshot.specChangedSinceGrill, true);
     assert.equal((await detectWithEdit(null)).state, "grill_clean");
     assert.equal((await detectWithEdit("2026-11-06T09:00:00Z")).state, "grill_clean");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("3462: --repo/--number take the fetched comment window over --comments-file, as startup does", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-window-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    const commentsPath = path.join(tempDir, "comments.json");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+    // The file holds the results comment; the truncated last-100 window holds only newer notes.
+    await writeFile(commentsPath, JSON.stringify([{ body: NO_GAPS_COMMENT, createdAt: "2026-11-06T10:00:00Z" }]), "utf8");
+    const window = Array.from({ length: 100 }, (_, i) => ({ body: `note ${i}`, createdAt: "2026-11-06T11:00:00Z" }));
+    const runChild = async () => ({ code: 0, stdout: JSON.stringify({ body: REFINED_BODY, lastEditedAt: null, comments: { pageInfo: { hasPreviousPage: true }, nodes: window } }), stderr: "" });
+    const stdout = makeCapture();
+    await runCli(["--body-file", bodyPath, "--comments-file", commentsPath, "--repo", "o/r", "--number", "7"], { stdout, stderr: makeCapture(), runChild });
+    const out = JSON.parse(stdout.text());
+    assert.equal(out.state, "detect_gaps");
+    assert.equal(out.reason, "spec_changed_since_grill");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -166,7 +194,7 @@ test("--body-file with a bypass-recorded results comment seeds grill_clean flagg
     await writeFile(bodyPath, REFINED_BODY, "utf8");
     await writeFile(
       commentsPath,
-      JSON.stringify([{ body: `## ${RESULTS_TITLE}\n\nbypass: operator-authorized by mfittko\n\nRan anyway; no gaps found.`, createdAt: "2026-11-06T10:00:00Z" }]),
+      JSON.stringify([{ body: `## ${RESULTS_TITLE}\n\nbypass: operator-authorized by mfittko\n\nRan anyway; no gaps found.\n\nsimplicity-review: 0 findings, 0 corrected, 0 rejected`, createdAt: "2026-11-06T10:00:00Z" }]),
       "utf8",
     );
     const { stdout } = await runDetect(["--body-file", bodyPath, "--comments-file", commentsPath]);
@@ -273,14 +301,13 @@ test("detector round-trip: a hand-authored matrix with no comments gets a real s
   }
 });
 
-test("the documented view-issue.mjs --jq extraction bridges the real wrapper envelope into --comments-file", async () => {
+test("the view-issue.mjs --jq extraction bridges the real wrapper envelope into --comments-file", async () => {
   // Real-shaped view-issue.mjs --json comments stdout: { ok, issue: { comments: [...] } },
   // each comment carrying the fields `gh issue view --json comments` actually returns
-  // (author, body, createdAt, id, url), not just `body`. Step 1 documents extracting past
-  // this envelope with `--jq '.issue.comments'` before handing the file to --comments-file
-  // (the wrapper's raw output fails closed there) -- this proves that documented path,
-  // using the SAME evaluateJqFilter engine emitResult's own --jq option runs, actually
-  // reaches grill_clean end to end.
+  // (author, body, createdAt, id, url), not just `body`. Extracting past this envelope with
+  // `--jq '.issue.comments'` before handing the file to --comments-file (the wrapper's raw
+  // output fails closed there), using the SAME evaluateJqFilter engine emitResult's own
+  // --jq option runs, reaches grill_clean end to end.
   const viewIssueWrapperOutput = {
     ok: true,
     issue: {
@@ -290,13 +317,13 @@ test("the documented view-issue.mjs --jq extraction bridges the real wrapper env
           url: "https://github.com/mfittko/dev-loops/issues/2364#issuecomment-1",
           author: { login: "mfittko" },
           createdAt: "2026-09-23T12:00:00Z",
-          body: `## ${RESULTS_TITLE}\n\nsource: auto (codebase, docs)\n\nNo gaps were found on this pass. Verdict: grill-clean.`,
+          body: `## ${RESULTS_TITLE}\n\nsource: auto (codebase, docs)\n\nNo gaps were found on this pass. Verdict: grill-clean.\n\nsimplicity-review: 0 findings, 0 corrected, 0 rejected`,
         },
       ],
     },
   };
   const [extractedComments] = evaluateJqFilter(viewIssueWrapperOutput, ".issue.comments");
-  assert.ok(Array.isArray(extractedComments), "the documented .issue.comments extraction yields the comments array");
+  assert.ok(Array.isArray(extractedComments), "the .issue.comments extraction yields the comments array");
 
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-real-envelope-"));
   try {

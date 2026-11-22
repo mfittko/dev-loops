@@ -4,13 +4,11 @@ import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import {
-  detectGrillProvenance,
-  detectSpecChangedSinceGrill,
   fetchSpecChangeFacts,
   interpretRefinementGrillState,
   normalizeGrillSnapshot,
 } from "@dev-loops/core/loop/refinement-grill-state";
-import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { buildGrillFactsSnapshot } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const HELP = `Usage: detect-refinement-grill-state.mjs [--input <path> | --body-file <path> [--surface issue|pr|plan] [--comments-file <path>] [--repo <owner/name> --number <n>]]
@@ -29,9 +27,15 @@ Options (body-file mode only):
                                   results comment carries a parseable "createdAt", the check
                                   fails closed (detect_gaps / spec_changed_since_grill)
   --repo <owner/name> --number <n>
-                                  Read the target's GraphQL body "lastEditedAt" (issue or PR);
-                                  a counted comment or a body edit after the latest results
-                                  comment returns detect_gaps / spec_changed_since_grill
+                                  Read the target's comments (with the truncation flag) and GraphQL
+                                  body "lastEditedAt" (issue or PR). The fetched comments replace
+                                  --comments-file, so the grill and startup read the same window.
+                                  A counted comment or a body edit after the latest results comment
+                                  returns detect_gaps / spec_changed_since_grill. On an issue, a body
+                                  without a "## Simplest design" section returns detect_gaps /
+                                  simplest_design_missing, and a latest results comment without a
+                                  balanced "simplicity-review: <n> findings, <n> corrected, <n> rejected"
+                                  line returns detect_gaps / simplicity_review_missing
 
 ${JQ_OUTPUT_USAGE}
 
@@ -143,7 +147,6 @@ export async function runCli(
   } else {
     const body = await readFile(options.bodyFilePath, "utf8");
     const surface = options.surface ?? "issue";
-    let provenance = { provenanceRecorded: false, bypass: false };
     let comments = [];
     if (options.commentsFilePath) {
       const commentsText = await readFile(options.commentsFilePath, "utf8");
@@ -156,27 +159,19 @@ export async function runCli(
       if (comments === undefined) {
         throw new Error('--comments-file must be a JSON array or { "comments": [...] }');
       }
-      provenance = detectGrillProvenance(comments);
     }
-    const bodyLastEditedAt = options.repo !== undefined
-      ? (await fetchSpecChangeFacts({ repo: options.repo, number: options.number, env, runChild: run })).lastEditedAt
+    // --repo/--number read through the same facts reader as startup, so both see the same comment window.
+    const facts = options.repo !== undefined
+      ? await fetchSpecChangeFacts({ repo: options.repo, number: options.number, env, runChild: run })
       : null;
+    if (facts) comments = facts.comments;
+    const bodyLastEditedAt = facts?.lastEditedAt ?? null;
     // Deterministic seed for the already-refined / zero-iteration path only: the full
     // semantic gap detection (scope/actor/decision) is the agent-layer bounded input consumed
     // at await_answers. This body-file mode computes ONLY the deterministic AC-presence signal
     // via the single is-it-refined source of truth, detectIssueRefinementArtifact, plus the
-    // recorded-provenance signal from --comments-file (ADR 0084).
-    const artifact = detectIssueRefinementArtifact({ body });
-    snapshot = normalizeGrillSnapshot({
-      loaded: true,
-      detectRan: true,
-      surface,
-      openGapCount: artifact.finding ? 1 : 0,
-      unresolvedGapCount: 0,
-      provenanceRecorded: provenance.provenanceRecorded,
-      provenanceBypass: provenance.bypass,
-      specChangedSinceGrill: detectSpecChangedSinceGrill({ comments, bodyLastEditedAt }),
-    });
+    // recorded-provenance signal from the comments (ADR 0084); startup reads the same facts through the same function.
+    snapshot = buildGrillFactsSnapshot({ body, comments, bodyLastEditedAt, commentsTruncated: facts?.commentsTruncated, surface });
   }
 
   const interpretation = interpretRefinementGrillState(snapshot);

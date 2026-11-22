@@ -3573,6 +3573,8 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json is 
         { angle: "correctness", verdict: "clean", findings: [] },
         { angle: "pr-description", verdict: "clean", findings: [] },
         { angle: "holistic", verdict: "clean", findings: [] },
+        { angle: "kiss", verdict: "clean", findings: [] },
+        { angle: "yagni", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -3610,6 +3612,8 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json car
         { angle: "correctness", verdict: "clean", findings: [] },
         { angle: "pr-description", verdict: "clean", findings: [] },
         { angle: "holistic", verdict: "clean", findings: [{ severity: "nice-to-have", summary: "evidence only note", judgeDisposition: "act", remedyKind: "evidence_only" }] },
+        { angle: "kiss", verdict: "clean", findings: [] },
+        { angle: "yagni", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -3651,6 +3655,8 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json car
         { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "nice-to-have cleanup" }] },
         { angle: "pr-description", verdict: "clean", findings: [] },
         { angle: "holistic", verdict: "clean", findings: [] },
+        { angle: "kiss", verdict: "clean", findings: [] },
+        { angle: "yagni", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -3699,6 +3705,8 @@ test("upsert-checkpoint-verdict allows a clean verdict whose only blocking-sever
         },
         { angle: "pr-description", verdict: "clean", findings: [] },
         { angle: "holistic", verdict: "clean", findings: [] },
+        { angle: "kiss", verdict: "clean", findings: [] },
+        { angle: "yagni", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -4324,6 +4332,8 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json car
         },
         { angle: "pr-description", verdict: "clean", findings: [] },
         { angle: "holistic", verdict: "clean", findings: [] },
+        { angle: "kiss", verdict: "clean", findings: [] },
+        { angle: "yagni", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -6651,6 +6661,8 @@ test("upsert-checkpoint-verdict accepts the fan-in synthetic pr-checklist angle 
       JSON.stringify([
         { angle: "pr-description", verdict: "clean", findings: [] },
         { angle: "holistic", verdict: "clean", findings: [] },
+        { angle: "kiss", verdict: "clean", findings: [] },
+        { angle: "yagni", verdict: "clean", findings: [] },
         { angle: "scope", verdict: "clean", findings: [] },
         { angle: "pr-checklist", verdict: "clean", findings: [] },
       ]),
@@ -6971,6 +6983,8 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
         // a fanout_fanin verdict's structured per-angle results must cover them.
         { angle: "pr-description", verdict: "clean", findings: [] },
         { angle: "holistic", verdict: "clean", findings: [] },
+        { angle: "kiss", verdict: "clean", findings: [] },
+        { angle: "yagni", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -6982,8 +6996,8 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
           "**Execution mode:** fanout_fanin",
           "Body-only findings — no anchorable changed line, so carried in full here (plain list, angle in brackets, `file:line` linked to the blob when known):",
           "- 🔴 high — broken edge case _`a.mjs:7`_ _(correctness)_", // "must-fix" input normalizes to canonical "high"
-          "**Clean (3):** coverage, pr-description, holistic",
-          "**Findings summary:** 4 angles reviewed; 1 finding (see per-angle breakdown below).",
+          "**Clean (5):** coverage, pr-description, holistic, kiss, yagni",
+          "**Findings summary:** 6 angles reviewed; 1 finding (see per-angle breakdown below).",
         ],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
@@ -7267,6 +7281,8 @@ test("upsert-checkpoint-verdict's noop short-circuit stays coupled to the posted
       // fanout_fanin verdict's angle-coverage check to pass.
       { angle: "pr-description", verdict: "clean", findings: [] },
       { angle: "holistic", verdict: "clean", findings: [] },
+      { angle: "kiss", verdict: "clean", findings: [] },
+      { angle: "yagni", verdict: "clean", findings: [] },
     ];
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(findingsPath, JSON.stringify(structuredFindings), "utf8");
@@ -7319,6 +7335,8 @@ test("upsert-checkpoint-verdict re-posts instead of noop for a no-ledger evidenc
       { angle: "correctness", verdict: "clean", findings: [] },
       { angle: "pr-description", verdict: "clean", findings: [] },
       { angle: "holistic", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "evidence only note", judgeDisposition: "act" }] },
+      { angle: "kiss", verdict: "clean", findings: [] },
+      { angle: "yagni", verdict: "clean", findings: [] },
     ];
     const findingsPath = path.join(tempDir, "findings.json");
     // The posted comment predates remedyKind; the rerun adds it without changing verdict, counts or next action.
@@ -7399,6 +7417,8 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
     await writeFile(findingsPath, JSON.stringify([
       { angle: "pr-description", verdict: "clean", findings: [] },
       { angle: "holistic", verdict: "clean", findings: [] },
+      { angle: "kiss", verdict: "clean", findings: [] },
+      { angle: "yagni", verdict: "clean", findings: [] },
     ]), "utf8");
     const fanout = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
@@ -10272,7 +10292,7 @@ async function runVerdictEnforcement(args, { repoRoot, headSha }) {
 
 // Valid draft_gate provenance, so the ledger-coverage refusal (which runs
 // before verdict enforcement) passes and the contradiction refusal is reached.
-const DRAFT_GATE_PROVENANCE = { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "reviewer-a" }, { angle: "holistic", reviewer: "reviewer-b" }] };
+const DRAFT_GATE_PROVENANCE = { distinctReviewers: 4, perAngle: [{ angle: "pr-description", reviewer: "reviewer-a" }, { angle: "holistic", reviewer: "reviewer-b" }, { angle: "kiss", reviewer: "reviewer-c" }, { angle: "yagni", reviewer: "reviewer-d" }] };
 
 test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVerdict (findings_present posted for a clean round)", async () => {
   await withTempDir(async (tempDir) => {
@@ -12110,6 +12130,8 @@ test("upsert-checkpoint-verdict posts a --findings-json finding whose summary ca
         { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "rename the [id] route segment to [slug]" }] },
         { angle: "pr-description", verdict: "clean", findings: [] },
         { angle: "holistic", verdict: "clean", findings: [] },
+        { angle: "kiss", verdict: "clean", findings: [] },
+        { angle: "yagni", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );

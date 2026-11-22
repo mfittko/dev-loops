@@ -24,7 +24,7 @@ import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
 import { detectAcDodMatrix, readNonGoalItems } from "@dev-loops/core/loop/issue-refinement-artifact";
-import { extractSection } from "@dev-loops/core/loop/markdown-sections";
+import { extractSection, stripFencedCode } from "@dev-loops/core/loop/markdown-sections";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import {
@@ -37,7 +37,7 @@ import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-r
 import { collectCopilotClasses, collectFindingClasses, defaultCopilotFile } from "./gate-finding-classes.mjs";
 import { resolveChecklistItems, resolveSelfCheckAngles } from "./_self-check-items.mjs";
 import { CONTRACT_DOC_RE, DEVLOOPS_CONFIG_PATHS, GATE_CONFIG_PATH } from "./check-adr-tripwire.mjs";
-import { citedAdrNumbers, indexDecisionRecords, inForceAmenders, loadKnownRuleIds, stripFencedCode } from "./spec-lint.mjs";
+import { citedAdrNumbers, indexDecisionRecords, inForceAmenders, loadKnownRuleIds } from "./spec-lint.mjs";
 
 const INVENTORY_CHAR_LIMIT = 2000;
 const IMPORTERS_LIMIT = 50;

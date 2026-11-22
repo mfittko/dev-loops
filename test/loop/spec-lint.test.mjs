@@ -10,6 +10,7 @@ import { afterEach, test } from "bun:test";
 
 import { runCli } from "../../cli/index.mjs";
 import { pathsMissingFromMatrix } from "../../scripts/github/waive-adr-tripwire.mjs";
+import { detectSimplicityReview } from "@dev-loops/core/loop/refinement-grill-state";
 import { indexDecisionRecords, lintContractDocsInMatrix, lintRuleOwnerDocsInMatrix, lintSimplestDesign, lintSizeForecast, lintSpec, lintStateRecoveryRows, main } from "../../scripts/loop/spec-lint.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -324,7 +325,7 @@ test("only cli/index.mjs wires the spec-lint lint surface; other files may reuse
   // The guard forbids a SECOND LINT ENTRY POINT (authority drift), not helper reuse:
   // `lintSpec` and the `loop spec-lint` argv are the lint surface, while e.g.
   // scripts/loop/implementation-brief.mjs imports only pure parsers (citedAdrNumbers,
-  // indexDecisionRecords, loadKnownRuleIds, stripFencedCode), which is not an entry point.
+  // indexDecisionRecords, loadKnownRuleIds), which is not an entry point.
   // Match the entry symbol, a quoted spec-lint argv/module-path token (runCli / execFile /
   // spawn / import), and a `[dev-loops] loop spec-lint` shell invocation (including the
   // `cli/index.mjs loop spec-lint` forms) — a prose mention of the subcommand is not
@@ -334,7 +335,7 @@ test("only cli/index.mjs wires the spec-lint lint surface; other files may reuse
   // The one declared pure-helper consumer: it may import only these parsers, never the
   // entry points `lintSpec` or `main`, and its comments may name the subcommand.
   const HELPER_CONSUMER = "scripts/loop/implementation-brief.mjs";
-  const PURE_HELPERS = new Set(["citedAdrNumbers", "indexDecisionRecords", "inForceAmenders", "loadKnownRuleIds", "stripFencedCode"]);
+  const PURE_HELPERS = new Set(["citedAdrNumbers", "indexDecisionRecords", "inForceAmenders", "loadKnownRuleIds"]);
   const IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*"\.\/spec-lint\.mjs";/u;
   const wired = (f, source) => {
     if (f !== HELPER_CONSUMER) return consumer.test(source);
@@ -350,10 +351,10 @@ test("only cli/index.mjs wires the spec-lint lint surface; other files may reuse
   }
   // The helper-consumer carve-out stays narrow: an entry-point import or an invocation is flagged.
   assert.ok(wired(HELPER_CONSUMER, 'import { main } from "./spec-lint.mjs";'));
-  assert.ok(wired(HELPER_CONSUMER, 'import { stripFencedCode } from "./spec-lint.mjs";\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
-  assert.ok(wired(HELPER_CONSUMER, 'import { stripFencedCode } from "./spec-lint.mjs";\nconst USAGE = `skills/docs/*-contract.md`;\n/** doc */\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
-  assert.ok(!wired(HELPER_CONSUMER, '/** runs `loop spec-lint` */\n  /* indented `loop spec-lint` */\nimport { stripFencedCode } from "./spec-lint.mjs";'));
-  assert.ok(!wired(HELPER_CONSUMER, '// runs `loop spec-lint`\nimport { stripFencedCode } from "./spec-lint.mjs";'));
+  assert.ok(wired(HELPER_CONSUMER, 'import { citedAdrNumbers } from "./spec-lint.mjs";\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
+  assert.ok(wired(HELPER_CONSUMER, 'import { citedAdrNumbers } from "./spec-lint.mjs";\nconst USAGE = `skills/docs/*-contract.md`;\n/** doc */\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
+  assert.ok(!wired(HELPER_CONSUMER, '/** runs `loop spec-lint` */\n  /* indented `loop spec-lint` */\nimport { citedAdrNumbers } from "./spec-lint.mjs";'));
+  assert.ok(!wired(HELPER_CONSUMER, '// runs `loop spec-lint`\nimport { citedAdrNumbers } from "./spec-lint.mjs";'));
   assert.doesNotMatch("// the grill (refine-plan-file, spec-lint) reads it", consumer);
 });
 
@@ -374,7 +375,7 @@ test("DESIGN-SIMPLEST-FIRST is registered, owned by structural-quality, and cite
   }
   assert.match(await read("agents/refiner.agent.md"), /`## Simplest design` section per issue and per slice/);
   assert.match(await read("skills/loop-grill/SKILL.md"), /The synthesized body and every slice also carry a `## Simplest design` section/);
-  assert.match(await read("skills/loop-grill/SKILL.md"), /`simplest_design_missing`[\s\S]{0,120}grill or a re-grill[\s\S]{0,200}`size_forecast_\*` and `contract_doc_not_in_matrix` findings only/);
+  assert.match(await read("skills/loop-grill/SKILL.md"), /`simplest_design_missing`[\s\S]{0,120}grill or a re-grill[\s\S]{0,400}needs one more grill before its zero-iteration exit/);
   assert.match(await read("skills/loop-grill/SKILL.md"), /`simplest_design_missing` is also not disposable[\s\S]{0,80}only by writing/);
   assert.match(await read("skills/loop-grill/SKILL.md"), /`size_forecast_malformed`, `simplest_design_missing` or `contract_doc_not_in_matrix` finding blocks `grill-clean`/);
   for (const file of ["developer", "fixer", "review", "judge"]) {
@@ -383,6 +384,21 @@ test("DESIGN-SIMPLEST-FIRST is registered, owned by structural-quality, and cite
   for (const file of ["review", "judge"]) {
     assert.match(await read(`agents/${file}.agent.md`), /no AC row[\s\S]{0,40}at least `medium`/, file);
   }
+});
+
+// GRILL-SUBLOOP-SIMPLICITY-REVIEW: the skill places the review, names the prompt source and documents the line the detector accepts.
+test("the loop-grill skill schedules the simplicity review after synthesis and documents the accepted line", async () => {
+  const skill = await readFile(path.join(repoRoot, "skills/loop-grill/SKILL.md"), "utf8");
+  const review = skill.indexOf("**Simplicity review (issue surface, `GRILL-SUBLOOP-SIMPLICITY-REVIEW`):**");
+  assert.ok(review > skill.indexOf("## Step 4"), "the review sits inside Step 4");
+  assert.ok(review < skill.indexOf("issue edit --repo <owner/repo> --issue <n> --body-file"), "the review runs before the body write");
+  assert.ok(review < skill.indexOf("comment-issue.mjs --repo <owner/repo> --issue <n>"), "the review runs before the comment write");
+  assert.match(skill, /gate resolve-role --gate review --angle <role>` for every role in `refinement\.roles`/);
+  assert.match(skill, /5\. On an issue, a `grill-clean` results comment has the `simplicity-review:/);
+  const line = skill.match(/`(simplicity-review: <n> findings, <n> corrected, <n> rejected)`/)?.[1];
+  assert.ok(line, "the documented line exists");
+  const results = (text) => [{ body: `## 🔬 Grill / refinement results\n\n${text}`, createdAt: "2026-11-06T10:00:00Z" }];
+  assert.equal(detectSimplicityReview(results(line.replace("<n> findings", "3 findings").replace("<n> corrected", "2 corrected").replace("<n> rejected", "1 rejected"))), true);
 });
 
 test("size forecast: a null waiverLoc never reports size_forecast_split_required", () => {
