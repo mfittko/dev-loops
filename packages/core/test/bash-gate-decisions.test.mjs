@@ -800,6 +800,73 @@ test("a shell-built or globbed recorder word is denied, with and without a subag
   }
 });
 
+const TRAILING_REDIRECT_ALLOW = [
+  `dev-loops-run cli/index.mjs 2>&1 | head -40`,
+  `dev-loops-run cli/index.mjs 2>&1 | grep -i -E "brief|work-order"`,
+  `dev-loops-run cli/index.mjs --help 2>&1 | head -60`,
+  `dev-loops-run cli/index.mjs --help 2>&1 | grep -i -E "review-ui|ui-review"`,
+  `dev-loops-run cli/index.mjs --help >/dev/null`,
+  `dev-loops-run --repo-root /w cli/index.mjs --help >/dev/null 2>&1`,
+  `dev-loops-run --repo-root /w cli/index.mjs gate 2>&1`,
+  `t=$(git ls-files | grep -i 'base-merge-verdict-carry.*test'); echo $t; bun test $t 2>&1 | tail -4`,
+  `bun run test:doc-guard > $TMPDIR/o6.txt 2>&1; tail -4 $TMPDIR/o6.txt`,
+  `for f in test/github/write-gate-context.test.mjs test/dev-loops-cli.test.mjs; do echo $f; bun test $f 2>&1 | grep -aE "\\(fail\\)" | head -5; done`,
+  `bun test "$t" > "$o" 2>&1`,
+];
+
+const TRAILING_REDIRECT_DENY = [
+  `dev-loops-run cli/index.mjs 2>&1 decision record`,
+  `dev-loops-run cli/index.mjs decision 2>&1 record`,
+  `dev-loops-run cli/index.mjs decision >"a b c" record`,
+  `dev-loops decision 2>&1 record`,
+  `node cli/index.mjs decision 2>&1 record --repo o/n`,
+  `dev-loops-run --repo-root /w cli/index.mjs decision record 2>&1`,
+  `dev-loops-run cli/index.mjs decision record>x`,
+  `dev-loops-run cli/index.mjs decision$IFS record 2>&1`,
+  `dev-loops-run cli/index.mjs decision $'record' >/dev/null 2>&1`,
+  `dev-loops-run cli/index.mjs decision $B 2>&1`,
+  `dev-loops-run cli/index.mjs $A $B 2>&1`,
+  `dev-loops-run $S 2>&1`,
+  `node $E decision record 2>&1`,
+  `dev-loops-run cli/index.mjs >"x;y" decision record`,
+  `dev-loops-run cli/index.mjs >|x decision record`,
+  `dev-loops-run cli/index.mjs >x\r decision record`,
+];
+
+test("a trailing simple output redirection is not read as a launcher word", () => {
+  for (const command of TRAILING_REDIRECT_ALLOW) {
+    for (const role of [null, "developer"]) assert.equal(decideBashGateDeny({ ...BASE, role, command }), null, `${command} (role ${role})`);
+  }
+});
+
+test("a redirection next to the recorder words keeps the recorder deny", () => {
+  for (const command of TRAILING_REDIRECT_DENY) {
+    for (const role of [null, "developer"]) assert.match(decideBashGateDeny({ ...BASE, role, command })?.reason ?? "", /^OPERATOR-DECISION-RECORDER/, `${command} (role ${role})`);
+  }
+});
+
+test("the canonical recorder with a trailing redirection is a prompt for the main agent and a deny for a subagent", () => {
+  const command = `dev-loops-run cli/index.mjs decision record 2>&1`;
+  assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null);
+  assert.match(decideBashGateDeny({ ...BASE, role: "developer", command }).reason, /^OPERATOR-DECISION-RECORDER/);
+});
+
+test("a redirection inserted at any word gap of a shell-built recorder spelling stays denied", () => {
+  const allowed = [];
+  for (const spelling of SHELL_BUILT_RECORDER_SPELLINGS) {
+    const words = spelling.split(" ");
+    for (const redirect of ["2>&1", "> out.txt"]) {
+      // Gaps inside the wrapper or option prefix before the entrypoint are an older gap and out of scope.
+      const entry = words.findIndex((w) => /(?:^|\/)(?:cli\/|scripts\/)|^dev-loops$/.test(w));
+      for (let i = Math.max(entry + 1, 1); i <= words.length; i += 1) {
+        const command = [...words.slice(0, i), redirect, ...words.slice(i)].join(" ");
+        if (!decideBashGateDeny({ ...BASE, role: null, command })) allowed.push(command);
+      }
+    }
+  }
+  assert.deepEqual(allowed, []);
+});
+
 test("scripts that only have `decision` in their name are not affected", () => {
   for (const command of ["dev-loops-run scripts/loop/check-judge-decision.mjs --file x.json", "dev-loops-run scripts/*/validate-decision-records.mjs"]) {
     assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
