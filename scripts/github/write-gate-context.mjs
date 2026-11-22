@@ -2375,13 +2375,6 @@ export const capRoundCoverage = (capRound, tmpRoot, record, { head, onHistory } 
   // A PR-body act item never enters a delta record (startDeltaSequence drops it), so the record cannot name its ref.
   // The delta act list carries each cluster's kept representative only, so the body-item filter reads that representative, as startDeltaSequence does.
   const actRefs = [...new Set(capRoundActList(capRound.log.findings, capRound.log.headSha).filter((e) => !isDeltaBodyItem(e)).map((e) => e.ref))];
-  // A thread-route item names marker fingerprints (every merged member of a gate-authored thread); each maps to the ref of the cluster that holds that finding, which may be a `#n` suffixed or a representative ref.
-  const refsOfFingerprint = new Map();
-  for (const [finding, ref] of capRoundActRefs(capRound.log.findings, capRound.log.headSha)) {
-    const fp = fingerprintFinding(finding);
-    refsOfFingerprint.set(fp, [...(refsOfFingerprint.get(fp) ?? []), ref]);
-  }
-  const namedBy = (i) => [String(i?.ref), ...(Array.isArray(i?.actFingerprints) ? i.actFingerprints.flatMap((fp) => refsOfFingerprint.get(fp) ?? []) : [])];
   const records = [];
   const seen = new Set();
   // Only the links the proof traverses count: the walk stops after the link whose candidate is the head, and a later link counts only when `onHistory` (anyHead: its candidate is an ancestor of the head) admits it and it resolved its items.
@@ -2389,7 +2382,7 @@ export const capRoundCoverage = (capRound, tmpRoot, record, { head, onHistory } 
     const next = normalizeSha(r.candidateHead);
     if (!first && onHistory && !onHistory(next)) break;
     const items = Array.isArray(r.items) ? r.items : [];
-    records.push({ baseline: normalizeSha(r.reviewBaselineHead), candidate: next, refs: (first ? items : items.filter((i) => i?.status === "resolved")).flatMap(namedBy) });
+    records.push({ baseline: normalizeSha(r.reviewBaselineHead), candidate: next, refs: (first ? items : items.filter((i) => i?.status === "resolved")).map((i) => String(i?.ref)) });
     if (!tmpRoot || !next || seen.has(next) || (head && next === head)) break;
     seen.add(next);
     r = clearingDeltaRecord(tmpRoot, next);

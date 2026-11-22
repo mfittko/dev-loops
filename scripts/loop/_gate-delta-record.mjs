@@ -70,12 +70,7 @@ export const isLifecycleFinding = (finding) => finding?.lifecycle === true;
 
 /** Write the decision of one `--result` run. Returns the record path. */
 export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocation, decision, result, lifecycleFindings = [], bodySha256, bodyTarget }) {
-  const items = Array.isArray(result?.actionableItems) ? result.actionableItems.map((item) => {
-    // A thread-route item's ref is its threadId: record the gate finding fingerprints of its markers (gate-authored root only) so the cap-round coverage union can map them to act refs.
-    const actItem = sequence.actItems?.find((a) => a.ref === item?.ref);
-    const actFingerprints = actItem?.angle === "review-thread" ? actItem.markerFingerprints : undefined;
-    return { ref: item?.ref, status: item?.status, ...(Array.isArray(actFingerprints) && actFingerprints.length > 0 ? { actFingerprints } : {}) };
-  }) : [];
+  const items = Array.isArray(result?.actionableItems) ? result.actionableItems.map((item) => ({ ref: item?.ref, status: item?.status })) : [];
   // The 20-entry cap bounds the record findings, lifecycle findings first; the emitter's act-ref tasks are not counted against it.
   const findings = [...lifecycleFindings, ...deltaFixerFindings(result)].slice(0, 20);
   const record = {

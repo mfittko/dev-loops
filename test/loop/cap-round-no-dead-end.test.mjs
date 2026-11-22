@@ -221,7 +221,7 @@ test("the remaining clean-cap needs_fix dead ends clear with the remedy ADR 0255
   }
 });
 
-// Issue 3443 AC3: a cap round with three act refs, covered by a commit_only fixer record (two refs, baseline A) and the thread-route fix of the escalated item (one ref, baseline F), needs no replacement PR.
+// Issue 3443 AC3: a cap round with three act refs, covered by a commit_only fixer record (two refs, baseline A) and a record keyed by the escalated act ref (one ref, baseline F), needs no replacement PR.
 test("issue 3443: act refs covered by two locally_clear records reach ready, and a genuinely uncovered ref blocks naming it", async () => {
   const s = scenario({ clean: false, sequence: "lost", merges: 0, fix: true, docs: true });
   try {

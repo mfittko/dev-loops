@@ -65,7 +65,6 @@ import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { prBodySha256 } from "../github/write-gate-context.mjs";
-import { resolveAuthenticatedLogin } from "../github/post-gate-findings.mjs";
 import { gateDeltaRecordPath, isLifecycleFinding, readGateDeltaRecord, readSealedGateDeltaRecord, writeGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { runDocsValidators } from "../docs/docs-validators.mjs";
 import { defaultFetchOrigin } from "./standing-authorization.mjs";
@@ -681,7 +680,7 @@ async function assertNoOpenWorkAtCandidate(prior, { handbackHead, siteCoverage, 
 
 export async function runCli(
   argv = process.argv.slice(2),
-  { revParse = gitRevParse, diffPatch = gitDiffPatch, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, docsValidators = runDocsValidators, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin, fetchPr = defaultFetchPr, fetchLogin = () => resolveAuthenticatedLogin({ env: process.env, ghCommand: "gh" }), readRecord = readGateDeltaRecord, readSealedRecord = readSealedGateDeltaRecord, stdout = process.stdout, tmpRoot } = {},
+  { revParse = gitRevParse, diffPatch = gitDiffPatch, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, docsValidators = runDocsValidators, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin, fetchPr = defaultFetchPr, readRecord = readGateDeltaRecord, readSealedRecord = readSealedGateDeltaRecord, stdout = process.stdout, tmpRoot } = {},
 ) {
   const options = parseCheckPrePushDeltaArgs(argv);
   if (options.help) {
@@ -707,11 +706,8 @@ export async function runCli(
   // The plan is read only when no unresolved thread exists, so a non-empty thread route never gates on --fixer-plan.
   let threadActList = null;
   if (options.threadsFile && !options.reviewerOnly) {
-    const threadsText = readFileSync(options.threadsFile, "utf8");
-    const threads = JSON.parse(threadsText);
-    // A marker maps a thread to a cap-round act ref only under the authenticated gate login on the thread root; an unreadable login maps nothing.
-    const gateLogin = threadsText.includes("dev-loops:finding") ? await fetchLogin().catch(() => null) : null;
-    threadActList = threadsToActList(threads, { repo: options.repo, pr: options.pr, gateLogin });
+    const threads = JSON.parse(readFileSync(options.threadsFile, "utf8"));
+    threadActList = threadsToActList(threads, { repo: options.repo, pr: options.pr });
     if (threadActList.length === 0 && options.fixerPlan) threadActList = threadsToActList(threads, { repo: options.repo, pr: options.pr, operatorFocus: planOperatorFocus(options.fixerPlan, baselineSha, options.worktree, options.repo, options.pr) });
   }
   if (threadActList?.length === 0) throw new Error("threads file holds no unresolved thread and the --fixer-plan carries no operator focus round; pass the pulled --fixer-plan of an emission that had an --operator-focus-file with a round");
