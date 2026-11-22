@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
 import { runCli } from "../../scripts/loop/round-causes.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
-import { withTempDir } from "../_helpers.mjs";
+import { runGitFixture, withTempDir } from "../_helpers.mjs";
 import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 
@@ -29,7 +29,7 @@ const raw = async (dir, args) => {
 };
 const run = async (dir, args) => JSON.parse((await raw(dir, args)).out);
 const json = (dir, name, value) => writeFile(path.join(dir, name), typeof value === "string" ? value : JSON.stringify(value));
-const git = (dir, ...args) => execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: dir, encoding: "utf8" }).trim();
+const git = (dir, ...args) => runGitFixture(dir, args);
 
 async function fixture(dir) {
   await ledger(dir, 10, sha("a"), "2026-11-01T00:00:00.000Z", { roundCause: "first" });
@@ -102,7 +102,7 @@ test("R4 a merged change without a ledger directory below an existing findings r
     await mkdir(path.join(dir, "gate-findings", "o-r"), { recursive: true });
     await json(dir, "merged.json", [{ number: 99, mergedAt: "2026-11-05T00:00:00Z" }]);
     const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
-    assert.deepEqual(r.perChange, [{ pr: 99, mergedAt: "2026-11-05T00:00:00Z", rounds: 0, derivedRounds: 0, undeterminedRounds: 0, unreadableLedgers: 0, byCause: ZERO, round1: null }]);
+    assert.deepEqual(r.perChange, [{ pr: 99, mergedAt: "2026-11-05T00:00:00Z", rounds: 0, derivedRounds: 0, undeterminedRounds: 0, unreadableLedgers: 0, outOfBandLedgers: 0, byCause: ZERO, round1: null }]);
   });
 });
 
@@ -130,6 +130,13 @@ test("R5 argument and export errors name the cause", async () => {
     await json(dir, "loose.json", [{ number: 1, mergedAt: "yesterday" }]);
     await fails(["--repo", "o/r", "--merged-prs", path.join(dir, "loose.json")], /mergedAt/);
     await fails(["--repo", "o/r", "--merged-prs", merged, "--base", " "], /--base must not be blank/);
+    // A blank --tmp-root is rejected, and a relative or absolute one is accepted.
+    for (const blank of ["", " "]) await fails(["--repo", "o/r", "--merged-prs", merged, "--tmp-root", blank], /--tmp-root must not be blank/);
+    await mkdir(path.join(dir, "tmp", "gate-findings", "o-r"), { recursive: true });
+    for (const ok of [path.join(dir, "tmp"), "tmp"]) {
+      await runCli(["--repo", "o/r", "--merged-prs", merged, "--tmp-root", ok, "--silent"], { stdout: { write() {} }, stderr: { write() {} }, repoRoot: dir });
+    }
+    process.exitCode = 0;
   });
 });
 
@@ -367,4 +374,126 @@ test("R16 an unresolved origin/<base> exits naming the ref when a legacy probe i
     await json(dir, "merged.json", [{ number: 22, mergedAt: "2026-11-05T00:00:00Z" }]);
     await assert.rejects(() => raw(dir, ["--merged-prs", path.join(dir, "merged.json"), "--base", "mian"]), /origin\/mian/);
   });
+});
+
+const tamper = async (file) => writeFile(file, `${await readFile(file, "utf8")} `);
+const retiredRecord = async (dir, headSha, name, content) => {
+  const round = path.join(dir, "retired-gate-rounds", headSha, name);
+  await mkdir(round, { recursive: true });
+  await writeFile(path.join(round, "retirement.json"), typeof content === "string" ? content : JSON.stringify({ gate: "draft_gate", ...content }));
+};
+
+test("R17 a ledger with a seal mismatch is excluded and counted, and the report of another change stays intact", async () => {
+  await withTempDir(async (dir) => {
+    await ledger(dir, 10, sha("a"), "2026-11-01T00:00:00.000Z", { roundCause: "first" });
+    await ledger(dir, 10, sha("b"), "2026-11-02T00:00:00.000Z", { roundCause: "developer_findings" }, 1);
+    await ledger(dir, 11, sha("c"), "2026-11-03T00:00:00.000Z", { roundCause: "first" });
+    await tamper(path.resolve(dir, buildLogPath({ repo: "o/r", pr: 10, gate: "draft_gate", headSha: sha("b"), tmpRoot: dir })).replace(/\.json$/, ".round-1.json"));
+    await json(dir, "merged.json", [{ number: 10, mergedAt: "2026-11-05T00:00:00Z" }, { number: 11, mergedAt: "2026-11-06T00:00:00Z" }]);
+    const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
+    assert.deepEqual(r.perChange.map((c) => [c.pr, c.rounds, c.outOfBandLedgers]), [[11, 1, 0], [10, 1, 1]]);
+    assert.equal(r.totals.outOfBandLedgers, 1);
+    assert.deepEqual(r.totals.byCause, { ...ZERO, first: 2 });
+  });
+});
+
+const checklistRepo = async (dir, devloops) => {
+  git(dir, "init", "-q", "-b", "main");
+  await writeFile(path.join(dir, ".devloops"), devloops);
+  await mkdir(path.join(dir, "scripts"), { recursive: true });
+  await ledger(dir, 40, sha("a"), "2026-11-22T00:00:00.000Z", { findings: [{ severity: "low", angle: "scope", summary: "x" }], roundCause: "first" });
+  await json(dir, "merged.json", [{ number: 40, mergedAt: "2026-11-23T00:00:00Z" }]);
+};
+const SCOPE_CHECKLIST = "version: 1\ngates:\n  draft:\n    angles:\n      - name: scope\n        developer-checklist:\n          - \"SC1: check the scope\"\n";
+const runFrom = (dir, repoRoot, args) => {
+  let out = "";
+  return runCli(["--repo", "o/r", "--tmp-root", dir, "--merged-prs", path.join(dir, "merged.json"), ...args], { stdout: { write: (s) => { out += s; } }, stderr: { write() {} }, repoRoot }).then(() => JSON.parse(out));
+};
+
+test("R18 the checklist config loads from the repository root, also for a run from a subdirectory", async () => {
+  await withTempDir(async (dir) => {
+    await checklistRepo(dir, SCOPE_CHECKLIST);
+    for (const from of [dir, path.join(dir, "scripts")]) {
+      assert.deepEqual((await runFrom(dir, from, [])).checklist.after, { changes: 1, covered: 1, uncovered: 0 });
+    }
+  });
+});
+
+test("R19 an invalid .devloops exits with config_load_failed instead of a split over the shipped angles", async () => {
+  await withTempDir(async (dir) => {
+    await checklistRepo(dir, `${SCOPE_CHECKLIST}unknownKey: 1\n`);
+    for (const from of [dir, path.join(dir, "scripts")]) {
+      await assert.rejects(() => runFrom(dir, from, []), { code: "config_load_failed" });
+    }
+  });
+});
+
+test("R20 round 1 is the earliest round stamped first, whatever a repeated write did to loggedAt", async () => {
+  await withTempDir(async (dir) => {
+    const finding = (angle) => ({ severity: "low", angle, summary: angle });
+    // W16 sequence: A judged, B written, A rewritten, so A's loggedAt is later than B's.
+    await ledger(dir, 41, sha("b"), "2026-11-22T01:00:00.000Z", { findings: [finding("scope")], roundCause: "developer_findings" });
+    await ledger(dir, 41, sha("a"), "2026-11-22T02:00:00.000Z", { findings: [finding("coverage"), finding("correctness")], roundCause: "first" });
+    await ledger(dir, 42, sha("c"), "2026-11-22T03:00:00.000Z", { findings: [finding("scope")], roundCause: "other_head_move" });
+    await ledger(dir, 42, sha("d"), "2026-11-22T04:00:00.000Z", { findings: [finding("coverage")], roundCause: "other_head_move" });
+    await json(dir, "merged.json", [{ number: 41, mergedAt: "2026-11-23T00:00:00Z" }, { number: 42, mergedAt: "2026-11-23T01:00:00Z" }]);
+    const byPr = Object.fromEntries((await run(dir, ["--merged-prs", path.join(dir, "merged.json")])).perChange.map((c) => [c.pr, c.round1]));
+    assert.deepEqual(byPr[41], { loggedAt: "2026-11-22T02:00:00.000Z", side: "after", covered: 2, uncovered: 0 });
+    // No round stamped first: the earliest by loggedAt.
+    assert.deepEqual(byPr[42], { loggedAt: "2026-11-22T03:00:00.000Z", side: "after", covered: 0, uncovered: 1 });
+  });
+});
+
+test("R21 a legacy round reads the blocked ledger and the retirement records of its head between the previous round and itself", async () => {
+  const merged = (dir) => json(dir, "merged.json", [{ number: 1, mergedAt: "2026-11-30T00:00:00Z" }]);
+  const cause = async (dir) => (await run(dir, ["--merged-prs", path.join(dir, "merged.json")])).perChange[0].byCause;
+  // A blocked round at the head of the first round.
+  await withTempDir(async (dir) => {
+    await ledger(dir, 1, sha("a"), "2026-11-01T00:00:00.000Z", { verdict: "blocked" });
+    await ledger(dir, 1, sha("a"), "2026-11-01T01:00:00.000Z", { verdict: "clean" }, 1);
+    await merged(dir);
+    assert.deepEqual(await cause(dir), { ...ZERO, system_rerun: 1 });
+  });
+  // A whole-round retirement, a scoped retirement and a retirement later than the round.
+  const retired = { retiredAt: "2026-11-01T00:30:00.000Z" };
+  for (const [record, expected] of [[retired, "system_rerun"], [{ ...retired, scopes: ["u1"] }, "body_only"], [{ retiredAt: "2026-11-02T00:00:00.000Z" }, "first"]]) {
+    await withTempDir(async (dir) => {
+      await ledger(dir, 1, sha("a"), "2026-11-01T01:00:00.000Z", { findings: [] });
+      await retiredRecord(dir, sha("a"), "r1", record);
+      await merged(dir);
+      assert.deepEqual(await cause(dir), { ...ZERO, [expected]: 1 });
+    });
+  }
+  // A retirement before the previous round does not count for the later head.
+  await withTempDir(async (dir) => {
+    const { a, b } = legacyRepo(dir);
+    await ledger(dir, 1, a, "2026-11-02T00:00:00.000Z", { findings: [] });
+    await ledger(dir, 1, b, "2026-11-03T00:00:00.000Z", { findings: [] });
+    await retiredRecord(dir, b, "r1", { retiredAt: "2026-11-01T00:00:00.000Z" });
+    await merged(dir);
+    assert.deepEqual(await cause(dir), { ...ZERO, first: 1, other_head_move: 1 });
+  });
+});
+
+test("R22 a truncated retirement record is skipped and named, and a valid sibling still counts in either name order", async () => {
+  for (const [bad, good] of [["r1", "r2"], ["r2", "r1"]]) {
+    await withTempDir(async (dir) => {
+      await ledger(dir, 1, sha("a"), "2026-11-01T01:00:00.000Z", { findings: [] });
+      await retiredRecord(dir, sha("a"), bad, "{truncated");
+      await retiredRecord(dir, sha("a"), good, { retiredAt: "2026-11-01T00:30:00.000Z" });
+      await json(dir, "merged.json", [{ number: 1, mergedAt: "2026-11-30T00:00:00Z" }]);
+      const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
+      assert.deepEqual(r.perChange[0].byCause, { ...ZERO, system_rerun: 1 });
+      assert.equal(r.warnings.length, 1);
+      assert.match(r.warnings[0], new RegExp(`${bad}/retirement\\.json`));
+    });
+  }
+});
+
+test("R23 --help states the derivation limit, the out-of-band count and the round 1 rule", async () => {
+  let out = "";
+  await runCli(["--help"], { stdout: { write: (s) => { out += s; } } });
+  assert.match(out, /can undercount system_rerun and body_only/);
+  assert.match(out, /outOfBandLedgers counts ledgers whose seal does not match/);
+  assert.match(out, /the earliest one stamped\s+first/);
 });

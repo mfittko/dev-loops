@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
-import { withTempDir } from "../_helpers.mjs";
+import { runGitFixture, withTempDir } from "../_helpers.mjs";
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
@@ -20,7 +19,7 @@ const writeCtx = async (dir, headSha, ctx) => {
 const bodyCtx = (sha256, base) => ({ requiredReads: [{ kind: "pr-body", sha256 }], ...(base ? { baseFreshness: { status: "current", base } } : {}) });
 const write = (dir, headSha, extra = {}) => writeGateFindingsLog({ ...ID, headSha, verdict: "findings_present", findings: act, tmpRoot: dir, contextTmpRoot: dir, ...extra }, { repoRoot: dir });
 const liveLedger = async (dir, headSha) => JSON.parse(await readFile(path.join(dir, "gate-findings", "o-r", "pr-1", `draft_gate-${headSha}.json`), "utf8"));
-const git = (dir, ...args) => execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: dir, encoding: "utf8" }).trim();
+const git = (dir, ...args) => runGitFixture(dir, args);
 
 test("W1 the first write stamps first", async () => {
   await withTempDir(async (dir) => {
@@ -276,4 +275,31 @@ test("W21 an unfinished blocked write with findings is no earlier round of itsel
     assert.equal((await write(dir, A, { verdict: "blocked", findings: unjudged })).log.roundCause, "first");
     assert.equal((await write(dir, A)).log.roundCause, "first");
   });
+});
+
+const retireRaw = async (dir, headSha, name, content) => {
+  const round = path.join(dir, "retired-gate-rounds", headSha, name);
+  await mkdir(round, { recursive: true });
+  await writeFile(path.join(round, "retirement.json"), content);
+};
+
+test("W22 a truncated retirement record never refuses the write and is named in the warning", async () => {
+  await withTempDir(async (dir) => {
+    await retireRaw(dir, A, "r1", "{truncated");
+    const result = await clean(dir, A);
+    assert.equal(result.log.roundCause, "first");
+    assert.match(result.warning, /r1\/retirement\.json/);
+  });
+});
+
+test("W23 a truncated retirement record does not hide a valid record of the same root, whatever the name order", async () => {
+  for (const [bad, good] of [["r1", "r2"], ["r2", "r1"]]) {
+    await withTempDir(async (dir) => {
+      await retireRaw(dir, A, bad, "{truncated");
+      await retireRaw(dir, A, good, JSON.stringify({ gate: "draft_gate", retiredAt: new Date().toISOString() }));
+      const result = await clean(dir, A);
+      assert.equal(result.log.roundCause, "system_rerun");
+      assert.match(result.warning, new RegExp(`${bad}/retirement\\.json`));
+    });
+  }
 });

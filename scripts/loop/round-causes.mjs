@@ -2,17 +2,17 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict } from "@dev-loops/core/config";
 import { parsePositiveInteger } from "@dev-loops/core/cli/primitives";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { isBaseOnlyMergeSince, runGitCommand } from "../lib/git-delta.mjs";
-import { ROUND_CAUSES, deriveRoundCause } from "../github/_round-cause.mjs";
+import { ROUND_CAUSES, deriveRoundCause, findSameHeadRerun } from "../github/_round-cause.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { readClosedPriorRoundLogs } from "../github/write-gate-context.mjs";
-import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage:
   dev-loops loop round-causes --repo <owner/name> --merged-prs <path> [--issues <path>] [--last <n>] [--gate <name>] [--base <branch>] [--tmp-root <path>]
@@ -41,12 +41,16 @@ selected merge (inclusive).
 Causes: byCause splits rounds by roundCause (${ROUND_CAUSES.join(", ")}). A ledger written before the
 stamp is derived in memory (derivedRounds). A derived round counts as undetermined, outside the causes,
 when git cannot answer (a missing commit object) or its head is contained in the current origin/<base>
-(the base then holds the landed PR, so a base-only probe misreads it). unreadableLedgers counts ledgers
-the findings reader dropped (invalid JSON or an invalid verdict).
+(the base then holds the landed PR, so a base-only probe misreads it). A derived round reads the blocked ledgers
+and retirement records of its head that lie between the previous round and itself (system_rerun and body_only); records that are missing
+(for example a retirement under a removed checkout) can undercount system_rerun and body_only. An unreadable retirement record is skipped,
+and warnings names it. unreadableLedgers counts ledgers the findings reader dropped (invalid JSON or an invalid verdict).
+outOfBandLedgers counts ledgers whose seal does not match; the report excludes them and never trusts their content.
 
-Checklist split (checklist): the first completed draft_gate round of each change, whatever --gate says,
-counts each finding as covered when its angle has a developer-checklist id in the resolved
-gates.draft.angles config, and as uncovered otherwise. Changes group before and after
+Checklist split (checklist): the first completed draft_gate round of each change (the earliest one stamped
+first, else the earliest by loggedAt), whatever --gate says, counts each finding as covered when its angle
+has a developer-checklist id in the gates.draft.angles config resolved from the repository root (an invalid
+config exits 1 with config_load_failed), and as uncovered otherwise. Changes group before and after
 2026-11-21T17:03Z (the checklist merge) by the loggedAt of that round. A change without such a round has round1 null.
 
 ${JQ_OUTPUT_USAGE}
@@ -84,7 +88,8 @@ async function readExport(file, dateField) {
 
 // A ledger written before the stamp has no roundCause: derive it in memory against the previous round of the same PR.
 // A round whose git answer is unknowable (a missing object) or whose head the current base already contains is undetermined, never a cause.
-async function roundCauses(rounds, { base, repoRoot, ensureBase }) {
+// Before the git probe, a head move or a first round reads the blocked ledgers and retirement records of its head that lie between the previous round and itself (system_rerun, body_only).
+async function roundCauses(rounds, { base, repoRoot, ensureBase, repo, pr, gate, tmpRoot, warn }) {
   const causes = [];
   let derived = 0;
   const resolves = async (rev) => (await runGitCommand(["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], { repoRoot })).code === 0;
@@ -93,7 +98,13 @@ async function roundCauses(rounds, { base, repoRoot, ensureBase }) {
     derived += 1;
     const prior = rounds[i - 1];
     let baseOnly = false;
-    if (prior && String(prior.headSha).toLowerCase() !== String(log.headSha).toLowerCase()) {
+    const headMove = !prior || String(prior.headSha).toLowerCase() !== String(log.headSha).toLowerCase();
+    if (headMove) {
+      const untilMs = Date.parse(log.loggedAt);
+      const sameHeadRerun = await findSameHeadRerun({ repoRoot, repo, pr, gate, headSha: log.headSha, tmpRoot, sinceMs: Date.parse(prior?.loggedAt) || 0, untilMs: Number.isFinite(untilMs) ? untilMs : Infinity, warn });
+      if (sameHeadRerun) { causes.push(sameHeadRerun); continue; }
+    }
+    if (prior && headMove) {
       await ensureBase();
       const mainRef = `origin/${base}`;
       let answerable = (await resolves(prior.headSha)) && (await resolves(log.headSha));
@@ -123,6 +134,7 @@ export async function buildReport(values, { repoRoot = process.cwd() } = {}) {
   const preceding = sorted[last] ?? null;
   const issues = values.issues === undefined ? null : await readExport(values.issues, "createdAt");
 
+  if (values["tmp-root"] !== undefined && !values["tmp-root"].trim()) throw parseError("--tmp-root must not be blank");
   const tmpRoot = values["tmp-root"] ?? resolveGateArtifactTmpRoot(repoRoot);
   const findingsRoot = path.resolve(repoRoot, path.dirname(path.dirname(buildLogPath({ repo: values.repo, pr: 1, gate, headSha: GATE_SENTINEL_HEAD, tmpRoot }))));
   if (!(await stat(findingsRoot).then((s) => s.isDirectory(), () => false))) {
@@ -136,7 +148,7 @@ export async function buildReport(values, { repoRoot = process.cwd() } = {}) {
     }
     baseChecked = true;
   };
-  const checklistAngles = new Set(((await loadDevLoopConfig({ repoRoot })).config.gates?.draft?.angles ?? []).filter((e) => e["developer-checklist"]?.length).map((e) => e.name));
+  const checklistAngles = new Set(((await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) })).config.gates?.draft?.angles ?? []).filter((e) => e["developer-checklist"]?.length).map((e) => e.name));
   const cutoff = Date.parse(CHECKLIST_CUTOFF);
 
   const totalsByCause = emptyCauses();
@@ -145,13 +157,17 @@ export async function buildReport(values, { repoRoot = process.cwd() } = {}) {
   let totalDerived = 0;
   let totalUndetermined = 0;
   let totalUnreadable = 0;
+  let totalOutOfBand = 0;
+  const warnings = new Set();
   const perChange = [];
   for (const { number, mergedAt } of merged) {
     let unreadable = 0;
-    const read = (g) => readClosedPriorRoundLogs({ repo: values.repo, pr: number, gate: g, headSha: GATE_SENTINEL_HEAD, tmpRoot }, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead: true, onUnreadable: () => { unreadable += 1; } });
+    let outOfBand = 0;
+    // A ledger with a seal mismatch is excluded and counted, never trusted: one damaged ledger must not remove the report of every change.
+    const read = (g) => readClosedPriorRoundLogs({ repo: values.repo, pr: number, gate: g, headSha: GATE_SENTINEL_HEAD, tmpRoot }, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead: true, onUnreadable: () => { unreadable += 1; }, onOutOfBand: () => { outOfBand += 1; } });
     // A sentinel head matches no ledger, so every ledger of the PR is read as a prior round.
     const logs = await read(gate);
-    const { causes, derived } = await roundCauses(logs, { base, repoRoot, ensureBase });
+    const { causes, derived } = await roundCauses(logs, { base, repoRoot, ensureBase, repo: values.repo, pr: number, gate, tmpRoot, warn: (m) => warnings.add(m) });
     const byCause = emptyCauses();
     let undetermined = 0;
     for (const c of causes) {
@@ -159,7 +175,9 @@ export async function buildReport(values, { repoRoot = process.cwd() } = {}) {
       byCause[c] += 1;
       totalsByCause[c] += 1;
     }
-    const first = (gate === "draft_gate" ? logs : await read("draft_gate"))[0];
+    // A repeated judged write keeps its first stamp but gets a new loggedAt, so the earliest round stamped first is round 1; an unstamped ledger falls back to the earliest by loggedAt.
+    const draftLogs = gate === "draft_gate" ? logs : await read("draft_gate");
+    const first = draftLogs.find((l) => l.roundCause === "first") ?? draftLogs[0];
     let round1 = null;
     if (first) {
       const findings = Array.isArray(first.findings) ? first.findings : [];
@@ -174,7 +192,8 @@ export async function buildReport(values, { repoRoot = process.cwd() } = {}) {
     totalDerived += derived;
     totalUndetermined += undetermined;
     totalUnreadable += unreadable;
-    perChange.push({ pr: number, mergedAt, rounds: causes.length, derivedRounds: derived, undeterminedRounds: undetermined, unreadableLedgers: unreadable, byCause, round1 });
+    totalOutOfBand += outOfBand;
+    perChange.push({ pr: number, mergedAt, rounds: causes.length, derivedRounds: derived, undeterminedRounds: undetermined, unreadableLedgers: unreadable, outOfBandLedgers: outOfBand, byCause, round1 });
   }
   const n = merged.length;
   const per = (x) => (n === 0 ? 0 : round2(x / n));
@@ -189,6 +208,7 @@ export async function buildReport(values, { repoRoot = process.cwd() } = {}) {
   return {
     ok: true,
     gate,
+    warnings: [...warnings].sort(),
     window: { merges: n, from, to, after },
     perChange,
     totals: {
@@ -197,6 +217,7 @@ export async function buildReport(values, { repoRoot = process.cwd() } = {}) {
       derivedRounds: totalDerived,
       undeterminedRounds: totalUndetermined,
       unreadableLedgers: totalUnreadable,
+      outOfBandLedgers: totalOutOfBand,
       byCause: totalsByCause,
       byCausePerMerge: Object.fromEntries(ROUND_CAUSES.map((c) => [c, per(totalsByCause[c])])),
     },
