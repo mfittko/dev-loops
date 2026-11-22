@@ -4631,7 +4631,9 @@ test("issue 2511: a mixed-unit carry round-trips through consolidateGateFanin an
     const fanout = resolveFanoutDispatch(config, "draft", ["dry", "kiss"], { carriedAngles: ["dry"] });
     const contextOptions = parseWriteGateContextCliArgs(["--repo", repo, "--pr", "7", "--gate", gate, "--head-sha", headSha, "--angles", JSON.stringify(["dry", "kiss"])]);
     await writeGateContext({ ...contextOptions, config, fanoutDispatch: fanout }, { repoRoot });
-    const emitted = await runNode(path.resolve("scripts/github/emit-fanout-dispatch.mjs"), ["--repo", repo, "--pr", "7", "--gate", gate, "--head-sha", headSha, "--pending"], { cwd: repoRoot });
+    const ciFile = path.join(repoRoot, "green-ci.json");
+    await writeFile(ciFile, JSON.stringify({ ok: true, status: "success", settled: true, ciStatus: "success", headSha }), "utf8");
+    const emitted = await runNode(path.resolve("scripts/github/emit-fanout-dispatch.mjs"), ["--repo", repo, "--pr", "7", "--gate", gate, "--head-sha", headSha, "--pending", "--ci-file", ciFile], { cwd: repoRoot });
     assert.equal(emitted.code, 0, emitted.stderr || emitted.stdout);
     const emitPlan = buildGateEmitPlanPath({ repo, pr: "7", gate, headSha, tmpRoot: path.join(repoRoot, "tmp") });
     const plan = JSON.parse(await readFile(emitPlan, "utf8"));

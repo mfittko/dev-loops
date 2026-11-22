@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { ghExecFileSync } from "@dev-loops/core/github/gh-throttle";
 import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir, release } from "node:os";
 import { join } from "node:path";
@@ -69,7 +70,7 @@ export function trustedRun(run, repository, workflow, branch) {
 }
 
 function api(path, binary = false) {
-  const output = execFileSync("gh", ["api", path], { timeout: 15000, maxBuffer: LIMIT, encoding: binary ? "buffer" : "utf8" });
+  const output = ghExecFileSync("gh", ["api", path], { timeout: 15000, maxBuffer: LIMIT, encoding: binary ? "buffer" : "utf8" });
   return binary ? output : JSON.parse(output);
 }
 

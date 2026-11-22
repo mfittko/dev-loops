@@ -34,8 +34,8 @@ import { runChild as liveRunChild } from "../cli/primitives.mjs";
 
 /**
  * Env var a process-boundary gh stub sets to attest that `gh` itself is a stub
- * (set automatically by the `writeGhStub` test helper). Only consulted in test
- * mode, so it is not a production escape hatch.
+ * (set automatically by the `writeGhStub` test helper). The write guard consults
+ * it only in test mode; the gh throttle skips pacing on it in any mode (ADR 0305).
  */
 export const GH_STUB_ATTESTATION_ENV = "DEV_LOOPS_GH_STUB";
 

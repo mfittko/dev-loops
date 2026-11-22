@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import process from "node:process";
-import { execFileSync } from "node:child_process";
+import { ghExecFileSync } from "@dev-loops/core/github/gh-throttle";
 import { parseArgs } from "node:util";
 import { interpretTrackerLoopState } from "@dev-loops/core/loop/tracker-first-loop-state";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -74,14 +74,14 @@ async function main() {
   let rawState = "";
   let prContext = null;
   try {
-    const issueJson = execFileSync(
+    const issueJson = ghExecFileSync(
       "gh",
       ["issue", "view", String(issue), "--repo", repo, "--json", "state,title", "--jq", ".state"],
       { encoding: "utf8" }
     ).trim();
     rawState = issueJson;
     try {
-      const prJson = execFileSync(
+      const prJson = ghExecFileSync(
         "gh",
         ["pr", "list", "--repo", repo, "--search", `${issue} in:body`, "--state", "open", "--json", "number,state,headRefName", "--jq", ".[0]"],
         { encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] }

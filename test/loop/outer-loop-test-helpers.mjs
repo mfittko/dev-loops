@@ -1,4 +1,4 @@
-import { chmod, writeFile } from "node:fs/promises";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -18,6 +18,8 @@ export const writeJson = writeJsonHelper;
  * headRef: what `git rev-parse --abbrev-ref HEAD` should return (e.g. "main" or "HEAD")
  */
 export async function writeGitStub(tempDir, { porcelainOutput = "", headRef = "main", headSha = "abc123" } = {}) {
+  await mkdir(path.join(tempDir, "throttle-root"), { recursive: true });
+  await writeFile(path.join(tempDir, "throttle-root", ".devloops.json"), JSON.stringify({ version: 1, queue: { ghMinIntervalMs: 0 } }));
   const gitPath = path.join(tempDir, "git");
   await writeFile(
     gitPath,
@@ -30,6 +32,11 @@ export async function writeGitStub(tempDir, { porcelainOutput = "", headRef = "m
       `}`,
       `if (args.includes('rev-parse') && args.includes('abbrev-ref')) {`,
       `  process.stdout.write(${JSON.stringify(headRef + "\n")});`,
+      `  process.exit(0);`,
+      `}`,
+      "// The gh throttle resolves its state root from the git common dir; point it at an unpaced stub root.",
+      `if (args.includes('--git-common-dir')) {`,
+      `  process.stdout.write(${JSON.stringify(path.join(tempDir, "throttle-root", ".git") + "\n")});`,
       `  process.exit(0);`,
       `}`,
       `if (args === 'rev-parse HEAD') {`,

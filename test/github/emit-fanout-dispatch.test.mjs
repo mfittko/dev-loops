@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { spawnSyncTrusted as spawnSync } from "../_helpers.mjs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, listPriorFindingsLogHeads, main, unitBudgetBasis } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, listPriorFindingsLogHeads, main as emitMain, unitBudgetBasis } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, readCompletedAnglesForHead, renderPrBodyRead, renderRequiredReadLine, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
@@ -37,9 +37,20 @@ async function writeGateFindingsLog(options, ctx) {
   return writeGateFindingsLogRaw(rest, ctx);
 }
 
-function runEmitCli(args = [], opts = {}) {
-  return spawnSync("node", [emitCliPath, ...args], { encoding: "utf8", ...opts });
+// A draft_gate fan-out needs the settled-green wait-pr-checks result (issue 3414), so a test that is not about the CI step passes one for its head.
+const greenCiDir = mkdtempSync(path.join(os.tmpdir(), "dev-loops-emit-fanout-ci-"));
+process.on("exit", () => rmSync(greenCiDir, { recursive: true, force: true }));
+function withGreenCi(argv) {
+  if (argv[argv.indexOf("--gate") + 1] !== "draft_gate" || argv.includes("--ci-file")) return argv;
+  const headSha = argv[argv.indexOf("--head-sha") + 1];
+  const file = path.join(greenCiDir, `${headSha}.json`);
+  writeFileSync(file, JSON.stringify({ ok: true, status: "success", settled: true, ciStatus: "success", headSha }));
+  return [...argv, "--ci-file", file];
 }
+function runEmitCli(args = [], { noGreenCi = false, ...opts } = {}) {
+  return spawnSync("node", [emitCliPath, ...(noGreenCi ? args : withGreenCi(args))], { encoding: "utf8", ...opts });
+}
+const main = (argv, ...rest) => emitMain(withGreenCi(argv), ...rest);
 
 // The reviewer's first step (#2416): pull its work order with the compact reference.
 function runPullCli(unit, opts = {}) {
@@ -2863,5 +2874,97 @@ test("issue 3416: a refusal after a full emission retired the stale round still 
     const payload = JSON.parse(second.stdout);
     assert.match(payload.error, /inline diff/);
     assert.equal(payload.retiredRound.dispatchPromptRecords.length, 3);
+  });
+});
+
+// Issue 3414 ac:2: the pre-fan-out CI re-check stops the round with a typed observation before any unit is emitted.
+for (const ciGate of ["draft_gate", "pre_approval_gate"]) for (const [label, ci, nextAction] of [
+  ["pending", { ok: true, status: "pending", settled: false, ciStatus: "pending", headSha: HEAD_SHA }, "wait_for_ci"],
+  ["red", { ok: true, status: "failure", settled: true, ciStatus: "failure", headSha: HEAD_SHA, failedChecks: [{ name: "build" }] }, "fix_ci_failure"],
+  ["red CI at another head", { ok: true, status: "failure", settled: true, ciStatus: "failure", headSha: "d".repeat(40), failedChecks: [{ name: "build" }] }, "wait_for_ci"],
+  ["another head", { ok: true, status: "success", settled: true, ciStatus: "success", headSha: "d".repeat(40) }, "wait_for_ci"],
+]) {
+  test(`emit-fanout-dispatch.mjs --gate ${ciGate} --ci-file with ${label} CI refuses with ci_not_green and ${nextAction} (issue 3414)`, async () => {
+    await withTmpDir(async (tmp) => {
+      const ciFile = path.join(tmp, "ci.json");
+      await writeFile(ciFile, JSON.stringify(ci));
+      const result = runEmitCli(["--repo", REPO, "--pr", "7", "--gate", ciGate, "--head-sha", HEAD_SHA, "--tmp-root", tmp, "--ci-file", ciFile], { cwd: tmp });
+      assert.equal(result.status, 1);
+      const out = JSON.parse(result.stdout);
+      assert.equal(out.ok, false);
+      assert.equal(out.refusal, "ci_not_green");
+      assert.equal(out.observation, "ci_not_green");
+      assert.equal(out.nextAction, nextAction);
+    });
+  });
+}
+
+for (const ciGate of ["draft_gate", "pre_approval_gate"]) test(`emit-fanout-dispatch.mjs --gate ${ciGate} --ci-file with settled green CI passes the CI step and emits units (issue 3414)`, async () => {
+  await withTmpDir(async (tmp) => {
+    await seedBundle(tmp, { gate: ciGate });
+    const ciFile = path.join(tmp, "ci.json");
+    await writeFile(ciFile, JSON.stringify({ ok: true, status: "success", settled: true, ciStatus: "success", headSha: HEAD_SHA }));
+    const result = runEmitCli(["--repo", REPO, "--pr", "7", "--gate", ciGate, "--head-sha", HEAD_SHA, "--ci-file", ciFile], { cwd: tmp });
+    assert.equal(result.status, 0, result.stderr);
+    const out = JSON.parse(result.stdout);
+    assert.equal(out.ok, true);
+    assert.ok(out.units.length > 0);
+  });
+});
+
+for (const ciGate of ["draft_gate", "pre_approval_gate"]) test(`emit-fanout-dispatch.mjs --gate ${ciGate} --ci-file with ciStatus none refuses with ci_not_green, as gate coordination does (issue 3414)`, async () => {
+  await withTmpDir(async (tmp) => {
+    const ciFile = path.join(tmp, "ci.json");
+    await writeFile(ciFile, JSON.stringify({ ok: true, status: "none", settled: true, ciStatus: "none", headSha: HEAD_SHA }));
+    const result = runEmitCli(["--repo", REPO, "--pr", "7", "--gate", ciGate, "--head-sha", HEAD_SHA, "--tmp-root", tmp, "--ci-file", ciFile], { cwd: tmp });
+    assert.equal(result.status, 1);
+    const out = JSON.parse(result.stdout);
+    assert.equal(out.refusal, "ci_not_green");
+    assert.equal(out.ciStatus, "none");
+    assert.match(out.recovery, /--ci-file/);
+  });
+});
+
+test("emit-fanout-dispatch.mjs --ci-file with an empty value, a missing file or a non-JSON file is a usage error (issue 3414)", async () => {
+  await withTmpDir(async (tmp) => {
+    const bad = path.join(tmp, "bad.json");
+    await writeFile(bad, "not json");
+    for (const [label, value, pattern] of [["empty", "", /must not be an empty value/], ["missing", path.join(tmp, "nope.json"), /not readable JSON/], ["non-JSON", bad, /not readable JSON/]]) {
+      const result = runEmitCli(["--repo", REPO, "--pr", "7", "--gate", GATE, "--head-sha", HEAD_SHA, "--tmp-root", tmp, "--ci-file", value], { cwd: tmp });
+      assert.equal(result.status, 2, label);
+      assert.match(result.stderr, pattern, label);
+      assert.doesNotMatch(result.stdout, /ci_not_green/, label);
+    }
+  });
+});
+
+test("emit-fanout-dispatch.mjs pre_approval_gate with gates.preApproval.requireCi false and a red --ci-file does not refuse ci_not_green (issue 3414)", async () => {
+  await withTmpDir(async (tmp) => {
+    await writeFile(path.join(tmp, ".devloops.json"), JSON.stringify({ version: 1, gates: { preApproval: { requireCi: false } } }));
+    const ciFile = path.join(tmp, "ci.json");
+    await writeFile(ciFile, JSON.stringify({ ok: true, status: "failure", settled: true, ciStatus: "failure", headSha: HEAD_SHA, failedChecks: [{ name: "build" }] }));
+    const result = runEmitCli(["--repo", REPO, "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD_SHA, "--tmp-root", tmp, "--ci-file", ciFile], { cwd: tmp, noGreenCi: true });
+    assert.notEqual(JSON.parse(result.stdout).refusal, "ci_not_green");
+  });
+});
+
+test("emit-fanout-dispatch.mjs draft_gate without --ci-file refuses with ci_file_required and a wait-pr-checks recovery, unless gates.draft.requireCi is false (issue 3414)", async () => {
+  await withTmpDir(async (tmp) => {
+    const args = ["--repo", REPO, "--pr", "7", "--gate", "draft_gate", "--head-sha", HEAD_SHA, "--tmp-root", tmp];
+    const result = runEmitCli(args, { cwd: tmp, noGreenCi: true });
+    assert.equal(result.status, 1);
+    const out = JSON.parse(result.stdout);
+    assert.equal(out.refusal, "ci_file_required");
+    assert.match(out.recovery, /wait-pr-checks\.mjs --repo o\/r --pr 7 --timeout 0/);
+    // requireCi false opts the draft gate out of the CI stop, so a red result no longer refuses.
+    await writeFile(path.join(tmp, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { requireCi: false } } }));
+    const ciFile = path.join(tmp, "ci.json");
+    await writeFile(ciFile, JSON.stringify({ ok: true, status: "failure", settled: true, ciStatus: "failure", headSha: HEAD_SHA, failedChecks: [{ name: "build" }] }));
+    for (const extra of [[], ["--ci-file", ciFile]]) {
+      const optedOut = runEmitCli([...args, ...extra], { cwd: tmp, noGreenCi: true });
+      // The run gets past the CI step and fails on the unseeded gate-context artifact.
+      assert.equal(optedOut.status, 1);
+      assert.match(JSON.parse(optedOut.stdout).error, /no gate-context artifact/);
+    }
   });
 });
