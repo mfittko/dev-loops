@@ -137,7 +137,7 @@ export function operatorFocusActItems(operatorFocus) {
 }
 
 // Line-start anchored like FINDING_MARKER_RE in scripts/github/_gate-finding-surface.mjs: a marker quoted mid-line is never honored.
-const GATE_FINDING_FP_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\b/m;
+const GATE_FINDING_FP_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\b/gm;
 
 /**
  * Thread route: reduce successful `list-review-threads --unresolved-only` output (or a github-sourced `capture-review-threads --unresolved --bodies` file) for `repo#pr`
@@ -145,7 +145,7 @@ const GATE_FINDING_FP_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\b/m;
  * @param {unknown} payload
  * @param {{ repo: string, pr: number|string }} target
  */
-export function threadsToActList(rawPayload, { repo, pr, operatorFocus } = {}) {
+export function threadsToActList(rawPayload, { repo, pr, operatorFocus, gateLogin } = {}) {
   const payload = normalizeThreadsPayload(rawPayload, { repo, pr });
   const allThreads = /** @type {any} */ (payload)?.threads;
   // A trust-incomplete thread stays a blocker but is never an act item.
@@ -164,8 +164,12 @@ export function threadsToActList(rawPayload, { repo, pr, operatorFocus } = {}) {
   return [...threads].sort((a, b) => (a.threadId < b.threadId ? -1 : a.threadId > b.threadId ? 1 : 0)).map((thread) => ({
     ref: thread.threadId,
     angle: "review-thread",
-    // A gate finding thread carries its ledger fingerprint in the marker: the cap-round coverage union maps the threadId ref back to the act ref through it.
-    ...(nonEmpty(thread.body) && thread.body.match(GATE_FINDING_FP_RE) ? { fingerprint: thread.body.match(GATE_FINDING_FP_RE)[1] } : {}),
+    // A gate finding thread carries the ledger fingerprint of every merged member in its markers: the cap-round coverage union maps the threadId ref back to the act refs through them.
+    // Gate-authored is the authenticated login on the thread root, never marker text alone: with no known gate login no thread maps (fail closed).
+    ...(() => {
+      const fingerprints = nonEmpty(gateLogin) && thread.author === gateLogin && nonEmpty(thread.body) ? [...new Set([...thread.body.matchAll(GATE_FINDING_FP_RE)].map((m) => m[1]))] : [];
+      return fingerprints.length > 0 ? { markerFingerprints: fingerprints } : {};
+    })(),
     summary: nonEmpty(thread.body) ? thread.body.trim() : "",
     judgeDisposition: "act",
     ...(nonEmpty(thread.path) ? { file: thread.path } : {}),
@@ -200,6 +204,7 @@ export function toDeltaActItems(actList) {
     if (nonEmpty(entry.judgeRationale)) item.judgeRationale = entry.judgeRationale.trim();
     // The site coverage record keys on the ledger fingerprint, which a repeated-fingerprint ref suffix would hide.
     if (nonEmpty(entry.fingerprint)) item.fingerprint = entry.fingerprint.trim();
+    if (Array.isArray(entry.markerFingerprints) && entry.markerFingerprints.length > 0) item.markerFingerprints = entry.markerFingerprints.filter(nonEmpty);
     for (const key of REMEDIATION_TEXT_FIELDS) if (nonEmpty(entry[key])) item[key] = entry[key].trim();
     for (const key of REMEDIATION_LIST_FIELDS) if (Array.isArray(entry[key]) && entry[key].length > 0) item[key] = key === "statedSurfaces" ? entry[key].filter(nonEmpty).map((v) => v.trim()) : entry[key].filter((v) => typeof v === "string"); // a form is an input (verbatim), a surface is a location (trimmed)
     if (Array.isArray(entry.siblingRemediations) && entry.siblingRemediations.length > 0) item.siblingRemediations = entry.siblingRemediations;

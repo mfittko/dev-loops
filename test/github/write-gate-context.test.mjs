@@ -9465,7 +9465,7 @@ test("resolveCapRoundFixed accepts the union of the chain's records over the cap
   }
 });
 
-// Issue 3443 review: a thread-route record names its items by threadId; the sealed record carries the ledger fingerprint of the gate finding marker as `actRef`.
+// Issue 3443 review: a thread-route record names its items by threadId; the sealed record carries the ledger fingerprints of the gate-authored thread's markers as `actFingerprints`.
 test("resolveCapRoundFixed covers a cap-round act ref through a thread-route record sealed from threadsToActList, and not through an unrelated thread (issue 3443)", async () => {
   const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
   try {
@@ -9478,8 +9478,8 @@ test("resolveCapRoundFixed covers a cap-round act ref through a thread-route rec
     const r = { ...p, summary: "escalated defect" };
     await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...r, clusterId: 1 }] }), "utf8");
     await writeDeltaRecord(repoRoot, A, B, "push_to_gate", { items: [{ ref: fingerprintFinding(p), status: "resolved" }] });
-    const sealThread = (body) => {
-      const sequence = startDeltaSequence({ reviewBaselineHead: B, actList: threadsToActList({ ok: true, repo: "owner/repo", pr: 68, threads: [{ trusted: true, threadId: "PRRT_escalated", body, isResolved: false }] }, { repo: "owner/repo", pr: 68 }) });
+    const sealThread = (body, author = "gate-bot") => {
+      const sequence = startDeltaSequence({ reviewBaselineHead: B, actList: threadsToActList({ ok: true, repo: "owner/repo", pr: 68, threads: [{ trusted: true, threadId: "PRRT_escalated", author, body, isResolved: false }] }, { repo: "owner/repo", pr: 68, gateLogin: "gate-bot" }) });
       writeGateDeltaRecord({ tmpRoot: path.join(repoRoot, "tmp"), sequence, candidateHead: C, invocation: 1, decision: { outcome: "locally_clear", nextStep: "push_to_gate" }, result: { actionableItems: [{ ref: "PRRT_escalated", status: "resolved" }] } });
     };
     let condition = null;
@@ -9487,8 +9487,33 @@ test("resolveCapRoundFixed covers a cap-round act ref through a thread-route rec
     sealThread("fix it\n<!-- dev-loops:finding 0123456789abcdef severity=low angle=x round=1 -->");
     assert.equal(await run(), null, "a thread whose marker names another fingerprint leaves r uncovered");
     assert.equal(condition, "items_do_not_cover");
-    sealThread(`<!-- dev-loops:finding ${fingerprintFinding(r)} severity=low angle=x round=1 -->\nfix it`);
-    assert.ok(await run(), "the thread carrying r's marker covers r");
+    const marker = (fp) => `<!-- dev-loops:finding ${fp} severity=low angle=x round=1 -->`;
+    sealThread(`${marker(fingerprintFinding(r))}\nfix it`, "copilot-bot");
+    assert.equal(await run(), null, "a thread whose root is not gate-authored never covers r, whatever its marker text");
+    assert.equal(condition, "items_do_not_cover");
+    // A merged comment carries one marker per member, primary first: a non-primary member's marker covers its ref.
+    sealThread(`${marker("0123456789abcdef")}\n${marker(fingerprintFinding(r))}\nfix it`);
+    assert.ok(await run(), "the non-primary marker of a gate-authored merged thread covers r");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 review: a marker names a cluster member, whose act ref is the cluster representative's fingerprint.
+test("resolveCapRoundFixed maps a gate thread marker of a non-representative cluster member to the cluster act ref (issue 3443)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const C = "8".repeat(40);
+    await seedClosedRounds(repoRoot, 70, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-70", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const member = { ...p, summary: "same cluster member" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...member, clusterId: 0 }] }), "utf8");
+    const body = `<!-- dev-loops:finding ${fingerprintFinding(member)} severity=low angle=x round=1 -->\nfix it`;
+    const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: threadsToActList({ ok: true, repo: "owner/repo", pr: 70, threads: [{ trusted: true, threadId: "PRRT_member", author: "gate-bot", body, isResolved: false }] }, { repo: "owner/repo", pr: 70, gateLogin: "gate-bot" }) });
+    writeGateDeltaRecord({ tmpRoot: path.join(repoRoot, "tmp"), sequence, candidateHead: B, invocation: 1, decision: { outcome: "locally_clear", nextStep: "push_to_gate" }, result: { actionableItems: [{ ref: "PRRT_member", status: "resolved" }] } });
+    assert.ok(await resolveCapRoundFixed({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: B }, { repoRoot }));
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
