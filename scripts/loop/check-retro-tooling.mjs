@@ -63,7 +63,7 @@ import { readFileSync } from "node:fs";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
-import { inlineInterpreterVerdict, isPayloadWord, stripLeadingWrappers, tokenizeShellCommand } from "@dev-loops/core/loop/bash-command-classify";
+import { inlineInterpreterParseError, inlineInterpreterVerdict, isPayloadWord, stripLeadingWrappers, tokenizeShellCommand } from "@dev-loops/core/loop/bash-command-classify";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const MAX_JOIN_LINES = 200;
@@ -131,7 +131,8 @@ function classifySegment(rawSegment) {
     return { kind: "violation", tool: "gh" };
   }
   // an inline python form is already reported as inline-interpreter
-  if (/^python3?\b/.test(segment) && inlineInterpreterVerdict(rawSegment) === "allow") {
+  // (a segment slice drops a heredoc body, so only a segment that parses and is denied is already reported)
+  if (/^python3?\b/.test(segment) && !(inlineInterpreterVerdict(rawSegment) === "deny" && inlineInterpreterParseError(rawSegment) === null)) {
     return { kind: "violation", tool: /^python3\b/.test(segment) ? "python3" : "python" };
   }
   return { kind: "clean" };

@@ -20,7 +20,7 @@ test("importing bash-command-classify and running a non-parsing predicate loads 
     const classify = await import(${JSON.stringify(loop("bash-command-classify.mjs"))});
     const shell = await import(${JSON.stringify(loop("shell-ast.mjs"))});
     const cache = createRequire(${JSON.stringify(loop("x.mjs"))}).cache;
-    const loaded = () => Object.keys(cache).some((key) => key.includes("sh-syntax"));
+    const loaded = () => Object.keys(cache).some((key) => /[\\\\/](?:node_modules|_vendor)[\\\\/]sh-syntax[\\\\/]/.test(key));
     classify.commandContainsGhPrReady("gh pr ready 5");
     const before = loaded();
     shell.parseShell("ls");

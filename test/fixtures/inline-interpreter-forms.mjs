@@ -129,8 +129,10 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("cat > tmp/r.sh <<'EOF'\nnode -e x\nEOF\nbash tmp/../tmp/r.sh"),
   deny("cat > tmp/r.mjs <<'EOF'\nx\nEOF\nnode < tmp/r.mjs"),
   deny("cat > tmp/r.py <<'EOF'\nx\nEOF\npython3 < tmp/r.py"),
-  // a run before the write is no write-then-run
-  allow("bash tmp/r.sh; cat > tmp/r.sh <<'EOF'\nx\nEOF"),
+  // a runner anywhere in the command matches a heredoc write anywhere in it: `&` and `|` run the runner after or beside the write
+  deny("bash tmp/r.sh; cat > tmp/r.sh <<'EOF'\nx\nEOF"),
+  deny("sleep 1 && bash tmp/r.sh & cat > tmp/r.sh <<'EOF'\nrm -rf src\nEOF"),
+  deny("bash tmp/r.sh | cat > tmp/r.sh <<'EOF'\nx\nEOF"),
   // after wrappers and reserved words
   deny("for p in a b; do node -e \"x\"; done"),
   deny("if true; then python3 -c x; fi"),
@@ -324,6 +326,13 @@ export const INLINE_INTERPRETER_FORMS = [
   allow("perl -Cio script.pl"),
   allow("perl -CSE script.pl"),
   allow("perl -Fi script.pl"),
+  allow("perl -V:intsize"),
+  allow("perl -V:installsitelib"),
+  allow("perl -V"),
+  // an interpreter runs a heredoc-fed process substitution as its script (origin/main denied it)
+  ...["node", "bun", "python3", "perl", "ruby"].flatMap((h) => [`${h} <(cat <<EOF\nx\nEOF\n)`, `${h} <(cat <<'EOF'\nx\nEOF\n)`, `${h} <(cat <<<x)`]).map(deny),
+  allow("diff <(cat a) b"),
+  allow("node <(cat a)"),
   deny("perl -C -e x"),
   // a backslash-newline continuation is removed by bash: it hides no head, flag or run path
   allow("node \\\n scripts/x.mjs"),

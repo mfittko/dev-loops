@@ -264,7 +264,7 @@ test("the retro report names every denied and every ceiling fixture row as inlin
     assert.deepEqual(reported, deny || ceiling ? [`inline-interpreter: ${command}`] : [], command);
   }
   const src = readFileSync(fileURLToPath(new URL("../../scripts/loop/check-retro-tooling.mjs", import.meta.url)), "utf8");
-  assert.match(src, /inlineInterpreterVerdict, isPayloadWord, stripLeadingWrappers, tokenizeShellCommand \} from "@dev-loops\/core\/loop\/bash-command-classify"/);
+  assert.match(src, /inlineInterpreterParseError, inlineInterpreterVerdict, isPayloadWord, stripLeadingWrappers, tokenizeShellCommand \} from "@dev-loops\/core\/loop\/bash-command-classify"/);
   assert.doesNotMatch(src, /function stripLeadingWrappers|WRAPPER_BINARIES/);
 });
 
@@ -288,6 +288,10 @@ test("the retro label names a python script call, and the inline form as inline-
   assert.match(analyzeTranscript("X=$(python3 -c x)").violations[0], /^inline-interpreter:/);
   assert.match(analyzeTranscript("python3 script.py").violations[0], /^python3:/);
   assert.match(analyzeTranscript("X=/opt/python/bin python3 script.py").violations[0], /^python3\b/);
+  // a segment slice drops a heredoc body: a python head with a heredoc is still reported as python3
+  for (const command of ["python3 tool.py - <<'E'\nx\nE", "python3 script.py <<EOF\nx\nEOF\necho done"]) {
+    assert.ok(analyzeTranscript(command).violations.some((v) => v.startsWith("python3:")), JSON.stringify(command));
+  }
 });
 
 test("retro classification of an unterminated quote and an escaped backtick before a separator (#2442)", () => {
@@ -352,7 +356,7 @@ test("a heredoc body is dropped only for a data host; a quote-blind or arithmeti
   assert.deepEqual(JSON.parse(clean.stdout).rawCallViolations, []);
   // a `tee` heredoc writes a file: an OPS-NO-INLINE-INTERPRETER ceiling case, reported as inline-interpreter, never as a raw gh call
   const tee = await runCli(["--json"], sessionLine("tee out <<EOF\ngh text\nEOF"));
-  assert.ok(JSON.parse(tee.stdout).rawCallViolations.every((v) => v.startsWith("inline-interpreter: tee out")));
+  assert.deepEqual(JSON.parse(tee.stdout).rawCallViolations, ["inline-interpreter: tee out <<EOF\nx\nEOF"]);
 });
 
 test("a heredoc that is not provably data fails closed: mid-line #, nested heredoc, escaped substitution after #", async () => {
