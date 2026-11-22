@@ -17,6 +17,7 @@ import {
   reviewedWorktreeRoot,
   BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
   buildGateBriefingEvidencePath,
+  buildGateFaninLedgerPath,
   buildGateBriefingPrefixPath,
   buildGateBriefingScopePath,
   buildGateBriefingVolatilePath,
@@ -5255,6 +5256,42 @@ test("writeGateContext REFUSES, naming the retirement command and the briefed re
   }
 });
 
+test("issue 3416: a rebuild at a full head retires the partial round and reports retiredRound; a recorded verdict refuses with a recovery", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-retire-"));
+  const fullSha = "abc1234567890def".padEnd(40, "0");
+  try {
+    const baseArgs = ["--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate", "--head-sha", fullSha, "--angles", '["scope"]', "--acceptance-criteria", "#9"];
+    await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Original body."]), { repoRoot });
+    const sentinel = path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${fullSha}.json`);
+    await writeFile(sentinel, "{}\n", "utf8");
+    // A reviewer that has not written its findings may still be running: the rebuild refuses and keeps the round.
+    await assert.rejects(
+      writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Corrected body."]), { repoRoot }),
+      (err) => /may still be running/.test(err.message) && /--pending/.test(err.recovery) && /write-gate-context\.mjs/.test(err.recovery) && /retire-gate-round\.mjs/.test(err.recovery),
+    );
+    assert.equal((await readFile(sentinel, "utf8")).trim(), "{}");
+    // Once it finished (a valid artifact newer than the sentinel) the round retires.
+    const reviewsDir = path.resolve(repoRoot, buildGateReviewsDir({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: fullSha, tmpRoot: "tmp" }));
+    await mkdir(reviewsDir, { recursive: true });
+    await writeFile(path.join(reviewsDir, "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", headSha: fullSha, findings: [] }), "utf8");
+    const rebuilt = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Corrected body."]), { repoRoot });
+    assert.equal(rebuilt.retiredRound.retired, 1);
+    await assert.rejects(readFile(sentinel), /ENOENT/);
+    // A fan-in ledger at the head marks a posted verdict: the next rebuild refuses and keeps the round.
+    const ledger = path.resolve(repoRoot, buildGateFaninLedgerPath({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: fullSha, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(ledger), { recursive: true });
+    await writeFile(ledger, "{}\n", "utf8");
+    await writeFile(sentinel, "{}\n", "utf8");
+    await assert.rejects(
+      writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Third body."]), { repoRoot }),
+      (err) => /a verdict is already recorded/.test(err.message) && /retire-gate-round\.mjs/.test(err.recovery),
+    );
+    assert.equal((await readFile(sentinel, "utf8")).trim(), "{}");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("writeGateContext detects SHA-256 (64-hex) sentinel filenames, not just SHA-1 (40-hex) (#1652)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-rebuild-sha256-"));
   // A SHA-256 head is 64 hex chars; the sentinel filename embeds the full SHA.
@@ -7905,14 +7942,25 @@ test("writeGateContext REFUSES a same-head rebuild that would rewrite the prior 
     const first = await writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot });
     const read = first.artifact.requiredReads.find((r) => r.kind === "prior-dispositions");
     const markerPath = path.resolve(repoRoot, first.path);
-    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-correctness-${"abc1234567890".padEnd(40, "0")}.json`), "{}\n", "utf8");
+    const fullHead = "abc1234567890".padEnd(40, "0");
+    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-correctness-${fullHead}.json`), "{}\n", "utf8");
     await writeLog("second-disposition");
+    // The reviewer has not written its findings, so it may still run: the recovery waits and keeps the retire command behind `operator:`.
     await assert.rejects(
       writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot }),
-      /Refusing to rewrite required read\(s\) .*prior-dispositions\.json with DIFFERENT bytes while a fan-out for head abc1234567890 may be in flight \(draft_gate\).*retire-gate-round\.mjs/,
+      (err) => /Refusing to rewrite required read\(s\) .*prior-dispositions\.json with DIFFERENT bytes while a fan-out for head abc1234567890 may be in flight \(draft_gate\).*retire-gate-round\.mjs/.test(err.message)
+        && /^wait for the running reviewers/.test(err.recovery) && /--pending/.test(err.recovery) && /write-gate-context\.mjs/.test(err.recovery) && /operator: run `dev-loops-run scripts\/github\/retire-gate-round\.mjs/.test(err.recovery),
     );
     assert.match(await readFile(path.resolve(repoRoot, read.path), "utf8"), /first-disposition/, "the in-flight reviewers keep the bytes their work order hashes");
     await stat(markerPath); // the completion marker survives the refusal
+    // Once every sentinel is finished the rewrite still refuses, and only then is the bare retire command the recovery.
+    const reviewsDir = path.resolve(repoRoot, buildGateReviewsDir({ repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: fullHead, tmpRoot: "tmp" }));
+    await mkdir(reviewsDir, { recursive: true });
+    await writeFile(path.join(reviewsDir, "correctness.json"), JSON.stringify({ angle: "correctness", verdict: "clean", headSha: fullHead, findings: [] }), "utf8");
+    await assert.rejects(
+      writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot }),
+      (err) => /^dev-loops-run scripts\/github\/retire-gate-round\.mjs --gate draft_gate --head-sha /.test(err.recovery) && !/operator/.test(err.recovery),
+    );
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -10925,4 +10973,121 @@ test("readsPrBody reads the developer-checklist lines the reviewer receives", ()
   assert.equal(readsPrBody("docs", cfg("X1: Check the PR body In scope list against the diff")), true);
   assert.equal(readsPrBody("docs", cfg("X1: Review the PR description for completeness")), true);
   assert.equal(readsPrBody("docs", cfg("A1: Check null and empty inputs")), false);
+});
+
+test("issue 3416: the rebuilt context plans a retired clean angle as pending, not completed", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-retire-plan-"));
+  const fullSha = "abc1234567890def".padEnd(40, "0");
+  const key = { repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: fullSha, tmpRoot: "tmp" };
+  try {
+    const args = ["--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate", "--head-sha", fullSha, "--angles", '["scope"]', "--acceptance-criteria", "#9"];
+    const run = (body) => main([...args, "--issue-body", body], { repoRoot, run: stubGhRun });
+    const realOut = process.stdout.write;
+    process.stdout.write = () => true;
+    try {
+      await run("Original body.");
+      await mkdir(path.resolve(repoRoot, buildGateReviewsDir(key)), { recursive: true });
+      await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${fullSha}.json`), "{}\n", "utf8");
+      await writeFile(path.resolve(repoRoot, buildGateReviewsDir(key), "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", headSha: fullSha, findings: [] }));
+      assert.deepEqual(await readCompletedAnglesForHead(key, { repoRoot }), ["scope"]);
+      await run("Corrected body.");
+    } finally {
+      process.stdout.write = realOut;
+    }
+    const { fanout } = await readGateContext(key, { repoRoot });
+    assert.deepEqual(fanout.preflight.completedAngles, []);
+    assert.deepEqual(fanout.pendingGroups.flatMap((g) => g.angles), ["scope"]);
+    assert.equal(existsSync(path.resolve(repoRoot, buildGateReviewsDir(key), "scope.json")), false);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("issue 3416: a rebuild retires an undispatched round (dispatch record, no sentinel)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-retire-undispatched-"));
+  const fullSha = "abc1234567890def".padEnd(40, "0");
+  try {
+    const baseArgs = ["--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate", "--head-sha", fullSha, "--angles", '["scope"]', "--acceptance-criteria", "#9"];
+    await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Original body."]), { repoRoot });
+    const record = path.resolve(repoRoot, "tmp", `checkpoint-dispatch-prompt-draft-gate-scope-${fullSha}.json`);
+    await writeFile(record, "{}\n", "utf8");
+    const rebuilt = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Corrected body."]), { repoRoot });
+    assert.equal(rebuilt.retiredRound.dispatchPromptRecords.length, 1);
+    await assert.rejects(readFile(record), /ENOENT/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("issue 3416: with --tmp-root set, the retirement still moves the sentinels the live scan reads under tmp/", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-retire-tmproot-"));
+  const fullSha = "abc1234567890def".padEnd(40, "0");
+  try {
+    const baseArgs = ["--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate", "--head-sha", fullSha, "--angles", '["scope"]', "--acceptance-criteria", "#9", "--tmp-root", "other-tmp"];
+    await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Original body."]), { repoRoot });
+    await mkdir(path.resolve(repoRoot, "tmp"), { recursive: true });
+    const sentinel = path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${fullSha}.json`);
+    await writeFile(sentinel, "{}\n", "utf8");
+    // The finished reviewer's artifact lives under --tmp-root, while its sentinel lives under tmp/.
+    const reviewsDir = path.resolve(repoRoot, buildGateReviewsDir({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: fullSha, tmpRoot: "other-tmp" }));
+    await mkdir(reviewsDir, { recursive: true });
+    await writeFile(path.join(reviewsDir, "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", headSha: fullSha, findings: [] }), "utf8");
+    const rebuilt = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Corrected body."]), { repoRoot });
+    assert.equal(rebuilt.retiredRound.retired, 1);
+    await assert.rejects(readFile(sentinel), /ENOENT/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("issue 3416: a failure after the retirement carries retiredRound on the error and in the CLI stderr JSON", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-retire-error-"));
+  const fullSha = "abc1234567890def".padEnd(40, "0");
+  const realOut = process.stdout.write;
+  const realErr = process.stderr.write;
+  let err = "";
+  try {
+    const baseArgs = ["--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate", "--head-sha", fullSha, "--angles", '["scope"]', "--acceptance-criteria", "#9"];
+    process.stdout.write = () => true;
+    await main([...baseArgs, "--issue-body", "Original body."], { repoRoot, run: stubGhRun });
+    // An undispatched round (a dispatch record only) retires, then the unreadable --known-findings path throws.
+    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-dispatch-prompt-draft-gate-scope-${fullSha}.json`), "{}\n", "utf8");
+    process.stderr.write = (chunk) => { err += chunk; return true; };
+    await main([...baseArgs, "--issue-body", "Corrected body.", "--known-findings", path.resolve(repoRoot, "missing-known-findings.json")], { repoRoot, run: stubGhRun });
+  } finally {
+    process.stdout.write = realOut;
+    process.stderr.write = realErr;
+    process.exitCode = 0;
+    await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+  const payload = JSON.parse(err.trim().split("\n").at(-1));
+  assert.equal(payload.ok, false);
+  assert.equal(payload.retiredRound.dispatchPromptRecords.length, 1);
+});
+
+test("issue 3416: the CLI refusal for a live round at an abbreviated head carries a concrete recovery key", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-recovery-cli-"));
+  const fullSha = "abc1234567890def".padEnd(40, "0");
+  const realOut = process.stdout.write;
+  const realErr = process.stderr.write;
+  let err = "";
+  try {
+    const args = ["--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate", "--head-sha", "abc1234567890def", "--angles", '["scope"]', "--acceptance-criteria", "#9"];
+    process.stdout.write = () => true;
+    await main([...args, "--issue-body", "Original body."], { repoRoot, run: stubGhRun });
+    await mkdir(path.resolve(repoRoot, "tmp"), { recursive: true });
+    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${fullSha}.json`), "{}\n", "utf8");
+    process.stderr.write = (chunk) => { err += chunk; return true; };
+    await main([...args, "--issue-body", "Corrected body."], { repoRoot, run: stubGhRun });
+  } finally {
+    process.stdout.write = realOut;
+    process.stderr.write = realErr;
+    process.exitCode = 0;
+    await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+  const payload = JSON.parse(err.trim().split("\n").at(-1));
+  assert.equal(payload.ok, false);
+  // The sentinel has no findings artifact, so its reviewer may still run: wait first, and keep the retire command behind `operator:`.
+  assert.match(payload.recovery, new RegExp(`^wait for the running reviewers .*--pending; if they crashed, operator: run \`dev-loops-run scripts/github/retire-gate-round\\.mjs --gate draft_gate --head-sha ${fullSha} --reason '[^'<>]+' --tmp-root '`));
+  assert.doesNotMatch(payload.recovery, /[<>\[\]]/);
 });

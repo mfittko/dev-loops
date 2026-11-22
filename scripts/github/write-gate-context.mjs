@@ -32,12 +32,13 @@ import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveFanoutSizeTier, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveGateDispatchMode, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves, validateAngleResult } from "@dev-loops/core/loop/gate-fanin";
+import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
 import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { retireGateRound } from "./retire-gate-round.mjs";
+import { buildLiveRoundRecovery, buildRetireCommand, findUnfinishedSentinels, isFinishedArtifact, retireStaleRound } from "./_stale-round-retirement.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities, splitDiffIntoParts, DIFF_PART_MAX_BYTES, DIFF_PART_MAX_LINES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
@@ -306,6 +307,7 @@ Optional:
                                  findings-log ledgers are read from the MAIN worktree's tmp/ (the stable
                                  per-repo ledger location); an explicit path pins both.
 Prior dispositions (no flag): every closed prior round of this gate on this PR (a findings-log ledger at any other head) contributes its reject/defer-disposed findings; the latest disposition of a finding wins. The cumulative list, scoped to angles re-running this round (not in --carried-angles), is written in full to <gate>-<headSha>.prior-dispositions.json and hash-bound as a required \`prior-dispositions\` read (a "do not re-raise" hint, skills/docs/gate-review-sub-loop-contract.md). A ledger that is unreadable, malformed, of a foreign identity, or not clean/findings_present contributes nothing; no usable ledger omits the read.
+Output: the artifact summary on stdout. When the rebuild retired a stale round at this head it adds "retiredRound" ({ retirementDir, retired, sentinels, dispatchPromptRecords, findingsDirRetired }); a failure after that retirement carries the same key on stderr. The posted-verdict and live-round refusals of the stale-round retirement (exit 1) carry a "recovery" field with the runnable command or stop route. A round with a posted verdict, or with a live reviewer sentinel (no findings artifact newer than it), is refused, never retired.
 
 ${JQ_OUTPUT_USAGE}
 `.trim();
@@ -3068,7 +3070,18 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
  * @param {{ repoRoot?: string }} [runtime]
  * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, evidencePath: string|null, prefixHash: string, prefixMode: "inline"|"pointer"|"file", warning?: string, volatilePath: string, requestPlanPath: string, requestPlan: object }>}
  */
-export async function writeGateContext(options, { repoRoot = process.cwd() } = {}) {
+export async function writeGateContext(options, deps = {}) {
+  const state = { retiredRound: null };
+  try {
+    return await writeGateContextBody(options, deps, state);
+  } catch (error) {
+    // Any failure after the stale-round retirement still tells the caller that state moved (the CLI copies the key into its stderr JSON).
+    if (state.retiredRound && error && typeof error === "object") error.retiredRound = state.retiredRound;
+    throw error;
+  }
+}
+
+async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, state) {
   // Validate/dedupe options.angles BEFORE any file write. The CLI path
   // already validates via parseAnglesJson; a programmatic caller
   // (buildGateContext or a direct writeGateContext call) may pass an
@@ -3419,7 +3432,27 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     }).map((e) => e.name);
     return { names, scanError };
   };
+  // The sentinels and dispatch records live under the scanned root; the findings directory lives under --tmp-root.
+  const scanRoot = path.resolve(repoRoot, "tmp");
+  const findingsRoot = path.resolve(repoRoot, options.tmpRoot || "tmp");
+  // The recovery for a refusal that fires while reviewers may still run, named by its one full head (taken from the sentinel names when
+  // --head-sha is abbreviated). The bare retire command goes out only when every named sentinel has a finished artifact; otherwise
+  // the coordinator, which runs a recovery that names no `operator`, is told to wait and the retire command waits behind `operator:`.
+  // When no single full head resolves, the recovery is an explicit stop route.
+  const liveRoundRecovery = async (names) => {
+    const heads = new Set(names.map((n) => n.slice(0, -".json".length).split("-").at(-1)));
+    const given = String(options.headSha).trim().toLowerCase();
+    const head = heads.size === 1 ? [...heads][0] : heads.size === 0 && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(given) ? given : null;
+    if (head === null) return `stop: no single full head names the live ${options.gate} round for ${options.headSha}; list tmp/ for its sentinels, then run dev-loops-run scripts/github/retire-gate-round.mjs for that full head`;
+    const findingsDir = buildGateReviewsDir({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: head, tmpRoot: findingsRoot });
+    const retire = { gate: options.gate, headSha: head, tmpRoot: scanRoot, findingsDir: existsSync(findingsDir) ? findingsDir : null, repo: options.repo, pr: options.pr };
+    const unfinished = names.length === 0 ? names : await findUnfinishedSentinels({ repo: options.repo, pr: options.pr, gate: options.gate, tmpRoot: scanRoot, findingsTmpRoot: findingsRoot, names }).catch(() => names);
+    return names.length > 0 && unfinished.length === 0
+      ? buildRetireCommand({ ...retire, reason: `the ${options.gate} round at ${head} was in flight when the briefing prefix changed` })
+      : buildLiveRoundRecovery(retire);
+  };
   let rebuildWarning = null;
+  let retiredRound = null;
   if (readError !== null) {
     rebuildWarning = `Could not read the existing briefing prefix (${readError.code ?? readError.message}) before overwriting it — if the new bytes differ and reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed. Retire the round explicitly before re-fanning: ${retireCommand}`;
     process.stderr.write(`WARNING: ${rebuildWarning}\n`);
@@ -3434,16 +3467,29 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     // refusing the rebuild (the operator can fix the scan or retire first).
     if (scanError !== null) {
       throw new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes at head ${options.headSha} (${options.gate}): the live-sentinel scan failed (${scanError.code ?? scanError.message}) — cannot rule out an in-flight fan-out for this head, and a rebuild that splits a live round must not be allowed through a broken scan. The existing (recorded) prefix hash is ${priorPrefixHash}; the attempted rebuild would write hash ${newPrefixHash}. Fix the scan first (make tmp/ listable again — restore read permission on the tmp/ directory or remove a file/blocker masquerading as it), then either retire the round explicitly before rebuilding (retire-gate-round moves sentinels out of the live namespace, so a rebuild then sees no live sentinels) or confirm no fan-out is in flight: ${retireCommand}`);
-    } else if (liveSentinelNames.length > 0) {
-      // AC2: name the in-flight head and point at the reviewers already briefed
-      // on the prior bytes (their sentinel files + the recorded hash they carry).
-      throw new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes while a fan-out for head ${options.headSha} is in flight (${options.gate}): ${liveSentinelNames.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one was briefed on the prior prefix hash ${priorPrefixHash} and would fail closed on the new hash ${newPrefixHash}, splitting the round. Reviewers already briefed on the prior bytes: ${liveSentinelNames.map((n) => `tmp/${n}`).sort().join(", ")}. Retire the round explicitly before rebuilding: ${retireCommand}`);
+    } else {
+      // Issue 3416: retire the undispatched or partial round at this head automatically, so the fresh round starts clean.
+      // A live round has sentinels or dispatch records; a round with a posted verdict is never retired: the refusal stands, with its recovery.
+      const stale = await retireStaleRound({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: scanRoot, findingsTmpRoot: findingsRoot, verdictRoots: [findingsRoot, scanRoot, resolveGateArtifactTmpRoot(repoRoot)], liveOnly: true });
+      if (stale.refusal) throw Object.assign(new Error(`${stale.refusal.error} recovery: ${stale.refusal.recovery}`), { recovery: stale.refusal.recovery });
+      retiredRound = stale.retiredRound;
+      state.retiredRound = retiredRound;
+      const { names: stillLive } = await scanLiveSentinels();
+      if (stillLive.length > 0) {
+        // AC2: name the in-flight head and point at the reviewers already briefed on the prior bytes (their sentinel files + the recorded hash they carry).
+        const recovery = await liveRoundRecovery(stillLive);
+        throw Object.assign(new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes while a fan-out for head ${options.headSha} is in flight (${options.gate}): ${stillLive.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one was briefed on the prior prefix hash ${priorPrefixHash} and would fail closed on the new hash ${newPrefixHash}, splitting the round. Reviewers already briefed on the prior bytes: ${stillLive.map((n) => `tmp/${n}`).sort().join(", ")}. Retire the round explicitly before rebuilding: ${recovery}`), { recovery });
+      }
     }
-    // liveSentinelNames.length === 0: the round is not in flight (already
-    // retired or never fanned out). AC3: a rebuild after the round has
+    // No live round remains (already retired, undispatched or never fanned out). AC3: a rebuild after the round has
     // completed is unaffected — proceed to overwrite the frozen artifact.
   }
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
+  // The caller computed the fan-out plan from the findings the retirement just moved away, so it plans again over what remains.
+  if (retiredRound && typeof options.replanFanout === "function") {
+    const fanoutDispatch = await options.replanFanout();
+    options = { ...options, fanoutDispatch };
+  }
 
   // Request plan: angles partition by concrete resolved model via
   // resolveRoleModel(config, { role: angle, harness, kind: "angle" }), the
@@ -3608,7 +3654,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       const cause = scanError !== null
         ? `the live-sentinel scan failed (${scanError.code ?? scanError.message}), so an in-flight fan-out cannot be ruled out`
         : `${names.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist: ${names.map((n) => `tmp/${n}`).sort().join(", ")}`;
-      throw new Error(`Refusing to rewrite required read(s) ${changedOutOfPrefix.join(", ")} with DIFFERENT bytes while a fan-out for head ${options.headSha} may be in flight (${options.gate}): ${cause}. Retire the round explicitly before rebuilding: ${retireCommand}`);
+      const recovery = await liveRoundRecovery(names);
+      throw Object.assign(new Error(`Refusing to rewrite required read(s) ${changedOutOfPrefix.join(", ")} with DIFFERENT bytes while a fan-out for head ${options.headSha} may be in flight (${options.gate}): ${cause}. Retire the round explicitly before rebuilding: ${recovery}`), { recovery });
     }
   }
 
@@ -3668,21 +3715,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       const wantHead = String(options.headSha).trim().toLowerCase();
       // An artifact proves its unit finished only when it is newer than the sentinel (an older one belongs to an earlier round)
       // and parses as findings JSON that names this head and this angle; a truncated or foreign file is still in flight.
-      const finishedArtifact = async (angle, sentinel) => {
-        try {
-          const file = artifactOf(angle);
-          if ((await stat(file)).mtimeMs < (await stat(path.resolve(repoRoot, "tmp", sentinel))).mtimeMs) return false;
-          const parsed = JSON.parse(await readFile(file, "utf8"));
-          const head = String(parsed?.headSha ?? "").trim().toLowerCase();
-          // The artifact must stamp a full SHA; only an abbreviated --head-sha may match by prefix.
-          const isFullSha = (sha) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha);
-          // A reviewer that exited through emit-reviewer-blocked.mjs writes verdict "blocked" with no findings; it is a finished unit.
-          const wellFormed = validateAngleResult(parsed?.verdict === "blocked" && Array.isArray(parsed.findings) && parsed.findings.length === 0 ? { ...parsed, verdict: "clean" } : parsed) === null;
-          return wellFormed && isFullSha(head) && (isFullSha(wantHead) ? head === wantHead : wantHead.length > 0 && head.startsWith(wantHead)) && String(parsed.angle).trim().toLowerCase() === String(angle).trim().toLowerCase();
-        } catch {
-          return false;
-        }
-      };
+      const finishedArtifact = (angle, sentinel) => isFinishedArtifact({
+        file: artifactOf(angle),
+        sentinelFile: path.resolve(repoRoot, "tmp", sentinel),
+        wantHead,
+        sameAngle: (parsedAngle) => parsedAngle.trim().toLowerCase() === String(angle).trim().toLowerCase(),
+      });
       const refuseInFlight = (scope) => {
         throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}) while unit ${scope} is in flight; wait for it to write its findings, or retire the round: ${retireCommand}`);
       };
@@ -3832,6 +3870,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     requestPlan,
     ...(rebuildWarning ? { warning: rebuildWarning } : {}),
     ...(bodyOnlyRerun ? { bodyOnlyRerun } : {}),
+    ...(retiredRound ? { retiredRound } : {}),
   };
 }
 
@@ -3975,9 +4014,12 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // AC3: same-head skip-completed resume — angles with a clean artifact
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
-  const angleState = await readBodyAwareAngleState({ ...input, tmpRoot, carriedAngles: input.carriedAngles ?? null }, { repoRoot });
-  const completedAngles = input.completedAngles ?? angleState.completedAngles;
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: angleState.carriedAngles, singleWave: !isReviewGate, unitBound: await recordedUnitBound(input, repoRoot), sizeOutcome: input.sizeOutcome, changedFiles, harness: input.harness ?? resolveRuntimeHarness(), recordedSizeTier: await recordedSizeTier(input, repoRoot) });
+  const planFanout = async (explicitCompletedAngles) => {
+    const angleState = await readBodyAwareAngleState({ ...input, tmpRoot, carriedAngles: input.carriedAngles ?? null }, { repoRoot });
+    const completedAngles = explicitCompletedAngles ?? angleState.completedAngles;
+    return resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: angleState.carriedAngles, singleWave: !isReviewGate, unitBound: await recordedUnitBound(input, repoRoot), sizeOutcome: input.sizeOutcome, changedFiles, harness: input.harness ?? resolveRuntimeHarness(), recordedSizeTier: await recordedSizeTier(input, repoRoot) });
+  };
+  const fanoutDispatch = await planFanout(input.completedAngles);
 
   const writeResult = await writeGateContext(
     {
@@ -3989,6 +4031,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       rationale,
       angleScopes,
       fanoutDispatch,
+      replanFanout: () => planFanout(),
       branch: input.branch ?? null,
       touchedFiles: input.touchedFiles ?? [],
       changedFiles,
@@ -4623,15 +4666,21 @@ export async function main(
       // --prefix-file (config is a local file read).
       // AC3: same-head skip-completed resume (angles with a clean artifact
       // at this head are excluded from the required count + pending plan).
-      const angleState = await readBodyAwareAngleState({ ...options, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
-      const { completedAngles } = angleState;
-      options.carriedAngles = angleState.carriedAngles;
-      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review", unitBound: await recordedUnitBound(options, repoRoot), sizeOutcome, changedFiles: options.changedFiles, harness: options.harness, recordedSizeTier: await recordedSizeTier(options, repoRoot) });
+      const planFanout = async () => {
+        const angleState = await readBodyAwareAngleState({ ...options, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
+        options.carriedAngles = angleState.carriedAngles;
+        return resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles: angleState.completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review", unitBound: await recordedUnitBound(options, repoRoot), sizeOutcome, changedFiles: options.changedFiles, harness: options.harness, recordedSizeTier: await recordedSizeTier(options, repoRoot) });
+      };
+      options.fanoutDispatch = await planFanout();
+      options.replanFanout = planFanout;
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
-    process.stderr.write(`${formatCliError(error)}\n`);
+    // A refusal that carries a recovery keeps it in the CLI JSON (RECOVERY-COMMAND-REQUIRED).
+    const recovery = typeof error?.recovery === "string" && error.recovery.length > 0 ? { recovery: error.recovery } : {};
+    const retired = error?.retiredRound ? { retiredRound: error.retiredRound } : {};
+    process.stderr.write(`${JSON.stringify({ ...JSON.parse(formatCliError(error)), ...recovery, ...retired })}\n`);
     process.exitCode = 1;
   }
 }
