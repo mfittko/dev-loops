@@ -812,6 +812,10 @@ const TRAILING_REDIRECT_ALLOW = [
   `bun run test:doc-guard > $TMPDIR/o6.txt 2>&1; tail -4 $TMPDIR/o6.txt`,
   `for f in test/github/write-gate-context.test.mjs test/dev-loops-cli.test.mjs; do echo $f; bun test $f 2>&1 | grep -aE "\\(fail\\)" | head -5; done`,
   `bun test "$t" > "$o" 2>&1`,
+  `dev-loops-run cli/index.mjs --help >>log.txt`,
+  `bun test $t >> log.txt`,
+  `bun test $t &>/dev/null`,
+  `dev-loops-run cli/index.mjs --help 1>&2`,
 ];
 
 const TRAILING_REDIRECT_DENY = [
