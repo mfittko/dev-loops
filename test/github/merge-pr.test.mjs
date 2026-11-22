@@ -2123,7 +2123,7 @@ test("gate_evidence_run ignores a cancelled run newer than a success", async () 
   assert.equal(runListCalls(calls).length, 1);
 });
 
-test("gate_evidence_run passes to the gate_evidence precondition when every run is cancelled", async () => {
+test("gate_evidence_run passes when every run is cancelled (branch protection still guards the status at merge)", async () => {
   const { runtime } = withRunReads([[RUN(9, "completed", "cancelled"), RUN(8, "completed", "cancelled")]]);
   const result = await mergePr(baseOptions(), runtime);
   assert.equal(result.merged, true);
@@ -2145,6 +2145,41 @@ test("gate_evidence_run treats a repo without the workflow (HTTP 404) as not app
   const { runtime } = withRunReads([Object.assign(new Error("gh run list failed: HTTP 404: workflow gate-evidence.yml not found on the default branch"), { code: "GH_API_ERROR" })]);
   const result = await mergePr(baseOptions(), runtime);
   assert.equal(result.merged, true);
+});
+
+test("gate_evidence_run fails closed on a generic HTTP 404", async () => {
+  const { runtime } = withRunReads([Object.assign(new Error("gh run list failed: HTTP 404: Not Found"), { code: "GH_API_ERROR" })]);
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /HTTP 404: Not Found/);
+});
+
+test("gate_evidence_run passes a failed run when the gate-evidence status is success", async () => {
+  const { runtime } = withRunReads([[RUN(7, "completed", "failure")]], { prView: { statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }, { state: "SUCCESS", context: "gate-evidence" }] } });
+  const result = await mergePr(baseOptions(), runtime);
+  assert.equal(result.merged, true);
+});
+
+test("gate_evidence_run refuses a failed run when the gate-evidence status is not success", async () => {
+  const { runtime } = withRunReads([[RUN(7, "completed", "failure")]], { prView: { statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }, { state: "FAILURE", context: "gate-evidence" }] } });
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /gate_evidence_run \(.*run 7 /);
+});
+
+test("gate_evidence_run refuses when the head changed during the wait and writes one stderr line", async () => {
+  const { runtime } = withRunReads([[RUN(2, "in_progress", null)], [RUN(2, "completed", "success")]]);
+  const base = runtime.ghJson;
+  let views = 0;
+  runtime.ghJson = async (args) => {
+    const result = await base(args);
+    if (args[0] === "pr" && args[1] === "view" && String(args[args.length - 1]).includes("headRefOid")) {
+      views += 1;
+      if (views === 2) return { ...result, headRefOid: "f".repeat(40) };
+    }
+    return result;
+  };
+  let written = "";
+  runtime.stderr = { write: (chunk) => { written += chunk; } };
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /gate_evidence_run \(the head changed from .* while waiting/);
+  assert.equal(written.split("\n").filter(Boolean).length, 1);
+  assert.match(written, /run 2/);
 });
 
 test("gate_evidence_run fails closed on any other gh error and on a non-array payload", async () => {
