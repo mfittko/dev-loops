@@ -1579,7 +1579,7 @@ export function buildResolveDevLoopStartupResult(input, {
     return {
       ...buildNeedsReconcileStartupResult(
         bundle,
-        `Issue #${issue} has no clean grill (${issueReadinessReason}): it needs a "🔬 Grill / refinement results" comment that is newer than every spec change, a "## Simplest design" section and a "simplicity-review:" line. Run the grill with \`/dev-loops:loop-grill ${issue} --auto\` (or \`/loop-grill ${issue} --auto\` in the dev-loops repo itself), then re-run startup (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
+        `Issue #${issue} is blocked: no clean grill (${issueReadinessReason}): it needs a "🔬 Grill / refinement results" comment that is newer than every spec change, a "## Simplest design" section and a "simplicity-review:" line. Run the grill with \`/dev-loops:loop-grill ${issue} --auto\` (or \`/loop-grill ${issue} --auto\` in the dev-loops repo itself), then re-run startup (rules GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL, GRILL-SUBLOOP-SIMPLICITY-REVIEW).`,
         pendingRetrospectives,
       ),
       issueReadiness: input.issueReadiness,
