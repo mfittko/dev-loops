@@ -1885,7 +1885,7 @@ function inspectShell(command, report = false, skipFirst = false) {
         }
       }
       // `sh < tmp/r.sh`, `node < tmp/r.mjs`: with no script word, a stdin redirect is the script, for every runner
-      const stdinFile = redirs.find((r) => r.op === R.RdrIn && (!r.n || r.n.value === "0"));
+      const stdinFile = redirs.find((r) => (r.op === R.RdrIn || r.op === R.RdrInOut) && (!r.n || r.n.value === "0"));
       if (FILE_RUNNER_HEAD_RE.test(head) && !script.script && stdinFile) script.script = wordOf(stdinFile.word);
       // compared when the command ends: bash expands the substitutions in its words first, so a heredoc write in one of them comes before the run
       const isWritten = (w) => !!w && written.includes(normPath(w.value));

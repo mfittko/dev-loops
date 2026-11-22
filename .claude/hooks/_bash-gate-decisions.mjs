@@ -337,7 +337,7 @@ export function decideBashGateDeny(facts = {}) {
         "file written by a heredoc in the same command. Write and edit files with the editor tools (Write/Edit under Claude " +
         "Code, write/edit under Pi), and parse tool output via --jq/--silent. An env -S split-string command and a command " +
         "head that bash expands (ANSI-C quoting, brace or pathname expansion) also deny, because the gate cannot read them." +
-        (!parseError ? "" : /^the inline-interpreter parser failed/.test(parseError)
+        (!parseError ? "" : /^the inline-interpreter parser failed to load/.test(parseError)
           ? ` The gate cannot parse any command (${parseError}). Regenerate or reinstall .claude/hooks/_vendor/sh-syntax.`
           : ` The command does not parse (${parseError}), so the gate cannot tell data from code. Fix the syntax or use the editor tools.`),
     };

@@ -115,7 +115,7 @@ export const INLINE_INTERPRETER_FORMS = [
   // write-then-run runner spellings (issue 2442 Mechanism): shells and path spellings the walk resolves deny; `cd` and `$PWD` spellings are reported ceiling rows
   allow("bash tmp/r.sh"),
   allow("cat > tmp/r.sh <<'EOF'\nx\nEOF\ncd tmp && bash r.sh"),
-  ...["bash tmp//r.sh", "bash ./tmp/./r.sh", "dash tmp/r.sh", "ksh tmp/r.sh", "sh < tmp/r.sh", "bash ././tmp///r.sh"]
+  ...["bash tmp//r.sh", "bash ./tmp/./r.sh", "dash tmp/r.sh", "ksh tmp/r.sh", "sh < tmp/r.sh", "sh <> tmp/r.sh", "bash ././tmp///r.sh"]
     .map((run) => deny(`cat > tmp/r.sh <<'EOF'\nnode -e x\nEOF\n${run}`)),
   ceiling("cat > tmp/r.sh <<'EOF'\nnode -e x\nEOF\ncd tmp && bash r.sh"),
   ceiling("cat > tmp/r.sh <<'EOF'\nnode -e x\nEOF\nbash \"$PWD/tmp/r.sh\""),
