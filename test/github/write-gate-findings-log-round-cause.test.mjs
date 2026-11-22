@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
@@ -179,10 +179,13 @@ test("W12b a draft_gate retirement at a head does not make a pre_approval_gate w
 test("W12c a truncated prior ledger does not block the write and is named in the warning", async () => {
   await withTempDir(async (dir) => {
     await clean(dir, A);
-    await writeFile(ledgerFile(dir, "draft_gate", A), "{truncated");
+    const ledger = ledgerFile(dir, "draft_gate", A);
+    await rm(`${ledger}.seal`, { force: true });
+    await writeFile(ledger, "{truncated");
     const result = await clean(dir, B);
     assert.equal(result.log.roundCause, "first");
     assert.match(result.warning, new RegExp(`draft_gate-${A}\\.json`));
+    assert.match(result.warning, /unreadable/);
   });
 });
 
