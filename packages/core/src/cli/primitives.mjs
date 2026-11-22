@@ -156,7 +156,7 @@ export function parseAllowedRefsCsv(value, flag, parseError = null) {
 // so a caller that needs stdin no longer has to reach for a second, separately
 // injected runner — every gh call in a script can route through the ONE
 // runChild its tests already stub.
-// `timeoutMs` is optional and additive: when set, spawn kills the child at the bound, so the close handler settles with a signal exit.
+// `timeoutMs` is optional and additive: when set, spawn kills the child at the bound, so the close handler settles with a signal exit and `timedOut: true`.
 // Every default-runner `gh` call takes a gh-throttle slot first.
 // A secondary rate limit backs off once, retakes a slot and retries; a second one throws RATE_LIMITED.
 // `sleep` is a test seam. gh-throttle and gh are imported lazily to avoid an import cycle.
@@ -182,7 +182,8 @@ function spawnChild(command, args, env, stdinText, timeoutMs) {
     }
     child.on("error", reject);
     child.on("close", (code) => {
-      resolve({ code, stdout, stderr });
+      // `child.killed` is true only when this process sent the signal, so the spawn timer's kill is the one a signal death can be told from.
+      resolve(timeoutMs !== undefined && child.killed ? { code, stdout, stderr, timedOut: true } : { code, stdout, stderr });
       if (command === "gh") recordGhCall(args, { durationMs: Date.now() - startedAt, status: code ?? 1, stderr });
     });
   });
