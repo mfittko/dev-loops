@@ -169,6 +169,23 @@ test("W12 a rerun after a retirement before any ledger write is system_rerun, an
   });
 });
 
+test("W12b a draft_gate retirement at a head does not make a pre_approval_gate write there system_rerun", async () => {
+  await withTempDir(async (dir) => {
+    await retire(dir, A);
+    assert.equal((await clean(dir, A, { gate: "pre_approval_gate" })).log.roundCause, "first");
+  });
+});
+
+test("W12c a truncated prior ledger does not block the write and is named in the warning", async () => {
+  await withTempDir(async (dir) => {
+    await clean(dir, A);
+    await writeFile(ledgerFile(dir, "draft_gate", A), "{truncated");
+    const result = await clean(dir, B);
+    assert.equal(result.log.roundCause, "first");
+    assert.match(result.warning, new RegExp(`draft_gate-${A}\\.json`));
+  });
+});
+
 test("W13 a rerun after a blocked round at the same head is system_rerun and a blocked round at another head is ignored", async () => {
   await withTempDir(async (dir) => {
     await clean(dir, A);

@@ -512,7 +512,7 @@ test("R23 --help states the derivation limit, the out-of-band count and the roun
   let out = "";
   await runCli(["--help"], { stdout: { write: (s) => { out += s; } } });
   assert.match(out, /is unread and can undercount system_rerun and body_only/);
-  assert.match(out, /outOfBandLedgers counts ledgers whose seal does not match/);
+  assert.match(out, /outOfBandLedgers counts ledgers of the --gate read whose seal does not match/);
   assert.match(out, /the earliest one stamped\s+first/);
 });
 
@@ -564,5 +564,21 @@ test("R28 a failed worktree listing in a git checkout is named in warnings", asy
     await mergedOne(dir);
     const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
     assert.ok(r.warnings.some((w) => /worktree listing failed/.test(w)));
+  });
+});
+
+test("R29 --gate review counts no draft_gate drop and names both dropped checklist ledgers in warnings", async () => {
+  await withTempDir(async (dir) => {
+    await ledger(dir, 1, sha("a"), "2026-11-01T01:00:00.000Z");
+    await ledger(dir, 1, sha("b"), "2026-11-01T02:00:00.000Z");
+    await writeFile(path.resolve(dir, buildLogPath({ repo: "o/r", pr: 1, gate: "draft_gate", headSha: sha("c"), tmpRoot: dir })), "{truncated");
+    await tamper(path.resolve(dir, buildLogPath({ repo: "o/r", pr: 1, gate: "draft_gate", headSha: sha("b"), tmpRoot: dir })));
+    await mergedOne(dir);
+    const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json"), "--gate", "review"]);
+    assert.equal(r.gate, "review");
+    assert.equal(r.totals.unreadableLedgers, 0);
+    assert.equal(r.totals.outOfBandLedgers, 0);
+    assert.ok(r.warnings.some((w) => w.includes(`draft_gate-${sha("c")}.json`)));
+    assert.ok(r.warnings.some((w) => w.includes(`draft_gate-${sha("b")}.json`)));
   });
 });

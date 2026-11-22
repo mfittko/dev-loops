@@ -85,7 +85,7 @@ export async function findSameHeadRerun({ repoRoot, repo, pr, gate, headSha, tmp
 /**
  * Reads the prior round the same way the round count does, probes git only for a head move, then derives the cause. Returns `{ roundCause, warnings }`.
  * Telemetry only, so it never refuses a write: a git or gate-context read error means no base-only merge, and a prior ledger with a sealed-ledger mismatch is excluded
- * (never trusted) and named in `warnings`, as is an unreadable retirement record or directory. The cap, retention and carry-forward readers stay fail-closed.
+ * (never trusted) and named in `warnings`, as are an unreadable (truncated or invalid-verdict) prior ledger, an unreadable retirement record and an unreadable directory. The cap, retention and carry-forward readers stay fail-closed.
  * A completed live ledger of the same round keeps its stamped cause, because a later head's ledger must not re-derive it on a repeated write.
  */
 export async function resolveRoundCause(options, { repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
@@ -99,7 +99,7 @@ export async function resolveRoundCause(options, { repoRoot, baseOnlyMerge = isB
   const ownLive = isOwnLedger(live, { repo, gate, pr, head });
   if (ownLive && live.roundIdentity?.completed === true && isInRoundRewrite(live, roundIdentity) && ROUND_CAUSES.includes(live.roundCause)) return { roundCause: live.roundCause, warnings };
 
-  const priors = await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot, roundIdentity }, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead: true, onOutOfBand: (name) => skipped(`roundCause telemetry skipped ${name}: ${OUT_OF_BAND_WRITE}`) });
+  const priors = await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot, roundIdentity }, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead: true, onUnreadable: (name) => skipped(`roundCause telemetry skipped ${name}: unreadable`), onOutOfBand: (name) => skipped(`roundCause telemetry skipped ${name}: ${OUT_OF_BAND_WRITE}`) });
   const prior = priors.at(-1);
 
   // A same-head record only matters before the no-prior and head-move rules; a prior round at this head keeps the digest rule.

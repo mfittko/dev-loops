@@ -11,6 +11,7 @@ import { isBaseOnlyMergeSince, runGitCommand } from "../lib/git-delta.mjs";
 import { ROUND_CAUSES, deriveRoundCause, findSameHeadRerun } from "../github/_round-cause.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
+import { OUT_OF_BAND_WRITE } from "../github/_gate-artifact-seal.mjs";
 import { readClosedPriorRoundLogs } from "../github/write-gate-context.mjs";
 import { listWorktreeEntries, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
@@ -45,8 +46,9 @@ when git cannot answer (a missing commit object) or its head is contained in the
 and retirement records of its head that lie between the previous round and itself (system_rerun and body_only). The retirement records come from
 <tmp-root> (a relative path resolves against the working directory) and from the tmp directory of the checkout root and of every registered worktree, whatever the working directory; a record elsewhere (for example under a removed checkout)
 is unread and can undercount system_rerun and body_only. An unreadable retirement record or directory is skipped,
-and warnings names it, as it names a failed worktree listing in a git checkout. A blocked ledger without a valid loggedAt counts only when no bound applies. unreadableLedgers counts ledgers the findings reader dropped (invalid JSON or an invalid verdict).
-outOfBandLedgers counts ledgers whose seal does not match; the report excludes them and never trusts their content.
+and warnings names it, as it names a failed worktree listing in a git checkout. A blocked ledger without a valid loggedAt counts only when no bound applies. unreadableLedgers counts ledgers of the --gate read that the findings reader dropped (invalid JSON or an invalid verdict).
+outOfBandLedgers counts ledgers of the --gate read whose seal does not match; the report excludes them and never trusts their content.
+Both counters skip the extra draft_gate read of the round 1 checklist; a ledger dropped there is named in warnings.
 
 Checklist split (checklist): the first completed draft_gate round of each change (the earliest one stamped
 first, else the earliest by loggedAt), whatever --gate says, counts each finding as covered when its angle
@@ -175,7 +177,14 @@ export async function buildReport(values, { repoRoot = process.cwd() } = {}) {
     let unreadable = 0;
     let outOfBand = 0;
     // A ledger with a seal mismatch is excluded and counted, never trusted: one damaged ledger must not remove the report of every change.
-    const read = (g) => readClosedPriorRoundLogs({ repo: values.repo, pr: number, gate: g, headSha: GATE_SENTINEL_HEAD, tmpRoot }, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead: true, onUnreadable: () => { unreadable += 1; }, onOutOfBand: () => { outOfBand += 1; } });
+    // Only the read of the selected gate counts; a drop of the extra draft_gate checklist read is named in warnings.
+    const read = (g) => readClosedPriorRoundLogs({ repo: values.repo, pr: number, gate: g, headSha: GATE_SENTINEL_HEAD, tmpRoot }, {
+      repoRoot,
+      includeRetainedCurrentHead: true,
+      includeLiveCurrentHead: true,
+      onUnreadable: g === gate ? () => { unreadable += 1; } : (name) => warnings.add(`checklist read of PR ${number} skipped ${g} ledger ${name}: unreadable`),
+      onOutOfBand: g === gate ? () => { outOfBand += 1; } : (name) => warnings.add(`checklist read of PR ${number} skipped ${g} ledger ${name}: ${OUT_OF_BAND_WRITE}`),
+    });
     // A sentinel head matches no ledger, so every ledger of the PR is read as a prior round.
     const logs = await read(gate);
     const { causes, derived } = await roundCauses(logs, { base, repoRoot, checkoutRoot, ensureBase, repo: values.repo, pr: number, gate, tmpRoot, extraRoots: retirementRoots, warn: (m) => warnings.add(m) });
