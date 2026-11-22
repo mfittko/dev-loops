@@ -3257,6 +3257,10 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     // The angle checks, tick and recorded marker all key on options.executionMode, so a ledger-declared
     // fan-out is promoted onto it rather than enforced only for this local check.
     promoteLedgerFanout(options, preloadedFindingsLedger);
+    // The review gate skips the non-review block above, so repeat the inline-reason refusal here for every gate.
+    if ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent" && options.inlineReason === undefined) {
+      throw new Error(INLINE_REASON_REQUIRED_MESSAGE);
+    }
     // A ledger-only post has no --findings-summary: derive a counts digest from the ledger.
     if (!options.findingsSummary) {
       const n = (preloadedFindingsLedger.findings ?? []).length;

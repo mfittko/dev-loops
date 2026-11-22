@@ -13509,7 +13509,15 @@ test("upsert-checkpoint-verdict: a partly judged clean ledger keeps its unjudged
   await withTempDir(async (tempDir) => {
     const findings = [{ ...BODY_FILED_FINDING, severity: "must-fix" }, { ...BODY_FILED_FINDING, summary: "judged away", judgeDisposition: "reject", judgeReason: "n/a" }];
     const { run, posted } = await postLedgerOnly(tempDir, { executionMode: "inline_single_agent" }, { findings, extra: { inlineReason: "test" } });
-    await assert.rejects(run, /severity|high|blocking/i);
+    await assert.rejects(run, /Cannot set verdict "clean" for draft_gate: unresolved findings remain at blocking severities/);
     assert.equal(posted().length, 0);
   }, { prefix: "dev-loops-upsert-ledger-only-floor-" });
+});
+
+test("upsert-checkpoint-verdict: a ledger-only review post whose ledger records inline mode is refused without --inline-reason (#3347)", async () => {
+  await withTempDir(async (tempDir) => {
+    const { run, posted } = await postLedgerOnly(tempDir, { executionMode: "inline_single_agent" }, { gate: "review" });
+    await assert.rejects(run, /--inline-reason is required for executionMode inline_single_agent/);
+    assert.equal(posted().length, 0);
+  }, { prefix: "dev-loops-upsert-ledger-only-review-inline-" });
 });
