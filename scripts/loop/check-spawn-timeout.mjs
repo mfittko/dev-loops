@@ -61,7 +61,7 @@ export function computeSpawnTimeout({ files = [] } = {}) {
   }
   if (!findings.length) return { ok: true, outcome: "pass", findings, reasons: [] };
   const reasons = findings.map((f) => `${f.path}:${f.line}: ${f.call}() passes no timeout option; a hung child blocks the lane. Add a timeout or \`${ESCAPE_MARKER} <reason>\`.`);
-  return { ok: false, outcome: "block", findings, reasons };
+  return { ok: false, outcome: "block", findings, reasons, recovery: `Add a timeout option to each listed call, or mark it \`${ESCAPE_MARKER} <reason>\`, then rerun the check.` };
 }
 
 const assertPlausibleRef = (ref, label) => {
