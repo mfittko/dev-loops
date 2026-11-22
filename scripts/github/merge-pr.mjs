@@ -880,7 +880,7 @@ export async function mergePr(options, runtime = {}) {
   const spikeFirst = spikeResult();
   if (spikeFirst !== null) return spikeFirst;
 
-  // The local config checks need no GitHub read, so they run before the wait and again after every run read (the policy can change during a read or a wait).
+  // The local config checks need no GitHub read, so they run before the wait and again once after the run-list resolution ends (the policy can change during a read or a wait).
   let configLoad;
   let humanMergeOnly;
   const loadAndCheckConfig = async () => {
@@ -928,7 +928,7 @@ export async function mergePr(options, runtime = {}) {
     const spikeAfterRead = spikeResult();
     if (spikeAfterRead !== null) return spikeAfterRead;
   }
-  // The first run read can last minutes without a wait, so the policy reloads after every run read.
+  // The first run read can last minutes without a wait, so the policy reloads once after the run-list resolution ends.
   await loadAndCheckConfig();
   const gateEvidenceStatus = resolveNamedContextState(prView?.statusCheckRollup, LOOP_DERIVED_CI_CHECK_NAME);
   // A failed run does not refuse while the head's `gate-evidence` commit status is `success` (reconcile reports already-success).

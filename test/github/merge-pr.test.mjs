@@ -2054,6 +2054,11 @@ test("the default merge record comment kills a hung gh child at the timeout boun
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+  // An external signal death (code null, empty stderr, no timedOut) is not a timeout.
+  await assert.rejects(
+    defaultPostMergeComment({ repo: "mfittko/dev-loops", pr: 5, body: "b", env: process.env, ghCommand: "gh", runChild: async () => ({ code: null, stderr: "" }) }),
+    /gh pr comment returned no result/,
+  );
 });
 
 test("a PR carrying the spike no-merge marker is refused before any merge (ADR 0293)", async () => {
@@ -2144,6 +2149,11 @@ test("gate_evidence_run waits while any run is active, even next to a completed 
   const result = await mergePr(baseOptions(), runtime);
   assert.equal(result.merged, true);
   assert.deepEqual(sleeps, [10]);
+
+  // An older run 6 is active while the newer run 7 already failed: the wait still happens, then run 7 refuses.
+  const older = withRunReads([[RUN(6, "in_progress", null), RUN(7, "completed", "failure")], [RUN(6, "completed", "success"), RUN(7, "completed", "failure")]]);
+  await assert.rejects(() => mergePr(baseOptions(), older.runtime), /gate_evidence_run \(.*run 7 /);
+  assert.deepEqual(older.sleeps, [10]);
 });
 
 test("gate_evidence_run treats a repo without the workflow (HTTP 404) as not applicable", async () => {
