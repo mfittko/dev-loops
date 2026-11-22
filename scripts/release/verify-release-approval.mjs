@@ -283,7 +283,7 @@ export function resolveApprovalState({ version, operator, comments, releaseRef }
  * Append one record to the shared gh call log (same path and fields as @dev-loops/core's recordGhCall).
  * Zero-dependency copy: this script runs before `npm ci`. Swallows every error.
  */
-export function recordGhCall(args, { durationMs, status }) {
+function recordGhCall(args, { durationMs, status }) {
   try {
     const override = String(process.env.DEVLOOPS_GH_CALL_LOG ?? "").trim();
     let file = override && path.isAbsolute(override) ? override : null;
