@@ -45,6 +45,7 @@ import { selectActThreadBinding } from "../github/_fixer-act-thread-bindings.mjs
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { renderCliText } from "@dev-loops/core/loop/cli-command";
 import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
+import { findHeadCiRun, isRerunnableAttempt, isSmokeOnly, isSmokeTimeoutOnlyRun } from "../github/rerun-failed-ci.mjs";
 import { readPrViewOnce } from "../github/_pr-view-memo.mjs";
 
 const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path> | --review-id <review node id> | --ci-file <path> [--act-list-file <path> --gate <draft_gate|pre_approval_gate>]) [--completion-only] [--delta-result <path>] [--allowed-path <repo-relative path>]... [--operator-focus-file <path>] [--tmp-root <path>]
@@ -58,6 +59,7 @@ takes only --phase full, needs no delta decision, ignores any delta record for t
 refuses --phase commit_only. --ci-file <path> takes the wait-pr-checks.mjs JSON of a red head (status and ciStatus
 "failure", headSha equal to --head-sha, non-blank failedChecks[].name; the order carries the first 50 names cut at 200 characters and the omitted count) as a ci-failure source with the same shape:
 --phase full only, no delta record, no --delta-result; its handoff is { headSha } and joinRef is the outputRef. --gate applies only with --act-list-file, which may accompany --ci-file: the round's unposted act list (its verdict post was refused for red CI) then rides as a second act-list read and the fixer fixes both.
+When every failed check is a smoke job (viewer-smoke, deck-smoke, article-smoke; the verify aggregator is ignored, a lone failed verify also takes the live read, because wait-pr-checks omits a cancelled job-timeout smoke job from failedChecks), the emitter reads the head CI run from GitHub: it refuses and names scripts/github/rerun-failed-ci.mjs when every failed job timed out; it refuses and names scripts/github/rerun-failed-ci.mjs (which waits boundedly for the run) when the head CI run is not completed; at the third attempt or on a failed GitHub read it emits the fixer order.
 --completion-only (--phase full, one --act-list-file or --threads-file source; no --delta-result, --allowed-path or --operator-focus-file, the plan pins them) re-enters the incomplete full plan on disk for delivery only: it applies when the plan was pulled and its report is missing or predates the pull, and the plan candidate is the live head or (act-list source only) an ancestor of it, and it emits an operation: complete order with empty allowedPaths and no push marker. Drift of the plan, its receipt, the source bytes, the branch or the tree refuses and writes nothing. A --phase commit_only emission refuses while such a pulled plan, or an unpulled completion order for it, is active at its candidate with no new commit. A plan that is unpulled, whose pinned required read drifted, whose gate sequence is closed or whose review round is retired is superseded without a refusal. --completion-only over an unpulled completion order refuses and names pulling its workOrderRef.
 On the threads source a commit_only emission carries the delta record's findings[] as deltaFindings act items.
 For the other sources --phase full needs a clearing
@@ -110,6 +112,7 @@ export function buildFixerDir({ repo, pr, tmpRoot }) {
 }
 
 // emitFixerWorkOrder renders the message for the target harness before it rethrows.
+const rerunRecovery = (repo, pr, headSha) => `dev-loops-run scripts/github/rerun-failed-ci.mjs --repo ${repo} --pr ${pr} --head-sha ${headSha}`;
 class Refusal extends Error {
   constructor(message, refusal, recovery) { super(message); if (refusal) this.refusal = refusal; if (recovery) this.recovery = recovery; }
 }
@@ -635,6 +638,18 @@ async function emitPlan({
     if (ci?.ok !== true || ci.status !== "failure" || ci.ciStatus !== "failure") throw new Refusal(`ci file ${ciFile} is not a red wait-pr-checks result (status ${JSON.stringify(ci?.status)}, ciStatus ${JSON.stringify(ci?.ciStatus)}); a green, pending or failed read has nothing to fix; ${next}`, undefined, ciActFile || ci?.ciStatus !== "success" ? recover() : "CI is green at this head: re-run gate coordination (detect-pr-gate-coordination-state.mjs); there is nothing to fix.");
     if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`, undefined, recover());
     if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`, undefined, recover());
+    // A smoke-only red head is re-run, never fixed, when GitHub's live annotations show every failed job timed out (issue 3251).
+    // A run at the re-run cap, or a failed live read, keeps the fixer route so the loop never dead-ends.
+    if (isSmokeOnly(ci.failedChecks)) {
+      const runtime = { env, ghCommand, runChild };
+      const headRun = await findHeadCiRun({ repo, headSha }, runtime).catch(() => null);
+      // A re-run already started (or the run is otherwise unsettled): emit nothing until CI settles, as the re-run script's run_in_progress refusal does.
+      if (headRun && headRun.status !== "completed") throw new Refusal(`CI run ${headRun.databaseId} attempt ${headRun.attempt} is ${headRun.status}, not completed; run scripts/github/rerun-failed-ci.mjs --repo ${repo} --pr ${pr} --head-sha ${headSha}, which waits for the run to complete (wait-pr-checks.mjs returns at once on a red head), then emit again`, undefined, rerunRecovery(repo, pr, headSha));
+      // A completed green run makes the red ci file stale: a fixer order would fix a head that has nothing to fix.
+      if (headRun?.conclusion === "success") throw new Refusal(`CI run ${headRun.databaseId} completed green, so ci file ${ciFile} is stale; ${next}`, undefined, `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${repo} --pr ${pr}`);
+      const run = headRun && isRerunnableAttempt(headRun.attempt) && await isSmokeTimeoutOnlyRun({ repo, runId: headRun.databaseId }, runtime).catch(() => false) ? headRun : null;
+      if (run) throw new Refusal(`every failed job of CI run ${run.databaseId} attempt ${run.attempt} is a timed-out smoke job: a hang, not a code defect, so emit no fixer; run scripts/github/rerun-failed-ci.mjs --repo ${repo} --pr ${pr} --head-sha ${headSha}, then wait for CI again`, undefined, rerunRecovery(repo, pr, headSha));
+    }
   }
   const isActItem = (f) => f?.judgeDisposition === "act" && (gate === "draft_gate" ? hasSeverityText(f) : typeof f.severity === "string" && VALID_SEVERITIES.has(f.severity)) && typeof f.summary === "string" && f.summary.trim() !== "";
   let ciActRead, ciActParsed;
