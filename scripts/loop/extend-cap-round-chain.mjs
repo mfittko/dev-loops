@@ -26,7 +26,7 @@ import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { capRoundChainCoverage, capRoundCovers, clearingChainLastCandidates, isCleanCapRound, resolveCapRound, resolveCapRoundFixed } from "../github/write-gate-context.mjs";
-import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
+import { DELTA_CLEARING_NEXT_STEPS, coverRecordBlocker, gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import { defaultFetchOrigin } from "./standing-authorization.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
@@ -37,7 +37,7 @@ Extend the sealed cap-round clearing chain over later commits that change docs a
 Commits after the start of the logic range that touch a logic file need a sealed locally_clear pre-push delta record for exactly the start of the logic range..PR head (the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end; ADR 0254): the tool then seals extension "delta_covered" into that record. It refuses with a typed reason and writes nothing when such commits have no covering delta, when no cap-round chain exists (a clean cap round counts as a chain of length zero ending at the cap-round head), or when the proof does not reach the head afterwards.
 Output (stdout, JSON): { "ok": true, "action": "chain_extended" | "already_proven", "chainEnd" (null for already_proven), "candidateHead", "files" }
 Refusal (stderr, JSON, exit 1): { "ok": false, "refused": true, "reason": "<code>", "detail": "...", "recovery": "<the one next command, or operator: <action>>" }
-Reasons: repo_mismatch, pr_state_unreadable, base_fetch_failed, head_mismatch, history_unresolved (git could not read a commit of the chain: fetch it and rerun), no_cap_round_chain (for a sealed cap-round record that leaves act refs uncovered it names the reviewer-only cover run, \`loop pre-push-delta --reviewer-only --cover-uncovered\`), baseline_orphaned,
+Reasons: repo_mismatch, pr_state_unreadable, base_fetch_failed, head_mismatch, history_unresolved (git could not read a commit of the chain: fetch it and rerun; the replacement PR if the commit stays absent), no_cap_round_chain (for a sealed cap-round record that leaves act refs uncovered it names the reviewer-only cover run, \`loop pre-push-delta --reviewer-only --cover-uncovered\`, only while the record's candidate is on the head's history and every uncovered ref's cover record can take another run; the replacement PR otherwise), baseline_orphaned,
 logic_commit_in_range (no sealed locally_clear pre-push delta covers the code commits: run it for the start of the logic range), delta_range_mismatch (a sealed delta record exists but covers another range or is not locally_clear: rerun it for the start of the logic range..PR head), chain_reaches_head, record_exists, record_changed (the delta record changed on disk after it was validated), record_not_clearing, proof_not_reached; a thrown gh or git failure is "writer_error".
 ${JQ_OUTPUT_USAGE}`.trim();
 const parseError = buildParseError(USAGE);
@@ -128,7 +128,14 @@ export async function extendCapRoundChain(options, {
   // Only merge-base exit 1 without a signal proves `from` is not an ancestor. Any other failure (exit 128 for a commit this clone never fetched, a signal, a spawn error) leaves the history unresolved:
   // it reads as not an ancestor for this run (fail closed) and is recorded, so the refusal names the fetch and never the replacement PR for a round it could not read.
   const unresolved = new Set();
-  const reaches = (from, to) => { try { git(repoRoot, ["merge-base", "--is-ancestor", from, to]); return true; } catch (error) { if (!(error?.status === 1 && !error?.signal)) unresolved.add(from); return false; } };
+  const present = (sha) => { try { git(repoRoot, ["cat-file", "-e", `${sha}^{commit}`]); return true; } catch { return false; } };
+  // The failure names the commit this clone lacks (`from` or `to`, the PR head included): a fetch of a commit it already holds changes nothing. With both present (a signal, a spawn error) `from` stays the named one.
+  const reaches = (from, to) => {
+    try { git(repoRoot, ["merge-base", "--is-ancestor", from, to]); return true; } catch (error) {
+      if (!(error?.status === 1 && !error?.signal)) { const lacking = [to, from].filter((sha) => !present(sha)); for (const sha of lacking.length > 0 ? lacking : [from]) unresolved.add(sha); }
+      return false;
+    }
+  };
   const isAncestor = (sha) => sha !== head && reaches(sha, head);
   // The bound resolveCapRoundFixed applies on a ready PR (anyHead): a later link counts only while its candidate is on the head's history, so the tool and the proof cannot disagree. A cover record counts under the same history bound.
   const onHistory = (candidate) => candidate === head || reaches(candidate, head);
@@ -205,15 +212,16 @@ export async function extendCapRoundChain(options, {
     // A rebase leaves the cap-round head outside the head's history: no extension can bind, so name the replacement-PR restart.
     // Same probe as resolveCapRoundFixed: only merge-base exit 1 with both commits present proves it; the head itself or an unfetched commit (exit 128) does not.
     const capHead = cap?.log?.headSha;
-    const present = (sha) => { try { git(repoRoot, ["cat-file", "-e", `${sha}^{commit}`]); return true; } catch { return false; } };
     const proveOrphan = () => { try { git(repoRoot, ["merge-base", "--is-ancestor", capHead, head]); return false; } catch (error) { return error?.status === 1 && present(capHead) && present(head); } };
     if (capHead && capHead.toLowerCase() !== head && proveOrphan()) return refuse("baseline_orphaned", CAP_ROUND_REFUSAL.baseline_orphaned, replacementPrOperatorRecovery(pr));
     if (capHead && !present(capHead)) return refuse("no_cap_round_chain", `the cap-round head ${capHead.slice(0, 7)} is not in this clone, so no chain can be read. A cap-round head missing from this clone is outside the PR head's fetched history. Run \`git rev-parse --is-shallow-repository\`: if it prints true, run \`git fetch --unshallow\`, otherwise run \`git fetch origin ${capHead}\`. Then rerun \`${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}\`. If the commit is still absent, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, `git fetch origin ${capHead}`);
     // A history git could not read (not a proven non-ancestor) never reaches a replacement-PR recovery: fetch the missing commits and rerun.
-    if (unresolved.size > 0) {
+    // A commit that is still absent after the fetch (amended away, never pushed or pruned) has one exit left: the replacement PR.
+    const refuseUnresolved = () => {
       const shas = [...unresolved];
-      return refuse("history_unresolved", `git could not prove whether ${shas.map((sha) => sha.slice(0, 7)).join(", ")} is on the history of the PR head ${head.slice(0, 7)} (merge-base failed for a reason other than exit 1: usually a commit this clone has not fetched), so no chain is proven missing and no act ref is proven uncovered. Run ${shas.map((sha) => `\`git fetch origin ${sha}\``).join(" and ")} (\`git fetch --unshallow\` for a shallow clone), then rerun \`${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}\``, `git fetch origin ${shas[0]}`);
-    }
+      return refuse("history_unresolved", `git could not prove whether ${shas.map((sha) => sha.slice(0, 7)).join(", ")} is on the history of the PR head ${head.slice(0, 7)} (merge-base failed for a reason other than exit 1: usually a commit this clone has not fetched), so no chain is proven missing and no act ref is proven uncovered. Run ${shas.map((sha) => `\`git fetch origin ${sha}\``).join(" and ")} (\`git fetch --unshallow\` for a shallow clone), then rerun \`${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}\`. If a commit is still absent after the fetch, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, `git fetch origin ${shas[0]}`);
+    };
+    if (unresolved.size > 0) return refuseUnresolved();
     // Issue 3437: without a resolved cap round (fewer closed draft_gate rounds than the cap, or an unreadable ledger) no chain exists to extend, and the next draft_gate round is not refused (round > cap): gate-coordination routes to that round or to the ledger repair, never back to this command.
     const coordination = coordinationRecovery(repo, pr);
     if (!cap) return refuse("no_cap_round_chain", `PR #${pr} has no resolved draft_gate cap round (fewer rounds than maxReviewRounds are closed, or the findings ledger is unreadable), so there is no cap-round chain to extend and no extension is needed. Run ${coordination}: it routes to the next draft_gate round, or to the repair of an unreadable ledger.`, coordination);
@@ -228,9 +236,17 @@ export async function extendCapRoundChain(options, {
       const head7 = head.slice(0, 7);
       const prefix = `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head7}: the sealed record at the cap-round head ${capHeadSha.slice(0, 7)} does not cover the cap round's act set or its candidate is off the PR head's history, and it is never overwritten, so a plain reviewer-only run at that head refuses.${named}`;
       // ADR 0255 amendment (issue 3443): an uncovered ref on a cap-round head that the PR head's history holds is covered by the cover run: a fresh reviewer verifies only the uncovered refs over the cap-round head..PR head and seals a separate record keyed by the cap-round head and the ref. It needs no new commit and takes no baseline record slot.
-      if (uncovered.length > 0) return refuse("no_cap_round_chain", `${prefix} Run the cover run over ${capHeadSha.slice(0, 7)}..${head7}: ${coverRecovery(capHeadSha)} (then --result <result-file> --invocation <1-3>) until it is locally_clear; it seals one cover record per uncovered ref and never overwrites a record, then rerun \`${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}\`. A reviewer-only run with a chain-end baseline derives an empty act list and covers no act ref, so the cover run is the route for an uncovered ref. Or restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, coverRecovery(capHeadSha));
-      // Every act ref is covered, so the record's candidate is off the head's history: only a replacement PR remains.
-      return refuse("no_cap_round_chain", `${prefix} Restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, replacement);
+      // The cover run needs the sealed record's candidate on the head's history: exit 1 without a signal proves it is not (replacement PR), any other failure leaves it unresolved (fetch).
+      // It also needs every uncovered ref's cover record to accept another run: a sealed locally_clear one coverage ignored (its candidate left the history), an unsealed one and one that used the last invocation never will.
+      const sealedCandidate = String(sealedCap.candidateHead ?? "").trim().toLowerCase();
+      const candidateOnHistory = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sealedCandidate) && (sealedCandidate === head || reaches(sealedCandidate, head));
+      if (!candidateOnHistory && unresolved.size > 0) return refuseUnresolved();
+      const blocked = uncovered.length > 0 && candidateOnHistory ? uncovered.find((ref) => coverRecordBlocker(tmpRoot, capHeadSha, ref)) : undefined;
+      if (uncovered.length > 0 && candidateOnHistory && blocked === undefined) return refuse("no_cap_round_chain", `${prefix} Run the cover run over ${capHeadSha.slice(0, 7)}..${head7}: ${coverRecovery(capHeadSha)} (then --result <result-file> --invocation <1-3>) until it is locally_clear; it seals one cover record per uncovered ref and never overwrites a record, then rerun \`${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}\`. A reviewer-only run with a chain-end baseline derives an empty act list and covers no act ref, so the cover run is the route for an uncovered ref. Or restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, coverRecovery(capHeadSha));
+      // Every act ref is covered and the record's candidate is off the head's history, or a cover record can take no further run: only a replacement PR remains.
+      const blocker = blocked === undefined ? null : coverRecordBlocker(tmpRoot, capHeadSha, blocked);
+      const why = blocker ? ` The cover record of act ref ${blocked} is ${blocker === "clearing" ? "sealed locally_clear but its candidate is not on the PR head's history" : blocker === "bounded" ? "sealed with the last invocation used" : "unsealed, hand-edited or unreadable"}, and a cover record is never overwritten or restarted, so no cover run can cover it.` : "";
+      return refuse("no_cap_round_chain", `${prefix}${why} Restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, replacement);
     }
     // The cap-round head is the PR head: no commit follows it, and a reviewer-only run with baseline equal to the head is refused. Only a new commit moves the head.
     if (capHeadSha === head) return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}: the cap-round head is the PR head, so no commit follows it; a reviewer-only delta over an empty range is refused. Push one docs or tests commit to the PR branch (a logic commit also needs its locally_clear pre-push delta), then rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}. If the PR head already carries a clean current-head draft_gate verdict, no extension is needed`, headMovingRecovery(repo, pr));

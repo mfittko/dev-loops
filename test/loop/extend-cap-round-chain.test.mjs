@@ -12,7 +12,7 @@ import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
 
 import { resolveCapRoundFixed } from "../../scripts/github/write-gate-context.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
-import { gateDeltaRecordPath, readGateDeltaRecord, readSealedCoverRecord, readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
+import { gateCoverRecordPath, gateDeltaRecordPath, readGateDeltaRecord, readSealedCoverRecord, readSealedGateDeltaRecord, writeCoverRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { extendCapRoundChain, parseExtendCapRoundChainCliArgs, runCli } from "../../scripts/loop/extend-cap-round-chain.mjs";
 import { initGitFixture, runGitFixture, spawnSyncTrusted } from "../_helpers.mjs";
 import { runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
@@ -1299,7 +1299,7 @@ test("issue 3437 ac:3: no_cap_round_chain names a replacement PR for a non-cover
     const unresolved = await extend(root, head);
     assert.equal(unresolved.reason, "history_unresolved", JSON.stringify(unresolved));
     assert.equal(unresolved.recovery, `git fetch origin ${missing}`);
-    assert.doesNotMatch(unresolved.detail, /replacement/iu);
+    assert.match(unresolved.detail, /If a commit is still absent after the fetch, restart on a replacement PR/u, "a commit that stays absent has the replacement PR as its next exit (issue 3443 review)");
     // A covering record whose candidate is a real commit off the head's history (merge-base exit 1) gives the replacement PR.
     const sibling = String(runGitFixture(root, ["commit-tree", `${B}^{tree}`, "-p", B, "-m", "abandoned sibling"])).trim();
     writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: sibling, actSetId: "other", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: actRef, status: "resolved" }] });
@@ -1438,7 +1438,8 @@ test("issue 3443: a git failure on the later link is an unresolved history with 
       const refused = await extend(root, head, { git: failing(failure) });
       assert.equal(refused.reason, "history_unresolved", JSON.stringify({ failure, refused }));
       assert.equal(refused.recovery, `git fetch origin ${C}`);
-      assert.doesNotMatch(refused.detail, /replacement/iu);
+      assert.match(refused.detail, /If a commit is still absent after the fetch, restart on a replacement PR/u);
+      assert.doesNotMatch(refused.recovery, /replacement|operator/iu, "the recovery stays the fetch");
     }
     // Exit 1 without a signal proves C off history: the link does not count, the ref is uncovered, and the cover run is named.
     const offHistory = await extend(root, head, { git: failing({ status: 1 }) });
@@ -1494,6 +1495,81 @@ test("issue 3437 ac:2: the state a ci_failed full-phase fixer leaves continues t
     assert.equal(before.nextAction, "report_blocked");
     const { trace, end } = await followRemedy(root, { repo: REPO, pr: PR, head, baseline: B, ledgerPath });
     assert.ok(["mark_ready_for_review", "run_pre_approval_gate"].includes(end.nextAction), `${end.failure}: ${end.reason}\n${trace.join("\n")}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 review: the cover run is named only when it can run. The sealed cap record's candidate must be on the head's history, and no uncovered ref may have a cover record that takes no further run.
+test("issue 3443 review: a sealed cap record off the head's history, or a dead-end cover record, names the replacement PR and never the cover run", async () => {
+  const act = (summary) => ({ severity: "medium", summary, files: ["src/a.mjs"], line: 1, angle: "correctness", judgeDisposition: "act", judgeTitle: summary, judgeFix: "add" });
+  const [p, q] = [act("guard missing"), act("second defect")];
+  const { root, A, B } = await capFixture({ findings: [p, q] });
+  try {
+    const tmp = path.join(root, "tmp");
+    const record = (candidateHead) => { rmSync(gateDeltaRecordPath(tmp, A), { force: true }); rmSync(`${gateDeltaRecordPath(tmp, A)}.seal`, { force: true }); writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead, actSetId: "round-3", invocation: 3, outcome: "locally_clear", nextStep: "push", items: [{ ref: fingerprintFinding(p), status: "resolved" }] }); };
+    const head = await commit(root, { "docs/z.md": "z\n" }, "docs");
+    const sibling = String(runGitFixture(root, ["commit-tree", `${B}^{tree}`, "-p", B, "-m", "abandoned sibling"])).trim();
+    const replacement = renderCliText(replacementPrOperatorRecovery(PR));
+    // The record at the cap-round head names an abandoned sibling: the cover run could seal, and the next refusal would still be the replacement PR.
+    record(sibling);
+    const offHistory = await extend(root, head);
+    assert.equal(offHistory.reason, "no_cap_round_chain", JSON.stringify(offHistory));
+    assert.equal(offHistory.recovery, replacement);
+    assert.doesNotMatch(offHistory.detail, /Run the cover run/u);
+    // On the head's history the cover run is named.
+    record(B);
+    const coverable = await extend(root, head);
+    assert.match(coverable.recovery, /--cover-uncovered/u);
+    const cover = (over = {}) => writeCoverRecord(tmp, { capHead: A, ref: fingerprintFinding(q), candidateHead: sibling, actSetId: "set", invocation: 1, outcome: "locally_clear", nextStep: "push", status: "resolved", ...over });
+    const coverPath = gateCoverRecordPath(tmp, A, fingerprintFinding(q));
+    const dropCover = () => { rmSync(coverPath, { force: true }); rmSync(`${coverPath}.seal`, { force: true }); };
+    // A sealed locally_clear cover record whose candidate left the history is ignored by coverage and never replaced: the replacement PR, without touching the record.
+    cover();
+    const sealed = [readFileSync(coverPath, "utf8"), readFileSync(`${coverPath}.seal`, "utf8")];
+    const dead = await extend(root, head);
+    assert.equal(dead.recovery, replacement);
+    assert.match(dead.detail, /sealed locally_clear but its candidate is not on the PR head's history/u);
+    assert.deepEqual([readFileSync(coverPath, "utf8"), readFileSync(`${coverPath}.seal`, "utf8")], sealed, "extend never overwrites the cover record");
+    // An unsealed or unreadable one is no evidence and no count.
+    rmSync(`${coverPath}.seal`);
+    assert.equal((await extend(root, head)).recovery, replacement);
+    writeFileSync(coverPath, "{ not json");
+    assert.equal((await extend(root, head)).recovery, replacement);
+    // A record that used the last invocation never restarts the bound.
+    dropCover();
+    cover({ outcome: "bounded_out", nextStep: "restart_on_replacement_pr", status: "not_resolved", invocation: 3 });
+    assert.equal((await extend(root, head)).recovery, replacement);
+    // A needs_fix record below the bound takes another run: the cover run is named again.
+    dropCover();
+    cover({ outcome: "needs_fix", nextStep: "fix_and_rereview", status: "not_resolved", invocation: 1 });
+    assert.match((await extend(root, head)).recovery, /--cover-uncovered/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 review: the failure names the commit this clone lacks. An unfetched PR head is named for the fetch, not the present candidate whose fetch would change nothing.
+test("issue 3443 review: history_unresolved names the unfetched PR head and the next exit for a commit that stays absent", async () => {
+  const act = (summary) => ({ severity: "medium", summary, files: ["src/a.mjs"], line: 1, angle: "correctness", judgeDisposition: "act", judgeTitle: summary, judgeFix: "add" });
+  const [p, q] = [act("guard missing"), act("second defect")];
+  const { root, A, B } = await capFixture({ findings: [p, q] });
+  try {
+    const tmp = path.join(root, "tmp");
+    const C = await commit(root, { "docs/c.md": "c\n" }, "docs C");
+    const head = await commit(root, { "docs/d.md": "d\n" }, "docs D");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: B, actSetId: "round-3", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: fingerprintFinding(p), status: "resolved" }] });
+    writeSealedGateDeltaRecord(tmp, B, { reviewBaselineHead: B, candidateHead: C, actSetId: "round-4", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: fingerprintFinding(q), status: "resolved" }] });
+    const headMissing = (cwd, args) => {
+      if (args[0] === "merge-base" && args[3] === head) throw Object.assign(new Error("fatal: Not a valid commit name"), { status: 128 });
+      if (args[0] === "cat-file" && args[2] === `${head}^{commit}`) throw Object.assign(new Error("missing"), { status: 1 });
+      return String(runGitFixture(cwd, args)).trim();
+    };
+    const refused = await extend(root, head, { git: headMissing });
+    assert.equal(refused.reason, "history_unresolved", JSON.stringify(refused));
+    assert.equal(refused.recovery, `git fetch origin ${head}`, "the missing PR head, not the present candidate");
+    assert.doesNotMatch(refused.detail, new RegExp(`git fetch origin ${C}`, "u"));
+    assert.match(refused.detail, /If a commit is still absent after the fetch, restart on a replacement PR/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

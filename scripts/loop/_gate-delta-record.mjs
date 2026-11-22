@@ -7,11 +7,14 @@
  * "no delta decision". Two exceptions (PRE-PUSH-DELTA-NOT-GATE-EVIDENCE): ADR 0168 (the converged
  * marker) and ADR 0208 (the cap round's cleared delta lets the PR go ready); the ADR 0208 reader
  * is `readSealedGateDeltaRecord`, which trusts only a record carrying its sha256 seal.
+ * The cover record of `check-pre-push-delta.mjs --reviewer-only --cover-uncovered --result` (ADR 0255 amendment, issue 3443) is written to
+ * `<tmp-root>/gate-cover/<capHead>-<ref hash>.json` and is a third exception under the same rule: it counts as the ADR 0208 evidence of its act ref
+ * only through its sealed reader `readSealedCoverRecord`, and a result run writes it and never a baseline record.
  */
 import { createHash } from "node:crypto";
-import { linkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { deltaCoverageBinding, deltaFixerFindings } from "@dev-loops/core/loop/pre-push-delta-review";
+import { DELTA_MAX_INVOCATIONS, deltaCoverageBinding, deltaFixerFindings } from "@dev-loops/core/loop/pre-push-delta-review";
 
 /** The next steps that authorize the committed candidate to be pushed. */
 export const DELTA_CLEARING_NEXT_STEPS = Object.freeze(["push", "push_to_gate"]);
@@ -68,11 +71,26 @@ export function readSealedCoverRecord(tmpRoot, capHead, ref) {
 export const isClearingCoverRecord = (record) => record?.outcome === "locally_clear" && record.status === "resolved" && DELTA_CLEARING_NEXT_STEPS.includes(record.nextStep);
 
 /**
- * Write the cover record of one act ref. A sealed clearing cover record is never replaced (the call throws), so a later run cannot overwrite the evidence coverage counts.
- * A non-clearing or unsealed leftover is replaced: the caller continues its invocation count.
+ * Why a cover run may not write the cover record of `ref`, or null when it may: `clearing` (a sealed locally_clear record, which coverage counts or ignored only because its candidate left the head's history),
+ * `unsealed` (a file that is unsealed, hand-edited, foreign or unreadable: its invocation count cannot be trusted) or `bounded` (a sealed record that used the last invocation).
+ */
+export function coverRecordBlocker(tmpRoot, capHead, ref) {
+  const recordPath = gateCoverRecordPath(tmpRoot, capHead, ref);
+  if (!existsSync(recordPath) && !existsSync(`${recordPath}.seal`)) return null;
+  let record;
+  try { record = readSealedCoverRecord(tmpRoot, capHead, ref); } catch { return "unsealed"; }
+  if (!record) return "unsealed";
+  if (isClearingCoverRecord(record)) return "clearing";
+  return record.invocation >= DELTA_MAX_INVOCATIONS ? "bounded" : null;
+}
+
+/**
+ * Write the cover record of one act ref. The call throws, and the file stays as it is, for any record `coverRecordBlocker` names: a later run cannot overwrite the evidence coverage counts,
+ * restart a bound or replace an untrusted leftover. Only a sealed non-clearing record below the bound is replaced: the caller continues its invocation count.
  */
 export function writeCoverRecord(tmpRoot, record) {
-  if (isClearingCoverRecord(readSealedCoverRecord(tmpRoot, record.capHead, record.ref))) throw new Error(`the cover record for act ref ${record.ref} at ${record.capHead} is sealed locally_clear and is never overwritten`);
+  const blocker = coverRecordBlocker(tmpRoot, record.capHead, record.ref);
+  if (blocker) throw new Error(`the cover record for act ref ${record.ref} at ${record.capHead} is ${blocker === "clearing" ? "sealed locally_clear" : blocker === "bounded" ? "sealed with the last invocation used" : "unsealed or unreadable"} and is never overwritten`);
   return writeSealedFile(gateCoverRecordPath(tmpRoot, record.capHead, record.ref), record, {});
 }
 
