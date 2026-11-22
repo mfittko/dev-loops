@@ -369,7 +369,7 @@ export function parseJsonText(text) {
   }
 }
 
-// Renders the one shared { ok: false, error, hint? } envelope every
+// Renders the one shared { ok: false, error, hint?, recovery? } envelope every
 // JSON-emitting gate CLI's main() catch block prints to stderr. `usage` is
 // accepted only as a PRESENCE check for a fallback usage string (a caller
 // passing its own `USAGE` constant when the error itself might not already
@@ -389,6 +389,8 @@ export function formatCliError(error, { usage } = {}) {
   } else if (error instanceof Error && error.code === "gate_artifact_out_of_band_write") {
     payload.code = error.code;
   }
+  // RECOVERY-COMMAND-REQUIRED: a refusal's one next command reaches the CLI output.
+  if (error instanceof Error && typeof error.recovery === "string") payload.recovery = error.recovery;
   const hasUsage = (error instanceof Error && typeof error.usage === "string") || typeof usage === "string";
   if (hasUsage) {
     payload.hint = "run with --help for usage";
