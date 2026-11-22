@@ -429,17 +429,23 @@ async function afterResolve(result, options, { cwd, env, runVerification, instal
         err.verifyFailed = true;
         throw err;
       };
-      const base = readBase(root);
-      if (base.reason) await failVerify(`Post-resolve verification refused: ${base.reason}`);
-      // Only the base block runs; the checkout's own validation block is never read.
-      // A full-repository profile (unmapped file) runs nothing here.
-      const selected = resolveTargetedValidation(result.resolvedFiles, base.validation.paths);
-      if (selected.profile === "targeted") {
-        for (const command of selected.commands) {
-          const verify = await runVerification("sh", ["-c", command], { cwd, env: commandEnv(env) });
-          if (verify.code !== 0) await failVerify(`Post-resolve verification (${command}) failed: ${verify.stderr.trim() || verify.stdout.trim() || `exit ${verify.code}`}`);
+      try {
+        const base = readBase(root);
+        if (base.reason) await failVerify(`Post-resolve verification refused: ${base.reason}`);
+        // Only the base block runs; the checkout's own validation block is never read.
+        // A full-repository profile (unmapped file) runs nothing here.
+        const selected = resolveTargetedValidation(result.resolvedFiles, base.validation.paths);
+        if (selected.profile === "targeted") {
+          for (const command of selected.commands) {
+            const verify = await runVerification("sh", ["-c", command], { cwd: root, env: commandEnv(env) });
+            if (verify.code !== 0) await failVerify(`Post-resolve verification (${command}) failed: ${verify.stderr.trim() || verify.stdout.trim() || `exit ${verify.code}`}`);
+          }
+          result.verified = true;
         }
-        result.verified = true;
+      } catch (error) {
+        // A thrown base read or spawn error must still drop the unverified merge commit.
+        if (error.verifyFailed) throw error;
+        await failVerify(`Post-resolve verification error: ${error.message}`);
       }
     }
   }

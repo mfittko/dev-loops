@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
@@ -475,6 +475,40 @@ describe("resolvePrConflicts (real git)", () => {
         assert.equal(result.verified, false);
         assert.equal(result.pushed, true);
         assert.deepEqual(calls, []);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a run through a symlinked repo root runs the command at the git toplevel", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        const link = path.join(tempDir, "link");
+        await symlink(workDir, link);
+        const cwds = [];
+        const runVerification = async (_command, _args, spawnOptions) => {
+          cwds.push(spawnOptions.cwd);
+          return { code: 0, stdout: "", stderr: "" };
+        };
+        await resolvePrConflicts(opts(link), { env: GIT_ENV, runVerification, readBase: baseWith(["x"]) });
+        assert.deepEqual(cwds, [realpathSync(workDir)]);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a throwing runner rolls back to the pre-merge head and a re-run repeats the merge", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        const head = git(workDir, ["rev-parse", "HEAD"]).trim();
+        const runVerification = async () => { throw new Error("spawn EAGAIN"); };
+        await assert.rejects(
+          () => resolvePrConflicts(opts(workDir), { env: GIT_ENV, runVerification, readBase: baseWith(["x"]) }),
+          (error) => error.verifyFailed === true && /spawn EAGAIN/.test(error.message),
+        );
+        assert.equal(git(workDir, ["rev-parse", "HEAD"]).trim(), head);
+        const result = await resolvePrConflicts(opts(workDir), { env: GIT_ENV, runVerification: recorder().runVerification, readBase: baseWith(["x"]) });
+        assert.equal(result.action, "resolved");
       } finally {
         await rm(tempDir, { recursive: true, force: true });
       }
