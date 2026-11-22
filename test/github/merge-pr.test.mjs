@@ -2,6 +2,7 @@ import { test, mock } from "bun:test";
 import assert from "node:assert/strict";
 import { recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { mergePr, parseMergePrCliArgs, main, defaultReadMergeDiff, defaultIsAncestor, defaultComputePatchId, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
+import { extractYesApproval, buildApprovalQuestion, writeApprovalRecord, buildApprovalComment } from "@dev-loops/core/github/ask-merge-approval";
 import { runChild } from "../../scripts/_cli-primitives.mjs";
 import { captureStream } from "../_helpers.mjs";
 import { scanDiffText } from "@dev-loops/core/security/secret-scan";
@@ -10,6 +11,8 @@ import os from "node:os";
 import path from "node:path";
 import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 
+// The ask-approval directory is isolated and absent, so no host hook key makes every plain approve-merge comment need a record (MERGE-ASK-APPROVAL).
+const TEST_ENV = { GH_TOKEN: "t", DEVLOOPS_APPROVAL_TEST_MODE: "1", DEVLOOPS_APPROVAL_DIR: path.join(os.tmpdir(), `pr-no-approval-key-${process.pid}`) };
 const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
 const MERGE_COMMIT = "aaaa1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
 
@@ -73,7 +76,7 @@ function makeRuntime({
   return {
     calls,
     runtime: {
-      env: { GH_TOKEN: "t" },
+      env: { ...TEST_ENV },
       ghJson: async (args) => {
         calls.ghJson.push(args);
         if (args.join(" ").includes("/files?")) {
@@ -355,7 +358,7 @@ test("fully-satisfied standing-authorized drain merge succeeds, stamps the appro
   assert.equal(calls.runChild.length, 1);
   assert.deepEqual(calls.runChild[0].args, ["pr", "merge", "5", "--repo", "mfittko/dev-loops", "--squash", "--match-head-commit", HEAD]);
   // env is passed positionally (a real GH_TOKEN reaches the child), not as { env }.
-  assert.deepEqual(calls.runChild[0].env, { GH_TOKEN: "t" });
+  assert.deepEqual(calls.runChild[0].env, TEST_ENV);
   assert.ok(!calls.runChild.some((c) => c.args.join(" ").match(/release|publish|tag/)));
 });
 
@@ -1713,6 +1716,55 @@ test("a patch-id marker for a different patch-id is refused with the stale-appro
   runtime.computePatchId = () => PATCH_ID;
   const threw = await mergePr(baseOptions({ standingAuthorization: false }), runtime).catch((e) => e);
   assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "merge_approval" && /no fresh mfittko approval on head/.test(f.reason)));
+});
+
+// mode: "record" (marked comment with its record), "forge" (marked comment, made-up id) or "typed" (hand-typed line while the hook key exists).
+async function askApprovalRuntime({ mode }) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pr-ask-merge-"));
+  const env = { ...process.env, DEVLOOPS_APPROVAL_TEST_MODE: "1", DEVLOOPS_APPROVAL_DIR: path.join(dir, "approvals") };
+  const text = buildApprovalQuestion({ repo: "mfittko/dev-loops", pr: 5, headSha: OLD_HEAD, patchId: PATCH_ID });
+  const q = { question: text, options: [{ label: "Yes", description: "Approve this merge" }, { label: "No", description: "Do not merge" }], multiSelect: false };
+  const approval = extractYesApproval({ tool_input: { questions: [q] }, tool_response: { answers: { [text]: "Yes" } } });
+  // Every mode writes one record, so the hook key exists: a made-up id or a typed line is then refused. Without a key a reader passes the comment through.
+  const written = writeApprovalRecord({ approval }, env);
+  const body = mode === "typed" ? `approve merge ${OLD_HEAD} patch-id ${PATCH_ID}` : buildApprovalComment({ id: mode === "forge" ? "f".repeat(64) : written.id, headSha: OLD_HEAD, patchId: PATCH_ID });
+  const { runtime } = makeRuntime({
+    evidence: ESCALATED_EVIDENCE,
+    comments: [{ user: { login: "mfittko" }, body }],
+  });
+  runtime.env = env;
+  runtime.computePatchId = () => PATCH_ID;
+  return runtime;
+}
+
+test("a hook-marked approval comment with its harness record approves an escalated merge (MERGE-ASK-APPROVAL)", async () => {
+  const result = await mergePr(baseOptions({ standingAuthorization: false }), await askApprovalRuntime({ mode: "record" }));
+  assert.equal(result.ok, true);
+  assert.equal(result.approvalMatch, "patch_id");
+});
+
+for (const mode of ["forge", "typed"]) {
+  test(`an approve-merge comment without a harness record fails closed with a recovery (${mode})`, async () => {
+    const threw = await mergePr(baseOptions({ standingAuthorization: false }), await askApprovalRuntime({ mode })).catch((e) => e);
+    for (const precondition of ["merge_approval", "size_budget_human_approval"]) {
+      assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === precondition && /Recovery: ask the operator the approval question again/.test(f.reason)), precondition);
+    }
+  });
+}
+
+test("the base-moved refusal recovery asks the approval question again (MERGE-ASK-APPROVAL)", async () => {
+  const { runtime } = makeRuntime({
+    evidence: ESCALATED_EVIDENCE,
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD_HEAD} patch-id ${PATCH_ID}` }],
+  });
+  // The first id authorizes the merge; the refreshed id after the ADR step differs (the base moved).
+  let calls = 0;
+  runtime.computePatchId = () => (++calls === 1 ? PATCH_ID : "e".repeat(40));
+  const threw = await mergePr(baseOptions({ standingAuthorization: false }), runtime).catch((e) => e);
+  const reason = threw.mergePrFailure.failures.find((f) => f.precondition === "base_not_integrated").reason;
+  assert.match(reason, /the base moved/);
+  assert.match(reason, /ask the approval question again with the new head and patch-id/);
+  assert.match(reason, /without the hook key/);
 });
 
 test("a patch-id marker is refused when the base is not contained (no patch-id computed)", async () => {

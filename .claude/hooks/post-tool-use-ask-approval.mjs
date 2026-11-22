@@ -1,0 +1,41 @@
+#!/usr/bin/env node
+/**
+ * PostToolUse AskUserQuestion hook (MERGE-ASK-APPROVAL, ADR 0315).
+ *
+ * A yes answer to the approval question ("Approve merge of <repo> PR #<n> at head <sha> with
+ * patch-id <id>?", options exactly Yes and No) is the operator's per-merge approval. The harness,
+ * not an agent, writes the signed record and posts the marked `approve merge` comment. Never
+ * blocks: always exits 0, and tells the model the outcome through `additionalContext`.
+ * `DEVLOOPS_GH_COMMAND` replaces `gh` so tests run a stub, only when `DEVLOOPS_APPROVAL_TEST_MODE` is "1".
+ */
+import { execFileSync } from "node:child_process";
+import { readHookInput } from "./_hook-io.mjs";
+import { extractYesApproval, classifyApprovalOutcome, writeApprovalRecord, buildApprovalComment, ASK_APPROVAL_RECOVERY, ASK_APPROVAL_KEY_RECOVERY, ASK_APPROVAL_NO_DIALOG_RECOVERY } from "./_ask-merge-approval.mjs";
+
+const tell = (additionalContext) => process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext } })}\n`);
+
+const input = readHookInput();
+const approval = extractYesApproval(input);
+if (approval) {
+  try {
+    // The real process env, so the hook resolves the same directory as the merge verifier (the test override never applies here).
+    const { id } = writeApprovalRecord({ approval, session: input?.session_id ?? null }, process.env);
+    const body = buildApprovalComment({ id, headSha: approval.headSha, patchId: approval.patchId });
+    // The binary override applies only under the test flag, like the directory override: an agent-set variable cannot swap the poster.
+    const gh = process.env.DEVLOOPS_APPROVAL_TEST_MODE === "1" && process.env.DEVLOOPS_GH_COMMAND ? process.env.DEVLOOPS_GH_COMMAND : "gh";
+    execFileSync(gh, ["pr", "comment", String(approval.pr), "--repo", approval.repo, "--body", body], { stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 });
+    tell(`MERGE-ASK-APPROVAL: recorded the yes answer and posted the approve-merge line for ${approval.repo}#${approval.pr} at head ${approval.headSha}.`);
+  } catch (error) {
+    tell(`MERGE-ASK-APPROVAL: could not record or post the approval (${error?.message ?? error}). ${error?.keyProblem ? ASK_APPROVAL_KEY_RECOVERY : ASK_APPROVAL_RECOVERY}`);
+  }
+} else {
+  const outcome = classifyApprovalOutcome(input);
+  if (outcome === "declined") {
+    tell("MERGE-ASK-APPROVAL: the operator declined the approval. No approval recorded and the merge stays blocked. Do not ask the approval question again; report the decline and wait for the operator.");
+  } else if (outcome === "unknown_shape") {
+    tell(`MERGE-ASK-APPROVAL: no approval recorded. The AskUserQuestion payload has an unknown shape (tool_response.answers is not an object with a string answer for the approval question), so asking again cannot help. ${ASK_APPROVAL_NO_DIALOG_RECOVERY}`);
+  } else if (outcome === "other") {
+    tell(`MERGE-ASK-APPROVAL: no approval recorded. The answer was not exactly "Yes" to an approval question whose options are exactly Yes and No (single select). ${ASK_APPROVAL_RECOVERY}`);
+  }
+}
+process.exitCode = 0;
