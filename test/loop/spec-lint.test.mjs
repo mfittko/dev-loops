@@ -325,7 +325,7 @@ test("only cli/index.mjs wires the spec-lint lint surface; other files may reuse
   // The guard forbids a SECOND LINT ENTRY POINT (authority drift), not helper reuse:
   // `lintSpec` and the `loop spec-lint` argv are the lint surface, while e.g.
   // scripts/loop/implementation-brief.mjs imports only pure parsers (citedAdrNumbers,
-  // indexDecisionRecords, loadKnownRuleIds, stripFencedCode), which is not an entry point.
+  // indexDecisionRecords, loadKnownRuleIds), which is not an entry point.
   // Match the entry symbol, a quoted spec-lint argv/module-path token (runCli / execFile /
   // spawn / import), and a `[dev-loops] loop spec-lint` shell invocation (including the
   // `cli/index.mjs loop spec-lint` forms) — a prose mention of the subcommand is not
@@ -335,7 +335,7 @@ test("only cli/index.mjs wires the spec-lint lint surface; other files may reuse
   // The one declared pure-helper consumer: it may import only these parsers, never the
   // entry points `lintSpec` or `main`, and its comments may name the subcommand.
   const HELPER_CONSUMER = "scripts/loop/implementation-brief.mjs";
-  const PURE_HELPERS = new Set(["citedAdrNumbers", "indexDecisionRecords", "inForceAmenders", "loadKnownRuleIds", "stripFencedCode"]);
+  const PURE_HELPERS = new Set(["citedAdrNumbers", "indexDecisionRecords", "inForceAmenders", "loadKnownRuleIds"]);
   const IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*"\.\/spec-lint\.mjs";/u;
   const wired = (f, source) => {
     if (f !== HELPER_CONSUMER) return consumer.test(source);
@@ -351,10 +351,10 @@ test("only cli/index.mjs wires the spec-lint lint surface; other files may reuse
   }
   // The helper-consumer carve-out stays narrow: an entry-point import or an invocation is flagged.
   assert.ok(wired(HELPER_CONSUMER, 'import { main } from "./spec-lint.mjs";'));
-  assert.ok(wired(HELPER_CONSUMER, 'import { stripFencedCode } from "./spec-lint.mjs";\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
-  assert.ok(wired(HELPER_CONSUMER, 'import { stripFencedCode } from "./spec-lint.mjs";\nconst USAGE = `skills/docs/*-contract.md`;\n/** doc */\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
-  assert.ok(!wired(HELPER_CONSUMER, '/** runs `loop spec-lint` */\n  /* indented `loop spec-lint` */\nimport { stripFencedCode } from "./spec-lint.mjs";'));
-  assert.ok(!wired(HELPER_CONSUMER, '// runs `loop spec-lint`\nimport { stripFencedCode } from "./spec-lint.mjs";'));
+  assert.ok(wired(HELPER_CONSUMER, 'import { citedAdrNumbers } from "./spec-lint.mjs";\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
+  assert.ok(wired(HELPER_CONSUMER, 'import { citedAdrNumbers } from "./spec-lint.mjs";\nconst USAGE = `skills/docs/*-contract.md`;\n/** doc */\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
+  assert.ok(!wired(HELPER_CONSUMER, '/** runs `loop spec-lint` */\n  /* indented `loop spec-lint` */\nimport { citedAdrNumbers } from "./spec-lint.mjs";'));
+  assert.ok(!wired(HELPER_CONSUMER, '// runs `loop spec-lint`\nimport { citedAdrNumbers } from "./spec-lint.mjs";'));
   assert.doesNotMatch("// the grill (refine-plan-file, spec-lint) reads it", consumer);
 });
 

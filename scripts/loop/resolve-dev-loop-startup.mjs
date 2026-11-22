@@ -89,7 +89,7 @@ Use --spike to start a time-boxed exploratory loop from a local spike
 artifact (read-only: no tracker mutation, no issue/PR number).
 Required (exactly one):
   --issue <n>    Target an issue by number (auto-resolves all state;
-                 without an open PR it needs a clean grill: a results comment, a "## Simplest design" section and a "simplicity-review:" line, else it stops and prints the grill command)
+                 without an open PR it needs a clean grill: a results comment, an AC / DoD matrix, Non-goals, a "## Simplest design" section and a "simplicity-review:" line, else it stops and prints the grill command)
   --pr <n>       Target a PR by number (auto-resolves all state)
   --input <path>  Path to a JSON file with canonical-state payload
   --plan-file <path>  Path to a phase-doc-format plan to start locally
@@ -801,10 +801,6 @@ const OWNERSHIP_GATE_BYPASS_VAR = "DEVLOOPS_OWNERSHIP_BYPASS";
 function ownershipGateBypassed(env) {
   return (env?.[OWNERSHIP_GATE_BYPASS_VAR] ?? "").trim() === "1";
 }
-function hasAcSection(body) {
-  if (typeof body !== "string" || body.length === 0) return false;
-  return /##\s*Acceptance Criteria|##\s*AC\b|###\s*Acceptance Criteria|###\s*AC\b/i.test(body);
-}
 function resolveTargetPreference(cwd) {
   const devloopsCandidates = [
     path.join(cwd, ".devloops"),
@@ -941,19 +937,9 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       return buildAutoResolvedInput({ pr: linkagePayload.prNumber, cwd: repoRoot,
         targetPreference: resolvedTargetPreference, inputSource, claim, expectedIssue: issue, env });
     }
-    let issueReadiness;
     let issueReadinessReason;
-    try {
-      const issueJson = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "body"], repoRoot, env);
-      issueReadiness = hasAcSection(issueJson.body) ? "ready" : "needs_clarification";
-    } catch {
-      issueReadiness = "needs_clarification";
-      warnings.push(`issueReadiness: using default "${issueReadiness}" — gh issue view failed`);
-    }
-    // GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL: a ready spec that changed after
-    // its latest grill goes back to the grill. Runs regardless of the AC
-    // heading (linked refinement documents, edited-out headings); the existing
-    // readiness value is kept when no change is found.
+    // GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL: the issue is ready exactly when its grill is clean.
+    let issueReadiness = "ready";
     {
       try {
         const facts = parseSpecChangeFacts(ghJson(buildSpecChangeFactsGhArgs({ repo, number: issue }), repoRoot, env));
@@ -1570,7 +1556,7 @@ export function buildResolveDevLoopStartupResult(input, {
     return {
       ...buildNeedsReconcileStartupResult(
         bundle,
-        `The spec-change read for issue #${issue} failed (${SPEC_CHANGE_READ_FAILED_REASON}). Retry with \`loop startup --issue ${issue}${claim ? " --claim" : ""}${canonicalSpecSource === "pr_body" ? " --lightweight" : ""}\`; check the warnings for the read error (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
+        `Stop and reconcile the failed spec-change read for issue #${issue} (it failed: ${SPEC_CHANGE_READ_FAILED_REASON}). Retry with \`loop startup --issue ${issue}${claim ? " --claim" : ""}${canonicalSpecSource === "pr_body" ? " --lightweight" : ""}\`; check the warnings for the read error (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
         pendingRetrospectives,
       ),
       issueReadiness: input.issueReadiness,
@@ -1583,7 +1569,7 @@ export function buildResolveDevLoopStartupResult(input, {
     return {
       ...buildNeedsReconcileStartupResult(
         bundle,
-        `Issue #${issue} is blocked: no clean grill (${issueReadinessReason}): it needs a "🔬 Grill / refinement results" comment that is newer than every spec change, a "## Simplest design" section and a "simplicity-review:" line. Run the grill with \`/dev-loops:loop-grill ${issue} --auto\` (or \`/loop-grill ${issue} --auto\` in the dev-loops repo itself), then re-run startup (rules GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL, GRILL-SUBLOOP-SIMPLICITY-REVIEW).`,
+        `Stop and reconcile issue #${issue}: no clean grill (${issueReadinessReason}). It needs a "🔬 Grill / refinement results" comment newer than every spec change, a valid AC / DoD matrix (or linked refinement doc), a Non-goals section, a "## Simplest design" section and a "simplicity-review:" line. Run the grill with \`/dev-loops:loop-grill ${issue} --auto\` (or \`/loop-grill ${issue} --auto\` in the dev-loops repo itself), then re-run startup (rules GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL, GRILL-SUBLOOP-SIMPLICITY-REVIEW).`,
         pendingRetrospectives,
       ),
       issueReadiness: input.issueReadiness,

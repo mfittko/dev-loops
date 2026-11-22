@@ -288,15 +288,15 @@ export function detectGrillProvenance(comments) {
   return { provenanceRecorded, bypass, bypassBy };
 }
 
-// The latest results comment has the greatest parseable createdAt; array position breaks ties and orders undated input.
+// The latest results comment has the greatest parseable createdAt (a later position breaks ties); undated ones never count.
 function latestResultsBody(comments) {
   let latest = null;
   let latestTime = null;
   for (const comment of Array.isArray(comments) ? comments : []) {
     const body = commentBody(comment);
-    if (body === null || !isResultsComment(body)) continue;
     const time = timestampOrNull(comment?.createdAt);
-    if (latest === null || (time !== null ? latestTime === null || time >= latestTime : latestTime === null)) {
+    if (body === null || time === null || !isResultsComment(body)) continue;
+    if (latest === null || time >= latestTime) {
       latest = body;
       latestTime = time;
     }
@@ -351,8 +351,8 @@ export function normalizeGrillSnapshot(raw) {
     provenanceRecorded: Boolean(raw.provenanceRecorded),
     provenanceBypass: Boolean(raw.provenanceRecorded) && Boolean(raw.provenanceBypass),
     // a counted comment or a body edit after the latest results comment
-    // (detectSpecChangedSinceGrill); meaningless without recorded provenance.
-    specChangedSinceGrill: Boolean(raw.provenanceRecorded) && Boolean(raw.specChangedSinceGrill),
+    // (detectSpecChangedSinceGrill), or a truncated window with no results comment.
+    specChangedSinceGrill: Boolean(raw.specChangedSinceGrill),
     // DESIGN-SIMPLEST-FIRST: a `## Simplest design` body section and a
     // `simplicity-review:` line in the latest results comment.
     simplestDesign: Boolean(raw.simplestDesign),

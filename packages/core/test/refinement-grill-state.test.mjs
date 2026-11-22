@@ -420,8 +420,8 @@ test("a results comment with no parseable createdAt fails closed", () => {
   assert.equal(detectSpecChangedSinceGrill({ comments: [{ body: heading, createdAt: GRILL_AT }] }), false);
 });
 
-test("normalizeGrillSnapshot forces specChangedSinceGrill to false without provenance", () => {
-  assert.equal(normalizeGrillSnapshot({ specChangedSinceGrill: true }).specChangedSinceGrill, false);
+test("normalizeGrillSnapshot keeps specChangedSinceGrill without provenance (a truncated window)", () => {
+  assert.equal(normalizeGrillSnapshot({ specChangedSinceGrill: true }).specChangedSinceGrill, true);
 });
 
 test("a truncated comment window with no results comment fails closed; an untruncated one does not", () => {
@@ -476,6 +476,7 @@ test("3462: the review line is read from the latest results comment by createdAt
   assert.equal(detectSimplicityReview([grilled("", BEFORE), grilled(REVIEW_LINE, AFTER)]), true);
   assert.equal(detectSimplicityReview([grilled(REVIEW_LINE, AFTER), grilled("", BEFORE)]), true);
   assert.equal(detectSimplicityReview([{ body: REVIEW_LINE }]), false);
+  assert.equal(detectSimplicityReview([{ body: grilled(REVIEW_LINE).body }]), false);
   const bypass = stateOf({ body: MATRIX, comments: [grilled("bypass: operator-authorized by mfittko")] });
   assert.equal(bypass.state, GRILL_STATE.DETECT_GAPS);
 });

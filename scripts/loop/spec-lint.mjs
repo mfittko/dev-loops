@@ -66,8 +66,6 @@ const BODY_ADR_RE = /\bADR[\s-]+(\d{4,})\b|docs\/decisions\/(\d{4,})-[\w-]*\.md/
 // Status sections also hold dates and issue numbers, so adrNumbersIn keeps only indexed record numbers.
 const STATUS_ADR_RE = /\b(\d{4,})\b/g;
 
-export { stripFencedCode };
-
 function isMissing(error) {
   return error?.code === "ENOENT" || error?.code === "ENOTDIR";
 }

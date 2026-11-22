@@ -1612,7 +1612,7 @@ test("AC5 (3127): a failed spec-change read stops startup on prefer_local with a
 });
 
 test("AC5 (3127): the freshness check runs when the issue body has no AC heading", async () => {
-  const noAcBody = grilledFacts().body; // a matrix and no "## Acceptance Criteria" heading
+  const noAcBody = grilledFacts({ body: PROSE_BODY }).body; // a linked refinement doc and no AC-like heading
   const results = { body: "## 🔬 Grill / refinement results\n\nNo gaps were found.\n\n" + GRILL_REVIEW_LINE, createdAt: "2026-11-06T10:00:00Z" };
   const changed = await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
@@ -1631,14 +1631,17 @@ test("AC5 (3127): the freshness check runs when the issue body has no AC heading
 // DESIGN-SIMPLEST-FIRST (issue 3462): startup stops every issue pickup without a clean grill, before any claim write.
 const GRILL_REVIEW_LINE = "simplicity-review: 1 findings, 1 corrected, 0 rejected";
 const GRILL_MATRIX = "## AC / DoD matrix\n\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the feature works end to end | a focused test proves the feature works |\n\n## Non-goals\n\n- none\n";
-function grilledFacts({ section = true, review = true, matrix = true, comments } = {}) {
-  const body = `${matrix ? GRILL_MATRIX : "## Acceptance Criteria\n\n- it works\n"}${section ? "\n## Simplest design\n\nOne predicate.\n" : ""}`;
+// A linked refinement doc, Non-goals and Simplest design, with no heading that names acceptance criteria.
+const PROSE_BODY = "Context: prose only.\n\nSee `tmp/refinement/735-plan.md` for the matrix.\n\n## Non-goals\n\n- none\n\n## Simplest design\n\nOne predicate.\n";
+function grilledFacts({ section = true, review = true, matrix = true, body: override, comments } = {}) {
+  const body = override ?? `${matrix ? GRILL_MATRIX : "## Acceptance Criteria\n\n- it works\n"}${section ? "\n## Simplest design\n\nOne predicate.\n" : ""}`;
   const results = { body: `## 🔬 Grill / refinement results\n\nVerdict: grill-clean.${review ? `\n\n${GRILL_REVIEW_LINE}` : ""}`, createdAt: "2026-11-06T10:00:00Z" };
   return { body, lastEditedAt: null, comments: { nodes: comments ?? [results] } };
 }
 
 const GRILL_STOP_CASES = [
   ["never grilled", { comments: [] }, "provenance_missing"],
+  ["never grilled, prose-only body", { body: PROSE_BODY, comments: [] }, "provenance_missing"],
   ["no Simplest design section", { section: false }, "simplest_design_missing"],
   ["no simplicity-review line", { review: false }, "simplicity_review_missing"],
   ["no AC / DoD matrix", { matrix: false }, "await_answers"],
@@ -1663,8 +1666,13 @@ for (const preference of ["prefer_local", "prefer_github_first"]) {
       assert.equal(pick.input.issueReadinessReason, reason);
       const routed = buildResolveDevLoopStartupResult({ ...pick.input, targetPreference: preference }, { env: { ...resolverTestEnv(), DEVLOOPS_WORKTREE_BYPASS: "1" }, cwd: os.tmpdir(), claim });
       assert.equal(routed.selectedStrategy, "none");
+      // The coordinator handoff rejects a needs_reconcile text without an accepted directive prefix.
+      assert.equal(validateHandoffEnvelope(buildDevLoopHandoffEnvelope(routed, {}, {}, { repoSlug: "owner/repo", repoRoot: os.tmpdir() })).ok, true);
       if (reason === "spec_change_read_failed") assert.ok(routed.nextAction.includes(`\`loop startup --issue 735${claim ? " --claim" : ""}\``), routed.nextAction);
-      else assert.match(routed.nextAction, /loop-grill 735 --auto/);
+      else {
+        assert.match(routed.nextAction, /loop-grill 735 --auto/);
+        assert.match(routed.nextAction, /AC \/ DoD matrix.*Non-goals/);
+      }
     });
   }
 }
@@ -1787,7 +1795,7 @@ test("3462: startup and the documented grill invocation return the same state ab
     await runDetectorCli(["--body-file", bodyPath, "--comments-file", commentsPath, "--repo", "mfittko/dev-loops", "--number", "735"], { stdout, stderr: captureStream(), runChild });
     return JSON.parse(stdout.get());
   }, { prefix: "resolve-dev-loop-grill-window-cli-" });
-  assert.equal(startup.issueReadinessReason, "provenance_missing");
+  assert.equal(startup.issueReadinessReason, "spec_changed_since_grill");
   assert.equal(detector.reason, startup.issueReadinessReason);
 });
 

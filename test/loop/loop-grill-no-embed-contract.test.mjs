@@ -28,3 +28,7 @@ test("no positive body-embed of raw Q&A findings", () => {
 test("the single is-it-refined source is referenced", () => {
   assert.ok(skill.includes("detectIssueRefinementArtifact"), "SKILL must reference the single refinement source");
 });
+
+test("the skill declares the subagent tool for the mandatory simplicity review", () => {
+  assert.match(skill, /^allowed-tools: .*\bsubagent\b/m);
+});

@@ -161,7 +161,7 @@ test("3462: --repo/--number take the fetched comment window over --comments-file
     await runCli(["--body-file", bodyPath, "--comments-file", commentsPath, "--repo", "o/r", "--number", "7"], { stdout, stderr: makeCapture(), runChild });
     const out = JSON.parse(stdout.text());
     assert.equal(out.state, "detect_gaps");
-    assert.equal(out.reason, "provenance_missing");
+    assert.equal(out.reason, "spec_changed_since_grill");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
