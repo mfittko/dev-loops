@@ -9601,6 +9601,58 @@ test("resolveCapRoundFixed follows the bridge for a clean cap round and never pa
   }
 });
 
+// Issue 3443 delta review: a clean cap round never counts a record past the head. Head B carries the plain record A..B, and an extension record B..D bound to the head as its baseline belongs to a later range.
+test("resolveCapRoundFixed never reads a clean cap round's extension record past the head (issue 3443 delta review)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const D = "9".repeat(40);
+    await seedClosedRounds(repoRoot, 79, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-79", `draft_gate-${A}.json`);
+    await writeFile(ledger, JSON.stringify({ ...JSON.parse(await readFile(ledger, "utf8")), verdict: "clean", findings: [] }), "utf8");
+    await writeDeltaRecord(repoRoot, A, B, "push", { items: [] });
+    await writeDeltaRecord(repoRoot, B, D, "push", { items: [], extension: "docs_tests_only" });
+    const opts = (headSha) => ({ repo: "owner/repo", pr: 79, gate: "draft_gate", headSha, baseRefName: "main" });
+    assert.equal(await resolveCapRoundFixed(opts(B), { repoRoot }), null, "head B: the extension record B..D lies past the head and proves nothing");
+    assert.ok(await resolveCapRoundFixed(opts(D), { repoRoot }), "control: head D traverses B..D, so its extension proves the clean cap round");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 delta review (high): a candidate that primeStops never probed reads as a stop. Three starts seeded from the cap-round head: while start 1's probe runs, a writer unseals start 2's link B2..X2 (so priming skips X2),
+// and while start 3's probe runs it reseals the link. The head H is a base-only merge of X2, and only the bridged M..C2 names r: the coverage must stop at X2 as the proof does.
+test("resolveCapRoundFixed fails closed for an unprobed chain candidate: a bridge is never followed past it (issue 3443 delta review)", async () => {
+  const { repoRoot, baseSha: A } = await makeBaseDiffRepo();
+  try {
+    const [M1, M2, M3, X1, B2, X2, X3, C2, M, H] = ["5", "6", "7", "4", "a", "b", "c", "d", "9", "e"].map((c) => c.repeat(40));
+    const { p, q, r, items } = await seedThreeActRefs(repoRoot, 80, A);
+    await writeDeltaRecord(repoRoot, M1, X1, "push_to_gate", items("resolved", p, q, r));
+    await writeDeltaRecord(repoRoot, M2, B2, "push_to_gate", items("resolved", p, q));
+    await writeDeltaRecord(repoRoot, B2, X2, "push_to_gate", items("resolved"));
+    await writeDeltaRecord(repoRoot, M3, X3, "push_to_gate", items("resolved"));
+    await writeDeltaRecord(repoRoot, M, C2, "push_to_gate", items("resolved", r));
+    const baseOnlyMerge = async (args) => {
+      if (args.head === H && args.fromHead === X1) await rm(path.join(repoRoot, "tmp", "gate-delta", `${B2}.json.seal`));
+      if (args.head === H && args.fromHead === X3) await writeDeltaRecord(repoRoot, B2, X2, "push_to_gate", items("resolved"));
+      return (args.fromHead === A && [M1, M2, M3].includes(args.head)) || (args.fromHead === X2 && [M, H].includes(args.head));
+    };
+    assert.equal(await resolveCapRoundFixed({ repo: "owner/repo", pr: 80, gate: "draft_gate", headSha: H, baseRefName: "main" }, { repoRoot, baseOnlyMerge }), null, "r is named only past X2, where the proof stops at the head");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 delta review: the early return of the chain starts (no baseRefName) carries an empty `linked`, so the exported walk reads the direct chain instead of throwing.
+test("clearingChainLastCandidates reads the direct chain without a baseRefName (issue 3443 delta review)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate");
+    assert.deepEqual(await clearingChainLastCandidates({ tmpRoot: path.join(repoRoot, "tmp"), capHead: A, repo: "owner/repo", pr: 81, repoRoot }), [B]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // Issue 3443 (review): the accepting branch of the history bound. Real commits: the ready head H descends from the B to C link's candidate C, so the later link counts.
 test("resolveCapRoundFixed anyHead counts a later link whose candidate is on the head's history (issue 3443)", async () => {
   const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();

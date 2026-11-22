@@ -2302,7 +2302,7 @@ async function capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, re
     for (const [end, records] of linkCandidates) variants = variants.flatMap((variant) => records.map((record) => new Map(variant).set(end, record))).slice(0, MAX_BRIDGE_VARIANTS);
     return variants;
   };
-  if (typeof baseRefName !== "string" || !baseRefName) return { starts, baseOnlyUnsealed, seedHeads, bridges: bridgesOf() };
+  if (typeof baseRefName !== "string" || !baseRefName) return { starts, baseOnlyUnsealed, seedHeads, bridges: bridgesOf(), linked: [] };
   const records = listGateDeltaRecords(tmpRoot).sort((a, b) => (String(a.reviewBaselineHead) < String(b.reviewBaselineHead) ? -1 : 1));
   const seeded = new Set(direct ? [capHead] : []);
   const fromHeads = [capHead];
@@ -2375,7 +2375,8 @@ export const capRoundCovers = (capRound, tmpRoot, bound) => (record, bridge, lin
     for (let r = record; r && tmpRoot;) {
       if (CLEAN_CAP_EXTENSIONS.has(r.extension)) return true;
       const next = normalizeSha(r.candidateHead);
-      if (!next || seen.has(next) || stopAt?.(next)) return false;
+      // The walk never goes past the PR head: a record bound to the head itself belongs to a later range.
+      if (!next || seen.has(next) || (bound?.head && next === bound.head) || stopAt?.(next)) return false;
       seen.add(next);
       r = link(next);
     }
@@ -2437,6 +2438,17 @@ export async function capRoundChainCoverage({ capRound, tmpRoot, repo, pr, baseR
   return starts.length === 0 ? null : fewestUncovered(starts.flatMap((s) => bridges.map((bridge) => capRoundCoverage(capRound, tmpRoot, s, { ...bound, bridge }))));
 }
 
+/**
+ * Issue 3443: whether the cover run can still let the cap-round chain reach the head. The draft proof needs a chain that reaches the head, so a cover run is useful on a draft PR only while some chain end (any sealed chain, bridges included) is the head or on its history;
+ * a chain whose every end lies off that history stays short of the head whatever a cover record covers. A ready PR (anyHead) accepts the first record whatever its candidate, so it keeps the cover run.
+ * `onHistory(candidate)` is the caller's history probe (it records an unresolved history for the fetch request).
+ */
+export async function coverRunReachesHead({ isDraft, head, onHistory, tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
+  if (!isDraft) return true;
+  const ends = await clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge, allowUnsealedEnd: true }).catch(() => []);
+  return ends.some((end) => end === head || onHistory(end));
+}
+
 /** The act refs a cover record can name: the cap round's open act refs minus the PR-body items no record carries. */
 export const capRoundCoverableRefs = (capRound) => [...new Set(capRoundActList(capRound.log.findings, capRound.log.headSha).filter((e) => !isDeltaBodyItem(e)).map((e) => e.ref))];
 
@@ -2476,7 +2488,8 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
     return baseOnlyMemo.get(from);
   };
   // The proof stops at a chain end the head is a base-only merge of (`reaches`): the coverage walk stops there too, so a bridged link past the head never counts. A ready PR (anyHead) is bound by the history of the head instead.
-  const stopsAt = (next, direct, unsealed) => !options.anyHead && baseOnlyMemo.get(next) === true && !direct && !unsealed;
+  // A candidate that primeStops never probed (a link rewritten between the priming and this read) reads as a stop, never as no stop: the walk fails closed rather than cross a bridge the proof may stop at. The head itself is never a stop.
+  const stopsAt = (next, direct, unsealed) => !options.anyHead && next !== head && baseOnlyMemo.get(next) !== false && !direct && !unsealed;
   const primeStops = async ({ starts: startRecords, bridges }) => {
     if (options.anyHead) return;
     for (const bridge of bridges) for (const start of startRecords) {

@@ -12,10 +12,10 @@ import { extendCapRoundChain } from "../../scripts/loop/extend-cap-round-chain.m
 import { runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
 
-const seam = { stdout: { write: () => {} }, fetchBase: () => {}, fetchPr: async () => ({ baseRefName: "main" }) };
+const seam = { stdout: { write: () => {} }, fetchBase: () => {}, fetchPr: async () => ({ baseRefName: "main", isDraft: true }) };
 
 export const extendRoute = (root, { repo, pr, head }) => extendCapRoundChain({ repo, pr, worktree: root }, {
-  detectOriginSlug: () => repo, fetchPr: async () => ({ headRefOid: head, baseRefName: "main" }), fetchBaseBranch: () => {},
+  detectOriginSlug: () => repo, fetchPr: async () => ({ headRefOid: head, baseRefName: "main", isDraft: true }), fetchBaseBranch: () => {},
 });
 
 /** The reviewer-only delta for baseline..head: the input run, a sealed reviewer result marking every derived act item `status`, then the result run. */
@@ -81,4 +81,21 @@ export async function followRemedy(root, { repo, pr, head, baseline, ledgerPath,
   }
   end = await coordinationAt(root, { repo, pr, head });
   return { trace, end };
+}
+
+/**
+ * The thread-route delta for baseline..head (issue 3443): the REAL CLI with a list-review-threads file of one unresolved thread, a sealed reviewer result marking that thread `resolved`, then the result run.
+ * It seals a record whose item ref is the thread id, as a fixer pass over an escalated item in the PR does.
+ */
+export async function threadRoute(root, { repo, pr, baseline, threadId }) {
+  const tmp = path.join(root, "tmp");
+  const threadsFile = path.join(root, "threads.json");
+  writeFileSync(threadsFile, JSON.stringify({ ok: true, repo, pr, threads: [{ trusted: true, threadId, commentId: 1, body: "fix the escalated defect", isResolved: false, path: "src/a.mjs", line: 3 }] }));
+  const args = ["--threads-file", threadsFile, "--repo", repo, "--pr", String(pr), "--baseline", baseline, "--worktree", root];
+  const resultPath = path.join(root, "thread-result.json");
+  const { input } = await runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", resultPath], seam);
+  const newFindings = [...new Set((input.staleSurfaceHits ?? []).map((hit) => hit.file ?? hit.site?.split(":")[0]))].map((file) => ({ severity: "nit", summary: `${file}: the removed wording is reworded, not stale`, evidence: [`${file}:1`], site: file }));
+  writeFileSync(resultPath, JSON.stringify({ ...input.resultShape, actionableItems: input.actItems.map((item) => ({ ref: item.ref, status: "resolved", evidence: ["src/a.mjs:1"] })), newFindings, widenedReads: [], outcome: "locally_clear" }));
+  sealDeltaFixture(tmp, resultPath);
+  return runDeltaCli([...args, "--result", resultPath, "--invocation", "1"], seam);
 }

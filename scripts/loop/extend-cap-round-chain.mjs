@@ -25,7 +25,7 @@ import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/g
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
-import { capRoundChainCoverage, capRoundCovers, clearingChainLastCandidates, isCleanCapRound, resolveCapRound, resolveCapRoundFixed } from "../github/write-gate-context.mjs";
+import { capRoundChainCoverage, capRoundCovers, clearingChainLastCandidates, coverRunReachesHead, isCleanCapRound, resolveCapRound, resolveCapRoundFixed } from "../github/write-gate-context.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, coverRecordBlocker, gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import { defaultFetchOrigin } from "./standing-authorization.mjs";
@@ -37,7 +37,7 @@ Extend the sealed cap-round clearing chain over later commits that change docs a
 Commits after the start of the logic range that touch a logic file need a sealed locally_clear pre-push delta record for exactly the start of the logic range..PR head (the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end; ADR 0254): the tool then seals extension "delta_covered" into that record. It refuses with a typed reason and writes nothing when such commits have no covering delta, when no cap-round chain exists (a clean cap round counts as a chain of length zero ending at the cap-round head), or when the proof does not reach the head afterwards.
 Output (stdout, JSON): { "ok": true, "action": "chain_extended" | "already_proven", "chainEnd" (null for already_proven), "candidateHead", "files" }
 Refusal (stderr, JSON, exit 1): { "ok": false, "refused": true, "reason": "<code>", "detail": "...", "recovery": "<the one next command, or operator: <action>>" }
-Reasons: repo_mismatch, pr_state_unreadable, base_fetch_failed, head_mismatch, history_unresolved (git could not read a commit of the chain: fetch it and rerun; the replacement PR if the commit stays absent), no_cap_round_chain (for a sealed cap-round record that leaves act refs uncovered it names the reviewer-only cover run, \`loop pre-push-delta --reviewer-only --cover-uncovered\`, only while the record's candidate is on the head's history and every uncovered ref's cover record can take another run; the replacement PR otherwise), baseline_orphaned,
+Reasons: repo_mismatch, pr_state_unreadable, base_fetch_failed, head_mismatch, history_unresolved (git could not read a commit of the chain: fetch it and rerun; the replacement PR if the commit stays absent), no_cap_round_chain (for a sealed cap-round record that leaves act refs uncovered it names the reviewer-only cover run, \`loop pre-push-delta --reviewer-only --cover-uncovered\`, only while the record's candidate is on the head's history, every uncovered ref's cover record can take another run and, on a draft PR, some sealed clearing chain end is the head or on its history; the replacement PR otherwise), baseline_orphaned,
 logic_commit_in_range (no sealed locally_clear pre-push delta covers the code commits: run it for the start of the logic range), delta_range_mismatch (a sealed delta record exists but covers another range or is not locally_clear: rerun it for the start of the logic range..PR head), chain_reaches_head, record_exists, record_changed (the delta record changed on disk after it was validated), record_not_clearing, proof_not_reached; a thrown gh or git failure is "writer_error".
 ${JQ_OUTPUT_USAGE}`.trim();
 const parseError = buildParseError(USAGE);
@@ -80,8 +80,9 @@ const headMovingRecovery = (repo, pr) => `operator: push one docs or tests commi
 // The one gate-coordination command that the proof_not_reached, record_exists and no-cap-round refusals name as their recovery.
 const coordinationRecovery = (repo, pr) => `${CLI} loop gate-coordination --repo ${repo} --pr ${pr}`;
 const CLI = "node <dev-loops-package-root>/cli/index.mjs";
+const HEX_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const defaultGit = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnvNoDirOverrides(), stdio: ["ignore", "pipe", "pipe"] }).trim();
-const defaultFetchPr = ({ repo, pr }, { env, ghCommand, runChild }) => ghJson(["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,headRefName,baseRefName"], { env, ghCommand, runChild });
+const defaultFetchPr = ({ repo, pr }, { env, ghCommand, runChild }) => ghJson(["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,headRefName,baseRefName,isDraft"], { env, ghCommand, runChild });
 
 export async function extendCapRoundChain(options, {
   env = process.env, ghCommand = "gh", runChild, fetchPr = defaultFetchPr, git = defaultGit,
@@ -138,7 +139,8 @@ export async function extendCapRoundChain(options, {
   };
   const isAncestor = (sha) => sha !== head && reaches(sha, head);
   // The bound resolveCapRoundFixed applies on a ready PR (anyHead): a later link counts only while its candidate is on the head's history, so the tool and the proof cannot disagree. A cover record counts under the same history bound.
-  const onHistory = (candidate) => candidate === head || reaches(candidate, head);
+  // A candidate that is not a full hex SHA never reaches git (as the proof's own probe): it is off the history, so a malformed sealed record cannot crash the tool.
+  const onHistory = (candidate) => HEX_SHA.test(String(candidate ?? "")) && (candidate === head || reaches(candidate, head));
   const coverBound = { head, onHistory, coverOnHistory: onHistory };
   const ends = cap ? await clearingChainLastCandidates({ tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot, covering: cleanCap ? () => true : capRoundCovers(cap, tmpRoot, coverBound), allowUnsealedEnd: true }) : [];
   // The latest end: the ancestor end that every other ancestor end precedes, so the logic check never spans commits a later chain cleared.
@@ -169,7 +171,8 @@ export async function extendCapRoundChain(options, {
   // A sealed clearing record at `from` that did not seal the extension below covers another range or a non-locally_clear outcome: never a cover for from..head.
   const deltaRecovery = (from) => `${CLI} loop pre-push-delta --reviewer-only --repo ${repo} --pr ${pr} --baseline ${from} --pr-head ${head} --findings-log ${capLog} --spec-identity <id> --result-path <result-file>`;
   // The cover run (ADR 0255 amendment, issue 3443): the reviewer-only delta limited to the cap round's uncovered act refs over the cap-round head..PR head.
-  const coverRecovery = (from) => `${CLI} loop pre-push-delta --reviewer-only --cover-uncovered --repo ${repo} --pr ${pr} --baseline ${from} --pr-head ${head} --findings-log ${capLog} --spec-identity <id> --result-path <result-file>`;
+  // The resolved worktree is part of the command: it runs from any caller directory (the run refuses a worktree whose HEAD is not --pr-head).
+  const coverRecovery = (from) => `${CLI} loop pre-push-delta --reviewer-only --cover-uncovered --repo ${repo} --pr ${pr} --baseline ${from} --pr-head ${head} --findings-log ${capLog} --spec-identity <id> --result-path <result-file> --worktree ${shellQuote(resolvePath(cwd))}`;
   const refuseLogic = (from, logic) => {
     const other = sealedClearing(from);
     if (other) return refuse("delta_range_mismatch", `GATE-EXEC-ROUND-CAP-CHAIN-EXTEND: commits after ${from.slice(0, 7)} change logic files: ${logic.join(", ")}, and the sealed delta record for ${from.slice(0, 7)} covers ${String(other.candidateHead).slice(0, 7)} with outcome ${other.outcome}, not locally_clear for exactly ${from.slice(0, 7)}..${head.slice(0, 7)}. ${deltaRemedy(from)}`, deltaRecovery(from));
@@ -240,12 +243,17 @@ export async function extendCapRoundChain(options, {
       // It also needs every uncovered ref's cover record to accept another run: a sealed locally_clear one coverage ignored (its candidate left the history), an unsealed one and one that used the last invocation never will.
       const sealedCandidate = String(sealedCap.candidateHead ?? "").trim().toLowerCase();
       const candidateOnHistory = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sealedCandidate) && (sealedCandidate === head || reaches(sealedCandidate, head));
-      if (!candidateOnHistory && unresolved.size > 0) return refuseUnresolved();
-      const blocked = uncovered.length > 0 && candidateOnHistory ? uncovered.find((ref) => coverRecordBlocker(tmpRoot, capHeadSha, ref)) : undefined;
-      if (uncovered.length > 0 && candidateOnHistory && blocked === undefined) return refuse("no_cap_round_chain", `${prefix} Run the cover run over ${capHeadSha.slice(0, 7)}..${head7}: ${coverRecovery(capHeadSha)} (then --result <result-file> --invocation <1-3>) until it is locally_clear; it seals one cover record per uncovered ref and never overwrites a record, then rerun \`${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}\`. A reviewer-only run with a chain-end baseline derives an empty act list and covers no act ref, so the cover run is the route for an uncovered ref. Or restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, coverRecovery(capHeadSha));
+      // On a draft PR the proof needs a chain that reaches the head: a cover run helps only while some chain end is the head or on its history. A ready PR keeps it (its anyHead proof accepts the first record whatever its candidate). An unreadable draft state reads as a draft.
+      const chainReaches = !(uncovered.length > 0 && candidateOnHistory) || await coverRunReachesHead({ isDraft: state.isDraft !== false, head, onHistory, tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot });
+      if (!(candidateOnHistory && chainReaches) && unresolved.size > 0) return refuseUnresolved();
+      // One read of every uncovered ref's cover record under the sequence lock the cover run writes under: a write in progress (the seal removed, the new one not yet linked) is never read as an unsealed dead end. The detail below reuses it.
+      const blockers = uncovered.length > 0 && candidateOnHistory && chainReaches ? await withSequenceLock(tmpRoot, [capHeadSha], () => new Map(uncovered.map((ref) => [ref, coverRecordBlocker(tmpRoot, capHeadSha, ref)]))) : new Map();
+      const blocked = uncovered.find((ref) => blockers.get(ref));
+      if (uncovered.length > 0 && candidateOnHistory && chainReaches && blocked === undefined) return refuse("no_cap_round_chain", `${prefix} Run the cover run over ${capHeadSha.slice(0, 7)}..${head7}: ${coverRecovery(capHeadSha)} (then --result <result-file> --invocation <1-3>) until it is locally_clear; it seals one cover record per uncovered ref and never overwrites a gate-delta record, then rerun \`${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}\`. A reviewer-only run with a chain-end baseline derives an empty act list and covers no act ref, so the cover run is the route for an uncovered ref. Or restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, coverRecovery(capHeadSha));
       // Every act ref is covered and the record's candidate is off the head's history, or a cover record can take no further run: only a replacement PR remains.
-      const blocker = blocked === undefined ? null : coverRecordBlocker(tmpRoot, capHeadSha, blocked);
-      const why = blocker ? ` The cover record of act ref ${blocked} is ${blocker === "clearing" ? "sealed locally_clear but its candidate is not on the PR head's history" : blocker === "bounded" ? "sealed with the last invocation used" : "unsealed, hand-edited or unreadable"}, and a cover record is never overwritten or restarted, so no cover run can cover it.` : "";
+      const blocker = blocked === undefined ? null : blockers.get(blocked);
+      const why = blocker ? ` The cover record of act ref ${blocked} is ${blocker === "clearing" ? "sealed locally_clear but its candidate is not on the PR head's history" : blocker === "bounded" ? "sealed with the last invocation used" : "unsealed, hand-edited or unreadable"}, and a cover record is never overwritten or restarted, so no cover run can cover it.`
+        : candidateOnHistory && uncovered.length > 0 && !chainReaches ? " This PR is a draft and no sealed clearing chain end is the PR head or on its history, so a cover run could not make the chain reach the head." : "";
       return refuse("no_cap_round_chain", `${prefix}${why} Restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, replacement);
     }
     // The cap-round head is the PR head: no commit follows it, and a reviewer-only run with baseline equal to the head is refused. Only a new commit moves the head.

@@ -84,6 +84,12 @@ export function coverRecordBlocker(tmpRoot, capHead, ref) {
   return record.invocation >= DELTA_MAX_INVOCATIONS ? "bounded" : null;
 }
 
+/** The raw record and seal bytes of the cover record of each ref: the compare-and-swap token of a cover run, read under the sequence lock before its checks and again under the lock before its write. */
+export function coverRecordsSnapshot(tmpRoot, capHead, refs) {
+  const read = (file) => { try { return readFileSync(file, "utf8"); } catch { return null; } };
+  return JSON.stringify(refs.map((ref) => { const recordPath = gateCoverRecordPath(tmpRoot, capHead, ref); return [read(recordPath), read(`${recordPath}.seal`)]; }));
+}
+
 /**
  * Write the cover record of one act ref. The call throws, and the file stays as it is, for any record `coverRecordBlocker` names: a later run cannot overwrite the evidence coverage counts,
  * restart a bound or replace an untrusted leftover. Only a sealed non-clearing record below the bound is replaced: the caller continues its invocation count.

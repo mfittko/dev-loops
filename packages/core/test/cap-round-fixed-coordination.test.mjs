@@ -60,6 +60,8 @@ test("the cap-round refusal names its failed condition and the remedy for that c
     ["no_clearing_record", /no sealed clearing delta record exists.*Remedy: run `node <dev-loops-package-root>\/cli\/index\.mjs loop pre-push-delta --reviewer-only`.*node <dev-loops-package-root>\/cli\/index\.mjs gate extend-cap-round-chain --repo <owner\/name> --pr <number>/],
     ["unsealed_record", /carries no valid seal.*Remedy: rerun .*loop pre-push-delta --reviewer-only.*never edit the record/],
     ["items_do_not_cover", /act refs of the cap round are not all named by the union of the sealed clearing records.*Remedy: run .*gate extend-cap-round-chain --repo <owner\/name> --pr <number>.*--cover-uncovered/],
+    // Issue 3443 delta review: the union counts every item of the first record and only the resolved items of each later link.
+    ["items_do_not_cover", /every item of the first record, the resolved items of each later link, and the sealed cover record of each ref/],
     ["cap_round_unresolved", /could not be resolved.*Remedy: repair or quarantine the unreadable ledger or config/],
     ["chain_does_not_reach_head", /ends before the current head.*Remedy: run .*loop pre-push-delta --reviewer-only.* for the current head, or fetch origin\/<base>.*node <dev-loops-package-root>\/cli\/index\.mjs gate extend-cap-round-chain --repo <owner\/name> --pr <number>/],
   ];
