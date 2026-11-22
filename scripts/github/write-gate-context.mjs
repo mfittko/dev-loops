@@ -2439,14 +2439,14 @@ export async function capRoundChainCoverage({ capRound, tmpRoot, repo, pr, baseR
 }
 
 /**
- * Issue 3443: whether the cover run can still let the cap-round chain reach the head. The draft proof needs a chain that reaches the head, so a cover run is useful on a draft PR only while some chain end (any sealed chain, bridges included) is the head or on its history;
- * a chain whose every end lies off that history stays short of the head whatever a cover record covers. A ready PR (anyHead) accepts the first record whatever its candidate, so it keeps the cover run.
+ * Issue 3443: whether the cover run can still let the cap-round chain reach the head. The draft proof needs a chain that reaches the head, so a cover run is useful on a draft PR only while some sealed chain (bridges included) visits the head or ends on its history;
+ * a chain whose every end lies off that history and that never visits the head stays short of the head whatever a cover record covers. A chain that visits the head (A..H, then a sealed H..X) reaches it, however far a later record continues. A ready PR (anyHead) accepts the first record whatever its candidate, so it keeps the cover run.
  * `onHistory(candidate)` is the caller's history probe (it records an unresolved history for the fetch request).
  */
 export async function coverRunReachesHead({ isDraft, head, onHistory, tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
   if (!isDraft) return true;
-  const ends = await clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge, allowUnsealedEnd: true }).catch(() => []);
-  return ends.some((end) => end === head || onHistory(end));
+  const { ends, candidates } = await clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge, allowUnsealedEnd: true }).catch(() => ({ ends: [], candidates: [] }));
+  return candidates.includes(head) || ends.some((end) => end === head || onHistory(end));
 }
 
 /** The act refs a cover record can name: the cap round's open act refs minus the PR-body items no record carries. */

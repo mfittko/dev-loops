@@ -251,7 +251,7 @@ test("the cap-round head equal to the head, or an unfetched cap-round head, refu
     const unfetched = await extend(root, D, { fetchPr: async () => ({ headRefOid: D, baseRefName: "trunk" }) });
     assert.equal(unfetched.reason, "no_cap_round_chain");
     assert.match(unfetched.detail, /`git rev-parse --is-shallow-repository`.*`git fetch --unshallow`.*`git fetch origin a{40}`/);
-    assert.match(unfetched.detail, /rerun `[^`]*gate extend-cap-round-chain --repo owner\/repo --pr \d+`/);
+    assert.match(unfetched.detail, /rerun `[^`]*gate extend-cap-round-chain --repo owner\/repo --pr \d+ --worktree \S+`/);
     assert.match(unfetched.detail, /still absent.*replacement PR/);
     assert.equal(unfetched.recovery, `git fetch origin ${"a".repeat(40)}`);
     assert.doesNotMatch(unfetched.detail, /git fetch origin (trunk|main)/);
@@ -268,7 +268,7 @@ test("runCli maps a refusal and a thrown failure to a stderr JSON with exit 1", 
     const stderr = sink();
     const code = await runCli(["--repo", REPO, "--pr", String(PR), "--worktree", root], { stdout, stderr, detectOriginSlug: () => REPO, fetchPr: async () => { throw new Error("gh down"); } });
     assert.equal(code, 1);
-    assert.deepEqual(JSON.parse(stderr.chunks.join("")), { ok: false, refused: true, reason: "writer_error", detail: "gh down", recovery: renderCliText(`node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo ${REPO} --pr ${PR}`) });
+    assert.deepEqual(JSON.parse(stderr.chunks.join("")), { ok: false, refused: true, reason: "writer_error", detail: "gh down", recovery: renderCliText(`node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo ${REPO} --pr ${PR} --worktree ${shellQuote(path.resolve(root))}`) });
     const refusedErr = sink();
     assert.equal(await runCli(["--repo", REPO, "--pr", String(PR), "--worktree", root], { stdout, stderr: refusedErr, detectOriginSlug: () => REPO, fetchPr: async () => ({}) }), 1);
     assert.equal(JSON.parse(refusedErr.chunks.join("")).reason, "pr_state_unreadable");
@@ -447,7 +447,7 @@ test("a --repo that differs from the checkout origin refuses repo_mismatch and w
       const result = await extend(root, D, { detectOriginSlug: () => origin, fetchPr: async () => { throw new Error("fetchPr must not run"); } });
       assert.equal(result.reason, "repo_mismatch");
       // No `<origin slug>` placeholder: an unresolved origin names the operator action.
-      if (origin) assert.ok(result.recovery.endsWith(`gate extend-cap-round-chain --repo ${origin} --pr ${PR}`));
+      if (origin) assert.ok(result.recovery.endsWith(`gate extend-cap-round-chain --repo ${origin} --pr ${PR} --worktree ${shellQuote(path.resolve(root))}`));
       else assert.equal(result.recovery, `operator: run from a clone whose origin is ${REPO}, then rerun`);
     }
     // repoSlugEquals normalization: a case variant of --repo is accepted and the origin slug keys the ledger path.
@@ -1454,7 +1454,7 @@ test("issue 3443: a git failure on the later link is an unresolved history with 
       const draft = await extend(root, head, { git: failing({ status: 1 }), fetchPr });
       assert.equal(draft.reason, "no_cap_round_chain", JSON.stringify(draft));
       assert.equal(draft.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
-      assert.match(draft.detail, /This PR is a draft and no sealed clearing chain end is the PR head or on its history/u);
+      assert.match(draft.detail, /This PR is a draft and no sealed clearing chain visits the PR head or ends on its history/u);
       assert.ok(draft.detail.includes(`Uncovered act refs: ${fingerprintFinding(q)}.`), draft.detail);
     }
   } finally {
@@ -1647,6 +1647,65 @@ test("issue 3443: the cover blocker is read under the cap-round head's sequence 
     const refused = await result;
     assert.equal(refused.reason, "no_cap_round_chain");
     assert.ok(refused.recovery.includes("--cover-uncovered"), "the completed write is a retryable record, so the cover run is named, not the replacement PR");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 delta review: a chain that visits the PR head reaches it, however far a sealed record continues past it (A..H [p], H..X after a reset of X to H).
+test("issue 3443: a draft PR whose chain visits the head and continues past it keeps the cover run", async () => {
+  const act = (summary) => ({ severity: "medium", summary, files: ["src/a.mjs"], line: 1, angle: "correctness", judgeDisposition: "act", judgeTitle: summary, judgeFix: "add" });
+  const [p, q] = [act("guard missing"), act("second defect")];
+  const { root, A, B } = await capFixture({ findings: [p, q] });
+  try {
+    const tmp = path.join(root, "tmp");
+    const X = "e".repeat(40);
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: B, actSetId: "round-3", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: fingerprintFinding(p), status: "resolved" }] });
+    writeSealedGateDeltaRecord(tmp, B, { reviewBaselineHead: B, candidateHead: X, actSetId: "round-4", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: fingerprintFinding(q), status: "resolved" }] });
+    const refused = await extend(root, B, { fetchPr: async () => ({ headRefOid: B, baseRefName: "main", isDraft: true }) });
+    assert.equal(refused.reason, "no_cap_round_chain", JSON.stringify(refused));
+    assert.ok(refused.recovery.includes("--cover-uncovered"), refused.recovery);
+    assert.ok(refused.detail.includes(`Uncovered act refs: ${fingerprintFinding(q)}.`), "the link past the head covers nothing");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 delta review: the coverage read before the lock is stale once a cover run completes during the wait: the tool rereads it under the lock and names the rerun, never a candidate off the history.
+test("issue 3443: a cover run that completes as locally_clear during the lock wait returns the rerun, not the replacement PR", async () => {
+  const act = (summary) => ({ severity: "medium", summary, files: ["src/a.mjs"], line: 1, angle: "correctness", judgeDisposition: "act", judgeTitle: summary, judgeFix: "add" });
+  const [p, q] = [act("guard missing"), act("second defect")];
+  const { root, A, B } = await capFixture({ findings: [p, q] });
+  try {
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: B, actSetId: "round-3", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: fingerprintFinding(p), status: "resolved" }] });
+    const cover = { capHead: A, ref: fingerprintFinding(q), candidateHead: B, actSetId: "set", invocation: 1, outcome: "needs_fix", nextStep: "fix_and_rereview", status: "not_resolved" };
+    writeCoverRecord(tmp, cover);
+    let result;
+    await withSequenceLock(tmp, [A], async () => {
+      const pending = extend(root, B);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      rmSync(gateCoverRecordPath(tmp, A, cover.ref));
+      rmSync(`${gateCoverRecordPath(tmp, A, cover.ref)}.seal`, { force: true });
+      writeCoverRecord(tmp, { ...cover, outcome: "locally_clear", nextStep: "push_to_gate", status: "resolved", invocation: 2 });
+      result = pending;
+    });
+    const refused = await result;
+    assert.equal(refused.reason, "record_changed", JSON.stringify(refused));
+    assert.match(refused.recovery, /gate extend-cap-round-chain --repo \S+ --pr \S+ --worktree \S+$/u);
+    assert.doesNotMatch(refused.detail, /not on the PR head's history|replacement PR: /u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 delta review: every rerun recovery carries the resolved worktree, so it runs from any caller directory.
+test("issue 3443: the rerun recoveries name the resolved worktree", async () => {
+  const { root, B } = await capFixture({});
+  try {
+    const refused = await extendCapRoundChain({ repo: REPO, pr: PR, worktree: root }, { detectOriginSlug: () => "other/repo", fetchPr: async () => ({ headRefOid: B, baseRefName: "main" }), fetchBaseBranch: () => {} });
+    assert.equal(refused.reason, "repo_mismatch");
+    assert.ok(refused.recovery.endsWith(`--worktree ${shellQuote(path.resolve(root))}`), refused.recovery);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

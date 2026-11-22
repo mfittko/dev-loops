@@ -55,9 +55,9 @@ test("GATE-EXEC-ROUND-CAP-CHAIN-EXTEND describes the CI-failed cap-round path wi
   assert.match(rule, /never replaces a cover record that is clearing, unsealed, unreadable or at the last invocation: the next invocation supersedes only its own sealed non-clearing cover record below the bound/);
   assert.doesNotMatch(rule, /a sealed `locally_clear` cover record is never replaced/);
   assert.match(rule, /a cap round with no sealed clearing chain start \(a record at the cap-round head or at a proven base-only merge of it\)/);
-  assert.match(rule, /some sealed clearing chain end is the head or on its history/);
+  assert.match(rule, /some sealed clearing chain visits the head or ends on its history/);
   assert.match(rule, /up to a limit of 16 combinations/);
   assert.match(rule, /takes its own snapshot of every cover record of the run in its first locked read, and refuses and writes nothing, with the input-run rerun as `recovery`, when a record or the next invocation differs from that snapshot/);
-  assert.match(rule, /no uncovered ref's cover record \(keyed by the cap-round head, read under that head's sequence lock\) is a dead end and, on a draft PR, some sealed clearing chain end is the head or on its history/);
+  assert.match(rule, /no uncovered ref's cover record \(keyed by the cap-round head, read under that head's sequence lock\) is a dead end and, on a draft PR, some sealed clearing chain visits the head or ends on its history/);
   assert.match(rule, /Existing gate-delta records are never rewritten, except the `delta_covered` extension reseal/);
 });
