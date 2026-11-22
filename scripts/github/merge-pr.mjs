@@ -880,7 +880,7 @@ export async function mergePr(options, runtime = {}) {
   const spikeFirst = spikeResult();
   if (spikeFirst !== null) return spikeFirst;
 
-  // The local config checks need no GitHub read, so they run before the wait and again after it (the policy can change during a wait).
+  // The local config checks need no GitHub read, so they run before the wait and again after every run read (the policy can change during a read or a wait).
   let configLoad;
   let humanMergeOnly;
   const loadAndCheckConfig = async () => {
