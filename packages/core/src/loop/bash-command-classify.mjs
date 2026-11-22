@@ -1674,7 +1674,7 @@ function interpreterFlag(head, t) {
   // perl and ruby: walk the short-flag cluster; a letter that takes an argument ends it
   const argLetters = head === "perl" ? "IMmxdD" : "IrCEFxT";
   for (let k = 1; k < t.length; k++) {
-    if (head === "perl" && "CFV".includes(t[k])) return null; // -C, -F and -V take an attached value (`-Cio`, `-Fi`, `-V:intsize`): its letters are no `e`/`i` flags
+    if (head === "perl" && ("CF".includes(t[k]) || (t[k] === "V" && t[k + 1] === ":"))) return null; // -C, -F and `-V:` take an attached value (`-Cio`, `-Fi`, `-V:intsize`): its letters are no `e`/`i` flags; a bare `-V` is a flag and the cluster goes on (`-Ve x`)
     if (head === "ruby" && t[k] === "W") { k += /^(?:\d+|:[\w-]+)?/.exec(t.slice(k + 1))[0].length; continue; } // `-W2`, `-W:no-deprecated`: the level or category ends, the cluster goes on (`-We`)
     if (head === "ruby" && t[k] === "K") { k++; continue; } // `-Ku`: one encoding letter, then the cluster goes on (`-Kue`)
     if (argLetters.includes(t[k])) return k === t.length - 1 && "IMmrCEF".includes(t[k]) ? "value" : null;
@@ -1876,7 +1876,7 @@ function inspectShell(command, report = false, skipFirst = false) {
       if (form === "dash" || form === "herestring" || (form === "stdin" && pipeSource.has(stmt))) out.ceiling = true;
       // only the script word of a runner runs the file; a written file later in the args is data (`node s.mjs --body-file tmp/b.md`)
       const script = { loaded: [] };
-      if (INTERPRETER_HEAD_RE.test(head)) { interpreterForm(head, args, stdin, script); if (args.some(procHeredoc)) out.deny = true; }
+      if (INTERPRETER_HEAD_RE.test(head)) { interpreterForm(head, args, stdin, script); if (args.some(procHeredoc) || redirs.some((r) => (r.op === R.RdrIn || r.op === R.RdrInOut) && (!r.n || r.n.value === "0") && procHeredoc(wordOf(r.word)))) out.deny = true; }
       else if (FILE_RUNNER_HEAD_RE.test(head)) { // sh/bash/zsh: skip `-o`/`-O`/`+o`/`+O` option values and `+x` words
         for (let k = 0; k < args.length; k++) {
           if (/^[-+][A-Za-z]*[oO]$/.test(args[k].value)) { k++; continue; } // a cluster ending in o (`-euo pipefail`) takes the next word as its value

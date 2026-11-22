@@ -130,9 +130,12 @@ function classifySegment(rawSegment) {
     }
     return { kind: "violation", tool: "gh" };
   }
-  // an inline python form is already reported as inline-interpreter
-  // (a segment slice drops a heredoc body, so only a segment that parses and is denied is already reported)
-  if (/^python3?\b/.test(segment) && !(inlineInterpreterVerdict(rawSegment) === "deny" && inlineInterpreterParseError(rawSegment) === null)) {
+  // a python segment the gate denies or reports as a ceiling is already reported as inline-interpreter
+  // (a segment slice drops a heredoc body, so a slice holding a heredoc reads as unterminated: it counts only when denied and parsed)
+  // shortcut: a `<<` heredoc anywhere in the slice stays reported as python3, even when the ceiling is real, as the slice cannot tell; list the case if it shows up
+  const verdict = inlineInterpreterVerdict(rawSegment);
+  const reported = inlineInterpreterParseError(rawSegment) === null && (verdict === "deny" || (verdict === "ceiling" && !/(?<!<)<<(?!<)/.test(rawSegment)));
+  if (/^python3?\b/.test(segment) && !reported) {
     return { kind: "violation", tool: /^python3\b/.test(segment) ? "python3" : "python" };
   }
   return { kind: "clean" };

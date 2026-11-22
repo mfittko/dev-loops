@@ -331,9 +331,14 @@ export const INLINE_INTERPRETER_FORMS = [
   allow("perl -V"),
   // an interpreter runs a heredoc-fed process substitution as its script (origin/main denied it)
   ...["node", "bun", "python3", "perl", "ruby"].flatMap((h) => [`${h} <(cat <<EOF\nx\nEOF\n)`, `${h} <(cat <<'EOF'\nx\nEOF\n)`, `${h} <(cat <<<x)`]).map(deny),
+  // the same text as the stdin redirect word
+  ...["node", "bun", "python3", "perl", "ruby"].flatMap((h) => [`${h} < <(cat <<EOF\nx\nEOF\n)`, `${h} < <(cat <<'EOF'\nx\nEOF\n)`, `${h} < <(cat <<<x)`]).map(deny),
+  allow("node < <(cat a)"),
   allow("diff <(cat a) b"),
   allow("node <(cat a)"),
   deny("perl -C -e x"),
+  deny("perl -Ve x"),
+  deny("perl -VE x"),
   // a backslash-newline continuation is removed by bash: it hides no head, flag or run path
   allow("node \\\n scripts/x.mjs"),
   allow("ls \\\n-la"),

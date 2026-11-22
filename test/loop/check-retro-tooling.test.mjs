@@ -292,6 +292,8 @@ test("the retro label names a python script call, and the inline form as inline-
   for (const command of ["python3 tool.py - <<'E'\nx\nE", "python3 script.py <<EOF\nx\nEOF\necho done"]) {
     assert.ok(analyzeTranscript(command).violations.some((v) => v.startsWith("python3:")), JSON.stringify(command));
   }
+  // a python ceiling segment is reported once, as inline-interpreter
+  assert.deepEqual(analyzeTranscript("python3 - <<< x").violations, ["inline-interpreter: python3 - <<< x"]);
 });
 
 test("retro classification of an unterminated quote and an escaped backtick before a separator (#2442)", () => {
