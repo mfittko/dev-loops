@@ -146,8 +146,10 @@ Output (stdout, JSON):
     "reason": "...",
     "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] },
     "blockedOn"?: "operator_decision",
-    "agentRemedy"?: { "command": "...", "summary": "..." }
+    "agentRemedy"?: { "command": "...", "summary": "..." },
+    "recovery"?: "..."
   }
+  (recovery is the fix_ci_failure route string that embeds agentRemedy.command and the emit-fixer-work-order.mjs --phase full --ci-file step, and is present only on a failing-CI report_blocked result that carries an agentRemedy)
   (blockedOn and agentRemedy are present only on report_blocked results; a
   result carries at most one of them. Results listed in KNOWN_GAPS in
   packages/core/src/loop/gate-no-dead-end.mjs carry neither until the
