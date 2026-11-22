@@ -969,3 +969,51 @@ test("top-level allPassed matches the artifact, and --jq is validated before any
     await assert.rejects(readFile(staleArtifact, "utf8"), /ENOENT/);
   } finally { await rm(marked.repoRoot, { recursive: true, force: true }); }
 });
+
+test("a prior artifact from a different toolchain is not reused", async () => {
+  const { second } = await secondGate((a) => ({ ...a, toolchain: "bun@0.0.0" }));
+  assert.equal(second.status, "complete");
+  assert.equal(second.artifact.reusedFrom, undefined);
+});
+
+// A fixture whose verify script appends one line to a counter outside the tree per full run.
+async function countingFixture(mode) {
+  const f = await fixture();
+  const counter = `${f.repoRoot}-runs.log`;
+  await writeFile(path.join(f.repoRoot, "scripts", "verify.mjs"), `import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(counter)}, "run\\n");`);
+  await writeFile(path.join(f.repoRoot, ".devloops"), `version: 1\nvalidation:\n  mode: ${mode}\n`);
+  execFileSync("git", ["add", "scripts", ".devloops"], { cwd: f.repoRoot });
+  execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "counting"], { cwd: f.repoRoot });
+  execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/main"], { cwd: f.repoRoot });
+  execFileSync("git", ["fetch", "-q", "origin"], { cwd: f.repoRoot });
+  const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.repoRoot, encoding: "utf8" }).trim();
+  const runs = async () => (await readFile(counter, "utf8").catch(() => "")).split("\n").filter(Boolean).length;
+  return { ...f, headSha, runs };
+}
+
+test("both lifecycle gates at one head and profile share one validation identity and one local full run", async () => {
+  const { repoRoot, headSha, runs } = await countingFixture("local");
+  try {
+    const readPrTitle = async () => "feat: x";
+    const draft = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readPrTitle });
+    const approval = await resolveValidation({ ...parseResolveValidationArgs(args(headSha)), gate: "pre_approval_gate" }, { repoRoot, readPrTitle });
+    assert.equal(draft.status, "complete");
+    assert.equal(approval.status, "complete");
+    assert.equal(await runs(), 1);
+    assert.equal(approval.artifact.reusedFrom, "draft_gate");
+    for (const key of ["headSha", "profile", "toolchain"]) assert.equal(approval.artifact[key], draft.artifact[key]);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); await rm(`${repoRoot}-runs.log`, { force: true }); }
+});
+
+test("green current-head CI resolves both gates with zero local full runs", async () => {
+  const { repoRoot, headSha, runs } = await countingFixture("ci-only");
+  try {
+    for (const gate of ["draft_gate", "pre_approval_gate"]) {
+      const result = await resolveValidation({ ...parseResolveValidationArgs(args(headSha)), gate }, { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
+      assert.equal(result.status, "complete");
+      assert.equal(result.artifact.authority, "ci-authoritative");
+      assert.deepEqual(result.artifact.suites, []);
+    }
+    assert.equal(await runs(), 0);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); await rm(`${repoRoot}-runs.log`, { force: true }); }
+});
