@@ -1669,7 +1669,7 @@ function interpreterFlag(head, t) {
     if ((head === "node" ? NODE_VALUE_FLAGS : BUN_VALUE_FLAGS).has(t)) return "value";
     return t.startsWith("--") && !t.includes("=") && !(head === "node" ? NODE_BOOLEAN_FLAGS : BUN_BOOLEAN_FLAGS).has(t) ? "long" : null;
   }
-  if (head.startsWith("python")) return /^-[BEIOPRSUVbdhiqsuvx]*c/.test(t) ? "code" : /^-[BEIOPRSUVbdhiqsuvx]*[WXm]$|^--check-hash-based-pycs$/.test(t) ? "value" : null; // `-m x -c y` denies: the module word is the flag's value, and `-c` after it still reads as code (origin/main denied it)
+  if (head.startsWith("python")) return /^-[BEIOPRSUVbdhiqsuvx]*c/.test(t) ? "code" : /^-[BEIOPRSUVbdhiqsuvx]*[WXm]$|^--check-hash-based-pycs$/.test(t) ? "value" : null; // `-m x -c y` and `-m x <<EOF` deny on purpose (review 5912982100): the module word is the flag's value, and `-c` or a stdin heredoc after it still reads as code (origin/main allowed both)
   if (t.startsWith("--")) return null;
   // perl and ruby: walk the short-flag cluster; a letter that takes an argument ends it
   const argLetters = head === "perl" ? "IMmxdD" : "IrCEFxT";
@@ -1767,8 +1767,15 @@ function envSplitString(words) {
   if ((w[0]?.value ?? "").split("/").pop() !== "env") return false;
   for (let i = 1; i < w.length; i++) {
     const { value } = w[i];
-    if (/^-[A-Za-z]*S/.test(value) || /^--split-string(=|$)/.test(value)) return true;
-    if (/^(?:-[uCPa]|--(?:unset|chdir|argv0))$/.test(value)) i++; // the option's value is the next word
+    if (/^-[A-Za-z]+$/.test(value)) {
+      // walk the cluster: `S` before a value-taking letter splits; the rest of the word after `u`, `C`, `P` or `a` is that option's value (`-uSSH_AUTH_SOCK`)
+      const stop = value.slice(1).search(/[uCPa]/);
+      if (value.slice(1, stop < 0 ? undefined : stop).includes("S")) return true;
+      if (stop === value.length - 2) i++; // the value letter ends the word: its value is the next word
+      continue;
+    }
+    if (/^--split-string(=|$)/.test(value)) return true;
+    if (/^(?:--(?:unset|chdir|argv0))$/.test(value)) i++; // the option's value is the next word
     else if (!value.startsWith("-")) return false;
   }
   return false;
@@ -1850,7 +1857,7 @@ function inspectShell(command, report = false, skipFirst = false) {
   const ends = (s, side) => (s.cmd?.type === "BinaryCmd" ? ends(s.cmd[side], side) : s);
   const isHeredoc = (r) => r.op === R.Hdoc || r.op === R.DashHdoc;
   const isStdinText = (r) => isHeredoc(r) || r.op === R.WordHdoc; // a heredoc or here-string: the text a cat/tee writes
-  const formIn = (text, skip) => inspectShell(text, false, skip).deny;
+  const formIn = (text, skip) => { const r = inspectShell(text, false, skip); return r.deny && r.parseError === null; }; // prose that does not parse holds no closed-list form
   const alone = parsed.file.stmts.length === 1 && parsed.file.stmts[0].cmd?.type === "CallExpr"; // the whole command is one simple command
   const runChecks = []; // write-then-run checks, run once the walk ends: a backgrounded or piped runner before the write runs after it
   // a `<(...)` holding a heredoc or here-string, among an interpreter's words, is text it runs as a script or preload (origin/main denied every such word)
@@ -1867,7 +1874,7 @@ function inspectShell(command, report = false, skipFirst = false) {
     if (tails.some(envSplitString)) out.deny = true;
     for (const tail of tails) {
       // a head that bash expands first (ANSI-C quote, brace/glob) can name any binary: deny. A parameter expansion or substitution in the head is a reported ceiling.
-      if (tail[0].expandsToName && tail[0].value !== "[") out.deny = true;
+      if (tail[0].expandsToName && tail[0].value.split("/").pop() !== "[") out.deny = true;
       if (tail[0].dynamic) out.ceiling = true;
       const head = tail[0].value.split("/").pop().toLowerCase();
       const args = tail.slice(1);

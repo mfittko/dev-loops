@@ -329,6 +329,23 @@ export const INLINE_INTERPRETER_FORMS = [
   allow("perl -V:intsize"),
   allow("perl -V:installsitelib"),
   allow("perl -V"),
+  // allow rows of the deleted unit-test tables, so a future deny of a legitimate script run fails a test
+  deny("python3 -m json.tool <<EOF\n{}\nEOF"), // flipped to deny on purpose (review 5912982100)
+  allow("node -- scripts/x.mjs -p 1"),
+  allow("node --experimental-strip-types scripts/x.ts -e foo"),
+  allow("node --experimental-config-file ./node.config.json scripts/x.mjs"),
+  allow("echo $((1<<2))"),
+  // a prose apostrophe in a heredoc body or substitution is no closed-list form and no ceiling case
+  allow("git commit -m \"$(cat <<'EOF'\nfix: don't break\nEOF\n)\""),
+  allow("git commit -F - <<'MSG'\nfix: don't break\nMSG"),
+  allow("node scripts/x.mjs --body-file - <<'EOF'\n- it's fine\nEOF"),
+  // env option clusters: a value-taking letter ends the cluster, `S` before it splits
+  allow("env -uSOMEVAR ls"),
+  allow("env -uSSH_AUTH_SOCK git status"),
+  deny("env -iS 'x'"),
+  deny("env -S 'ls'"),
+  // a path-qualified test command is a literal head
+  allow("/usr/bin/[ -f x ]"),
   // an interpreter runs a heredoc-fed process substitution as its script (origin/main denied it)
   ...["node", "bun", "python3", "perl", "ruby"].flatMap((h) => [`${h} <(cat <<EOF\nx\nEOF\n)`, `${h} <(cat <<'EOF'\nx\nEOF\n)`, `${h} <(cat <<<x)`]).map(deny),
   // the same text as the stdin redirect word

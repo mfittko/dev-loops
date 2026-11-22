@@ -6,7 +6,13 @@
 import { createRequire } from "node:module";
 
 let shSyntax;
-const load = () => (shSyntax ??= createRequire(import.meta.url)("sh-syntax/sync"));
+const load = () => {
+  if (shSyntax) return shSyntax;
+  const require = createRequire(import.meta.url);
+  // wasm_exec installs a `globalThis.fs` that sends every Go write, fd 2 included, to stdout. A hook reports its decision as JSON on stdout, so Go output there would drop the deny.
+  globalThis.fs ??= require("node:fs");
+  return (shSyntax = require("sh-syntax/sync"));
+};
 
 /**
  * Parse TEXT as Bash. Every failure returns `{ error }` so the gate's blanket deny on a parse failure applies (ADR 0276):

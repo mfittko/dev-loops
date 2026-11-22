@@ -38,7 +38,7 @@ The policy does not change. Operator decisions 1 to 5 of 2026-11-15 stand: the o
 ## Consequences
 
 - A 4.1 MB binary lives in git per `sh-syntax` version. It ships in the `dev-loops` npm tarball (`.claude/hooks/`) and again through `@dev-loops/core` in `node_modules`.
-- The first parse costs a wasm load. On the PreToolUse hook (Node, `ls`), wall time rose from about 65 ms to about 95 ms.
+- The first parse costs a wasm load. On the PreToolUse hook (Node, `ls`), wall time rose from about 65 ms to about 100 ms (about 110 ms for `node -e x`). The figures are approximate; the PR description Validation section is the measurement record.
 - `sh-syntax` is a single-maintainer wrapper over mvdan/sh. The exact pin makes each upgrade explicit.
 - Zsh-only syntax becomes a parse-failure deny. The reason quotes the parse error so the agent can rewrite the command.
 - Claude Code treats a crashed PreToolUse hook as a non-blocking error, so the hook must not crash. A hook that cannot load the vendored parser denies every command in a managed repo through the parse-failure deny. The Bash hook also catches a throw from the inline-interpreter classifier and denies in a managed repo. The installed-plugin test guards a missing asset, and a hook test covers a broken vendored entry and a throwing classifier.

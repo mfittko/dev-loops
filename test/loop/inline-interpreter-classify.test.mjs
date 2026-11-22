@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import nodeFs from "node:fs";
 import { test } from "bun:test";
 import { commandContainsInlineInterpreter, inlineInterpreterVerdict } from "@dev-loops/core/loop/bash-command-classify";
 import { decideBashGate } from "@dev-loops/core/claude/hook-decisions";
@@ -32,6 +33,11 @@ test("a deeply nested eval substitution returns a verdict", () => {
     assert.equal(typeof commandContainsInlineInterpreter(command), "boolean", String(depth));
     assert.match(inlineInterpreterVerdict(command), /^(?:allow|ceiling|deny)$/, String(depth));
   }
+});
+
+test("the parser adapter routes Go runtime writes to node fs, not stdout (hook stdout stays one JSON decision)", () => {
+  inlineInterpreterVerdict("ls");
+  assert.equal(globalThis.fs, nodeFs);
 });
 
 const GATE = (command) => decideBashGate({ command, inManagedContext: true });
