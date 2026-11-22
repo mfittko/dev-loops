@@ -1290,15 +1290,14 @@ test("issue 3437 ac:3: no_cap_round_chain names a replacement PR for a non-cover
     assert.equal(refused.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
     assert.doesNotMatch(refused.recovery, /pre-push-delta/u);
     assert.ok(refused.detail.includes(CAP_ROUND_REFUSAL.baseline_orphaned));
-    // A candidate off the head's history gives the same recovery.
-    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: "9".repeat(40), actSetId: "other", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "unrelated", status: "resolved" }] });
-    const offHistory = await extend(root, head);
-    assert.equal(offHistory.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
-    assert.doesNotMatch(offHistory.recovery, /pre-push-delta/u, "a run at the cap-round head refuses and names this command again");
-    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: B, actSetId: "other", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "unrelated", status: "resolved" }] });
     // Issue 3443: the refusal names the records that exist; the act refs they leave uncovered are named too.
     assert.ok(refused.detail.includes(`Uncovered act refs: ${actRef}.`), `names the cap round's own act ref ${actRef}: ${refused.detail}`);
     assert.ok(refused.detail.includes(`Records on the chain: ${A.slice(0, 7)}..${B.slice(0, 7)} [unrelated].`), refused.detail);
+    // A covering record whose candidate is off the head's history gives the same recovery.
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: "9".repeat(40), actSetId: "other", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: actRef, status: "resolved" }] });
+    const offHistory = await extend(root, head);
+    assert.equal(offHistory.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
+    assert.doesNotMatch(offHistory.recovery, /pre-push-delta/u, "a run at the cap-round head refuses and names this command again");
     rmSync(gateDeltaRecordPath(tmp, A), { force: true });
     rmSync(`${gateDeltaRecordPath(tmp, A)}.seal`, { force: true });
     const noRecord = await extend(root, head);

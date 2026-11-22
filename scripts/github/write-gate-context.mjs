@@ -2428,20 +2428,35 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   // With no open act item the check is vacuously true unless the cap round is clean: a clean cap round binds only a record chain that carries an extension in `CLEAN_CAP_EXTENSIONS` (docs_tests_only, delta_covered).
   // Issue 3443: the coverage union spans only the links the proof traverses. anyHead accepts the first record whatever its candidate, so a later link counts only when its candidate is an ancestor of the head.
   const gitProbe = (args) => runGitCommand([...DIFF_ISOLATION_FLAGS, ...args], { repoRoot }).catch(() => ({ code: 128 }));
-  const onHistoryHeads = new Set();
-  if (options.anyHead) {
-    for (const { candidateHead } of listGateDeltaRecords(tmpRoot)) {
-      const candidate = normalizeSha(candidateHead);
-      if (candidate && head && (candidate === head || (await gitProbe(["merge-base", "--is-ancestor", candidate, head])).code === 0)) onHistoryHeads.add(candidate);
+  // Probe only the candidates a start's chain reaches (memoized), not every record under tmp/gate-delta.
+  const onHistoryMemo = new Map();
+  const probeOnHistory = async (candidate) => {
+    if (!onHistoryMemo.has(candidate)) onHistoryMemo.set(candidate, Boolean(head) && (candidate === head || (await gitProbe(["merge-base", "--is-ancestor", candidate, head])).code === 0));
+    return onHistoryMemo.get(candidate);
+  };
+  // Mirrors the capRoundCoverage walk: the first link is always counted, a later link only while its candidate is on the head's history.
+  const primeOnHistory = async (startRecords) => {
+    if (!options.anyHead) return;
+    for (const start of startRecords) {
+      const seen = new Set();
+      for (let r = start, first = true; r; first = false) {
+        const next = normalizeSha(r.candidateHead);
+        if (!first && (!next || !(await probeOnHistory(next)))) break;
+        if (!next || seen.has(next) || next === head) break;
+        seen.add(next);
+        r = clearing(next);
+      }
     }
-  }
-  const bound = { head, onHistory: options.anyHead ? (candidate) => onHistoryHeads.has(candidate) : undefined };
+  };
+  const bound = { head, onHistory: options.anyHead ? (candidate) => onHistoryMemo.get(candidate) === true : undefined };
   const covers = capRoundCovers(capRound, tmpRoot, bound);
   // The direct chain is tried first: merge-seeded starts (a directory scan and Git probes) are discovered only when it does not prove the round fixed.
   const chainArgs = { tmpRoot, capHead, repo: options.repo, pr: options.pr, repoRoot, baseOnlyMerge };
   const directStarts = (await capRoundChainStarts({ ...chainArgs, baseRefName: undefined })).starts;
+  await primeOnHistory(directStarts);
   for (const start of directStarts.filter(covers)) if (await reaches(start)) return capRound;
   const { starts, baseOnlyUnsealed } = await capRoundChainStarts({ ...chainArgs, baseRefName: options.baseRefName });
+  await primeOnHistory(starts);
   const covering = starts.filter(covers);
   for (const start of covering) if (await reaches(start)) return capRound;
   // ADR 0218: report the one condition that failed, so the refusal names its own remedy.

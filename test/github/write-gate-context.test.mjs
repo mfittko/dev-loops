@@ -9446,6 +9446,31 @@ test("resolveCapRoundFixed does not count a link past the head, an unresolved it
   }
 });
 
+// Issue 3443 review: with real commits, a ready PR head H descends from B and the B to C link resolves r, but C is an abandoned sibling off H's history.
+test("resolveCapRoundFixed anyHead does not count a link whose real candidate commit is off the head's history (issue 3443)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const sibling = (msg) => git(repoRoot, ["commit-tree", `${B}^{tree}`, "-p", B, "-m", msg]).trim();
+    const H = sibling("ready head");
+    const C = sibling("abandoned sibling");
+    await seedClosedRounds(repoRoot, 67, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-67", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const q = { ...p, summary: "second defect" };
+    const r = { ...p, summary: "escalated defect" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...q, clusterId: 1 }, { ...r, clusterId: 2 }] }), "utf8");
+    const resolved = (...fs) => ({ items: fs.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) });
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", resolved(p, q));
+    await writeDeltaRecord(repoRoot, B, C, "push_to_gate", resolved(r));
+    let condition = null;
+    assert.equal(await resolveCapRoundFixed({ repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: H, anyHead: true }, { repoRoot, onFailure: (c) => { condition = c; } }), null);
+    assert.equal(condition, "items_do_not_cover");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapRoundFixed trusts only a sealed, unmodified delta record (ADR 0208, PRE-PUSH-DELTA-NOT-GATE-EVIDENCE)", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
