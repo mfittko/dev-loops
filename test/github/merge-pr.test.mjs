@@ -2084,9 +2084,11 @@ function withRunReads(reads, { intervalMs = 10, timeoutMs = 1000, ...runtimeOpti
   const { runtime, calls } = makeRuntime(runtimeOptions);
   const base = runtime.ghJson;
   const queue = [...reads];
-  runtime.ghJson = async (args) => {
+  const timeouts = [];
+  runtime.ghJson = async (args, opts) => {
     if (args[0] === "run" && args[1] === "list") {
       calls.ghJson.push(args);
+      timeouts.push(opts?.timeoutMs);
       const next = queue.length > 1 ? queue.shift() : queue[0];
       if (next instanceof Error) throw next;
       return next;
@@ -2098,7 +2100,7 @@ function withRunReads(reads, { intervalMs = 10, timeoutMs = 1000, ...runtimeOpti
   runtime.now = () => clock;
   runtime.sleep = async (ms) => { sleeps.push(ms); clock += ms; };
   runtime.gateEvidenceWait = { intervalMs, timeoutMs };
-  return { runtime, calls, sleeps };
+  return { runtime, calls, sleeps, timeouts };
 }
 
 test("gate_evidence_run waits for an in-progress run that then succeeds, one run list per poll", async () => {
@@ -2277,12 +2279,24 @@ test("gate_evidence_run refuses on a wall-clock timeout without suggesting a rer
 });
 
 test("gate_evidence_run waits with the shipped 15 s interval and refuses after the shipped 540 s deadline", async () => {
-  const { runtime, calls, sleeps } = withRunReads([[RUN(9, "in_progress", null)]]);
+  const { runtime, calls, sleeps, timeouts } = withRunReads([[RUN(9, "in_progress", null)]]);
   runtime.gateEvidenceWait = {};
   await assert.rejects(() => mergePr(baseOptions(), runtime), (error) => assertRecovery(error, { reasonPattern: /run 9 .*still in_progress after 540s/, recoveryPattern: /wait for it to complete/ }));
   assert.equal(sleeps.length, 36);
   assert.ok(sleeps.every((ms) => ms === 15_000));
   assert.equal(runListCalls(calls).length, 37);
+  // Each read is bounded by the remaining deadline; the last poll starts at the deadline and keeps a usable bound.
+  assert.equal(timeouts[0], 540_000);
+  assert.equal(timeouts[35], 15_000);
+  assert.equal(timeouts[36], 5_000);
+});
+
+test("gate_evidence_run re-checks the spike marker after the PR re-read of a failed run without a wait", async () => {
+  const { runtime, calls } = withRunReads([[RUN(7, "completed", "failure")]]);
+  withViewPatches(runtime, { 2: { body: "spike\n\n<!-- dev-loops:spike-pr no-merge -->\n" } });
+  const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.equal(threw.mergePrFailure.failures[0].precondition, "spike_pr");
+  assert.equal(mergeCalls(calls).length, 0);
 });
 
 test("gate_evidence_run kills a hung gh run list at the remaining deadline and refuses with the last active run", async () => {

@@ -117,11 +117,12 @@ Optional:
 Preconditions (each refuses with a machine-readable reason naming the failing one):
   gate_evidence_run (waits up to 540 s for a queued or in-progress Gate
   evidence run of the head, one gh run list per 15 s; the caller's tool timeout
-  must cover the wait; refuses naming the run id and one recovery, the same text
-  in the reason and in the recovery field, when the newest run failed and the
-  gate-evidence status is not success, the wait or a run read timed out, or the
-  head changed during the wait; after an optional wait line, the refusal JSON is
-  the last stderr line),
+  must cover the wait; refuses with one recovery, the same text in the reason
+  and in the recovery field, when the newest run failed and the gate-evidence
+  status is not success, the wait or a run read timed out, or the head changed
+  during the wait; the reason names the run id when one is known, and a head
+  change names the old and the new head; after an optional wait line, the
+  refusal JSON is the last stderr line),
   human_approver, mergeable, ci_green, title_markers, gate_evidence,
   copilot_convergence, size_budget_human_approval, merge_approval, adr_tripwire,
   secret_scan, spike_pr (the PR body carries the ADR 0293 spike no-merge marker),
@@ -739,12 +740,13 @@ const GATE_EVIDENCE_WORKFLOW = "gate-evidence.yml";
 const GATE_EVIDENCE_POLL_MS = 15_000;
 // 540 s: the caller's tool timeout (the Bash tool allows 600 s at most) must cover the wait plus the rest of the merge.
 const GATE_EVIDENCE_TIMEOUT_MS = 540_000;
+const GATE_EVIDENCE_MIN_READ_MS = 5_000;
 const GATE_EVIDENCE_OK_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 
 // Reads the Gate evidence runs of the head with one `gh run list` per poll and waits (wall-clock deadline) while any run is
 // queued or in progress. A cancelled run never decides: cancellation order follows concurrency-group join order and
 // createdAt ties at one second, so only the newest (highest id) NON-cancelled completed run can refuse. When every run is
-// cancelled or none exists there is no refusal. `failedRun` marks a refusal on a failed run: the caller drops it when the
+// cancelled or none exists there is no refusal. A refusal of kind `failed` is one the caller drops when the
 // head's `gate-evidence` commit status is `success` (reconcile reports already-success; a failed detector job or a
 // cancelled newer run can sit next to a success status). A run that concluded success can still have posted a failure
 // status: branch protection blocks it at `gh pr merge`.
@@ -759,7 +761,8 @@ async function resolveGateEvidenceRunRefusal({ repo, pr, headSha, check }, { env
     try {
       runs = await ghJson(
         ["run", "list", "--repo", repo, "--workflow", GATE_EVIDENCE_WORKFLOW, "--commit", headSha, "--limit", "100", "--json", "databaseId,status,conclusion"],
-        { env, ghCommand, runChild, label: "gh run list", timeoutMs: Math.max(1, deadline - now()) },
+        // The last poll starts at the deadline, so it keeps a usable bound (never longer than the whole wait).
+        { env, ghCommand, runChild, label: "gh run list", timeoutMs: Math.max(deadline - now(), Math.min(GATE_EVIDENCE_MIN_READ_MS, timeoutMs)) },
       );
     } catch (error) {
       // A repo without the workflow has no Gate evidence run to wait for; every other error stays fail-closed.
@@ -916,12 +919,11 @@ export async function mergePr(options, runtime = {}) {
     if (currentHeadSha !== readHeadSha) {
       gateRefusal = { kind: "head_changed", detail: `the head changed from ${readHeadSha} to ${currentHeadSha} while ${gateRun.waited ? "waiting for" : "reading"} the Gate evidence run` };
     }
+    // The body can change while the run list or the wait lasts.
+    const spikeAfterRead = spikeResult();
+    if (spikeAfterRead !== null) return spikeAfterRead;
   }
-  if (gateRun.waited) {
-    const spikeAfterWait = spikeResult();
-    if (spikeAfterWait !== null) return spikeAfterWait;
-    await loadAndCheckConfig();
-  }
+  if (gateRun.waited) await loadAndCheckConfig();
   const gateEvidenceStatus = resolveNamedContextState(prView?.statusCheckRollup, LOOP_DERIVED_CI_CHECK_NAME);
   // A failed run does not refuse while the head's `gate-evidence` commit status is `success` (reconcile reports already-success).
   if (gateRefusal?.kind === "failed" && gateEvidenceStatus === "success") gateRefusal = null;
