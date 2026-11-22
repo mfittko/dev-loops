@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawnRecorded } from "@dev-loops/core/github/gh-call-log";
 import { takeGhSlot } from "@dev-loops/core/github/gh-throttle";
 import { withSecondaryLimitBackoff } from "@dev-loops/core/github/gh";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
@@ -96,7 +96,7 @@ function runChild(command, args, env, stdinText) {
 }
 function spawnChild(command, args, env, stdinText) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnRecorded(command, args, {
       env,
       stdio: ["pipe", "pipe", "pipe"],
     });
