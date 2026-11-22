@@ -66,6 +66,7 @@ export const SANCTIONED_COMMANDS = Object.freeze({
     "gate-verdict-comment": "scripts/github/upsert-checkpoint-verdict.mjs",
     "gate-findings-log-quarantine": "scripts/github/quarantine-gate-findings-log.mjs",
     "close-gate-sequence": "scripts/loop/close-gate-sequence.mjs",
+    "rerun-failed-ci": "scripts/github/rerun-failed-ci.mjs",
   }),
 
   // Never allowed for any operation above — the sanctioned wrapper is mandatory.
