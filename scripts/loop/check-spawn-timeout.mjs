@@ -14,9 +14,9 @@
  * Result shape: { ok, outcome: "pass" | "block", findings: [{ path, line, call }], reasons, recovery? }.
  * `recovery` is present on a block only.
  *
- * shortcut: strings, template literals and comments are skipped while counting parentheses, but a regex
- * literal that holds a quote or parenthesis can still end the span early or late; upgrade to a parser if
- * that shows up. Unbalanced or unterminated arguments block.
+ * shortcut: a masking pass blanks strings, templates, regex literals and comments, but a `${}` expression in a
+ * template is blanked with it and a slash after `)` or `}` reads as division; upgrade to a parser if that
+ * shows up. Unbalanced or unterminated arguments block.
  */
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -32,50 +32,96 @@ const EXCLUDED_RE = /(^|\/)(node_modules|test|__tests__)\/|\.test\.[mc]?[jt]s$/u
 const CALL_RE = /(?<![\w$.])(runChild|spawnSync|execFileSync)\s*\(/gu;
 // The reason needs a word character before any comment terminator, so a bare block-comment marker fails.
 const REASONED_ALLOW_RE = new RegExp(`${ESCAPE_MARKER}[ \\t]+(?:(?!\\*/)[^\\w\\n])*\\w`, "u");
-const COMMENT_ONLY_RE = /^\s*(?:\/\/|\/\*|\*)/u;
-// Text before a call that makes it prose (a line comment, a JSDoc body, an open block comment) or the declared name.
-const PROSE_PREFIX_RE = /^\s*(?:\/\/|\*(?!\/)|\/\*(?!.*\*\/))/u;
+// Masked text before a call that makes it the declared name, not a call.
 const DECLARED_NAME_PREFIX_RE = /\bfunction\s*\*?\s+$/u;
-// The option key each callee reads; a call needs it with a value other than the literal 0 or undefined.
+// The option key each callee reads. runChild reads `timeoutMs` only in its fifth argument; spawnSync and
+// execFileSync read `timeout` in an options object after the command.
 const TIMEOUT_KEY = { runChild: "timeoutMs", spawnSync: "timeout", execFileSync: "timeout" };
 
 export const isInScope = (p) => SCOPE_RE.test(p) && !EXCLUDED_RE.test(p);
 
-const hasTimeoutKey = (key, args) => new RegExp(`(?<![\\w$.])${key}\\s*(?::(?!\\s*(?:0|undefined)\\s*(?:[,}]|$))|(?=[,}]))`, "u").test(args);
+// A regex literal can follow one of these characters or keywords; after anything else a slash divides.
+const REGEX_PREV = "(,=:[!&|?{};+-*%<>~^";
+const REGEX_KEYWORD_RE = /(?:^|[^\w$.])(?:return|typeof|case|throw)\s*$/u;
 
-// The call's argument text with string, template and comment content blanked, and the index of its closing
-// parenthesis; null when the parentheses or a string or comment never close.
-function callArguments(text, openIndex) {
-  let depth = 0;
-  let out = "";
-  for (let i = openIndex; i < text.length; i += 1) {
+// Same-length copy of the source with string, template, regex and comment content blanked and newlines kept.
+export function maskSource(text) {
+  const out = text.split("");
+  const blank = (from, to) => { for (let k = from; k < to; k += 1) if (out[k] !== "\n") out[k] = " "; };
+  let prev = "";
+  let i = 0;
+  while (i < text.length) {
     const c = text[i];
     if (c === '"' || c === "'" || c === "`") {
       let j = i + 1;
-      while (j < text.length && text[j] !== c) j += text[j] === "\\" ? 2 : 1;
-      if (j >= text.length) return null;
-      out += `${c} ${c}`;
-      i = j;
+      while (j < text.length && text[j] !== c && (c === "`" || text[j] !== "\n")) j += text[j] === "\\" ? 2 : 1;
+      blank(i + 1, Math.min(j, text.length));
+      i = j + 1;
+      prev = "a";
     } else if (c === "/" && text[i + 1] === "/") {
       const nl = text.indexOf("\n", i);
-      if (nl === -1) return null;
-      i = nl - 1;
+      const end = nl === -1 ? text.length : nl;
+      blank(i, end);
+      i = end;
     } else if (c === "/" && text[i + 1] === "*") {
       const close = text.indexOf("*/", i + 2);
-      if (close === -1) return null;
-      i = close + 1;
-      out += " ";
-    } else if (c === "(") {
-      depth += 1;
-      if (depth > 1) out += c;
-    } else if (c === ")") {
+      const end = close === -1 ? text.length : close + 2;
+      blank(i, end);
+      i = end;
+    } else if (c === "/" && (prev === "" || REGEX_PREV.includes(prev) || REGEX_KEYWORD_RE.test(text.slice(Math.max(0, i - 12), i)))) {
+      let j = i + 1;
+      let inClass = false;
+      while (j < text.length && text[j] !== "\n" && (inClass || text[j] !== "/")) {
+        if (text[j] === "\\") j += 1;
+        else if (text[j] === "[") inClass = true;
+        else if (text[j] === "]") inClass = false;
+        j += 1;
+      }
+      if (text[j] === "/") { blank(i + 1, j); i = j + 1; prev = "a"; } else { i += 1; prev = c; }
+    } else {
+      if (!/\s/u.test(c)) prev = c;
+      i += 1;
+    }
+  }
+  return out.join("");
+}
+
+// The masked argument text of the call that opens at openIndex and the index of its closing parenthesis;
+// null when the parentheses never close.
+function callArguments(masked, openIndex) {
+  let depth = 0;
+  for (let i = openIndex; i < masked.length; i += 1) {
+    if (masked[i] === "(") depth += 1;
+    else if (masked[i] === ")") {
       depth -= 1;
-      if (depth === 0) return { text: out, end: i };
-      out += c;
-    } else if (depth > 0) out += c;
+      if (depth === 0) return { text: masked.slice(openIndex + 1, i), end: i };
+    }
   }
   return null;
 }
+
+const splitTop = (text) => {
+  const parts = [];
+  let depth = 0;
+  let current = "";
+  for (const c of text) {
+    if ("([{".includes(c)) depth += 1;
+    else if (")]}".includes(c)) depth -= 1;
+    if (c === "," && depth === 0) { parts.push(current.trim()); current = ""; } else current += c;
+  }
+  parts.push(current.trim());
+  return parts;
+};
+
+// True when an argument that the callee reads as options is an object literal whose key is set to anything but 0, undefined or null.
+const hasTimeout = (call, argsText) => {
+  const key = new RegExp(`^${TIMEOUT_KEY[call]}\\s*(?::\\s*([\\s\\S]*))?$`, "u");
+  const args = splitTop(argsText);
+  return (call === "runChild" ? args.slice(4, 5) : args.slice(1)).some((arg) => arg.startsWith("{") && arg.endsWith("}") && splitTop(arg.slice(1, -1)).some((prop) => {
+    const m = key.exec(prop);
+    return m !== null && (m[1] === undefined || !/^(?:0|undefined|null|)$/u.test(m[1].trim()));
+  }));
+};
 
 /**
  * Pure: `files` is [{ path, content, addedLines: number[], deletedAfter?: number[] }] (1-based added line
@@ -90,17 +136,19 @@ export function computeSpawnTimeout({ files = [] } = {}) {
     const offsets = [0];
     for (const line of lines) offsets.push(offsets[offsets.length - 1] + line.length + 1);
     const lineAt = (index) => offsets.findLastIndex((o) => o <= index) + 1;
-    for (const match of content.matchAll(CALL_RE)) {
+    const masked = maskSource(content);
+    const maskedLines = masked.split("\n");
+    for (const match of masked.matchAll(CALL_RE)) {
       const line = lineAt(match.index);
-      const prefix = lines[line - 1].slice(0, match.index - offsets[line - 1]);
-      if (PROSE_PREFIX_RE.test(prefix) || DECLARED_NAME_PREFIX_RE.test(prefix) || /^\s*import\b/u.test(lines[line - 1])) continue;
-      const args = callArguments(content, match.index + match[0].length - 1);
+      if (DECLARED_NAME_PREFIX_RE.test(maskedLines[line - 1].slice(0, match.index - offsets[line - 1]))) continue;
+      const args = callArguments(masked, match.index + match[0].length - 1);
       const endLine = args ? lineAt(args.end) : lines.length;
       // A call is touched by an added line in its span or a deletion between two of its lines.
       if (!addedLines.some((n) => n >= line && n <= endLine) && !deletedAfter.some((n) => n >= line && n < endLine)) continue;
-      const previous = lines[line - 2] ?? "";
-      if (REASONED_ALLOW_RE.test(lines[line - 1]) || (COMMENT_ONLY_RE.test(previous) && REASONED_ALLOW_RE.test(previous))) continue;
-      if (args !== null && hasTimeoutKey(TIMEOUT_KEY[match[1]], args.text)) continue;
+      // The marker above counts only on a line that holds nothing but a comment (blank once masked).
+      const aloneAbove = line > 1 && !maskedLines[line - 2].trim() && REASONED_ALLOW_RE.test(lines[line - 2]);
+      if (REASONED_ALLOW_RE.test(lines[line - 1]) || aloneAbove) continue;
+      if (args !== null && hasTimeout(match[1], args.text)) continue;
       findings.push({ path, line, call: match[1] });
     }
   }
@@ -133,7 +181,7 @@ export function parseAddedLines(diffOutput) {
       current = null;
     } else if (inHeader && line.startsWith("+++ ")) {
       const p = line.slice(4).trim();
-      if (p.startsWith('"')) throw new Error(`diff header path stays quoted: ${p}`);
+      if (p.startsWith('"') && isInScope(p.slice(3, -1))) throw new Error(`diff header path stays quoted: ${p}`);
       current = p.startsWith("b/") && isInScope(p.slice(2)) ? p.slice(2) : null;
       if (current) byPath.set(current, { added: [], deletedAfter: [] });
     } else if (line.startsWith("@@")) {

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 import {
@@ -49,6 +51,30 @@ test("each callee needs the key it reads, outside strings and comments, with an 
   assert.equal(run('spawnSync("timeout-helper", a);').outcome, "block");
 });
 
+test("the timeout must be an option key at the position the callee reads, with a real value", () => {
+  assert.equal(run('spawnSync("curl", ["-m", timeout, url]);').outcome, "block");
+  assert.equal(run('spawnSync("sleep", [timeout, x]);').outcome, "block");
+  assert.equal(run('spawnSync("sleep", a, { cwd: flag ? timeout : fallback });').outcome, "block");
+  assert.equal(run('spawnSync("sleep", a, { timeout: null });').outcome, "block");
+  assert.equal(run('runChild(c, a, { timeoutMs: null });').outcome, "block");
+  assert.equal(run('runChild(c, a, { timeoutMs: 5000 });').outcome, "block");
+  assert.equal(run('runChild(c, a, env, undefined, { timeoutMs: flag ? 5 : 9 });').outcome, "pass");
+});
+
+test("a regex literal, a trailing comment and a string do not change what counts as a call", () => {
+  assert.equal(run('retry(() => { spawnSync("grep", [p.replace(/\\(/, "")]); }, { timeout: 5 });').outcome, "block");
+  assert.equal(run('const re = /https?:\\/\\//u; spawnSync("git");').outcome, "block");
+  assert.equal(run("const a = 1; // calls spawnSync(cmd)").outcome, "pass");
+  assert.equal(run('const msg = "use spawnSync(cmd)";').outcome, "pass");
+});
+
+test("a generator method, a multiplication line and an import call still block", () => {
+  assert.equal(run('class A {\n  *run() { spawnSync("git"); }\n}').outcome, "block");
+  assert.equal(run('const n = a\n  * spawnSync("git").status;').outcome, "block");
+  assert.equal(run('import cp from "x"; spawnSync("git");').outcome, "block");
+  assert.equal(run('import("x").then(() => spawnSync("git"));').outcome, "block");
+});
+
 test("passes a multi-line call that sets timeout or timeoutMs", () => {
   assert.equal(run('execFileSync("git", ["log"], {\n  cwd,\n  timeout: 5000,\n});').outcome, "pass");
   assert.equal(run('runChild("node", args, env, undefined, {\n  timeoutMs: 5000,\n});').outcome, "pass");
@@ -77,6 +103,12 @@ test("a trailing marker on the previous call does not admit the next call", () =
   const out = run(`spawnSync("vim"); // ${ESCAPE_MARKER} interactive editor\nspawnSync("git", args);`);
   assert.equal(out.outcome, "block");
   assert.deepEqual(out.findings.map((f) => f.line), [2]);
+});
+
+test("a marker admits only a call it sits beside or alone above, never a code line before", () => {
+  assert.equal(run(`/* note */ spawnSync("vim"); // ${ESCAPE_MARKER} editor\nspawnSync("git", args);`).findings.map((f) => f.line).join(), "2");
+  assert.equal(run(`/* ${ESCAPE_MARKER} editor */ spawnSync("vim");\nspawnSync("git", args);`).findings.map((f) => f.line).join(), "2");
+  assert.equal(run(`/* ${ESCAPE_MARKER} editor */\nspawnSync("vim");`).outcome, "pass");
 });
 
 test("ignores test files, out-of-scope paths, definitions, imports, member calls, comments and untouched lines", () => {
@@ -135,6 +167,7 @@ test("parseAddedLines ignores a content line that looks like a file header and r
   ].join("\n");
   assert.deepEqual([...parseAddedLines(diff)], [["scripts/a.mjs", { added: [1, 9], deletedAfter: [] }]]);
   assert.throws(() => parseAddedLines('diff --git a/x b/x\n+++ "b/scripts/caf\\303\\251.mjs"'), /quoted/u);
+  assert.deepEqual([...parseAddedLines('diff --git a/x b/x\n+++ "b/docs/a\\tb.md"\n@@ -0,0 +1 @@')], []);
 });
 
 // A feature branch over a base commit; `change` writes the feature files.
@@ -243,4 +276,11 @@ test("runCli exits 0 on pass, 1 on block with recovery and error, and refuses a 
     assert.equal(pass.payload.outcome, "pass");
   });
   await assert.rejects(exec([], process.cwd()), /requires --base/u);
+});
+
+test("the direct CLI run exits 2 on a usage error, never 0", () => {
+  const script = fileURLToPath(new URL("../../scripts/loop/check-spawn-timeout.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, [script], { encoding: "utf8", env: isolatedEnv, timeout: 30_000 });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /requires --base/u);
 });
