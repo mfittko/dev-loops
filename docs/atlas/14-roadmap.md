@@ -1,3 +1,8 @@
+---
+title: Ideas and roadmap (not decided)
+status: snapshot
+snapshot_date: 2026-11-19
+---
 <a id="14-roadmap"></a>
 
 ## Ideas and roadmap (not decided)

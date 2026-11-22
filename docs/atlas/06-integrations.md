@@ -1,3 +1,8 @@
+---
+title: External integrations and adapters
+status: snapshot
+snapshot_date: 2026-11-19
+---
 <a id="06-integrations"></a>
 
 ## External integrations and adapters

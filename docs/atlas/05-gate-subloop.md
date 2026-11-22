@@ -1,3 +1,8 @@
+---
+title: "Gate sub-loop: fan-out, fan-in, judge, fixer"
+status: snapshot
+snapshot_date: 2026-11-19
+---
 <a id="05-gate-subloop"></a>
 
 ## Gate sub-loop: fan-out, fan-in, judge, fixer

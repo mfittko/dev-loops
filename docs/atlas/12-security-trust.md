@@ -1,3 +1,8 @@
+---
+title: Security and trust boundaries
+status: snapshot
+snapshot_date: 2026-11-19
+---
 <a id="12-security-trust"></a>
 
 ## Security and trust boundaries

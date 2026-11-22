@@ -1,3 +1,8 @@
+---
+title: Ops, CI and release
+status: snapshot
+snapshot_date: 2026-11-19
+---
 <a id="10-ops-ci-release"></a>
 
 ## Ops, CI and release

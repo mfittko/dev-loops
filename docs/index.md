@@ -44,7 +44,7 @@ Start here for repository documentation.
 - [dev-loops: A Deep Dive](./articles/dev-loops-deep-dive.md) — deep dive in two parts: why every handoff is an explicit decision on a state graph, then measuring the waiting between actions
 - [The State Graph Is the Surface](./articles/the-state-graph-is-the-surface.md) — reframes dev-loops as a graph/loop control surface: modeled state is authoritative, loops traverse it, and GitHub supplies the durable tracker/review evidence plane
 - [How dev-loops Decided Itself Into Shape](./articles/how-dev-loops-decided-itself.md) — the history: forty dated architecture decisions, the two reversals, and the outcomes, read straight from the decision log
-- [dev-loops Atlas, 2026-11-19 snapshot](./atlas/2026-11-19/README.md): 14 sections and 192 Mermaid diagrams derived from the code on 2026-11-19; not maintained
+- [dev-loops Atlas, 2026-11-19 snapshot](./atlas/README.md): 14 sections and 192 Mermaid diagrams derived from the code on 2026-11-19; not maintained
 
 ## Presentations
 

@@ -1,3 +1,8 @@
+---
+title: Hooks, guards and permissions
+status: snapshot
+snapshot_date: 2026-11-19
+---
 <a id="09-hooks-and-guards"></a>
 
 ## Hooks, guards and permissions

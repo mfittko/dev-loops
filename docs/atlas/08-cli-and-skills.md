@@ -1,3 +1,8 @@
+---
+title: CLI, skills and commands
+status: snapshot
+snapshot_date: 2026-11-19
+---
 <a id="08-cli-and-skills"></a>
 
 ## CLI, skills and commands

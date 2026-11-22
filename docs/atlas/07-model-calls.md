@@ -1,3 +1,8 @@
+---
+title: Agent roles and model calls
+status: snapshot
+snapshot_date: 2026-11-19
+---
 <a id="07-model-calls"></a>
 
 ## Agent roles and model calls

@@ -1,3 +1,8 @@
+---
+title: System context and architecture
+status: snapshot
+snapshot_date: 2026-11-19
+---
 <a id="01-system-context"></a>
 
 ## System context and architecture

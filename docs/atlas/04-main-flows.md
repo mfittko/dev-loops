@@ -1,3 +1,8 @@
+---
+title: Main flows from issue to merge
+status: snapshot
+snapshot_date: 2026-11-19
+---
 <a id="04-main-flows"></a>
 
 ## Main flows from issue to merge

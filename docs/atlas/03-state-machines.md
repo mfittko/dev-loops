@@ -1,3 +1,8 @@
+---
+title: State machines and lifecycles
+status: snapshot
+snapshot_date: 2026-11-19
+---
 <a id="03-state-machines"></a>
 
 ## State machines and lifecycles

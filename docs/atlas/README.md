@@ -1,4 +1,9 @@
-# dev-loops Atlas, 2026-11-19 snapshot
+---
+title: dev-loops Atlas
+status: snapshot
+snapshot_date: 2026-11-19
+---
+# dev-loops Atlas
 
 Snapshot, not maintained. The code is authoritative.
 

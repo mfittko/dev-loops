@@ -1,3 +1,8 @@
+---
+title: Development process
+status: snapshot
+snapshot_date: 2026-11-19
+---
 <a id="11-dev-process"></a>
 
 ## Development process

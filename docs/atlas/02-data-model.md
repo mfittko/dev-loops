@@ -1,3 +1,8 @@
+---
+title: "Data model: state files and records"
+status: snapshot
+snapshot_date: 2026-11-19
+---
 <a id="02-data-model"></a>
 
 ## Data model: state files and records

@@ -1,3 +1,8 @@
+---
+title: The repo in numbers
+status: snapshot
+snapshot_date: 2026-11-19
+---
 <a id="13-numbers"></a>
 
 ## The repo in numbers
