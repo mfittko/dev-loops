@@ -54,11 +54,11 @@ export function ghCommandFailed(err) {
  * returns the limited result with `rateLimited: true`, so the caller throws
  * RATE_LIMITED with its own message prefix.
  */
-async function runWithBackoff(runChild, command, args, env, { sleep }) {
+async function runWithBackoff(runChild, command, args, env, { sleep, timeoutMs }) {
   if (runChild === defaultRunChild) {
     // The default runChild owns the one retry; map its RATE_LIMITED to the caller's own prefix.
     try {
-      return await runChild(command, args, env, undefined, { sleep });
+      return await runChild(command, args, env, undefined, { sleep, timeoutMs });
     } catch (error) {
       if (error?.code !== "RATE_LIMITED") throw error;
       return { code: 1, stdout: "", stderr: error.message.replace(/^gh command failed: /, ""), rateLimited: true };
@@ -112,9 +112,12 @@ export async function withSecondaryLimitBackoff(attempt, { sleep = realSleep } =
  *   except a second secondary rate limit, which carries `code: "RATE_LIMITED"`
  *   with the same prefix.
  * @param {(ms: number) => Promise<void>} [opts.sleep] - injectable backoff sleep.
+ * @param {number} [opts.timeoutMs] - the default runner kills the child at this bound and ghJson throws `code: "GH_TIMEOUT"`; an injected runner ignores it.
  */
-export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRunChild, label, sleep } = {}) {
-  const result = await runWithBackoff(runChild, ghCommand, args, env, { sleep });
+export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRunChild, label, sleep, timeoutMs } = {}) {
+  const result = await runWithBackoff(runChild, ghCommand, args, env, { sleep, timeoutMs });
+  // A child killed at the bound exits with a null code.
+  if (result.code === null && timeoutMs !== undefined) throw Object.assign(new Error(`${label ? `${label} failed` : "gh command failed"}: timed out after ${timeoutMs}ms`), { code: "GH_TIMEOUT" });
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
     const prefix = label ? `${label} failed` : "gh command failed";

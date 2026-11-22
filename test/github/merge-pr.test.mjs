@@ -5,6 +5,7 @@ import { mergePr, parseMergePrCliArgs, main, defaultReadMergeDiff, defaultIsAnce
 import { extractYesApproval, buildApprovalQuestion, writeApprovalRecord, buildApprovalComment } from "@dev-loops/core/github/ask-merge-approval";
 import { runChild } from "../../scripts/_cli-primitives.mjs";
 import { captureStream } from "../_helpers.mjs";
+import { ghJson as defaultGhJson } from "@dev-loops/core/github/gh";
 import { scanDiffText } from "@dev-loops/core/security/secret-scan";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -967,7 +968,8 @@ test("a merge blocked by branch protection with a stale gate-evidence context na
   assert.match(threw.message, /gate-evidence/);
   assert.match(threw.message, /failure/i);
   assert.match(threw.message, /COMPLETED Gate-evidence run/);
-  assert.match(threw.message, /re-run|verdict comment/i);
+  assert.ok(threw.message.includes("run `dev-loops-run --repo-root <checkout> scripts/github/reconcile-gate-evidence-status.mjs --repo mfittko/dev-loops --pr 5`"));
+  assert.match(threw.message, /no-run-to-refire.*gh run rerun <run-id> --repo mfittko\/dev-loops.*evidence-not-satisfied-fail-closed/);
 });
 
 test("a base-branch-policy block with a SUCCESS gate-evidence context gets no gate-evidence note (#2262)", async () => {
@@ -2105,7 +2107,7 @@ test("gate_evidence_run waits for an in-progress run that then succeeds, one run
   assert.equal(result.merged, true);
   assert.equal(runListCalls(calls).length, 3);
   assert.deepEqual(sleeps, [10, 10]);
-  assert.deepEqual(runListCalls(calls)[0].slice(0, 9), ["run", "list", "--repo", "mfittko/dev-loops", "--workflow", "gate-evidence.yml", "--commit", runListCalls(calls)[0][7], "--limit"]);
+  assert.deepEqual(runListCalls(calls)[0].slice(0, 9), ["run", "list", "--repo", "mfittko/dev-loops", "--workflow", "gate-evidence.yml", "--commit", HEAD, "--limit"]);
   assert.equal(runListCalls(calls)[0][9], "100");
 });
 
@@ -2158,26 +2160,49 @@ test("gate_evidence_run passes a failed run when the gate-evidence status is suc
   assert.equal(result.merged, true);
 });
 
-test("gate_evidence_run refuses a failed run when the gate-evidence status is not success", async () => {
-  const { runtime } = withRunReads([[RUN(7, "completed", "failure")]], { prView: { statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }, { state: "FAILURE", context: "gate-evidence" }] } });
-  await assert.rejects(() => mergePr(baseOptions(), runtime), /gate_evidence_run \(.*run 7 /);
-});
-
-test("gate_evidence_run refuses when the head changed during the wait and writes one stderr line", async () => {
-  const { runtime } = withRunReads([[RUN(2, "in_progress", null)], [RUN(2, "completed", "success")]]);
+const OK_ROLLUP = { status: "COMPLETED", conclusion: "SUCCESS" };
+const gateStatus = (state) => ({ state, context: "gate-evidence" });
+const RECONCILE_CMD = "dev-loops-run --repo-root <checkout> scripts/github/reconcile-gate-evidence-status.mjs --repo mfittko/dev-loops --pr 5";
+const PR_VIEW_FIELDS = "headRefOid";
+const isPrView = (args) => args[0] === "pr" && args[1] === "view" && String(args[args.length - 1]).includes(PR_VIEW_FIELDS);
+// Replaces the Nth (1-based) primary PR view with `patch`, so a test can move the head, the body or the status between reads.
+function withViewPatches(runtime, patches) {
   const base = runtime.ghJson;
   let views = 0;
   runtime.ghJson = async (args) => {
     const result = await base(args);
-    if (args[0] === "pr" && args[1] === "view" && String(args[args.length - 1]).includes("headRefOid")) {
-      views += 1;
-      if (views === 2) return { ...result, headRefOid: "f".repeat(40) };
-    }
-    return result;
+    if (!isPrView(args)) return result;
+    views += 1;
+    return patches[views] ? { ...result, ...patches[views] } : result;
   };
+}
+// The refusal's reason and its `recovery` field must carry the same recovery text.
+function assertRecovery(error, { reasonPattern, recoveryPattern }) {
+  const failure = error.mergePrFailure;
+  assert.equal(failure.failures[0].precondition, "gate_evidence_run");
+  assert.match(failure.failures[0].reason, reasonPattern);
+  assert.match(failure.recovery, recoveryPattern);
+  assert.ok(failure.failures[0].reason.endsWith(failure.recovery), "the reason ends with the recovery text");
+  return true;
+}
+
+test("gate_evidence_run refuses a failed run when the gate-evidence status is not success", async () => {
+  const { runtime } = withRunReads([[RUN(7, "completed", "failure")]], { prView: { statusCheckRollup: [OK_ROLLUP, gateStatus("FAILURE")] } });
+  await assert.rejects(() => mergePr(baseOptions(), runtime), (error) => {
+    assert.match(error.message, /gate_evidence_run \(.*run 7 /);
+    return assertRecovery(error, { reasonPattern: /run 7 .*completed as failure/, recoveryPattern: /reconcile-gate-evidence-status\.mjs/ });
+  });
+});
+
+test("gate_evidence_run refuses when the head changed during the wait and writes one stderr line", async () => {
+  const { runtime } = withRunReads([[RUN(2, "in_progress", null)], [RUN(2, "completed", "success")]]);
+  withViewPatches(runtime, { 2: { headRefOid: "f".repeat(40) } });
   let written = "";
   runtime.stderr = { write: (chunk) => { written += chunk; } };
-  await assert.rejects(() => mergePr(baseOptions(), runtime), /gate_evidence_run \(the head changed from .* while waiting/);
+  await assert.rejects(() => mergePr(baseOptions(), runtime), (error) => {
+    assert.match(error.message, /gate_evidence_run \(the head changed from .* while waiting/);
+    return assertRecovery(error, { reasonPattern: /the head changed from/, recoveryPattern: /^call merge-pr again to re-gate the new head$/ });
+  });
   assert.equal(written.split("\n").filter(Boolean).length, 1);
   assert.match(written, /run 2/);
 });
@@ -2190,14 +2215,54 @@ test("gate_evidence_run fails closed on any other gh error and on a non-array pa
   await assert.rejects(() => mergePr(baseOptions(), odd.runtime), /non-array/);
 });
 
-test("gate_evidence_run refuses a failed run with the exact reconcile command", async () => {
-  const { runtime, calls } = withRunReads([[RUN(1, "completed", "success"), RUN(77, "completed", "failure")]]);
+test("gate_evidence_run refuses a failed run with the exact reconcile command and the fail-closed exit", async () => {
+  const { runtime, calls } = withRunReads([[RUN(1, "completed", "success"), RUN(77, "completed", "failure")]], { prView: { statusCheckRollup: [OK_ROLLUP, gateStatus("FAILURE")] } });
   await assert.rejects(() => mergePr(baseOptions(), runtime), (error) => {
     assert.match(error.message, /gate_evidence_run \(.*run 77.*completed as failure.*reconcile-gate-evidence-status\.mjs --repo mfittko\/dev-loops --pr \d+.*call merge-pr again/);
     assert.doesNotMatch(error.message, /gh run rerun|edit the/);
-    return true;
+    assert.ok(error.mergePrFailure.recovery.includes(`run \`${RECONCILE_CMD}\``));
+    return assertRecovery(error, { reasonPattern: /run 77/, recoveryPattern: /evidence-not-satisfied-fail-closed, the head needs a new gate round/ });
   });
   assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("gate_evidence_run names a rerun of the failed run when the head has no gate-evidence status", async () => {
+  const { runtime, calls } = withRunReads([[RUN(77, "completed", "startup_failure")]]);
+  await assert.rejects(() => mergePr(baseOptions(), runtime), (error) => {
+    assert.doesNotMatch(error.message, /reconcile-gate-evidence-status/);
+    return assertRecovery(error, { reasonPattern: /run 77.*startup_failure/, recoveryPattern: /^rerun it with `gh run rerun 77 --repo mfittko\/dev-loops`, then call merge-pr again/ });
+  });
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("gate_evidence_run names the run approval for an action_required run without a gate-evidence status", async () => {
+  const { runtime } = withRunReads([[RUN(78, "completed", "action_required")]]);
+  await assert.rejects(() => mergePr(baseOptions(), runtime), (error) => assertRecovery(error, { reasonPattern: /run 78.*action_required/, recoveryPattern: /^approve the run with `gh api -X POST repos\/mfittko\/dev-loops\/actions\/runs\/78\/approve`/ }));
+});
+
+test("gate_evidence_run judges a failed run against a status read after the run list, in both directions", async () => {
+  // A stale success before the list does not clear a run that failed and posted failure after the first view.
+  const stale = withRunReads([[RUN(7, "completed", "failure")]], { prView: { statusCheckRollup: [OK_ROLLUP, gateStatus("SUCCESS")] } });
+  withViewPatches(stale.runtime, { 2: { statusCheckRollup: [OK_ROLLUP, gateStatus("FAILURE")] } });
+  await assert.rejects(() => mergePr(baseOptions(), stale.runtime), /gate_evidence_run \(.*run 7 /);
+  assert.equal(mergeCalls(stale.calls).length, 0);
+  // A reconcile rerun that posted success after the first view clears the refusal.
+  const fresh = withRunReads([[RUN(7, "completed", "failure")]], { prView: { statusCheckRollup: [OK_ROLLUP, gateStatus("FAILURE")] } });
+  withViewPatches(fresh.runtime, { 2: { statusCheckRollup: [OK_ROLLUP, gateStatus("SUCCESS")] } });
+  assert.equal((await mergePr(baseOptions(), fresh.runtime)).merged, true);
+});
+
+test("gate_evidence_run keeps a changed-head refusal when a failed run meets a success status", async () => {
+  // Waited: the run fails after the wait, the head moved and the new head's status is success.
+  const waited = withRunReads([[RUN(2, "in_progress", null)], [RUN(2, "completed", "failure")]]);
+  withViewPatches(waited.runtime, { 2: { headRefOid: "f".repeat(40), statusCheckRollup: [OK_ROLLUP, gateStatus("SUCCESS")] } });
+  await assert.rejects(() => mergePr(baseOptions(), waited.runtime), (error) => assertRecovery(error, { reasonPattern: /the head changed from .* while waiting/, recoveryPattern: /re-gate the new head/ }));
+  assert.equal(mergeCalls(waited.calls).length, 0);
+  // No wait: the failed run alone triggers the re-read, and the moved head still refuses.
+  const direct = withRunReads([[RUN(7, "completed", "failure")]]);
+  withViewPatches(direct.runtime, { 2: { headRefOid: "f".repeat(40), statusCheckRollup: [OK_ROLLUP, gateStatus("SUCCESS")] } });
+  await assert.rejects(() => mergePr(baseOptions(), direct.runtime), (error) => assertRecovery(error, { reasonPattern: /the head changed from .* while reading the Gate evidence run/, recoveryPattern: /re-gate the new head/ }));
+  assert.equal(mergeCalls(direct.calls).length, 0);
 });
 
 test("gate_evidence_run refuses on a wall-clock timeout without suggesting a rerun of the active run", async () => {
@@ -2205,10 +2270,106 @@ test("gate_evidence_run refuses on a wall-clock timeout without suggesting a rer
   await assert.rejects(() => mergePr(baseOptions(), runtime), (error) => {
     assert.match(error.message, /gate_evidence_run \(.*run 88.*still in_progress after 0s?; wait for it to complete, then call merge-pr again/);
     assert.doesNotMatch(error.message, /gh run rerun/);
-    return true;
+    return assertRecovery(error, { reasonPattern: /run 88 .*in_progress after/, recoveryPattern: /^wait for it to complete, then call merge-pr again$/ });
   });
   assert.equal(runListCalls(calls).length, 4);
   assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("gate_evidence_run waits with the shipped 15 s interval and refuses after the shipped 540 s deadline", async () => {
+  const { runtime, calls, sleeps } = withRunReads([[RUN(9, "in_progress", null)]]);
+  runtime.gateEvidenceWait = {};
+  await assert.rejects(() => mergePr(baseOptions(), runtime), (error) => assertRecovery(error, { reasonPattern: /run 9 .*still in_progress after 540s/, recoveryPattern: /wait for it to complete/ }));
+  assert.equal(sleeps.length, 36);
+  assert.ok(sleeps.every((ms) => ms === 15_000));
+  assert.equal(runListCalls(calls).length, 37);
+});
+
+test("gate_evidence_run kills a hung gh run list at the remaining deadline and refuses with the last active run", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "merge-pr-hung-run-list-"));
+  const hungGh = path.join(dir, "gh");
+  await writeFile(hungGh, "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+  try {
+    const { runtime, calls } = makeRuntime();
+    const base = runtime.ghJson;
+    let polls = 0;
+    runtime.ghJson = async (args, opts) => {
+      if (args[0] === "run" && args[1] === "list") {
+        polls += 1;
+        calls.ghJson.push(args);
+        if (polls === 1) return [RUN(66, "in_progress", null)];
+        return defaultGhJson(args, { ...opts, ghCommand: hungGh, runChild: undefined, env: process.env });
+      }
+      return base(args, opts);
+    };
+    runtime.sleep = async () => {};
+    runtime.gateEvidenceWait = { intervalMs: 1, timeoutMs: 400 };
+    const started = Date.now();
+    await assert.rejects(() => mergePr(baseOptions(), runtime), (error) => assertRecovery(error, { reasonPattern: /the Gate evidence run read for head .* timed out after \d+s \(last active run 66\)/, recoveryPattern: /^wait for it to complete/ }));
+    assert.ok(Date.now() - started < 5000, "the hung child was killed at the deadline");
+    assert.equal(mergeCalls(calls).length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("gate_evidence_run checks the spike marker again after a wait and never merges", async () => {
+  const { runtime, calls } = withRunReads([[RUN(2, "in_progress", null)], [RUN(2, "completed", "success")]]);
+  withViewPatches(runtime, { 2: { body: "spike\n\n<!-- dev-loops:spike-pr no-merge -->\n" } });
+  const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.equal(threw.mergePrFailure.failures[0].precondition, "spike_pr");
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("gate_evidence_run loads the merge policy again after a wait and refuses a humanMergeOnly set during it", async () => {
+  const { runtime, calls } = withRunReads([[RUN(2, "in_progress", null)], [RUN(2, "completed", "success")]]);
+  const base = runtime.loadConfig;
+  let loads = 0;
+  runtime.loadConfig = async (arg) => {
+    loads += 1;
+    const config = await base(arg);
+    return loads === 1 ? config : { ...config, config: { ...config.config, autonomy: { humanMergeOnly: true } } };
+  };
+  const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.equal(threw.mergePrFailure.humanMergeOnly, true);
+  assert.equal(loads, 2);
+  assert.equal(mergeCalls(calls).length, 0);
+  // A config that becomes invalid during the wait refuses too.
+  const bad = withRunReads([[RUN(2, "in_progress", null)], [RUN(2, "completed", "success")]]);
+  let badLoads = 0;
+  const badBase = bad.runtime.loadConfig;
+  bad.runtime.loadConfig = async (arg) => { badLoads += 1; return badLoads === 1 ? badBase(arg) : { config: {}, errors: ["broken"] }; };
+  const badThrew = await mergePr(baseOptions(), bad.runtime).catch((e) => e);
+  assert.equal(badThrew.mergePrFailure.configError, true);
+  assert.equal(mergeCalls(bad.calls).length, 0);
+});
+
+test("a spike PR refuses at spike_pr before the config checks, under humanMergeOnly and with a config error", async () => {
+  const spike = { body: "spike\n\n<!-- dev-loops:spike-pr no-merge -->\n" };
+  const human = makeRuntime({ humanMergeOnly: true, prView: spike });
+  const threw = await mergePr(baseOptions(), human.runtime).catch((e) => e);
+  assert.equal(threw.mergePrFailure.failures[0].precondition, "spike_pr");
+  assert.equal(threw.mergePrFailure.humanMergeOnly, undefined);
+  const broken = makeRuntime({ prView: spike });
+  broken.runtime.loadConfig = async () => ({ config: {}, errors: ["broken"] });
+  const result = await mergePr(baseOptions({ check: true }), broken.runtime);
+  assert.equal(result.check, true);
+  assert.equal(result.failures[0].precondition, "spike_pr");
+  const real = await mergePr(baseOptions(), broken.runtime).catch((e) => e);
+  assert.equal(real.mergePrFailure.failures[0].precondition, "spike_pr");
+});
+
+test("main writes the gate_evidence_run refusal JSON as the last stderr line after a wait line", async () => {
+  const { runtime } = withRunReads([[RUN(2, "in_progress", null)], [RUN(2, "completed", "failure")]], { prView: { statusCheckRollup: [OK_ROLLUP, gateStatus("FAILURE")] } });
+  const err = captureStream();
+  runtime.stderr = err;
+  const code = await main(["--repo", "mfittko/dev-loops", "--pr", "5", "--human-approved-by", "mfittko", "--standing-authorization"], { ...runtime, stdout: captureStream() });
+  assert.notEqual(code, 0);
+  const lines = err.get().split("\n").filter(Boolean);
+  assert.match(lines[0], /^merge-pr: waiting for Gate evidence run 2/);
+  const refusal = JSON.parse(lines[lines.length - 1]);
+  assert.equal(refusal.failures[0].precondition, "gate_evidence_run");
+  assert.ok(refusal.failures[0].reason.endsWith(refusal.recovery));
 });
 
 test("gate_evidence_run keeps a run with a missing status active until the timeout", async () => {
