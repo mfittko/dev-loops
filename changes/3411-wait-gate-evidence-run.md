@@ -1,3 +1,3 @@
 ### Changed
 
-- The merge wrapper waits (540 s wall-clock bound; the caller's tool timeout must cover it) while any Gate evidence run of the head is queued or in progress, after the local config checks and before every GitHub read. It writes one stderr line with the run id when a wait starts and refuses when the head changes during the wait. A cancelled run never decides. A failed newest non-cancelled run refuses with the run id and one exact recovery unless the `gate-evidence` commit status is `success`; a timeout refuses the same way. `--check` reads the runs once and reports an active or failed run as a `gate_evidence_run` failure (#3411)
+- The merge wrapper waits up to 540 s for an active Gate evidence run of the head and refuses a failed run or a timeout with the run id and one recovery; `--check` reports it without waiting (#3411)
