@@ -26,6 +26,7 @@ import { readSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { assertDeltaClearsFullPhase, assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
+import { DEFAULT_MAX_ATTEMPTS } from "../../scripts/github/rerun-failed-ci.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { addLocalOrigin, ensureOriginHead, makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -2878,6 +2879,8 @@ for (const route of ["Historical main", "OLD authority", "complete"]) test(`${ro
     const pulled = spawnSync("node", [pullScript, unit.executionIdentity], { cwd: wt, encoding: "utf8", env });
     assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
     assert.equal(pulled.stdout, await readFile(unit.promptPath, "utf8"));
+    // The fixture runs real gh-stub calls through the throttle; pacing them would exceed the 10s test timeout.
+    await writeFile(path.join(root, ".devloops.json"), JSON.stringify({ version: 1, queue: { ghMinIntervalMs: 0 } }));
     const bin = path.join(root, "tmp/bin");
     await mkdir(bin);
     await writeFile(path.join(bin, "gh"), `#!/bin/sh\ncase "$1 $2" in\n'pr view') printf '%s\\n' '${JSON.stringify({ headRefOid: f.candidate })}';;\n'api graphql') printf '%s\\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}';;\n'api user') printf '%s\\n' '{"login":"bot"}';;\n"api --paginate") case "$4" in *check-runs*) printf '%s\\n' '{"check_runs":[{"name":"build","status":"completed","conclusion":"success"}]}';; *) printf '%s\\n' '{"statuses":[]}';; esac;;\napi*) printf '%s\\n' '{"status":"ahead"}';;\n*) exit 1;;\nesac\n`);
@@ -3733,6 +3736,203 @@ test("issue 2787 C11: --ci-file emits a ci-failure order that names the failing 
   });
 });
 
+test("issue 3251: a smoke-only red head whose failed jobs carry GitHub timeout annotations routes to the re-run script, any other failure keeps the fixer", async () => {
+  await withFixture(async (fx) => {
+    // Real CI shape: a failed smoke job always fails the `verify` aggregator too, so failedChecks lists both.
+    const smokeOnly = ciFailureFor(fx.head, { failedChecks: [{ name: "viewer-smoke" }, { name: "verify" }] });
+    const gh = (jobs, annotations) => makeGhMock([
+      { assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", attempt: 1 }]) },
+      { assertArgs: ["view", "7"], stdout: JSON.stringify({ jobs: [...jobs, { databaseId: 12, name: "verify", conclusion: "failure" }] }) },
+      ...annotations.map((a) => ({ assertArgs: ["api"], stdout: JSON.stringify([{ annotation_level: "failure", message: a }]) })),
+    ]);
+    const ghCalls = (mock) => mock.calls.filter((c) => c.command === "gh").length;
+    const timedOut = gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }], ["The action 'Run inspect-run viewer WebKit smoke' has timed out after 10 minutes."]);
+    const recovery = `dev-loops-run scripts/github/rerun-failed-ci.mjs --repo ${REPO} --pr ${PR} --head-sha ${fx.head}`;
+    await assert.rejects(emitCi(fx, { runChild: timedOut.runChild }, smokeOnly), (error) => /timed-out smoke job.*rerun-failed-ci\.mjs/.test(error.message) && error.recovery === recovery);
+    // The re-run keeps the run id, so the attempt must make the attempt 2 refusal differ from attempt 1 (RECOVERY-COMMAND-REQUIRED).
+    const attempt2 = makeGhMock([
+      { assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", attempt: 2 }]) },
+      { assertArgs: ["view", "7"], stdout: JSON.stringify({ jobs: [{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }, { databaseId: 12, name: "verify", conclusion: "failure" }] }) },
+      { assertArgs: ["api"], stdout: JSON.stringify([{ annotation_level: "failure", message: "The action 'Run inspect-run viewer WebKit smoke' has timed out after 10 minutes." }]) },
+    ]);
+    const refusalMessage = async (mock) => (await emitCi(fx, { runChild: mock.runChild }, smokeOnly).catch((error) => error)).message;
+    const [first, second] = [await refusalMessage(gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }], ["The action 'Run inspect-run viewer WebKit smoke' has timed out after 10 minutes."])), await refusalMessage(attempt2)];
+    assert.match(first, /attempt 1 is a timed-out smoke job/);
+    assert.match(second, /attempt 2 is a timed-out smoke job/);
+    assert.notEqual(first, second);
+    const realFailure = gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }], ["Process completed with exit code 1."]);
+    assert.equal((await emitCi(fx, { runChild: realFailure.runChild }, smokeOnly)).workOrder.source, "ci-failure");
+    // list, view and one annotations read for viewer-smoke; verify annotations are never read.
+    assert.equal(ghCalls(realFailure), 3);
+    // A non-smoke failed check never reads GitHub, even beside verify.
+    for (const failedChecks of [[{ name: "viewer-smoke" }, { name: "build (24)" }], [{ name: "verify-suite" }, { name: "verify" }], [{ name: "verify-suite" }]]) {
+      const mixed = makeGhMock([]);
+      assert.equal((await emitCi(fx, { runChild: mixed.runChild }, ciFailureFor(fx.head, { failedChecks }))).workOrder.source, "ci-failure");
+      assert.equal(ghCalls(mixed), 0, JSON.stringify(failedChecks));
+    }
+    // A job-level timeout concludes `cancelled`, so wait-pr-checks lists only `verify`: the live read still routes to the re-run script.
+    const loneVerify = ciFailureFor(fx.head, { failedChecks: [{ name: "verify" }] });
+    const jobTimeout = gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "cancelled" }], ["The job has exceeded the maximum execution time of 45m0s"]);
+    await assert.rejects(emitCi(fx, { runChild: jobTimeout.runChild }, loneVerify), /timed-out smoke job.*rerun-failed-ci\.mjs/);
+    // A lone failed verify with no failed smoke job keeps the fixer route after the live read.
+    const loneVerifyOther = makeGhMock([
+      { assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", attempt: 1 }]) },
+      { assertArgs: ["view", "7"], stdout: JSON.stringify({ jobs: [{ databaseId: 12, name: "verify", conclusion: "failure" }] }) },
+    ]);
+    assert.equal((await emitCi(fx, { runChild: loneVerifyOther.runChild }, loneVerify)).workOrder.source, "ci-failure");
+    assert.equal(ghCalls(loneVerifyOther), 2);
+    // A re-run already started (attempt 2 in progress): emit nothing until CI settles.
+    const inProgress = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "in_progress", attempt: 2 }]) }]);
+    await assert.rejects(emitCi(fx, { runChild: inProgress.runChild }, smokeOnly), (error) => /attempt 2 is in_progress, not completed.*rerun-failed-ci\.mjs/.test(error.message) && error.recovery === recovery);
+    assert.equal(ghCalls(inProgress), 1);
+    // The re-run completed green: the red ci file is stale, so no fixer order.
+    const green = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", conclusion: "success", attempt: 2 }]) }]);
+    await assert.rejects(emitCi(fx, { runChild: green.runChild }, smokeOnly), (error) => /completed green.*stale/.test(error.message) && error.recovery === `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${REPO} --pr ${PR}`);
+    assert.equal(ghCalls(green), 1);
+    // A run with no numeric attempt fails closed to the fixer route and never reads the jobs.
+    const noAttempt = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed" }]) }]);
+    assert.equal((await emitCi(fx, { runChild: noAttempt.runChild }, smokeOnly)).workOrder.source, "ci-failure");
+    assert.equal(ghCalls(noAttempt), 1);
+  });
+});
+
+test("issue 3251: a timed-out smoke run at the re-run cap, or a failed live read, falls through to the fixer route", async () => {
+  await withFixture(async (fx) => {
+    const smokeOnly = ciFailureFor(fx.head, { failedChecks: [{ name: "viewer-smoke" }] });
+    // At the cap the re-run script would refuse, so the emitter keeps the fixer route and never reads the jobs.
+    const atCap = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", attempt: DEFAULT_MAX_ATTEMPTS }]) }]);
+    assert.equal((await emitCi(fx, { runChild: atCap.runChild }, smokeOnly)).workOrder.source, "ci-failure");
+    assert.equal(atCap.calls.filter((c) => c.command === "gh").length, 1);
+    // A gh failure in the live read never blocks the fixer.
+    const ghDown = makeGhMock([{ assertArgs: ["list"], exitCode: 1, stdout: "", stderr: "HTTP 502" }]);
+    assert.equal((await emitCi(fx, { runChild: ghDown.runChild }, smokeOnly)).workOrder.source, "ci-failure");
+    // A failed jobs read after a successful list also keeps the fixer route.
+    const viewDown = makeGhMock([
+      { assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", attempt: 1 }]) },
+      { assertArgs: ["view", "7"], exitCode: 1, stdout: "", stderr: "HTTP 502" },
+    ]);
+    assert.equal((await emitCi(fx, { runChild: viewDown.runChild }, smokeOnly)).workOrder.source, "ci-failure");
+  });
+});
+
+test("issue 3414: --ci-file with --act-list-file feeds the unposted act list and the CI failure to one fixer order", async () => {
+  await withFixture(async (fx) => {
+    await writeCurrentLog(path.join(fx.root, "tmp"), fx.head, ACT);
+    const unit = await emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" });
+    assert.equal(unit.workOrder.source, "ci-failure");
+    assert.equal(unit.workOrder.gate, "draft_gate");
+    assert.deepEqual(unit.workOrder.requiredReads.map((read) => read.kind), ["ci-failure", "act-list"]);
+    // No commit_only handback writes or checks site coverage on this route, so the order carries no skeleton (ADR 0311).
+    assert.equal(unit.workOrder.siteCoverage, undefined);
+    const text = await readFile(unit.promptPath, "utf8");
+    assert.match(text, /Also fix every act item in the `act-list` read/);
+    assert.equal(pull(unit, fx.root).status, 0);
+    await writeFile(fx.files.actList, "[]");
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), /not a non-empty judge-pass --out array/);
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: undefined }), /--act-list-file needs --gate/);
+  });
+});
+
+test("issue 3414: --ci-file with --act-list-file refuses what the plain act-list path refuses", async () => {
+  await withFixture(async (fx) => {
+    const { root, wt, head, files } = fx;
+    const combined = (over = {}) => emitCi(fx, { actListFile: files.actList, gate: "draft_gate", ...over });
+    const { fingerprint, ...noFingerprint } = ACT[0];
+    // A list with no ledger for this head is another round's list (stale_act_list).
+    await assert.rejects(combined(), (e) => e.refusal === "stale_act_list");
+    await writeCurrentLog(path.join(root, "tmp"), head, ACT);
+    // Rejected input forms: a missing fingerprint, a non-canonical fingerprint, and clusterSeverities [] .
+    await writeFile(files.actList, JSON.stringify([noFingerprint]));
+    await assert.rejects(combined(), /whose fingerprint is missing/);
+    await writeFile(files.actList, JSON.stringify([{ ...ACT[0], fingerprint: "0".repeat(16) }]));
+    await assert.rejects(combined(), /not the canonical fingerprintFinding value/);
+    await writeFile(files.actList, JSON.stringify([{ ...ACT[0], clusterSeverities: [] }]));
+    await assert.rejects(combined(), (e) => e.refusal === "invalid_cluster_severities");
+    // Accepted input form: a canonical fingerprint with valid clusterSeverities.
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], clusterSeverities: ["high", "low"] })]));
+    assert.equal((await combined()).workOrder.source, "ci-failure");
+    // A low-only pre_approval list never reaches the fixer.
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low" })]));
+    await assert.rejects(combined({ gate: "pre_approval_gate" }), (e) => e.refusal === "low_fix_until_cap");
+    // A list after the cap round is refused.
+    await rm(path.join(root, "tmp", "gate-findings"), { recursive: true });
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    await writeFile(files.actList, JSON.stringify(ACT));
+    for (const sha of ["d", "e"]) await writeCurrentLog(path.join(root, "tmp"), sha.repeat(40));
+    await assert.rejects(combined(), (e) => e.refusal === "round_cap_reached");
+  });
+});
+
+test("issue 3414: a carried act list must match an act finding of the head's ledger, not only a ledger's existence", async () => {
+  await withFixture(async (fx) => {
+    const other = withFp({ ...ACT[0], summary: "an older head's finding" });
+    await writeCurrentLog(path.join(fx.root, "tmp"), fx.head, [other]);
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), (e) => e.refusal === "stale_act_list" && /not an act finding/.test(e.message));
+    await writeCurrentLog(path.join(fx.root, "tmp"), fx.head, [{ ...ACT[0], judgeDisposition: "reject" }]);
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), (e) => e.refusal === "stale_act_list");
+    await writeCurrentLog(path.join(fx.root, "tmp"), fx.head, ACT);
+    assert.equal((await emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" })).workOrder.source, "ci-failure");
+  });
+});
+
+test("issue 3414: the combined --ci-file path accepts a ledger only at the carry origin head", async () => {
+  await withFixture(async (fx) => {
+    const { merged, over } = await verdictCarryScenario(fx, { cap: 3 });
+    const unit = await emitCi(fx, { ...over(), phase: "full", gate: "draft_gate", actListFile: fx.files.actList }, ciFailureFor(merged));
+    assert.equal(unit.workOrder.source, "ci-failure");
+    assert.deepEqual(unit.workOrder.requiredReads.map((read) => read.kind), ["ci-failure", "act-list"]);
+  });
+});
+
+test("issue 3414: the combined --ci-file path refuses a corrupt head ledger with the judge-pass recovery", async () => {
+  await withFixture(async (fx) => {
+    const file = path.join(fx.root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${fx.head}.json`);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "{not json");
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), (error) => error.refusal === "stale_act_list" && /judge-pass/.test(error.recovery));
+  });
+});
+
+test("issue 3414: the verdict_not_posted recovery names --ci-file for a red-CI post refusal", () => withoutClaudeCode(async () => {
+  await withFixture(async ({ head, emit }) => {
+    await assert.rejects(emit({ fetchVerdictMarkers: async () => summarizeGateReviewCommentMarkers([], { headSha: head }) }), (error) => error.refusal === "verdict_not_posted" && /--ci-file/.test(error.recovery));
+  });
+}));
+
+for (const gated of [true, false]) test(`issue 3414: locateFixerUnit${gated ? "reports a gated ci-failure order retired with its round" : "does not retire a gate-less ci-failure order"}`, async () => {
+  await withFixture(async (fx) => {
+    const { root, wt, head, files } = fx;
+    await writeCurrentLog(path.join(root, "tmp"), head, ACT);
+    const unit = await emitCi(fx, gated ? { actListFile: files.actList, gate: "draft_gate" } : {});
+    const retired = path.join(root, "tmp", "retired-gate-rounds", head, "r1");
+    await mkdir(retired, { recursive: true });
+    await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: new Date(clock + 60_000).toISOString() }));
+    const { stale } = await locateFixerUnit({ ref: unit.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] });
+    if (gated) assert.match(stale, /retired/);
+    else assert.equal(stale, undefined);
+  });
+});
+
+test("issue 3414: --ci-file with a malformed act list refuses with a retry recovery, and a threads file with both is ambiguous", async () => {
+  await withFixture(async (fx) => {
+    await writeFile(fx.files.actList, "not json");
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), (error) => /act-list is not JSON/.test(error.message) && /--ci-file .* --act-list-file/.test(error.recovery));
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate", threadsFile: fx.files.threads }), (error) => error.refusal === "ambiguous_source" && /--ci-file/.test(error.recovery));
+  });
+});
+
+test("issue 3414: a plain --ci-file refusal recovery names no act list, and a stale act list carries a judge-pass recovery", async () => {
+  await withFixture(async (fx) => {
+    // Rejected input forms: a CI file for another head and a green CI file.
+    await assert.rejects(emitCi(fx, {}, ciFailureFor("a".repeat(40))), (error) => /wait-pr-checks/.test(error.recovery) && !/--act-list-file/.test(error.recovery));
+    await assert.rejects(emitCi(fx, {}, ciFailureFor(fx.head, { status: "success", ciStatus: "success" })), (error) => /gate coordination/.test(error.recovery) && !/--act-list-file/.test(error.recovery));
+    // The combined path keeps the act-list retry.
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }, ciFailureFor("a".repeat(40))), (error) => /--act-list-file/.test(error.recovery));
+    // A list with no ledger for this head refuses stale_act_list with a recovery.
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), (error) => error.refusal === "stale_act_list" && /judge-pass/.test(error.recovery));
+  });
+});
+
 test("issue 2787 C17: a ci-failure plan emits the claude, pi and codex adapter payloads", async () => {
   await withFixture(async (fx) => {
     const unit = await emitCi(fx);
@@ -3759,11 +3959,10 @@ test("issue 2787 C11: a ci-failure file that is missing, green, pending, for ano
   });
 });
 
-test("issue 2787 C11: --ci-file takes only --phase full and no other source, --gate or --delta-result", async () => {
+test("issue 2787 C11: --ci-file accepts no other primary source and accepts --gate only with --act-list-file", async () => {
   await withFixture(async (fx) => {
     await assert.rejects(emitCi(fx, { phase: "commit_only" }), /--ci-file takes only --phase full.*re-run with --phase full/);
     await assert.rejects(emitCi(fx, { threadsFile: fx.files.threads }), /exactly one of --act-list-file, --threads-file, --review-id and --ci-file/);
-    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), /exactly one of/);
     await assert.rejects(emitCi(fx, { gate: "draft_gate" }), /--gate applies only to an --act-list-file source/);
     await assert.rejects(emitCi(fx, { deltaResult: fx.files.delta }), /--delta-result applies only to an --act-list-file source/);
   });

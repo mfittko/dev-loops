@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { ghExecFileSync } from "@dev-loops/core/github/gh-throttle";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -84,7 +84,7 @@ export function buildLabelArgs({ repo, name, color, description, force }) {
   return args;
 }
 
-export function createLabel(options, { ghCommand = "gh", exec = execFileSync } = {}) {
+export function createLabel(options, { ghCommand = "gh", exec = ghExecFileSync } = {}) {
   const args = buildLabelArgs(options);
   try {
     exec(ghCommand, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -103,7 +103,7 @@ export function createLabel(options, { ghCommand = "gh", exec = execFileSync } =
 
 export function run(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, stderr = process.stderr, ghCommand = "gh", exec = execFileSync } = {},
+  { stdout = process.stdout, stderr = process.stderr, ghCommand = "gh", exec = ghExecFileSync } = {},
 ) {
   let options;
   try {

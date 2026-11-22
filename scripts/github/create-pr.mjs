@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { spawn, execFile, execFileSync } from "node:child_process";
+import { takeGhSlot } from "@dev-loops/core/github/gh-throttle";
 import { promisify } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import {
@@ -431,7 +432,7 @@ export function spawnCreatePr(ghArgs, { ghCommand = "gh", env = process.env } = 
   // the live executor). In test mode this fails closed unless gh is stubbed at
   // the process boundary (writeGhStub sets DEV_LOOPS_GH_STUB).
   assertGithubWriteStubbedInTestMode(undefined, "pr create", { env });
-  return new Promise((resolve, reject) => {
+  return (ghCommand === "gh" ? takeGhSlot({ env }) : Promise.resolve()).then(() => new Promise((resolve, reject) => {
     // `gh pr create` never reads stdin (body comes from --body/--body-file), so
     // the captured path ignores it rather than inheriting: inheriting a
     // never-closing stdin (e.g. an in-process test runner) would hang any child
@@ -451,7 +452,7 @@ export function spawnCreatePr(ghArgs, { ghCommand = "gh", env = process.env } = 
     child.on("close", (code) => {
       resolve({ code: typeof code === "number" ? code : 1, stdout });
     });
-  });
+  }));
 }
 export async function main(argv = process.argv.slice(2), runtime = {}) {
   // --help/-h short-circuits BEFORE wrapper-owned validation (Copilot

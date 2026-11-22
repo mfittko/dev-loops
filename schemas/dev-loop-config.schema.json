@@ -1507,6 +1507,13 @@
           "minimum": 0,
           "maximum": 10
         },
+        "ghMinIntervalMs": {
+          "default": 500,
+          "description": "Minimum milliseconds between gh calls across the local dev-loops processes that share one main checkout (separate clones do not share pacing; a process outside a git checkout fails closed with GH_THROTTLE_UNAVAILABLE); 0 disables.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
         "archiveOlderThanDays": {
           "type": "integer",
           "exclusiveMinimum": 0,
