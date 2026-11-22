@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { exec, execFile, execFileSync } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { defaultComputePatchId } from "./_patch-id.mjs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -112,6 +113,9 @@ Optional:
                                maxCopilotRounds), as the loop does.
 
 Preconditions (each refuses with a machine-readable reason naming the failing one):
+  gate_evidence_run (waits up to 10 minutes for a queued or in-progress Gate
+  evidence run of the head, one gh run list per 15 s; refuses naming the run id
+  when the newest run failed or the wait timed out),
   human_approver, mergeable, ci_green, title_markers, gate_evidence,
   copilot_convergence, size_budget_human_approval, merge_approval, adr_tripwire,
   secret_scan, spike_pr (the PR body carries the ADR 0293 spike no-merge marker),
@@ -725,6 +729,36 @@ export async function defaultPostMergeComment({ repo, pr, body, env, ghCommand, 
   if (!result || result.code !== 0) throw new Error(String(result?.stderr ?? "").trim() || (result?.code === null ? "gh pr comment timed out" : "gh pr comment returned no result"));
 }
 
+const GATE_EVIDENCE_WORKFLOW = "gate-evidence.yml";
+const GATE_EVIDENCE_POLL_MS = 15_000;
+const GATE_EVIDENCE_TIMEOUT_MS = 10 * 60_000;
+const GATE_EVIDENCE_OK_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
+
+// Waits for the newest Gate evidence run of the head to complete (one `gh run list` per poll). The pull_request and
+// pull_request_review events each start a run and the newer cancels the older, so only the newest run decides.
+// Returns a refusal reason, or null when the newest run succeeded or none exists.
+async function resolveGateEvidenceRunRefusal({ repo, headSha }, { env, ghCommand, runChild, ghJson, sleep, intervalMs, timeoutMs }) {
+  const readNewest = async () => {
+    const runs = await ghJson(
+      ["run", "list", "--repo", repo, "--workflow", GATE_EVIDENCE_WORKFLOW, "--commit", headSha, "--limit", "20", "--json", "databaseId,status,conclusion,createdAt"],
+      { env, ghCommand, runChild, label: "gh run list" },
+    );
+    // shortcut: a non-array payload reads as no runs; ghJson already throws on unparseable output.
+    return (Array.isArray(runs) ? runs : []).reduce((a, r) => (a === null || String(r?.createdAt ?? "") > String(a.createdAt ?? "") ? r : a), null);
+  };
+  const recovery = (id) => `wait for or re-run Gate evidence run ${id} (gh run rerun ${id} --repo ${repo}), or edit the current-head gate-verdict comment to re-fire it, then call merge-pr again`;
+  for (let waited = 0; ; waited += intervalMs) {
+    const run = await readNewest();
+    if (run === null) return null;
+    if (run.status === "completed") {
+      return GATE_EVIDENCE_OK_CONCLUSIONS.has(run.conclusion) ? null
+        : `the newest Gate evidence run ${run.databaseId} for head ${headSha} completed as ${run.conclusion ?? "unknown"}; ${recovery(run.databaseId)}`;
+    }
+    if (waited >= timeoutMs) return `Gate evidence run ${run.databaseId} for head ${headSha} is still ${run.status} after ${Math.round(timeoutMs / 1000)}s; ${recovery(run.databaseId)}`;
+    await sleep(intervalMs);
+  }
+}
+
 export async function mergePr(options, runtime = {}) {
   const {
     env = process.env,
@@ -747,6 +781,8 @@ export async function mergePr(options, runtime = {}) {
     computePatchId = defaultComputePatchId,
     postMergeComment = defaultPostMergeComment,
     checkpointDir = undefined,
+    sleep = delay,
+    gateEvidenceWait = {},
   } = runtime;
 
   assertGithubWriteStubbedInTestMode(runChild, "pr merge", { env });
@@ -825,6 +861,21 @@ export async function mergePr(options, runtime = {}) {
         currentPatchId = computePatchId({ base: `origin/${baseRefName}`, head: currentHeadSha, repoRoot });
       }
     } catch { currentPatchId = null; }
+  }
+
+  const gateRunReason = await resolveGateEvidenceRunRefusal(
+    { repo: options.repo, headSha: currentHeadSha },
+    { env, ghCommand, runChild, ghJson, sleep, intervalMs: gateEvidenceWait.intervalMs ?? GATE_EVIDENCE_POLL_MS, timeoutMs: gateEvidenceWait.timeoutMs ?? GATE_EVIDENCE_TIMEOUT_MS },
+  );
+  if (gateRunReason !== null) {
+    const failure = {
+      ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
+      failures: [{ precondition: "gate_evidence_run", reason: gateRunReason }],
+    };
+    if (options.check) return { ...failure, check: true };
+    const error = new Error(`Merge preconditions not satisfied: gate_evidence_run (${gateRunReason})`);
+    error.mergePrFailure = failure;
+    throw error;
   }
 
   const evidence = await detectEvidence({ repo: options.repo, pr: options.pr, env, cwd, baseRefName, readOnly: options.check === true, patchId: currentPatchId });

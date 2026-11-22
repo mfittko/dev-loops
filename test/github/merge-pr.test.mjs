@@ -61,6 +61,8 @@ function makeRuntime({
   // PR files API entries and the base tip docs/decisions listing (names, or an Error).
   adrPrFiles = [],
   adrTip = [],
+  // The Gate evidence runs `gh run list` returns for the head.
+  gateRuns = [],
 } = {}) {
   const calls = { ghJson: [], runChild: [], postMerge: [], comments: [] };
   const view = {
@@ -79,6 +81,7 @@ function makeRuntime({
       env: { ...TEST_ENV },
       ghJson: async (args) => {
         calls.ghJson.push(args);
+        if (args[0] === "run" && args[1] === "list") return gateRuns;
         if (args.join(" ").includes("/files?")) {
           if (adrPrFiles instanceof Error) throw adrPrFiles;
           return adrPrFiles;
@@ -2070,4 +2073,43 @@ test("main --check on a spike-marked PR exits 0 with the check-shaped spike_pr f
   assert.equal(result.failures.length, 1);
   assert.equal(result.failures[0].precondition, "spike_pr");
   assert.equal(calls.runChild.length, 0);
+});
+
+const RUN = (databaseId, status, conclusion, createdAt) => ({ databaseId, status, conclusion, createdAt });
+const runListCalls = (calls) => calls.ghJson.filter((a) => a[0] === "run" && a[1] === "list");
+
+test("gate_evidence_run waits for an in-progress run that then succeeds, one run list per poll", async () => {
+  const { runtime, calls } = makeRuntime();
+  const reads = [[RUN(2, "in_progress", null, "2026-01-01T00:02:00Z")], [RUN(2, "queued", null, "2026-01-01T00:02:00Z")], [RUN(2, "completed", "success", "2026-01-01T00:02:00Z")]];
+  const base = runtime.ghJson;
+  runtime.ghJson = async (args) => (args[0] === "run" && args[1] === "list" ? (calls.ghJson.push(args), reads.shift()) : base(args));
+  const sleeps = [];
+  runtime.sleep = async (ms) => { sleeps.push(ms); };
+  runtime.gateEvidenceWait = { intervalMs: 10, timeoutMs: 1000 };
+  const result = await mergePr(baseOptions(), runtime);
+  assert.equal(result.merged, true);
+  assert.equal(runListCalls(calls).length, 3);
+  assert.deepEqual(sleeps, [10, 10]);
+});
+
+test("gate_evidence_run treats a cancelled run replaced by a newer success as no failure", async () => {
+  const { runtime, calls } = makeRuntime({ gateRuns: [RUN(1, "completed", "cancelled", "2026-01-01T00:01:00Z"), RUN(2, "completed", "success", "2026-01-01T00:02:00Z")] });
+  const result = await mergePr(baseOptions(), runtime);
+  assert.equal(result.merged, true);
+  assert.equal(runListCalls(calls).length, 1);
+});
+
+test("gate_evidence_run refuses a failed newest run, naming the run id and the recovery", async () => {
+  const { runtime, calls } = makeRuntime({ gateRuns: [RUN(1, "completed", "success", "2026-01-01T00:01:00Z"), RUN(77, "completed", "failure", "2026-01-01T00:02:00Z")] });
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /gate_evidence_run \(.*run 77.*completed as failure.*gh run rerun 77 --repo mfittko\/dev-loops.*call merge-pr again/);
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("gate_evidence_run refuses on wait timeout, naming the run id and the recovery", async () => {
+  const { runtime, calls } = makeRuntime({ gateRuns: [RUN(88, "in_progress", null, "2026-01-01T00:02:00Z")] });
+  runtime.sleep = async () => {};
+  runtime.gateEvidenceWait = { intervalMs: 10, timeoutMs: 30 };
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /gate_evidence_run \(.*run 88.*still in_progress.*gh run rerun 88/);
+  assert.equal(runListCalls(calls).length, 4);
+  assert.equal(mergeCalls(calls).length, 0);
 });
