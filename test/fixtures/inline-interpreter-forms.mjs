@@ -310,7 +310,7 @@ export const INLINE_INTERPRETER_FORMS = [
   allow("node scripts/x.mjs -e"),
   allow("node --no-warnings scripts/x.mjs --eval x"),
   allow("node --no-warnings bin/cli -"),
-  allow("cat -EOF"),
+  ceiling("cat <<-EOF\n\tnode -e x\n\tEOF"),
   allow("python3 -m json.tool f"),
   allow("python3 -W error script.py"),
   allow("sed -n 's/a/b/p' f"),
