@@ -6,7 +6,7 @@ Accepted — 2026-11-22 ([PR 3456](https://github.com/mfittko/dev-loops/pull/345
 
 ## Context
 
-`GATE-EXEC-BOUNDED-WAIT-CAP` caps a foreground wait in a subagent call, because Claude Code moves a long foreground call of a subagent to the background. `scripts/github/merge-pr.mjs` has a `gate_evidence_run` check. When the Gate evidence run is still in progress, the check must wait for it. [Issue 3411](https://github.com/mfittko/dev-loops/issues/3411) (`ac:1`) requires that wait to be bounded. Before the wait existed, an operator watched the run by hand and retried the merge, and that routine failed three merges.
+`GATE-EXEC-BOUNDED-WAIT-CAP` caps a foreground wait in a subagent call, because Claude Code moves a long foreground call of a subagent to the background. `scripts/github/merge-pr.mjs` has a `gate_evidence_run` check. When the Gate evidence run is still in progress, the check must wait for it. [Issue 3411](https://github.com/mfittko/dev-loops/issues/3411) (`ac:1`) requires that wait to be bounded. Before the wait existed, an operator watched the run by hand and retried the merge, and three merges each failed once and merged on the retry.
 
 ## Decision
 
@@ -15,7 +15,7 @@ The `gate_evidence_run` wait of `merge-pr.mjs` (bound 540 s, poll interval 15 s)
 Rejected alternatives:
 
 1. A capped wait that returns a `pending` outcome and a reissue instruction. It needs more calls and more code, for the one caller that the cap does not target.
-2. The manual watch and retry. It is the routine that failed three merges.
+2. The manual watch and retry. The orchestrator watched three merges that each failed once and merged on the retry.
 
 ## Consequences
 
