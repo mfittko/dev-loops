@@ -87,8 +87,9 @@ Optional:
                                with " patch-id <id>" appended when the head
                                contains origin/<base>), approvalMatch (head |
                                patch_id | null), sizeClass, and EVERY failing precondition
-                               (an active or failed Gate evidence run is a gate_evidence_run
-                               entry; --check reads the runs once and never waits). Exit 0
+                               (an active run, a failed newest non-cancelled run, a read
+                               timeout and a head change are gate_evidence_run entries;
+                               --check reads the runs once and never waits). Exit 0
                                whenever the preconditions could be evaluated
                                (ok:false carries the failures; under
                                autonomy.humanMergeOnly it carries a
@@ -734,7 +735,7 @@ const POST_MERGE_COMMENT_TIMEOUT_MS = 60_000;
 export async function defaultPostMergeComment({ repo, pr, body, env, ghCommand, runChild, timeoutMs = POST_MERGE_COMMENT_TIMEOUT_MS }) {
   // runChild kills the gh child at the bound, so a hung request cannot keep the CLI alive.
   const result = await runChild(ghCommand, ["pr", "comment", String(pr), "--repo", repo, "--body", body], env, undefined, { timeoutMs });
-  if (!result || result.code !== 0) throw new Error(String(result?.stderr ?? "").trim() || (result?.code === null ? "gh pr comment timed out" : "gh pr comment returned no result"));
+  if (!result || result.code !== 0) throw new Error(String(result?.stderr ?? "").trim() || (result?.timedOut ? "gh pr comment timed out" : "gh pr comment returned no result"));
 }
 
 const GATE_EVIDENCE_WORKFLOW = "gate-evidence.yml";
