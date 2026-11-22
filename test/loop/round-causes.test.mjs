@@ -490,10 +490,28 @@ test("R22 a truncated retirement record is skipped and named, and a valid siblin
   }
 });
 
+test("R24 a retirement record under a linked worktree counts, run from the checkout root or a subdirectory", async () => {
+  for (const sub of [false, true]) {
+    await withTempDir(async (dir) => {
+      legacyRepo(dir);
+      const wt = path.join(dir, "wt");
+      git(dir, "worktree", "add", "-q", "-b", "wt-branch", wt);
+      await ledger(dir, 1, sha("a"), "2026-11-01T01:00:00.000Z", { findings: [] });
+      await retiredRecord(path.join(wt, "tmp"), sha("a"), "r1", { retiredAt: "2026-11-01T00:30:00.000Z" });
+      await json(dir, "merged.json", [{ number: 1, mergedAt: "2026-11-30T00:00:00Z" }]);
+      let out = "";
+      const cwd = sub ? path.join(dir, "sub") : dir;
+      await mkdir(cwd, { recursive: true });
+      await runCli(["--repo", "o/r", "--tmp-root", dir, "--merged-prs", path.join(dir, "merged.json")], { stdout: { write: (s) => { out += s; } }, stderr: { write() {} }, repoRoot: cwd });
+      assert.deepEqual(JSON.parse(out).perChange[0].byCause, { ...ZERO, system_rerun: 1 });
+    });
+  }
+});
+
 test("R23 --help states the derivation limit, the out-of-band count and the round 1 rule", async () => {
   let out = "";
   await runCli(["--help"], { stdout: { write: (s) => { out += s; } } });
-  assert.match(out, /can undercount system_rerun and body_only/);
+  assert.match(out, /is unread and can undercount system_rerun and body_only/);
   assert.match(out, /outOfBandLedgers counts ledgers whose seal does not match/);
   assert.match(out, /the earliest one stamped\s+first/);
 });

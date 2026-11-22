@@ -12,7 +12,7 @@ import { ROUND_CAUSES, deriveRoundCause, findSameHeadRerun } from "../github/_ro
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { readClosedPriorRoundLogs } from "../github/write-gate-context.mjs";
-import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { listWorktreeEntries, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage:
   dev-loops loop round-causes --repo <owner/name> --merged-prs <path> [--issues <path>] [--last <n>] [--gate <name>] [--base <branch>] [--tmp-root <path>]
@@ -42,8 +42,9 @@ Causes: byCause splits rounds by roundCause (${ROUND_CAUSES.join(", ")}). A ledg
 stamp is derived in memory (derivedRounds). A derived round counts as undetermined, outside the causes,
 when git cannot answer (a missing commit object) or its head is contained in the current origin/<base>
 (the base then holds the landed PR, so a base-only probe misreads it). A derived round reads the blocked ledgers
-and retirement records of its head that lie between the previous round and itself (system_rerun and body_only); records that are missing
-(for example a retirement under a removed checkout) can undercount system_rerun and body_only. An unreadable retirement record is skipped,
+and retirement records of its head that lie between the previous round and itself (system_rerun and body_only). The retirement records come from
+<tmp-root> and from the tmp directory of the checkout root and of every registered worktree; a record elsewhere (for example under a removed checkout)
+is unread and can undercount system_rerun and body_only. An unreadable retirement record is skipped,
 and warnings names it. unreadableLedgers counts ledgers the findings reader dropped (invalid JSON or an invalid verdict).
 outOfBandLedgers counts ledgers whose seal does not match; the report excludes them and never trusts their content.
 
@@ -89,7 +90,7 @@ async function readExport(file, dateField) {
 // A ledger written before the stamp has no roundCause: derive it in memory against the previous round of the same PR.
 // A round whose git answer is unknowable (a missing object) or whose head the current base already contains is undetermined, never a cause.
 // Before the git probe, a head move or a first round reads the blocked ledgers and retirement records of its head that lie between the previous round and itself (system_rerun, body_only).
-async function roundCauses(rounds, { base, repoRoot, ensureBase, repo, pr, gate, tmpRoot, warn }) {
+async function roundCauses(rounds, { base, repoRoot, ensureBase, repo, pr, gate, tmpRoot, extraRoots, warn }) {
   const causes = [];
   let derived = 0;
   const resolves = async (rev) => (await runGitCommand(["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], { repoRoot })).code === 0;
@@ -101,7 +102,7 @@ async function roundCauses(rounds, { base, repoRoot, ensureBase, repo, pr, gate,
     const headMove = !prior || String(prior.headSha).toLowerCase() !== String(log.headSha).toLowerCase();
     if (headMove) {
       const untilMs = Date.parse(log.loggedAt);
-      const sameHeadRerun = await findSameHeadRerun({ repoRoot, repo, pr, gate, headSha: log.headSha, tmpRoot, sinceMs: Date.parse(prior?.loggedAt) || 0, untilMs: Number.isFinite(untilMs) ? untilMs : Infinity, warn });
+      const sameHeadRerun = await findSameHeadRerun({ repoRoot, repo, pr, gate, headSha: log.headSha, tmpRoot, extraRoots, sinceMs: Date.parse(prior?.loggedAt) || 0, untilMs: Number.isFinite(untilMs) ? untilMs : Infinity, warn });
       if (sameHeadRerun) { causes.push(sameHeadRerun); continue; }
     }
     if (prior && headMove) {
@@ -150,6 +151,11 @@ export async function buildReport(values, { repoRoot = process.cwd() } = {}) {
   };
   const checklistAngles = new Set(((await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) })).config.gates?.draft?.angles ?? []).filter((e) => e["developer-checklist"]?.length).map((e) => e.name));
   const cutoff = Date.parse(CHECKLIST_CUTOFF);
+  // The writers put a retirement record under the checkout they ran in, so read the tmp root of the checkout root and of every registered worktree, whatever the cwd.
+  const checkoutRoot = resolveRepoRoot(repoRoot);
+  let worktreePaths = [];
+  try { worktreePaths = listWorktreeEntries(checkoutRoot).map((e) => e.path); } catch { /* not a git checkout: the checkout root alone */ }
+  const retirementRoots = [checkoutRoot, ...worktreePaths].map((p) => path.join(p, "tmp"));
 
   const totalsByCause = emptyCauses();
   const checklist = { before: emptySplit(), after: emptySplit() };
@@ -167,7 +173,7 @@ export async function buildReport(values, { repoRoot = process.cwd() } = {}) {
     const read = (g) => readClosedPriorRoundLogs({ repo: values.repo, pr: number, gate: g, headSha: GATE_SENTINEL_HEAD, tmpRoot }, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead: true, onUnreadable: () => { unreadable += 1; }, onOutOfBand: () => { outOfBand += 1; } });
     // A sentinel head matches no ledger, so every ledger of the PR is read as a prior round.
     const logs = await read(gate);
-    const { causes, derived } = await roundCauses(logs, { base, repoRoot, ensureBase, repo: values.repo, pr: number, gate, tmpRoot, warn: (m) => warnings.add(m) });
+    const { causes, derived } = await roundCauses(logs, { base, repoRoot, ensureBase, repo: values.repo, pr: number, gate, tmpRoot, extraRoots: retirementRoots, warn: (m) => warnings.add(m) });
     const byCause = emptyCauses();
     let undetermined = 0;
     for (const c of causes) {
