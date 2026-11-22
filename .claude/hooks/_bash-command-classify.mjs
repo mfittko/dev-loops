@@ -1899,11 +1899,32 @@ export function classifyDecisionRecorderCommand(command) {
     const script = !fileCommand && words.some((w) => w.endsWith("record-operator-decision.mjs"));
     const at = words.findIndex((w, i) => w === "decision" && words[i + 1] === "record");
     const cli = !fileCommand && at >= 0 && words.slice(0, at).some((w) => /(?:^|\/)(?:dev-loops(?:-run)?|index\.mjs)$/.test(w));
-    if (!script && !cli && !stripped.some((s) => hasUnreadableLauncherWord(s.split(/\s+/)))) continue;
+    if (!script && !cli && !stripped.some((s) => hasUnreadableLauncherWord(dropTrailingRedirects(s.split(/\s+/), command)))) continue;
     const canonical = !script && !continued && segments.length === 1 && segment.startsWith("dev-loops-run cli/index.mjs decision record ");
     found = { canonical: found?.canonical !== false && canonical };
   }
   return found;
+}
+
+const REDIRECT_TARGET = String.raw`(?:[A-Za-z0-9_./$-]+|"[A-Za-z0-9_./$-]+")`;
+const REDIRECT_BARE = /^[0-9&]?>>?$/;
+const REDIRECT_ATTACHED = new RegExp(`^(?:[0-9&]?>>?${REDIRECT_TARGET}|[0-9]?>&[0-9])$`);
+const REDIRECT_TARGET_WORD = new RegExp(`^${REDIRECT_TARGET}$`);
+
+/**
+ * Drops the simple output redirections at the end of a segment's words, so the launcher-word check does not read `2>&1` or a target as a program word.
+ * Only trailing redirections qualify: one in front of a program word could hide it, and a redirection target never holds a program word after it.
+ * A command with a carriage return qualifies for nothing, because `shellSegments` splits there and the shell does not.
+ */
+function dropTrailingRedirects(words, command) {
+  if (command.includes("\r")) return words;
+  let end = words.length;
+  for (;;) {
+    const last = words[end - 1];
+    if (last !== undefined && REDIRECT_ATTACHED.test(last)) end -= 1;
+    else if (end > 1 && REDIRECT_TARGET_WORD.test(last) && REDIRECT_BARE.test(words[end - 2])) end -= 2;
+    else return words.slice(0, end);
+  }
 }
 
 /**
