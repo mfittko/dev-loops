@@ -5,7 +5,7 @@ export const ROUND_CAUSES = Object.freeze(["first", "developer_findings", "syste
 
 const DIGEST_RE = /^[0-9a-f]{64}$/;
 
-/** Pure cause rules, first match wins (GATE-LEDGER-ROUND-CAUSE). `baseOnly` is read only for a head move. */
+/** Pure cause rules, first match wins. `baseOnly` is read only for a head move. */
 export function deriveRoundCause({ prior, headSha, prBodySha256, baseOnly }) {
   if (!prior) return "first";
   if (String(prior.headSha).toLowerCase() === String(headSha).toLowerCase()) {
