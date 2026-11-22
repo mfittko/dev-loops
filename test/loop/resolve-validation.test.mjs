@@ -974,6 +974,7 @@ test("a prior artifact from a different toolchain is not reused", async () => {
   const { second } = await secondGate((a) => ({ ...a, toolchain: "bun@0.0.0" }));
   assert.equal(second.status, "complete");
   assert.equal(second.artifact.reusedFrom, undefined);
+  assert.equal(second.artifact.toolchain, `bun@${bunVersion}`);
 });
 
 // A fixture whose verify script appends one line to a counter outside the tree per full run.
