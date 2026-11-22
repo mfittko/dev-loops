@@ -2838,11 +2838,14 @@ test("issue 3416: re-emission at the same head retires the prior partial round a
     const sentinel = path.join(tmpDir, "tmp", `${CHECKPOINT_SENTINEL_PREFIX}pre-approval-gate-contradiction-lens-${HEAD_SHA}.json`);
     await writeFile(sentinel, "{}", "utf8");
     // The reviewer has not written its findings: a full re-emission refuses and points to --pending.
+    const planPath = path.join(tmpDir, buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: "tmp" }));
+    const livePlan = await readFile(planPath, "utf8");
     const live = runEmitCli(args, { cwd: tmpDir });
     assert.equal(live.status, 1, live.stderr);
     assert.match(JSON.parse(live.stdout).error, /may still be running/);
     assert.match(JSON.parse(live.stdout).recovery, /--pending/);
     assert.equal(existsSync(sentinel), true);
+    assert.equal(await readFile(planPath, "utf8"), livePlan, "the refused emission leaves the live round's keyed emit plan in place");
     // Once it finished (a valid artifact newer than the sentinel) the round retires.
     await writeAngleArtifact(tmpDir, "tmp");
     const second = runEmitCli(args, { cwd: tmpDir });

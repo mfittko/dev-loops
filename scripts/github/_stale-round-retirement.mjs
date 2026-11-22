@@ -33,12 +33,15 @@ export async function isFinishedArtifact({ file, sentinelFile, wantHead, sameAng
   }
 }
 
+// POSIX single quotes keep $, backticks and ! literal; an embedded single quote closes, escapes and reopens the quoting.
+const shellQuote = (value) => `'${String(value).replaceAll("'", `'\\''`)}'`;
+
 /**
  * The runnable retire-gate-round command for one round: the launcher, the full head, a fixed reason and every path
- * JSON-quoted (a checkout path with a space stays one argument). `findingsDir` null names the round by --repo and --pr.
+ * single-quoted for a POSIX shell (a checkout path with a space or a `$` stays one literal argument). `findingsDir` null names the round by --repo and --pr.
  */
 export function buildRetireCommand({ gate, headSha, tmpRoot, findingsDir = null, repo, pr, reason }) {
-  return `dev-loops-run scripts/github/retire-gate-round.mjs --gate ${gate} --head-sha ${headSha} --reason ${JSON.stringify(reason)} --tmp-root ${JSON.stringify(tmpRoot)} ${findingsDir ? `--findings-dir ${JSON.stringify(findingsDir)}` : `--repo ${repo} --pr ${pr}`}`;
+  return `dev-loops-run scripts/github/retire-gate-round.mjs --gate ${gate} --head-sha ${headSha} --reason ${shellQuote(reason)} --tmp-root ${shellQuote(tmpRoot)} ${findingsDir ? `--findings-dir ${shellQuote(findingsDir)}` : `--repo ${repo} --pr ${pr}`}`;
 }
 
 /**
@@ -90,41 +93,30 @@ export async function retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdi
   }
   // A sentinel is live when no valid artifact for its unit is newer than it: that reviewer is still running, and moving
   // its round would orphan it. Undispatched (records only) and finished rounds retire as before.
-  const liveSentinels = [];
-  let plan; // the emit plan (or its sidecar), read once and only when a group sentinel needs it
-  for (const name of names.filter((n) => n.endsWith(suffix) && n.startsWith(sentinelPrefix))) {
-    const segment = name.slice(sentinelPrefix.length, -suffix.length);
-    const sentinelFile = path.join(tmpRoot, name);
-    let angles = [segment];
-    if (segment.startsWith("group-")) {
-      // A group unit finishes only when every one of its angles has a finished artifact, so another unit's artifact never counts.
-      // A missing or unreadable plan, or a unit absent from it, leaves the sentinel live.
-      plan ??= await readEmitPlan({ repo, pr, gate, headSha: head, tmpRoot: findingsTmpRoot });
-      const unit = plan?.units?.find((u) => u?.scope === `${gateScopePrefix(gate)}${segment}`);
-      angles = Array.isArray(unit?.angles) && unit.angles.length > 0 ? unit.angles.map(String) : [];
-    }
-    const finished = angles.length > 0 && (await Promise.all(angles.map((angle) => isFinishedArtifact({
-      file: path.join(findingsDir, `${sanitizeScopeSegment(angle)}.json`), sentinelFile, wantHead: head, sameAngle: (a) => sanitizeScopeSegment(a) === sanitizeScopeSegment(angle),
-    })))).every(Boolean);
-    if (!finished) liveSentinels.push(name);
-  }
+  const liveSentinels = await findUnfinishedSentinels({ repo, pr, gate, tmpRoot, findingsTmpRoot, names: names.filter((n) => n.endsWith(suffix) && n.startsWith(sentinelPrefix)) });
   if (liveSentinels.length > 0) {
     return {
       refusal: {
         error: `GATE-EXEC-ROUND-RETIREMENT: refusing to retire the ${gate} round at head ${head}: ${liveSentinels.length} reviewer sentinel(s) have no findings artifact newer than them, so their reviewers may still be running (${liveSentinels.sort().join(", ")}). Retiring now would orphan them.`,
-        recovery: `wait for the running reviewers to write their findings and resume the round with emit-fanout-dispatch.mjs --pending; if they crashed, operator: run \`${buildRetireCommand({ gate, headSha: head, tmpRoot, findingsDir: hasFindings ? findingsDir : null, repo, pr, reason: `operator confirmed the reviewers of ${head} are no longer running` })}\``,
+        recovery: buildLiveRoundRecovery({ gate, headSha: head, tmpRoot, findingsDir: hasFindings ? findingsDir : null, repo, pr }),
       },
     };
   }
   const reason = "automatic: the gate context was rebuilt or the round re-emitted at the same head before any verdict was recorded";
-  const result = await retireGateRound({ // the findings dir may live under another root than the sentinels
-    gate, headSha: head, tmpRoot, repo, pr, reason,
-    ...(hasFindings ? { findingsDir } : { noFindingsArtifacts: true }),
-  });
-  // The dispatch records follow --tmp-root, so a distinct records root retires them in a second audited move.
-  const recordsResult = recordNames.some((n) => n.endsWith(suffix) && n.startsWith(recordPrefix)) && recordsTmpRoot !== tmpRoot
-    ? await retireGateRound({ gate, headSha: head, tmpRoot: recordsTmpRoot, reason, noFindingsArtifacts: true })
-    : null;
+  const distinctRecords = recordsTmpRoot !== tmpRoot && recordNames.some((n) => n.endsWith(suffix) && n.startsWith(recordPrefix));
+  const findingsOpt = hasFindings ? { findingsDir } : { noFindingsArtifacts: true };
+  let result = { noop: true };
+  let recordsResult = null;
+  if (await exists(tmpRoot)) {
+    result = await retireGateRound({ // the findings dir may live under another root than the sentinels
+      gate, headSha: head, tmpRoot, repo, pr, reason, ...findingsOpt,
+    });
+    // The dispatch records follow --tmp-root, so a distinct records root retires them in a second audited move.
+    if (distinctRecords) recordsResult = await retireGateRound({ gate, headSha: head, tmpRoot: recordsTmpRoot, reason, noFindingsArtifacts: true });
+  } else if (distinctRecords || hasFindings) {
+    // The sentinel root is missing, so it holds no sentinels and retireGateRound would refuse it; retire the records and findings through the roots that hold them.
+    result = await retireGateRound({ gate, headSha: head, tmpRoot: distinctRecords ? recordsTmpRoot : findingsTmpRoot, repo, pr, reason, ...findingsOpt });
+  }
   if (result.noop && !recordsResult) return { retiredRound: null };
   const base = result.noop ? recordsResult : result;
   return { retiredRound: { retirementDir: path.resolve(base.retirementDir), retired: result.retired, sentinels: result.sentinels, dispatchPromptRecords: [...result.dispatchPromptRecords, ...(recordsResult?.dispatchPromptRecords ?? [])], findingsDirRetired: result.findingsDirRetired } };
@@ -139,4 +131,36 @@ async function readEmitPlan(key) {
     } catch { /* try the sidecar, then treat the unit as live */ }
   }
   return null;
+}
+
+/** The recovery for a round whose reviewers may still run: wait and resume, and name `operator` before the retire command so no coordinator runs it unattended. */
+export function buildLiveRoundRecovery({ gate, headSha, tmpRoot, findingsDir = null, repo, pr }) {
+  return `wait for the running reviewers to write their findings and resume the round with emit-fanout-dispatch.mjs --pending; if they crashed, operator: run \`${buildRetireCommand({ gate, headSha, tmpRoot, findingsDir, repo, pr, reason: `operator confirmed the reviewers of ${headSha} are no longer running` })}\``;
+}
+
+/**
+ * The sentinel file names (one gate, each stamped with its full head) whose reviewer has not finished: no valid artifact
+ * for the unit is newer than the sentinel. A group unit finishes only when every angle the emit plan lists for it has one,
+ * so another unit's artifact never counts, and a missing or unreadable plan or a unit absent from it leaves it unfinished.
+ */
+export async function findUnfinishedSentinels({ repo, pr, gate, tmpRoot, findingsTmpRoot = tmpRoot, names }) {
+  const sentinelPrefix = `${CHECKPOINT_SENTINEL_PREFIX}${gateScopePrefix(gate)}`;
+  const plans = new Map(); // the emit plan (or its sidecar) per head, read once and only when a group sentinel needs it
+  const unfinished = [];
+  for (const name of names) {
+    const head = name.slice(0, -".json".length).split("-").at(-1);
+    const segment = name.slice(sentinelPrefix.length, -`-${head}.json`.length);
+    const findingsDir = buildGateReviewsDir({ repo, pr, gate, headSha: head, tmpRoot: findingsTmpRoot });
+    let angles = [segment];
+    if (segment.startsWith("group-")) {
+      if (!plans.has(head)) plans.set(head, await readEmitPlan({ repo, pr, gate, headSha: head, tmpRoot: findingsTmpRoot }));
+      const unit = plans.get(head)?.units?.find((u) => u?.scope === `${gateScopePrefix(gate)}${segment}`);
+      angles = Array.isArray(unit?.angles) && unit.angles.length > 0 ? unit.angles.map(String) : [];
+    }
+    const finished = angles.length > 0 && (await Promise.all(angles.map((angle) => isFinishedArtifact({
+      file: path.join(findingsDir, `${sanitizeScopeSegment(angle)}.json`), sentinelFile: path.join(tmpRoot, name), wantHead: head, sameAngle: (a) => sanitizeScopeSegment(a) === sanitizeScopeSegment(angle),
+    })))).every(Boolean);
+    if (!finished) unfinished.push(name);
+  }
+  return unfinished;
 }

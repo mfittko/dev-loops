@@ -505,6 +505,8 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       }
     }
   }
+  // A full emission keeps the bytes it removes, so a retirement refusal (the round is live or has a verdict) can put the live round's plan back.
+  const removedPlanText = pendingOnly ? null : await readFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), "utf8").catch(() => null);
   try {
     await rm(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), { force: true });
   } catch (err) {
@@ -839,7 +841,10 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;
     }
-    if (stale.refusal) return finish({ ok: false, error: stale.refusal.error, recovery: stale.refusal.recovery }, false);
+    if (stale.refusal) {
+      if (removedPlanText !== null) await writeFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), removedPlanText, "utf8");
+      return finish({ ok: false, error: stale.refusal.error, recovery: stale.refusal.recovery }, false);
+    }
     retiredRound = stale.retiredRound;
   }
   // This emission's round identity, minted after the retirement above. Its ms timestamp lets the pull tool tell a

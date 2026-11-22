@@ -38,7 +38,7 @@ import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-wri
 import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { retireGateRound } from "./retire-gate-round.mjs";
-import { buildRetireCommand, isFinishedArtifact, retireStaleRound } from "./_stale-round-retirement.mjs";
+import { buildLiveRoundRecovery, buildRetireCommand, findUnfinishedSentinels, isFinishedArtifact, retireStaleRound } from "./_stale-round-retirement.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities, splitDiffIntoParts, DIFF_PART_MAX_BYTES, DIFF_PART_MAX_LINES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
@@ -3384,15 +3384,21 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
   // The sentinels and dispatch records live under the scanned root; the findings directory lives under --tmp-root.
   const scanRoot = path.resolve(repoRoot, "tmp");
   const findingsRoot = path.resolve(repoRoot, options.tmpRoot || "tmp");
-  // A runnable retire command for the live round, named by its one full head (taken from the sentinel names when
-  // --head-sha is abbreviated). When no single full head resolves, the recovery is an explicit stop route.
-  const liveRoundRecovery = (names) => {
+  // The recovery for a refusal that fires while reviewers may still run, named by its one full head (taken from the sentinel names when
+  // --head-sha is abbreviated). The bare retire command goes out only when every named sentinel has a finished artifact; otherwise
+  // the coordinator, which runs a recovery that names no `operator`, is told to wait and the retire command waits behind `operator:`.
+  // When no single full head resolves, the recovery is an explicit stop route.
+  const liveRoundRecovery = async (names) => {
     const heads = new Set(names.map((n) => n.slice(0, -".json".length).split("-").at(-1)));
     const given = String(options.headSha).trim().toLowerCase();
     const head = heads.size === 1 ? [...heads][0] : heads.size === 0 && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(given) ? given : null;
     if (head === null) return `stop: no single full head names the live ${options.gate} round for ${options.headSha}; list tmp/ for its sentinels, then run dev-loops-run scripts/github/retire-gate-round.mjs for that full head`;
     const findingsDir = buildGateReviewsDir({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: head, tmpRoot: findingsRoot });
-    return buildRetireCommand({ gate: options.gate, headSha: head, tmpRoot: scanRoot, findingsDir: existsSync(findingsDir) ? findingsDir : null, repo: options.repo, pr: options.pr, reason: `the ${options.gate} round at ${head} was in flight when the briefing prefix changed` });
+    const retire = { gate: options.gate, headSha: head, tmpRoot: scanRoot, findingsDir: existsSync(findingsDir) ? findingsDir : null, repo: options.repo, pr: options.pr };
+    const unfinished = names.length === 0 ? names : await findUnfinishedSentinels({ repo: options.repo, pr: options.pr, gate: options.gate, tmpRoot: scanRoot, findingsTmpRoot: findingsRoot, names }).catch(() => names);
+    return names.length > 0 && unfinished.length === 0
+      ? buildRetireCommand({ ...retire, reason: `the ${options.gate} round at ${head} was in flight when the briefing prefix changed` })
+      : buildLiveRoundRecovery(retire);
   };
   let rebuildWarning = null;
   let retiredRound = null;
@@ -3420,7 +3426,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
       const { names: stillLive } = await scanLiveSentinels();
       if (stillLive.length > 0) {
         // AC2: name the in-flight head and point at the reviewers already briefed on the prior bytes (their sentinel files + the recorded hash they carry).
-        const recovery = liveRoundRecovery(stillLive);
+        const recovery = await liveRoundRecovery(stillLive);
         throw Object.assign(new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes while a fan-out for head ${options.headSha} is in flight (${options.gate}): ${stillLive.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist — every one was briefed on the prior prefix hash ${priorPrefixHash} and would fail closed on the new hash ${newPrefixHash}, splitting the round. Reviewers already briefed on the prior bytes: ${stillLive.map((n) => `tmp/${n}`).sort().join(", ")}. Retire the round explicitly before rebuilding: ${recovery}`), { recovery });
       }
     }
@@ -3597,7 +3603,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
       const cause = scanError !== null
         ? `the live-sentinel scan failed (${scanError.code ?? scanError.message}), so an in-flight fan-out cannot be ruled out`
         : `${names.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist: ${names.map((n) => `tmp/${n}`).sort().join(", ")}`;
-      const recovery = liveRoundRecovery(names);
+      const recovery = await liveRoundRecovery(names);
       throw Object.assign(new Error(`Refusing to rewrite required read(s) ${changedOutOfPrefix.join(", ")} with DIFFERENT bytes while a fan-out for head ${options.headSha} may be in flight (${options.gate}): ${cause}. Retire the round explicitly before rebuilding: ${recovery}`), { recovery });
     }
   }

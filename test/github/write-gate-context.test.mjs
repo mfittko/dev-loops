@@ -7942,14 +7942,25 @@ test("writeGateContext REFUSES a same-head rebuild that would rewrite the prior 
     const first = await writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot });
     const read = first.artifact.requiredReads.find((r) => r.kind === "prior-dispositions");
     const markerPath = path.resolve(repoRoot, first.path);
-    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-correctness-${"abc1234567890".padEnd(40, "0")}.json`), "{}\n", "utf8");
+    const fullHead = "abc1234567890".padEnd(40, "0");
+    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-correctness-${fullHead}.json`), "{}\n", "utf8");
     await writeLog("second-disposition");
+    // The reviewer has not written its findings, so it may still run: the recovery waits and keeps the retire command behind `operator:`.
     await assert.rejects(
       writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot }),
-      /Refusing to rewrite required read\(s\) .*prior-dispositions\.json with DIFFERENT bytes while a fan-out for head abc1234567890 may be in flight \(draft_gate\).*retire-gate-round\.mjs/,
+      (err) => /Refusing to rewrite required read\(s\) .*prior-dispositions\.json with DIFFERENT bytes while a fan-out for head abc1234567890 may be in flight \(draft_gate\).*retire-gate-round\.mjs/.test(err.message)
+        && /^wait for the running reviewers/.test(err.recovery) && /--pending/.test(err.recovery) && /operator: run `dev-loops-run scripts\/github\/retire-gate-round\.mjs/.test(err.recovery),
     );
     assert.match(await readFile(path.resolve(repoRoot, read.path), "utf8"), /first-disposition/, "the in-flight reviewers keep the bytes their work order hashes");
     await stat(markerPath); // the completion marker survives the refusal
+    // Once every sentinel is finished the rewrite still refuses, and only then is the bare retire command the recovery.
+    const reviewsDir = path.resolve(repoRoot, buildGateReviewsDir({ repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: fullHead, tmpRoot: "tmp" }));
+    await mkdir(reviewsDir, { recursive: true });
+    await writeFile(path.join(reviewsDir, "correctness.json"), JSON.stringify({ angle: "correctness", verdict: "clean", headSha: fullHead, findings: [] }), "utf8");
+    await assert.rejects(
+      writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot }),
+      (err) => /^dev-loops-run scripts\/github\/retire-gate-round\.mjs --gate draft_gate --head-sha /.test(err.recovery) && !/operator/.test(err.recovery),
+    );
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -10992,6 +11003,7 @@ test("issue 3416: the CLI refusal for a live round at an abbreviated head carrie
   }
   const payload = JSON.parse(err.trim().split("\n").at(-1));
   assert.equal(payload.ok, false);
-  assert.match(payload.recovery, new RegExp(`^dev-loops-run scripts/github/retire-gate-round\\.mjs --gate draft_gate --head-sha ${fullSha} --reason "[^"<>]+" --tmp-root "`));
+  // The sentinel has no findings artifact, so its reviewer may still run: wait first, and keep the retire command behind `operator:`.
+  assert.match(payload.recovery, new RegExp(`^wait for the running reviewers .*--pending; if they crashed, operator: run \`dev-loops-run scripts/github/retire-gate-round\\.mjs --gate draft_gate --head-sha ${fullSha} --reason '[^'<>]+' --tmp-root '`));
   assert.doesNotMatch(payload.recovery, /[<>\[\]]/);
 });

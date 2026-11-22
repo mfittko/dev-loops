@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { retireStaleRound } from "../../scripts/github/_stale-round-retirement.mjs";
+import { buildRetireCommand, retireStaleRound } from "../../scripts/github/_stale-round-retirement.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 
 const HEAD = "d".repeat(40);
@@ -44,8 +44,8 @@ test("a round with a posted verdict at the head is refused with a recovery and l
     const result = await retireStaleRound({ ...KEY, tmpRoot });
     assert.equal(result.retiredRound, undefined);
     assert.match(result.refusal.recovery, /dev-loops-run scripts\/github\/retire-gate-round\.mjs/);
-    assert.ok(result.refusal.recovery.includes(`--tmp-root ${JSON.stringify(tmpRoot)}`));
-    assert.ok(result.refusal.recovery.includes(`--findings-dir ${JSON.stringify(buildGateReviewsDir({ ...KEY, tmpRoot }))}`));
+    assert.ok(result.refusal.recovery.includes(`--tmp-root '${tmpRoot}'`));
+    assert.ok(result.refusal.recovery.includes(`--findings-dir '${buildGateReviewsDir({ ...KEY, tmpRoot })}'`));
     assert.doesNotMatch(result.refusal.recovery, /<why>/);
     assert.equal(existsSync(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`)), true);
   });
@@ -100,8 +100,8 @@ test("the recovery command quotes a tmp root with a space and a findings dir pat
     await mkdir(path.dirname(ledger), { recursive: true });
     await writeFile(ledger, "{}");
     const { refusal } = await retireStaleRound({ ...KEY, tmpRoot });
-    assert.ok(refusal.recovery.includes(`--tmp-root "${tmpRoot}"`), refusal.recovery);
-    assert.ok(refusal.recovery.includes(`--findings-dir "${buildGateReviewsDir({ ...KEY, tmpRoot })}"`), refusal.recovery);
+    assert.ok(refusal.recovery.includes(`--tmp-root '${tmpRoot}'`), refusal.recovery);
+    assert.ok(refusal.recovery.includes(`--findings-dir '${buildGateReviewsDir({ ...KEY, tmpRoot })}'`), refusal.recovery);
   } finally {
     await rm(base, { recursive: true, force: true });
   }
@@ -145,6 +145,7 @@ test("a live reviewer sentinel (no valid artifact newer than it) is refused with
       assert.equal(result.retiredRound, undefined);
       assert.match(result.refusal.error, /reviewer sentinel\(s\) have no findings artifact newer than them/);
       assert.match(result.refusal.recovery, /--pending/);
+      assert.match(result.refusal.recovery, /operator: run `dev-loops-run scripts\/github\/retire-gate-round\.mjs/);
       assert.match(result.refusal.recovery, /retire-gate-round\.mjs/);
       assert.equal(existsSync(path.join(tmpRoot, SENTINEL)), true);
     });
@@ -257,6 +258,36 @@ test("an unreadable tmp root (ENOTDIR) is not treated as an empty round", async 
     await writeFile(tmpRoot, "x");
     await assert.rejects(retireStaleRound({ ...KEY, tmpRoot }), (err) => err.code === "ENOTDIR");
     assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot: path.join(base, "missing") }), { retiredRound: null });
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("buildRetireCommand single-quotes a path so the shell keeps $, backticks and quotes literal (issue 3416)", () => {
+  const command = (tmpRoot) => buildRetireCommand({ gate: "draft_gate", headSha: HEAD, tmpRoot, repo: "o/r", pr: 1, reason: "why not" });
+  assert.ok(command("/work/proj/tmp").includes("--tmp-root '/work/proj/tmp'"));
+  assert.ok(command("/work/my proj/tmp").includes("--tmp-root '/work/my proj/tmp'"));
+  assert.ok(command("/work/$proj/tmp").includes("--tmp-root '/work/$proj/tmp'"));
+  assert.ok(command("/work/o'brien/tmp").includes("--tmp-root '/work/o'\\''brien/tmp'"));
+  assert.ok(command("/work/$proj/tmp").includes("--reason 'why not'"));
+  assert.doesNotMatch(command("/work/$proj/tmp"), /"/);
+  assert.doesNotMatch(command("/work/`id`/tmp"), /"/);
+});
+
+test("a missing sentinel root with dispatch records and a findings dir under another root still retires (issue 3416)", async () => {
+  const base = await mkdtemp(path.join(os.tmpdir(), "stale-round-"));
+  const tmpRoot = path.join(base, "no-such-tmp");
+  const recordsRoot = path.join(base, "records");
+  try {
+    await mkdir(recordsRoot, { recursive: true });
+    await writeFile(path.join(recordsRoot, `checkpoint-dispatch-prompt-draft-gate-coverage-${HEAD}.json`), "{}");
+    const dir = buildGateReviewsDir({ ...KEY, tmpRoot: recordsRoot });
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "coverage.json"), FINISHED);
+    const { retiredRound } = await retireStaleRound({ ...KEY, tmpRoot, findingsTmpRoot: recordsRoot, recordsTmpRoot: recordsRoot });
+    assert.equal(retiredRound.dispatchPromptRecords.length, 1);
+    assert.equal(retiredRound.findingsDirRetired, true);
+    assert.equal(existsSync(dir), false);
   } finally {
     await rm(base, { recursive: true, force: true });
   }
