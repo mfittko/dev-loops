@@ -7,7 +7,7 @@ import { test } from "bun:test";
 
 import { withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import { renderCliText } from "@dev-loops/core/loop/cli-command";
-import { replacementPrOperatorRecovery } from "@dev-loops/core/loop/pr-gate-coordination";
+import { CAP_ROUND_REFUSAL, replacementPrOperatorRecovery } from "@dev-loops/core/loop/pr-gate-coordination";
 import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
 
 import { resolveCapRoundFixed } from "../../scripts/github/write-gate-context.mjs";
@@ -1286,8 +1286,15 @@ test("issue 3437 ac:3: no_cap_round_chain names a replacement PR for a non-cover
     writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: B, actSetId: "other", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "unrelated", status: "resolved" }] });
     const refused = await extend(root, head);
     assert.equal(refused.reason, "no_cap_round_chain");
-    assert.equal(refused.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
-    assert.doesNotMatch(refused.recovery, /pre-push-delta/u, "a run at the cap-round head refuses and names this command again");
+    // Issue 3443: the candidate B is an ancestor of the head, so the chain-end delta comes first (a run at the cap-round head A would refuse).
+    assert.match(refused.recovery, new RegExp(`loop pre-push-delta --reviewer-only .*--baseline ${B} --pr-head ${head}`, "u"));
+    assert.ok(refused.detail.includes(CAP_ROUND_REFUSAL.baseline_orphaned), "the replacement PR stays the fallback");
+    // A candidate off the head's history leaves the replacement PR as the only recovery.
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: "9".repeat(40), actSetId: "other", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "unrelated", status: "resolved" }] });
+    const offHistory = await extend(root, head);
+    assert.equal(offHistory.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
+    assert.doesNotMatch(offHistory.recovery, /pre-push-delta/u, "a run at the cap-round head refuses and names this command again");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: B, actSetId: "other", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "unrelated", status: "resolved" }] });
     // Issue 3443: the refusal names the records that exist; the act refs they leave uncovered are named too.
     assert.ok(refused.detail.includes(`Uncovered act refs: ${actRef}.`), `names the cap round's own act ref ${actRef}: ${refused.detail}`);
     assert.ok(refused.detail.includes(`Records on the chain: ${A.slice(0, 7)}..${B.slice(0, 7)} [unrelated].`), refused.detail);
@@ -1307,6 +1314,31 @@ test("issue 3437 ac:3: no_cap_round_chain names a replacement PR for a non-cover
     assert.match(refused.recovery, /loop gate-coordination --repo owner\/repo --pr 70$/u);
   } finally {
     await rm(bare, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 review: a partial chain (one of two act refs covered) names the reviewer-only delta at the chain end first, and that run accepts the cap-round log.
+test("issue 3443: a partially covering chain names a reviewer-only delta at the chain end, which accepts the cap-round log", async () => {
+  const act = (summary) => ({ severity: "medium", summary, files: ["src/a.mjs"], line: 1, angle: "correctness", judgeDisposition: "act", judgeTitle: summary, judgeFix: "add" });
+  const [p, q] = [act("guard missing"), act("second defect")];
+  const { root, A, B } = await capFixture({ findings: [p, q] });
+  try {
+    const tmp = path.join(root, "tmp");
+    rmSync(gateDeltaRecordPath(tmp, A), { force: true });
+    rmSync(`${gateDeltaRecordPath(tmp, A)}.seal`, { force: true });
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: B, actSetId: "round-3", invocation: 3, outcome: "locally_clear", nextStep: "push", items: [{ ref: fingerprintFinding(p), status: "resolved" }] });
+    const head = await commit(root, { "docs/z.md": "z\n" }, "docs");
+    const refused = await extend(root, head);
+    assert.equal(refused.reason, "no_cap_round_chain", JSON.stringify(refused));
+    assert.ok(refused.detail.includes(`Uncovered act refs: ${fingerprintFinding(q)}.`), refused.detail);
+    assert.match(refused.recovery, new RegExp(`loop pre-push-delta --reviewer-only .*--baseline ${B} --pr-head ${head}`, "u"), "the chain-end delta comes first");
+    assert.ok(refused.detail.includes(CAP_ROUND_REFUSAL.baseline_orphaned), "the replacement PR stays the fallback");
+    await reviewerOnlyDelta(root, B, head, { logHead: A });
+    assert.equal(readSealedGateDeltaRecord(tmp, B).outcome, "locally_clear", "the chain-end baseline accepts the cap-round log");
+    // Limit: a chain-end baseline derives an empty act list (ADR 0255), so this record names no ref; it cannot cover the still-uncovered ref.
+    assert.deepEqual(readSealedGateDeltaRecord(tmp, B).items, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

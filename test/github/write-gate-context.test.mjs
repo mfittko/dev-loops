@@ -9416,6 +9416,36 @@ test("resolveCapRoundFixed accepts the union of the chain's records over the cap
   }
 });
 
+// Issue 3443 review: the union spans only the links the proof traverses.
+test("resolveCapRoundFixed does not count a link past the head, an unresolved item or an off-history link (issue 3443)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const C = "8".repeat(40);
+    await seedClosedRounds(repoRoot, 66, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-66", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const q = { ...p, summary: "second defect" };
+    const r = { ...p, summary: "escalated defect" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...q, clusterId: 1 }, { ...r, clusterId: 2 }] }), "utf8");
+    const items = (status, ...fs) => ({ items: fs.map((f) => ({ ref: fingerprintFinding(f), status })) });
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", items("resolved", p, q));
+    await writeDeltaRecord(repoRoot, B, C, "push_to_gate", items("resolved", r));
+    let condition = null;
+    const run = (opts) => resolveCapRoundFixed({ repo: "owner/repo", pr: 66, gate: "draft_gate", ...opts }, { repoRoot, onFailure: (c) => { condition = c; } });
+    assert.equal(await run({ headSha: B }), null, "head B: the B to C link is past the head and covers nothing");
+    assert.equal(condition, "items_do_not_cover");
+    assert.equal(await run({ headSha: B, anyHead: true }), null, "anyHead: C is not an ancestor of B, so its link does not count");
+    assert.equal(condition, "items_do_not_cover");
+    assert.ok(await run({ headSha: C }), "head C: the traversed link covers r");
+    await writeDeltaRecord(repoRoot, B, C, "push_to_gate", items("unresolved", r));
+    assert.equal(await run({ headSha: C }), null, "a later link with an unresolved item does not cover it");
+    assert.equal(condition, "items_do_not_cover");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapRoundFixed trusts only a sealed, unmodified delta record (ADR 0208, PRE-PUSH-DELTA-NOT-GATE-EVIDENCE)", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {

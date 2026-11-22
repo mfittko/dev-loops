@@ -999,9 +999,11 @@ export const CAP_ROUND_REFUSAL = Object.freeze({
 /** RECOVERY-COMMAND-REQUIRED: the replacement-PR restart is an operator decision (ADR 0255), so its `recovery` is the operator form with the full procedure. One renderer serves every refusal that names it. */
 export const replacementPrOperatorRecovery = (pr) => `operator: push HEAD to a new branch that keeps the issue slug (\`git push origin HEAD:<new-branch>\`), record a pre-PR review on the new branch head (\`node <dev-loops-package-root>/cli/index.mjs loop pre-pr-review ...\`), run \`node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr ${pr}\` while PR #${pr} is still open, then close PR #${pr}`;
 
+const shortSha = (sha) => (typeof sha === "string" && sha ? sha.slice(0, 7) : "?");
+
 /** Issue 3443: names the act refs no record on the chain covers and the records that exist (`{ uncovered, records }` from `capRoundCoverage`); empty when nothing is uncovered. */
 export const capRoundCoverageDetail = (coverage) => coverage?.uncovered?.length > 0
-  ? ` Uncovered act refs: ${coverage.uncovered.join(", ")}. Records on the chain: ${coverage.records.map((r) => `${String(r.baseline).slice(0, 7)}..${String(r.candidate).slice(0, 7)} [${r.refs.join(", ")}]`).join("; ")}.`
+  ? ` Uncovered act refs: ${coverage.uncovered.join(", ")}. Records on the chain: ${coverage.records.map((r) => `${shortSha(r.baseline)}..${shortSha(r.candidate)} [${r.refs.join(", ")}]`).join("; ")}.`
   : "";
 
 /** The refusal text of a failed cap-round condition: its remedy, plus the coverage detail of items_do_not_cover. */
