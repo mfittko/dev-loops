@@ -1,28 +1,35 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
 import { runCli } from "../../scripts/loop/round-causes.mjs";
+import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { withTempDir } from "../_helpers.mjs";
-import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 
 const sha = (c) => c.repeat(40);
-const ZERO = { first: 0, developer_findings: 0, system_rerun: 0, base_refresh: 0, body_only: 0 };
+const ZERO = { first: 0, developer_findings: 0, system_rerun: 0, base_refresh: 0, body_only: 0, other_head_move: 0 };
 
-async function ledger(dir, pr, headSha, loggedAt, extra = {}, retainedRound) {
-  const file = path.resolve(dir, buildLogPath({ repo: "o/r", pr, gate: "draft_gate", headSha, tmpRoot: dir }));
+async function ledger(dir, pr, headSha, loggedAt, extra = {}, retainedRound, gate = "draft_gate") {
+  const file = path.resolve(dir, buildLogPath({ repo: "o/r", pr, gate, headSha, tmpRoot: dir }));
   await mkdir(path.dirname(file), { recursive: true });
   const target = retainedRound ? file.replace(/\.json$/, `.round-${retainedRound}.json`) : file;
-  await writeSealed(target, JSON.stringify({ repo: "o/r", pr, gate: "draft_gate", headSha, verdict: "clean", loggedAt, roundIdentity: { completed: true }, findings: [], ...extra }));
+  await writeSealed(target, JSON.stringify({ repo: "o/r", pr, gate, headSha, verdict: "clean", loggedAt, roundIdentity: { completed: true }, findings: [], ...extra }));
 }
-const run = async (dir, args) => {
+const raw = async (dir, args) => {
   let out = "";
+  const previous = process.exitCode;
   await runCli(["--repo", "o/r", "--tmp-root", dir, ...args], { stdout: { write: (s) => { out += s; } }, stderr: { write() {} }, repoRoot: dir });
-  return JSON.parse(out);
+  const code = process.exitCode ?? 0;
+  process.exitCode = previous;
+  return { out, code };
 };
+const run = async (dir, args) => JSON.parse((await raw(dir, args)).out);
 const json = (dir, name, value) => writeFile(path.join(dir, name), typeof value === "string" ? value : JSON.stringify(value));
+const git = (dir, ...args) => execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: dir, encoding: "utf8" }).trim();
 
 async function fixture(dir) {
   await ledger(dir, 10, sha("a"), "2026-11-01T00:00:00.000Z", { roundCause: "first" });
@@ -47,16 +54,17 @@ test("R1 counts rounds per change and in total, deriving the legacy ledger", asy
     assert.equal(r.totals.rounds, 5);
     assert.equal(r.totals.roundsPerMerge, 1.67);
     assert.equal(r.totals.derivedRounds, 1);
+    assert.equal(r.totals.undeterminedRounds, 0);
     assert.equal(r.totals.byCausePerMerge.first, 1);
     assert.equal(r.issues, null);
   });
 });
 
-test("R2 --last keeps the newest merges", async () => {
+test("R2 --last keeps the newest merges and names the preceding merge as the window bound", async () => {
   await withTempDir(async (dir) => {
     await fixture(dir);
     const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json"), "--last", "2"]);
-    assert.deepEqual(r.window, { merges: 2, from: "2026-11-06T00:00:00Z", to: "2026-11-07T00:00:00Z" });
+    assert.deepEqual(r.window, { merges: 2, from: "2026-11-06T00:00:00Z", to: "2026-11-07T00:00:00Z", after: "2026-11-05T00:00:00Z" });
     assert.deepEqual(r.perChange.map((c) => c.pr), [12, 11]);
   });
 });
@@ -75,16 +83,39 @@ test("R3 --issues counts the issues filed inside the window", async () => {
   });
 });
 
-test("R4 a merged change without a ledger directory has zero rounds", async () => {
+test("R3b --last 1 counts the issues filed since the preceding merge", async () => {
   await withTempDir(async (dir) => {
+    await fixture(dir);
+    await json(dir, "issues.json", [
+      { number: 1, createdAt: "2026-11-05T12:00:00Z" },
+      { number: 2, createdAt: "2026-11-06T00:00:00Z" },
+      { number: 3, createdAt: "2026-11-06T12:00:00Z" },
+    ]);
+    const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json"), "--issues", path.join(dir, "issues.json"), "--last", "1"]);
+    assert.deepEqual(r.window, { merges: 1, from: "2026-11-07T00:00:00Z", to: "2026-11-07T00:00:00Z", after: "2026-11-06T00:00:00Z" });
+    assert.deepEqual(r.issues, { filed: 1, perMerge: 1 });
+  });
+});
+
+test("R4 a merged change without a ledger directory below an existing findings root has zero rounds", async () => {
+  await withTempDir(async (dir) => {
+    await mkdir(path.join(dir, "gate-findings", "o-r"), { recursive: true });
     await json(dir, "merged.json", [{ number: 99, mergedAt: "2026-11-05T00:00:00Z" }]);
     const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
-    assert.deepEqual(r.perChange, [{ pr: 99, mergedAt: "2026-11-05T00:00:00Z", rounds: 0, derivedRounds: 0, byCause: ZERO }]);
+    assert.deepEqual(r.perChange, [{ pr: 99, mergedAt: "2026-11-05T00:00:00Z", rounds: 0, derivedRounds: 0, undeterminedRounds: 0, unreadableLedgers: 0, byCause: ZERO, round1: null }]);
+  });
+});
+
+test("R4b a missing findings root exits with the resolved path instead of reporting zero rounds", async () => {
+  await withTempDir(async (dir) => {
+    await json(dir, "merged.json", [{ number: 99, mergedAt: "2026-11-05T00:00:00Z" }]);
+    await assert.rejects(() => raw(dir, ["--merged-prs", path.join(dir, "merged.json")]), (err) => err.message.includes(path.join(dir, "gate-findings", "o-r")));
   });
 });
 
 test("R5 argument and export errors name the cause", async () => {
   await withTempDir(async (dir) => {
+    await mkdir(path.join(dir, "gate-findings", "o-r"), { recursive: true });
     await json(dir, "merged.json", [{ number: 1, mergedAt: "2026-11-05T00:00:00Z" }]);
     await json(dir, "bad.json", "not json");
     await json(dir, "nodate.json", [{ number: 1 }]);
@@ -93,23 +124,64 @@ test("R5 argument and export errors name the cause", async () => {
     await fails(["--merged-prs", merged, "--bogus"], /bogus/);
     await fails(["--merged-prs", merged], /--repo is required/);
     await fails(["--repo", "o/r"], /--merged-prs is required/);
-    await fails(["--repo", "o/r", "--merged-prs", merged, "--last", "0"], /--last/);
     await fails(["--repo", "o/r", "--merged-prs", path.join(dir, "bad.json")], /bad\.json/);
     await fails(["--repo", "o/r", "--merged-prs", path.join(dir, "nodate.json")], /mergedAt/);
     await fails(["--repo", "o/r", "--merged-prs", merged, "--gate", "bogus_gate"], /--gate must be one of/);
-    await fails(["--repo", "nope", "--merged-prs", merged], /--repo must be/);
     await json(dir, "loose.json", [{ number: 1, mergedAt: "yesterday" }]);
     await fails(["--repo", "o/r", "--merged-prs", path.join(dir, "loose.json")], /mergedAt/);
+    await fails(["--repo", "o/r", "--merged-prs", merged, "--base", " "], /--base must not be blank/);
+  });
+});
+
+test("R5b --repo accepts a safe slug and rejects unsafe or malformed ones", async () => {
+  await withTempDir(async (dir) => {
+    await mkdir(path.join(dir, "gate-findings", "mfittko-dev-loops"), { recursive: true });
+    await mkdir(path.join(dir, "gate-findings", "o-r"), { recursive: true });
+    await json(dir, "merged.json", [{ number: 1, mergedAt: "2026-11-05T00:00:00Z" }]);
+    const merged = path.join(dir, "merged.json");
+    const repoRun = (repo) => runCli(["--repo", repo, "--merged-prs", merged, "--tmp-root", dir, "--silent"], { stdout: { write() {} }, stderr: { write() {} }, repoRoot: dir });
+    await repoRun("o/r");
+    await repoRun("mfittko/dev-loops");
+    for (const bad of ["o/..", "o\\x/r", "nope"]) await assert.rejects(() => repoRun(bad), /--repo must be <owner\/name>/);
+    process.exitCode = 0;
+  });
+});
+
+test("R5c --last accepts digits and rejects zero, hex, negative and exponent forms", async () => {
+  await withTempDir(async (dir) => {
+    await fixture(dir);
+    const merged = path.join(dir, "merged.json");
+    assert.equal((await run(dir, ["--merged-prs", merged, "--last", "1"])).window.merges, 1);
+    assert.equal((await run(dir, ["--merged-prs", merged, "--last", "20"])).window.merges, 3);
+    for (const bad of ["0", "0x10", "-1", "1e2"]) await assert.rejects(() => raw(dir, ["--merged-prs", merged, "--last", bad]), /--last/);
+  });
+});
+
+test("R5d an export entry with a zero or negative number is rejected", async () => {
+  await withTempDir(async (dir) => {
+    await mkdir(path.join(dir, "gate-findings", "o-r"), { recursive: true });
+    for (const bad of [0, -1]) {
+      await json(dir, "bad-number.json", [{ number: bad, mergedAt: "2026-11-05T00:00:00Z" }]);
+      await assert.rejects(() => raw(dir, ["--merged-prs", path.join(dir, "bad-number.json")]), /positive integer number/);
+    }
   });
 });
 
 test("R6 the report makes no gh call", async () => {
   await withTempDir(async (dir) => {
     await fixture(dir);
-    const log = process.env.DEVLOOPS_GH_CALL_LOG;
-    const before = existsSync(log) ? readFileSync(log, "utf8") : "";
-    await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
-    assert.equal(existsSync(log) ? readFileSync(log, "utf8") : "", before);
+    const bin = path.join(dir, "bin");
+    await mkdir(bin);
+    await writeFile(path.join(bin, "gh"), `#!/bin/sh\ntouch "${dir}/gh-called"\nexit 1\n`);
+    await chmod(path.join(bin, "gh"), 0o755);
+    const pathBefore = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${pathBefore}`;
+    try {
+      await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
+    } finally {
+      process.env.PATH = pathBefore;
+    }
+    assert.equal(existsSync(path.join(dir, "gh-called")), false);
   });
 });
 
@@ -117,6 +189,8 @@ test("R7 --help prints usage", async () => {
   let out = "";
   await runCli(["--help"], { stdout: { write: (s) => { out += s; } } });
   assert.match(out, /dev-loops loop round-causes/);
+  assert.match(out, /other_head_move/);
+  assert.match(out, /2 {2}Invalid output filter/);
 });
 
 test("R8 duplicate export rows count once", async () => {
@@ -131,5 +205,154 @@ test("R8 duplicate export rows count once", async () => {
     const r = await run(dir, ["--merged-prs", path.join(dir, "dup.json"), "--issues", path.join(dir, "issues.json"), "--last", "2"]);
     assert.deepEqual(r.perChange.map((c) => c.pr), [11, 10]);
     assert.equal(r.issues.filed, 1);
+  });
+});
+
+test("R9 --fields prints the named field and an unknown field exits 2", async () => {
+  await withTempDir(async (dir) => {
+    await fixture(dir);
+    const merged = path.join(dir, "merged.json");
+    assert.deepEqual(await raw(dir, ["--merged-prs", merged, "--fields", "gate"]), { out: "draft_gate\n", code: 0 });
+    assert.equal((await raw(dir, ["--merged-prs", merged, "--fields", "nope"])).code, 2);
+  });
+});
+
+test("R10 merges with an equal mergedAt tie-break by PR number, whatever the export order", async () => {
+  await withTempDir(async (dir) => {
+    await fixture(dir);
+    for (const rows of [[10, 11], [11, 10]]) {
+      await json(dir, "tie.json", rows.map((number) => ({ number, mergedAt: "2026-11-05T00:00:00Z" })));
+      assert.deepEqual((await run(dir, ["--merged-prs", path.join(dir, "tie.json"), "--last", "1"])).perChange.map((c) => c.pr), [11]);
+    }
+  });
+});
+
+test("R11 an unreadable ledger is counted per change and in totals", async () => {
+  await withTempDir(async (dir) => {
+    await ledger(dir, 10, sha("a"), "2026-11-01T00:00:00.000Z", { roundCause: "first" });
+    await ledger(dir, 10, sha("b"), "2026-11-02T00:00:00.000Z", { roundCause: "other_head_move" });
+    await ledger(dir, 11, sha("c"), "2026-11-03T00:00:00.000Z");
+    await writeFile(path.resolve(dir, buildLogPath({ repo: "o/r", pr: 10, gate: "draft_gate", headSha: sha("d"), tmpRoot: dir })), "{truncated");
+    await writeFile(path.resolve(dir, buildLogPath({ repo: "o/r", pr: 11, gate: "draft_gate", headSha: sha("e"), tmpRoot: dir })), "{truncated");
+    await json(dir, "merged.json", [{ number: 10, mergedAt: "2026-11-05T00:00:00Z" }, { number: 11, mergedAt: "2026-11-06T00:00:00Z" }]);
+    const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
+    assert.deepEqual(r.perChange.map((c) => [c.pr, c.rounds, c.unreadableLedgers]), [[11, 1, 1], [10, 2, 1]]);
+    assert.equal(r.totals.unreadableLedgers, 2);
+    assert.equal(r.perChange[1].byCause.other_head_move, 1);
+  });
+});
+
+test("R12 the round-1 draft_gate findings split by developer-checklist coverage on both sides of the cutoff", async () => {
+  await withTempDir(async (dir) => {
+    const finding = (angle) => ({ severity: "low", angle, summary: angle });
+    // coverage and correctness carry developer-checklist ids in the shipped defaults, scope does not.
+    await ledger(dir, 30, sha("a"), "2026-11-20T00:00:00.000Z", { findings: [finding("coverage"), finding("scope"), finding("scope")], roundCause: "first" });
+    await ledger(dir, 30, sha("b"), "2026-11-20T06:00:00.000Z", { findings: [finding("coverage")], roundCause: "developer_findings" });
+    await ledger(dir, 31, sha("c"), "2026-11-22T00:00:00.000Z", { findings: [finding("coverage"), finding("correctness")], roundCause: "first" });
+    await ledger(dir, 32, sha("d"), "2026-11-22T00:00:00.000Z", { findings: [finding("scope")], roundCause: "first" });
+    await json(dir, "merged.json", [
+      { number: 30, mergedAt: "2026-11-23T00:00:00Z" }, { number: 31, mergedAt: "2026-11-23T01:00:00Z" }, { number: 32, mergedAt: "2026-11-23T02:00:00Z" }, { number: 33, mergedAt: "2026-11-23T03:00:00Z" },
+    ]);
+    await mkdir(path.join(dir, "gate-findings", "o-r"), { recursive: true });
+    for (const args of [[], ["--gate", "pre_approval_gate"]]) {
+      const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json"), ...args]);
+      assert.deepEqual(r.checklist, { cutoff: "2026-11-21T17:03:00Z", before: { changes: 1, covered: 1, uncovered: 2 }, after: { changes: 2, covered: 2, uncovered: 1 } });
+      const byPr = Object.fromEntries(r.perChange.map((c) => [c.pr, c.round1]));
+      assert.deepEqual(byPr[30], { loggedAt: "2026-11-20T00:00:00.000Z", side: "before", covered: 1, uncovered: 2 });
+      assert.deepEqual(byPr[31], { loggedAt: "2026-11-22T00:00:00.000Z", side: "after", covered: 2, uncovered: 0 });
+      assert.deepEqual(byPr[32], { loggedAt: "2026-11-22T00:00:00.000Z", side: "after", covered: 0, uncovered: 1 });
+      assert.equal(byPr[33], null);
+    }
+  });
+});
+
+test("R13 a ledger written by the writer reaches the report: retained, intermediate and blocked rounds", async () => {
+  await withTempDir(async (dir) => {
+    const ID = { repo: "o/r", pr: 1, gate: "draft_gate", tmpRoot: dir, contextTmpRoot: dir };
+    const act = JSON.stringify([{ severity: "low", angle: "scope", summary: "x", judgeDisposition: "act" }]);
+    const ctx = async (headSha, digest) => {
+      const file = path.resolve(dir, buildGateContextPath({ repo: "o/r", pr: 1, gate: "draft_gate", headSha, tmpRoot: dir }));
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: digest }] }));
+    };
+    const write = (headSha, extra) => writeGateFindingsLog({ ...ID, headSha, verdict: "findings_present", findings: act, ...extra }, { repoRoot: dir });
+    await ctx(sha("a"), "1".repeat(64));
+    await write(sha("a"));
+    await ctx(sha("a"), "2".repeat(64));
+    await write(sha("a"));
+    await write(sha("b"));
+    await write(sha("c"), { findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "x" }]) });
+    await write(sha("d"), { verdict: "blocked" });
+    await json(dir, "merged.json", [{ number: 1, mergedAt: "2026-11-30T00:00:00Z" }]);
+    const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
+    assert.equal(r.perChange[0].rounds, 3);
+    assert.equal(r.perChange[0].derivedRounds, 0);
+    assert.deepEqual(r.perChange[0].byCause, { ...ZERO, first: 1, body_only: 1, developer_findings: 1 });
+  });
+});
+
+// main advances after the PR branch forks; B is an own commit, C merges main into the PR head.
+function legacyRepo(dir, { land = false } = {}) {
+  git(dir, "init", "-q", "-b", "main");
+  execFileSync("sh", ["-c", "echo 0 > base.txt"], { cwd: dir });
+  git(dir, "add", "."); git(dir, "commit", "-qm", "m0");
+  git(dir, "checkout", "-qb", "pr");
+  execFileSync("sh", ["-c", "echo pr > pr.txt"], { cwd: dir });
+  git(dir, "add", "."); git(dir, "commit", "-qm", "pr");
+  const a = git(dir, "rev-parse", "HEAD");
+  git(dir, "checkout", "-q", "main");
+  execFileSync("sh", ["-c", "echo 1 > base.txt"], { cwd: dir });
+  git(dir, "commit", "-qam", "m1");
+  git(dir, "update-ref", "refs/remotes/origin/main", "main");
+  git(dir, "checkout", "-q", "pr");
+  execFileSync("sh", ["-c", "echo pr2 > pr.txt"], { cwd: dir });
+  git(dir, "commit", "-qam", "own");
+  const b = git(dir, "rev-parse", "HEAD");
+  git(dir, "merge", "-q", "--no-ff", "-m", "merge main", "main");
+  const c = git(dir, "rev-parse", "HEAD");
+  if (land) {
+    git(dir, "checkout", "-q", "main");
+    git(dir, "merge", "-q", "--no-ff", "-m", "land pr", "pr");
+    git(dir, "update-ref", "refs/remotes/origin/main", "main");
+  }
+  return { a, b, c };
+}
+
+test("R14 legacy rounds derive same head, own commit, base-only merge and an unresolved commit", async () => {
+  await withTempDir(async (dir) => {
+    const { a, b, c } = legacyRepo(dir);
+    const act = { findings: [{ severity: "low", angle: "scope", summary: "x", judgeDisposition: "act" }] };
+    await ledger(dir, 20, a, "2026-11-01T00:00:00.000Z", act, 1);
+    await ledger(dir, 20, a, "2026-11-01T01:00:00.000Z", act);
+    await ledger(dir, 20, b, "2026-11-02T00:00:00.000Z", act);
+    await ledger(dir, 20, c, "2026-11-03T00:00:00.000Z");
+    await ledger(dir, 20, sha("e"), "2026-11-04T00:00:00.000Z");
+    await json(dir, "merged.json", [{ number: 20, mergedAt: "2026-11-05T00:00:00Z" }]);
+    const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
+    const change = r.perChange[0];
+    assert.deepEqual([change.rounds, change.derivedRounds, change.undeterminedRounds], [5, 5, 1]);
+    assert.deepEqual(change.byCause, { ...ZERO, first: 1, system_rerun: 1, developer_findings: 1, base_refresh: 1 });
+    assert.equal(r.totals.undeterminedRounds, 1);
+  });
+});
+
+test("R15 a legacy head contained in the current base after a merge-commit landing is undetermined, not base_refresh", async () => {
+  await withTempDir(async (dir) => {
+    const { a, b } = legacyRepo(dir, { land: true });
+    await ledger(dir, 21, a, "2026-11-01T00:00:00.000Z");
+    await ledger(dir, 21, b, "2026-11-02T00:00:00.000Z");
+    await json(dir, "merged.json", [{ number: 21, mergedAt: "2026-11-05T00:00:00Z" }]);
+    const change = (await run(dir, ["--merged-prs", path.join(dir, "merged.json")])).perChange[0];
+    assert.deepEqual([change.byCause.first, change.byCause.base_refresh, change.undeterminedRounds], [1, 0, 1]);
+  });
+});
+
+test("R16 an unresolved origin/<base> exits naming the ref when a legacy probe is needed", async () => {
+  await withTempDir(async (dir) => {
+    const { a, b } = legacyRepo(dir);
+    await ledger(dir, 22, a, "2026-11-01T00:00:00.000Z");
+    await ledger(dir, 22, b, "2026-11-02T00:00:00.000Z");
+    await json(dir, "merged.json", [{ number: 22, mergedAt: "2026-11-05T00:00:00Z" }]);
+    await assert.rejects(() => raw(dir, ["--merged-prs", path.join(dir, "merged.json"), "--base", "mian"]), /origin\/mian/);
   });
 });

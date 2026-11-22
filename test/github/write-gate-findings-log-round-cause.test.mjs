@@ -136,3 +136,87 @@ test("W10 a blocked prior ledger is ignored", async () => {
     assert.equal((await write(dir, B)).log.roundCause, "first");
   });
 });
+
+const clean = (dir, headSha, extra = {}) => write(dir, headSha, { verdict: "clean", findings: "[]", ...extra });
+const ledgerFile = (dir, gate, headSha, round) => path.join(dir, "gate-findings", "o-r", "pr-1", `${gate}-${headSha}${round ? `.round-${round}` : ""}.json`);
+const tamper = async (file) => writeFile(file, `${await readFile(file, "utf8")} `);
+const retire = async (dir, headSha, extra = {}) => {
+  const round = path.join(dir, "retired-gate-rounds", headSha, "r1");
+  await mkdir(round, { recursive: true });
+  await writeFile(path.join(round, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: "2026-11-22T00:00:00.000Z", ...extra }));
+};
+
+test("W11 a later head after a clean round is other_head_move", async () => {
+  await withTempDir(async (dir) => {
+    await clean(dir, A);
+    assert.equal((await clean(dir, B)).log.roundCause, "other_head_move");
+  });
+});
+
+test("W12 a rerun after a retirement before any ledger write is system_rerun, and a scoped retirement is body_only", async () => {
+  await withTempDir(async (dir) => {
+    await clean(dir, A);
+    await retire(dir, B);
+    assert.equal((await clean(dir, B)).log.roundCause, "system_rerun");
+  });
+  await withTempDir(async (dir) => {
+    await retire(dir, A);
+    assert.equal((await clean(dir, A)).log.roundCause, "system_rerun");
+  });
+  await withTempDir(async (dir) => {
+    await clean(dir, A);
+    await retire(dir, B, { scopes: ["unit-1"] });
+    assert.equal((await clean(dir, B)).log.roundCause, "body_only");
+  });
+});
+
+test("W13 a rerun after a blocked round at the same head is system_rerun and a blocked round at another head is ignored", async () => {
+  await withTempDir(async (dir) => {
+    await clean(dir, A);
+    await write(dir, B, { verdict: "blocked" });
+    assert.equal((await clean(dir, B)).log.roundCause, "system_rerun");
+  });
+});
+
+test("W14 a seal mismatch on an old ledger of any gate does not block the write and is named in the warning", async () => {
+  for (const gate of ["draft_gate", "pre_approval_gate", "review"]) {
+    await withTempDir(async (dir) => {
+      await clean(dir, A, { gate });
+      await tamper(ledgerFile(dir, gate, A));
+      const result = await clean(dir, B, { gate });
+      assert.equal(result.log.roundCause, "first");
+      assert.match(result.warning, new RegExp(`${gate}-${A}\\.json`));
+    });
+  }
+});
+
+test("W15 a seal mismatch on a retained round file does not block the write", async () => {
+  await withTempDir(async (dir) => {
+    await clean(dir, A);
+    await clean(dir, A);
+    await tamper(ledgerFile(dir, "draft_gate", A, 1));
+    const result = await clean(dir, B);
+    assert.match(result.warning, /\.round-1\.json/);
+    assert.equal(result.log.roundCause, "other_head_move");
+  });
+});
+
+test("W16 a repeated judged write of an earlier round keeps its cause after a later head completed", async () => {
+  await withTempDir(async (dir) => {
+    const plan = path.join(dir, "judge-emit-plan.json");
+    const execDir = path.join(dir, "j1730000000000-deadbeef");
+    await mkdir(execDir, { recursive: true });
+    await writeFile(plan, JSON.stringify({ roundId: "j1730000000000-deadbeef", workOrder: { target: { repo: "o/r", pr: 1 }, roundIdentity: { gate: "draft_gate", headSha: A }, headSha: A } }));
+    const judgeVerdict = path.join(execDir, "judge-verdict.json");
+    await writeFile(judgeVerdict, JSON.stringify({
+      headSha: A, scopeDrift: { verdict: "within_scope", rationale: "in scope", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x", criterion: "AC-1" }],
+    }));
+    const unjudged = JSON.stringify([{ severity: "low", angle: "scope", summary: "x" }]);
+    const first = await write(dir, A, { findings: unjudged, judgeVerdict });
+    assert.equal(first.log.roundCause, "first");
+    await write(dir, B);
+    const again = await write(dir, A, { findings: unjudged, judgeVerdict });
+    assert.equal(again.log.roundCause, "first");
+  });
+});

@@ -33,7 +33,7 @@ import { resolveRoundCause } from "./_round-cause.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--verdict <clean|findings_present|blocked>] (--findings <json> | --findings-file <path>) [--tmp-root <path>] [--context-tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
-Each log records roundCause: first, developer_findings, system_rerun, base_refresh or body_only (why the round ran, derived from the prior round).
+Each log records roundCause: first, developer_findings (the prior round had act items), system_rerun (same head after a retirement, a blocked round or a rerun), base_refresh, body_only or other_head_move (the head moved with no act items and no base-only merge). A prior ledger with a seal mismatch is skipped for this field and named in the result warning.
 Required:
   --repo <owner/name>
   --pr <number>
@@ -1248,7 +1248,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // An unreadable or ambiguous context records none, and the closer then falls back to the context path.
   const prBodyDigest = await readReviewedBodySha256({ repo: options.repo, pr: options.pr, gate: options.gate, contextTmpRoot: options.contextTmpRoot }, options.headSha, repoRoot).catch(() => null);
   // Derived before retainSameHeadLedger runs, so the prior round is the one this round follows.
-  const roundCause = await resolveRoundCause({ ...priorOptions, roundIdentity: { ...roundIdentity, completed: roundCompleted() }, prBodySha256: prBodyDigest, contextTmpRoot: options.contextTmpRoot }, { repoRoot });
+  const { roundCause, warnings: roundCauseWarnings } = await resolveRoundCause({ ...priorOptions, roundIdentity: { ...roundIdentity, completed: roundCompleted() }, prBodySha256: prBodyDigest, contextTmpRoot: options.contextTmpRoot }, { repoRoot });
   const log = {
     repo: options.repo,
     pr: options.pr,
@@ -1309,7 +1309,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   return {
     ok: true, path: logPath, log: written,
     ...(retainedRound ? { retainedRound } : {}),
-    ...(angleCoverage.warning ? { warning: angleCoverage.warning } : {}),
+    ...([angleCoverage.warning, ...roundCauseWarnings].some(Boolean) ? { warning: [angleCoverage.warning, ...roundCauseWarnings].filter(Boolean).join("; ") } : {}),
   };
 }
 // GATE-LEDGER-REJUDGE-SAME-ROUND: an in-place re-judge overlays `remedyKind: "pr_body"` onto the live ledger of this gate and head, matched by fingerprint.

@@ -1,42 +1,69 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { parsePositiveInteger } from "@dev-loops/core/cli/primitives";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
-import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
+import { isBaseOnlyMergeSince, runGitCommand } from "../lib/git-delta.mjs";
 import { ROUND_CAUSES, deriveRoundCause } from "../github/_round-cause.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
+import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { readClosedPriorRoundLogs } from "../github/write-gate-context.mjs";
+import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage:
   dev-loops loop round-causes --repo <owner/name> --merged-prs <path> [--issues <path>] [--last <n>] [--gate <name>] [--base <branch>] [--tmp-root <path>]
 Read-only report of gate rounds per merged change, split by roundCause, from the local
 findings logs. Prints JSON. It makes no gh call: the export files come from
-  gh pr list --state merged --json number,mergedAt --limit <n>
-  gh issue list --state all --json number,createdAt --limit <n>
+  gh pr list --state merged --json number,mergedAt --limit <m>
+  gh issue list --state all --json number,createdAt --limit <m>
+Use an export limit <m> well above --last (for example 200): gh orders by creation time, and the
+report selects the window by mergedAt, so an old PR merged today needs a limit that reaches it.
 Required:
   --repo <owner/name>   Repository whose findings logs are read
   --merged-prs <path>   JSON array of { number, mergedAt }
 Optional:
   --issues <path>       JSON array of { number, createdAt }; adds issues filed per merge
-  --last <n>            Window: the n most recent merges (default 20)
+  --last <n>            Window: the n most recent merges by mergedAt, ties broken by PR number, higher first (default 20)
   --gate <name>         Gate to count (default draft_gate)
-  --base <branch>       Base for the legacy base-merge probe (default main)
-  --tmp-root <path>     Findings-log root (default: <main checkout>/tmp)
+  --base <branch>       Base for the legacy base-merge probe (default main); must resolve as origin/<branch> when a probe runs
+  --tmp-root <path>     Findings-log root (default: <main checkout>/tmp); it must hold gate-findings/<owner-name>
   --help, -h            Show this help
+
+Window and issues: the n selected merges span n merge intervals. Issues filed after the merge before
+the oldest selected merge (exclusive) up to the newest selected merge (inclusive) count, so
+issues.perMerge divides by n. With no preceding merge in the export, the window starts at the oldest
+selected merge (inclusive).
+
+Causes: byCause splits rounds by roundCause (${ROUND_CAUSES.join(", ")}). A ledger written before the
+stamp is derived in memory (derivedRounds). A derived round counts as undetermined, outside the causes,
+when git cannot answer (a missing commit object) or its head is contained in the current origin/<base>
+(the base then holds the landed PR, so a base-only probe misreads it). unreadableLedgers counts ledgers
+the findings reader dropped (invalid JSON or an invalid verdict).
+
+Checklist split (checklist): the first completed draft_gate round of each change, whatever --gate says,
+counts each finding as covered when its angle has a developer-checklist id in the resolved
+gates.draft.angles config, and as uncovered otherwise. Changes group before and after
+2026-11-21T17:03Z (the checklist merge) by the loggedAt of that round. A change without such a round has round1 null.
 
 ${JQ_OUTPUT_USAGE}
 
 Exit codes:
   0  Success
-  1  Argument error or runtime failure`.trim();
+  1  Argument error or runtime failure (for example a missing findings-log root or an unresolved base)
+  2  Invalid output filter (--jq or --fields)`.trim();
 
 const parseError = buildParseError(USAGE);
 const ISO_8601 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
 const GATE_SENTINEL_HEAD = "0".repeat(40);
+const CHECKLIST_CUTOFF = "2026-11-21T17:03:00Z";
+const UNDETERMINED = "undetermined";
 const round2 = (n) => Math.round(n * 100) / 100;
 const emptyCauses = () => Object.fromEntries(ROUND_CAUSES.map((c) => [c, 0]));
+const emptySplit = () => ({ changes: 0, covered: 0, uncovered: 0 });
 
 async function readExport(file, dateField) {
   let data;
@@ -47,8 +74,8 @@ async function readExport(file, dateField) {
   }
   if (!Array.isArray(data)) throw parseError(`${file} must hold a JSON array`);
   for (const entry of data) {
-    if (!Number.isInteger(entry?.number) || typeof entry?.[dateField] !== "string" || !ISO_8601.test(entry[dateField]) || !Number.isFinite(Date.parse(entry[dateField]))) {
-      throw parseError(`${file} has an entry without an integer number and an ISO ${dateField}`);
+    if (!Number.isInteger(entry?.number) || entry.number <= 0 || typeof entry?.[dateField] !== "string" || !ISO_8601.test(entry[dateField]) || !Number.isFinite(Date.parse(entry[dateField]))) {
+      throw parseError(`${file} has an entry without a positive integer number and an ISO ${dateField}`);
     }
   }
   // Keep the first entry per number so a repeated export row counts once.
@@ -56,16 +83,29 @@ async function readExport(file, dateField) {
 }
 
 // A ledger written before the stamp has no roundCause: derive it in memory against the previous round of the same PR.
-async function roundCauses(rounds, { base, repoRoot }) {
+// A round whose git answer is unknowable (a missing object) or whose head the current base already contains is undetermined, never a cause.
+async function roundCauses(rounds, { base, repoRoot, ensureBase }) {
   const causes = [];
   let derived = 0;
+  const resolves = async (rev) => (await runGitCommand(["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], { repoRoot })).code === 0;
   for (const [i, log] of rounds.entries()) {
     if (ROUND_CAUSES.includes(log.roundCause)) { causes.push(log.roundCause); continue; }
     derived += 1;
     const prior = rounds[i - 1];
     let baseOnly = false;
     if (prior && String(prior.headSha).toLowerCase() !== String(log.headSha).toLowerCase()) {
-      baseOnly = await isBaseOnlyMergeSince({ fromHead: prior.headSha, head: log.headSha, mainRef: `origin/${base}`, repoRoot }).catch(() => false);
+      await ensureBase();
+      const mainRef = `origin/${base}`;
+      let answerable = (await resolves(prior.headSha)) && (await resolves(log.headSha));
+      // A head the current base contains means the PR landed: the probe would exclude every PR commit.
+      if (answerable && (await runGitCommand(["merge-base", "--is-ancestor", log.headSha, mainRef], { repoRoot })).code === 0) answerable = false;
+      if (!answerable) { causes.push(UNDETERMINED); continue; }
+      try {
+        baseOnly = (await isBaseOnlyMergeSince({ fromHead: prior.headSha, head: log.headSha, mainRef, repoRoot })) === true;
+      } catch {
+        causes.push(UNDETERMINED);
+        continue;
+      }
     }
     causes.push(deriveRoundCause({ prior, headSha: log.headSha, prBodySha256: log.prBodySha256, baseOnly }));
   }
@@ -75,42 +115,92 @@ async function roundCauses(rounds, { base, repoRoot }) {
 export async function buildReport(values, { repoRoot = process.cwd() } = {}) {
   const gate = values.gate ?? "draft_gate";
   if (!GATE_NAMES.includes(gate)) throw parseError(`--gate must be one of ${GATE_NAMES.join(", ")}`);
-  const base = values.base ?? "main";
-  const last = values.last === undefined ? 20 : Number(values.last);
-  if (!Number.isInteger(last) || last < 1) throw parseError("--last must be a positive integer");
-  const merged = (await readExport(values["merged-prs"], "mergedAt")).sort((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt)).slice(0, last);
+  if (values.base !== undefined && !values.base.trim()) throw parseError("--base must not be blank");
+  const base = values.base?.trim() ?? "main";
+  const last = values.last === undefined ? 20 : parsePositiveInteger(values.last, "--last", parseError);
+  const sorted = (await readExport(values["merged-prs"], "mergedAt")).sort((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt) || b.number - a.number);
+  const merged = sorted.slice(0, last);
+  const preceding = sorted[last] ?? null;
   const issues = values.issues === undefined ? null : await readExport(values.issues, "createdAt");
+
+  const tmpRoot = values["tmp-root"] ?? resolveGateArtifactTmpRoot(repoRoot);
+  const findingsRoot = path.resolve(repoRoot, path.dirname(path.dirname(buildLogPath({ repo: values.repo, pr: 1, gate, headSha: GATE_SENTINEL_HEAD, tmpRoot }))));
+  if (!(await stat(findingsRoot).then((s) => s.isDirectory(), () => false))) {
+    throw new Error(`findings-log root ${findingsRoot} does not exist: pass --tmp-root, or run from the repository checkout`);
+  }
+  let baseChecked = false;
+  const ensureBase = async () => {
+    if (baseChecked) return;
+    if ((await runGitCommand(["rev-parse", "--verify", "--quiet", `origin/${base}^{commit}`], { repoRoot })).code !== 0) {
+      throw new Error(`origin/${base} does not resolve in ${repoRoot}: fetch it or pass --base`);
+    }
+    baseChecked = true;
+  };
+  const checklistAngles = new Set(((await loadDevLoopConfig({ repoRoot })).config.gates?.draft?.angles ?? []).filter((e) => e["developer-checklist"]?.length).map((e) => e.name));
+  const cutoff = Date.parse(CHECKLIST_CUTOFF);
+
   const totalsByCause = emptyCauses();
+  const checklist = { before: emptySplit(), after: emptySplit() };
   let totalRounds = 0;
   let totalDerived = 0;
+  let totalUndetermined = 0;
+  let totalUnreadable = 0;
   const perChange = [];
   for (const { number, mergedAt } of merged) {
+    let unreadable = 0;
+    const read = (g) => readClosedPriorRoundLogs({ repo: values.repo, pr: number, gate: g, headSha: GATE_SENTINEL_HEAD, tmpRoot }, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead: true, onUnreadable: () => { unreadable += 1; } });
     // A sentinel head matches no ledger, so every ledger of the PR is read as a prior round.
-    const logs = await readClosedPriorRoundLogs({ repo: values.repo, pr: number, gate, headSha: GATE_SENTINEL_HEAD, tmpRoot: values["tmp-root"] }, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead: true });
-    const { causes, derived } = await roundCauses(logs, { base, repoRoot });
+    const logs = await read(gate);
+    const { causes, derived } = await roundCauses(logs, { base, repoRoot, ensureBase });
     const byCause = emptyCauses();
-    for (const c of causes) { byCause[c] += 1; totalsByCause[c] += 1; }
+    let undetermined = 0;
+    for (const c of causes) {
+      if (c === UNDETERMINED) { undetermined += 1; continue; }
+      byCause[c] += 1;
+      totalsByCause[c] += 1;
+    }
+    const first = (gate === "draft_gate" ? logs : await read("draft_gate"))[0];
+    let round1 = null;
+    if (first) {
+      const findings = Array.isArray(first.findings) ? first.findings : [];
+      const covered = findings.filter((f) => checklistAngles.has(f?.angle)).length;
+      const side = Date.parse(first.loggedAt) >= cutoff ? "after" : "before";
+      round1 = { loggedAt: first.loggedAt ?? null, side, covered, uncovered: findings.length - covered };
+      checklist[side].changes += 1;
+      checklist[side].covered += covered;
+      checklist[side].uncovered += round1.uncovered;
+    }
     totalRounds += causes.length;
     totalDerived += derived;
-    perChange.push({ pr: number, mergedAt, rounds: causes.length, derivedRounds: derived, byCause });
+    totalUndetermined += undetermined;
+    totalUnreadable += unreadable;
+    perChange.push({ pr: number, mergedAt, rounds: causes.length, derivedRounds: derived, undeterminedRounds: undetermined, unreadableLedgers: unreadable, byCause, round1 });
   }
   const n = merged.length;
   const per = (x) => (n === 0 ? 0 : round2(x / n));
   const from = n ? merged[n - 1].mergedAt : null;
   const to = n ? merged[0].mergedAt : null;
-  const filed = issues === null ? null : issues.filter((i) => Date.parse(i.createdAt) >= Date.parse(from) && Date.parse(i.createdAt) <= Date.parse(to)).length;
+  const after = preceding?.mergedAt ?? null;
+  const inWindow = (createdAt) => {
+    const t = Date.parse(createdAt);
+    return (after === null ? t >= Date.parse(from) : t > Date.parse(after)) && t <= Date.parse(to);
+  };
+  const filed = issues === null ? null : issues.filter((i) => inWindow(i.createdAt)).length;
   return {
     ok: true,
     gate,
-    window: { merges: n, from, to },
+    window: { merges: n, from, to, after },
     perChange,
     totals: {
       rounds: totalRounds,
       roundsPerMerge: per(totalRounds),
       derivedRounds: totalDerived,
+      undeterminedRounds: totalUndetermined,
+      unreadableLedgers: totalUnreadable,
       byCause: totalsByCause,
       byCausePerMerge: Object.fromEntries(ROUND_CAUSES.map((c) => [c, per(totalsByCause[c])])),
     },
+    checklist: { cutoff: CHECKLIST_CUTOFF, ...checklist },
     issues: filed === null ? null : { filed, perMerge: per(filed) },
   };
 }
@@ -135,9 +225,15 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   }
   if (!values.repo?.trim()) throw parseError("--repo is required");
   if (!values["merged-prs"]?.trim()) throw parseError("--merged-prs is required");
-  if (!/^[^/\s]+\/[^/\s]+$/.test(values.repo.trim())) throw parseError("--repo must be <owner/name>");
-  const report = await buildReport({ ...values, repo: values.repo.trim(), "merged-prs": path.resolve(values["merged-prs"]), ...(values.issues ? { issues: path.resolve(values.issues) } : {}) }, { repoRoot });
-  process.exitCode = emitResult(report, { jq: values.jq, silent: values.silent, stdout, stderr });
+  let slug;
+  try {
+    const { owner, name } = parseRepoSlug(values.repo, { errorMessage: "--repo must be <owner/name>" });
+    slug = `${owner}/${name}`;
+  } catch (err) {
+    throw parseError(err.message);
+  }
+  const report = await buildReport({ ...values, repo: slug, "merged-prs": path.resolve(values["merged-prs"]), ...(values.issues ? { issues: path.resolve(values.issues) } : {}) }, { repoRoot });
+  process.exitCode = emitResult(report, { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr });
 }
 
 if (isDirectCliRun(import.meta.url)) {
