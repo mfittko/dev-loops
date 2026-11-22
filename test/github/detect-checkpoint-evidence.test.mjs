@@ -23,7 +23,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { test } from "bun:test";
-import { runIdFreeEnv, runNode as runNodeHelper, trustCommentFixtures, trustGhEntries, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { NO_APPROVAL_KEY_ENV, runIdFreeEnv, runNode as runNodeHelper, trustCommentFixtures, trustGhEntries, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
   isGateMachineArtifactBody,
@@ -1532,7 +1532,7 @@ test("buildPreMergeGateCheck: a solo-owner PR clears the gate via a head-pinned 
   const evidence = cleanEvidence();
   evidence.preApprovalGateMarker.sizeOutcome = "escalate";
   evidence.comments = [{ login: "carol", body: "approve merge abc1234", type: "User", trusted: true }];
-  const result = buildPreMergeGateCheck(evidence, 0, null);
+  const result = buildPreMergeGateCheck(evidence, 0, null, null, { env: NO_APPROVAL_KEY_ENV });
   assert.equal(result.ok, true, JSON.stringify(result.failures));
 });
 
@@ -1542,7 +1542,7 @@ test("buildPreMergeGateCheck: --patch-id lets a patch-id approve-merge comment c
   evidence.preApprovalGateMarker.sizeOutcome = "escalate";
   evidence.comments = [{ login: "carol", body: `approve merge ${"b".repeat(40)} patch-id ${patchId}`, type: "User", trusted: true }];
   assert.equal(buildPreMergeGateCheck(evidence, 0, null).ok, false, "refused without a patch-id");
-  assert.equal(buildPreMergeGateCheck(evidence, 0, null, null, { patchId }).ok, true);
+  assert.equal(buildPreMergeGateCheck(evidence, 0, null, null, { patchId, env: NO_APPROVAL_KEY_ENV }).ok, true);
   assert.equal(parseDetectCheckpointEvidenceCliArgs(["--repo", "owner/repo", "--pr", "17", "--patch-id", patchId]).patchId, patchId);
 });
 

@@ -799,6 +799,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "MERGE-ASK-APPROVAL",
+      "enforcement": "runtime"
+    },
+    {
       "id": "MERGE-POSTMERGE-FULL-SHA-REPORT",
       "enforcement": "doc"
     },
