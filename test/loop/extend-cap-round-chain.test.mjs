@@ -99,6 +99,9 @@ test("a logic commit, alone or mixed with docs, refuses and writes no record", a
     const L = await commit(root, { "src/b.mjs": "export const b = 1;\n" }, "logic");
     const refused = await extend(root, L);
     assert.equal(refused.reason, "logic_commit_in_range");
+    // RECOVERY-COMMAND-REQUIRED: the delta recovery and remedy name the resolved worktree, so they run from any caller directory.
+    assert.match(refused.recovery, /loop pre-push-delta --reviewer-only .* --worktree \S+$/u);
+    assert.match(refused.detail, /--result-path <result-file> --worktree \S+, have the reviewer/u);
     assert.match(refused.detail, /src\/b\.mjs/);
     assert.match(refused.detail, /pre-push-delta --reviewer-only --repo \S+ --pr \d+ --baseline /u);
     const M = await commit(root, { "docs/x.md": "x\n", "src/c.mjs": "export const c = 1;\n" }, "mixed");
@@ -1263,7 +1266,7 @@ test("issue 3437 ac:1: a cap-round clear sealed for the round's own act set cove
     assert.match(refused.detail, new RegExp(`--baseline ${B}`, "u"), "the delta starts at the sealed candidate, not the cap-round head");
     // ac:3: the reviewer-only run at the cap-round head refuses and names the extension; the extension names a run at the cleared candidate. The two recoveries differ and resolve.
     const deltaRefusal = await reviewerOnlyDelta(root, A, head).then(() => null, (error) => error);
-    assert.match(deltaRefusal?.recovery ?? "", /gate extend-cap-round-chain --repo \S+ --pr \S+$/u);
+    assert.match(deltaRefusal?.recovery ?? "", /gate extend-cap-round-chain --repo \S+ --pr \S+ --worktree \S+$/u);
     assert.notEqual(deltaRefusal.recovery, refused.recovery);
     assert.match(refused.recovery, new RegExp(`loop pre-push-delta --reviewer-only .*--baseline ${B} --pr-head ${head}`, "u"));
     assert.equal(readGateDeltaRecord(tmp, B), null, "the candidate has no record, so the named run is not refused");
@@ -1413,7 +1416,7 @@ test("issue 3443: the reviewer-only refusal at the cap-round head names the chai
     writeSealedGateDeltaRecord(tmp, B, { reviewBaselineHead: B, candidateHead: C, actSetId: "round-4", invocation: 1, outcome: "locally_clear", nextStep: "push", items: resolved(q) });
     const head2 = await commit(root, { "docs/d.md": "d\n" }, "docs D");
     const covered = await reviewerOnlyDelta(root, A, head2).then(() => null, (error) => error);
-    assert.match(covered?.recovery ?? "", /gate extend-cap-round-chain --repo \S+ --pr \S+$/u, "A..B [p], B..C [q]: the union covers, so the chain-end recovery");
+    assert.match(covered?.recovery ?? "", /gate extend-cap-round-chain --repo \S+ --pr \S+ --worktree \S+$/u, "A..B [p], B..C [q]: the union covers, so the chain-end recovery");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1473,7 +1476,7 @@ test("issue 3437 ac:3: the reviewer-only CLI prints the recovery of its refusal 
     const out = spawnSyncTrusted(process.execPath, [path.resolve("scripts/loop/check-pre-push-delta.mjs"), "--reviewer-only", "--repo", REPO, "--pr", String(PR), "--baseline", A, "--pr-head", head, "--findings-log", logPath, "--worktree", root, "--spec-identity", "spec@1", "--result-path", path.join(root, "r.json")], { cwd: root, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
     const payload = JSON.parse(out.stderr.trim().split("\n").at(-1));
     assert.equal(payload.ok, false, out.stderr);
-    assert.match(payload.recovery ?? "", new RegExp(`gate extend-cap-round-chain --repo ${REPO} --pr ${PR}$`, "u"), out.stderr);
+    assert.match(payload.recovery ?? "", new RegExp(`gate extend-cap-round-chain --repo ${REPO} --pr ${PR} --worktree \\S+$`, "u"), out.stderr);
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(bin, { recursive: true, force: true });

@@ -1618,7 +1618,7 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
         // Issue 3437 ac:3: the recovery is the one runnable command of the printed remedy, with the real PR number; an unsealed record names the rm step and carries none.
         if (unsealed || message === "bounded_out") assert.equal(error.recovery, undefined, "no recovery contradicts the printed remedy");
         else if (coverRun) assert.match(error.recovery, /loop pre-push-delta --reviewer-only --cover-uncovered --repo owner\/repo --pr 70 --baseline \S+ --pr-head \S+ --findings-log \S+ --spec-identity <id> --result-path <result-file> --worktree \S+$/u);
-        else if (/extend-cap-round-chain/.test(String(remedy))) assert.match(error.recovery, /gate extend-cap-round-chain --repo owner\/repo --pr 70$/u);
+        else if (/extend-cap-round-chain/.test(String(remedy))) assert.match(error.recovery, /gate extend-cap-round-chain --repo owner\/repo --pr 70 --worktree \S+$/u);
 
         else assert.equal(error.recovery, renderCliText(replacementPrOperatorRecovery(70)), "the off-history and other-refs recovery is the shared operator form");
         return true;
@@ -2463,7 +2463,31 @@ test("the cover run refuses an active sequence marker at the cap head and writes
     writeSequenceMarker({ tmpRoot: repo.tmpRoot, baselineHead: repo.baseline, branch: "issue-1" });
     await assert.rejects(runDeltaCli([...args, "--result", resultPath, "--invocation", "1"], seam), /an active sequence marker exists for baseline/, "the result run rechecks the marker");
     assert.equal(readSealedCoverRecord(repo.tmpRoot, repo.baseline, two), null, "nothing was sealed");
-    await assert.rejects(runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", resultPath], seam), /an active sequence marker exists for baseline/, "the input run refuses too");
+    await assert.rejects(runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", resultPath], seam), (error) => {
+      assert.match(error.message, /an active sequence marker exists for baseline/, "the input run refuses too");
+      // RECOVERY-COMMAND-REQUIRED: the refusal carries the rendered close command with the real repo and PR, in its message and its recovery.
+      assert.match(error.recovery, new RegExp(`gate close-sequence --head ${repo.baseline} --repo owner/repo --pr 70$`, "u"));
+      assert.doesNotMatch(`${error.message}\n${error.recovery}`, /<owner\/name>|<n>/u);
+      return true;
+    });
+  } finally { cleanup(repo); }
+});
+
+// Issue 3443 delta review: cover records are keyed by the cap-round head. A plain run whose baseline is a base-only merge M of the cap-round head reads the blocker under the cap-round head, so a bound-exhausted cover record there names the replacement PR and never a cover run that must refuse.
+test("the plain reviewer-only refusal at a base-only merge baseline reads the cover record at the cap-round head (issue 3443 delta review)", async () => {
+  const repo = reviewerOnlyRepo({ commitAfterMerge: true });
+  try {
+    const findings = [CAP_ACT, SECOND_ACT];
+    const [one, two] = capRoundActList(findings, repo.fix).map((entry) => entry.ref);
+    writeSealedGateDeltaRecord(repo.tmpRoot, repo.mergeHead, { reviewBaselineHead: repo.mergeHead, candidateHead: repo.mergeHead, actSetId: "fixer-act-set", invocation: 1, outcome: "locally_clear", nextStep: "push_to_gate", items: [{ ref: one, status: "resolved" }] });
+    const plain = () => runDeltaCli(["--reviewer-only", "--repo", "owner/repo", "--pr", "70", "--baseline", repo.mergeHead, "--pr-head", repo.head, "--findings-log", capLog(repo.dir, repo.fix, findings), "--worktree", repo.dir, "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam);
+    await assert.rejects(plain(), (error) => { assert.match(error.recovery, new RegExp(`--cover-uncovered .*--baseline ${repo.fix} `, "u"), "no blocked cover record: the cover run at the cap-round head"); return true; });
+    writeCoverRecord(repo.tmpRoot, { capHead: repo.fix, ref: two, candidateHead: repo.head, actSetId: "set", invocation: 3, outcome: "needs_fix", nextStep: "bounded_out", status: "not_resolved" });
+    await assert.rejects(plain(), (error) => {
+      assert.equal(error.recovery, renderCliText(replacementPrOperatorRecovery(70)));
+      assert.doesNotMatch(error.message, /--cover-uncovered/);
+      return true;
+    });
   } finally { cleanup(repo); }
 });
 
@@ -2550,7 +2574,7 @@ test("a cover result run never replaces a cover record a concurrent run sealed d
 // Issue 3443 delta review (RECOVERY-COMMAND-REQUIRED): each refusal of the cover run carries one rendered recovery with the real repo, PR, baseline and worktree.
 test("every cover-run refusal carries a rendered recovery and writes no cover record (issue 3443 delta review)", async () => {
   const input = (repo, findings, runSeam = seam, extra = {}) => runDeltaCli(["--reviewer-only", "--cover-uncovered", "--repo", "owner/repo", "--pr", "70", "--baseline", extra.baseline ?? repo.baseline, "--pr-head", repo.head, "--findings-log", capLog(repo.dir, extra.capHead ?? repo.baseline, findings), "--worktree", repo.dir, "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], runSeam);
-  const extension = /gate extend-cap-round-chain --repo owner\/repo --pr 70$/u;
+  const extension = /gate extend-cap-round-chain --repo owner\/repo --pr 70 --worktree \S+$/u;
   const coverCommand = (repo) => new RegExp(`loop pre-push-delta --reviewer-only --cover-uncovered --repo owner/repo --pr 70 --baseline ${repo.baseline} --pr-head ${repo.head} --findings-log \\S+ --spec-identity <id> --result-path <result-file> --worktree \\S+$`, "u");
   const noPlaceholder = (error) => assert.doesNotMatch(`${error.message}\n${error.recovery}`, /<owner\/name>|<n>|<owner>/u);
   const cases = [

@@ -2431,7 +2431,7 @@ const fewestUncovered = (coverages) => coverages.reduce((best, c) => (c.uncovere
 
 /**
  * The one coverage read shared by the cap-round proof, extend-cap-round-chain and the reviewer-only refusals: the coverage (`{ uncovered, records }`) of the start that leaves the fewest act refs uncovered, or null when no sealed clearing record starts a chain.
- * `chain` is an already read `{ starts, bridges }`; without it the starts are read here (seeding base-only merges needs `baseRefName`). Every bridge alternative is read, so a stale merge record of a chain end never hides a covering one.
+ * `chain` is an already read `{ starts, bridges }`; without it the starts are read here (seeding base-only merges needs `baseRefName`). The bridge alternatives are read up to the 16-combination limit, so past that limit a stale merge record of a chain end can hide a covering one and the coverage fails closed.
  */
 export async function capRoundChainCoverage({ capRound, tmpRoot, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, bound = {}, chain }) {
   const { starts, bridges } = chain ?? await capRoundChainStarts({ tmpRoot, capHead: capRound.log.headSha, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
