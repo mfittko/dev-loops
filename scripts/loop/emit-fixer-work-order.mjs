@@ -6,7 +6,7 @@
  * reader and receipt stay in _work-order-protocol.mjs.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { ghExecFileSync } from "@dev-loops/core/github/gh-throttle";
+import { ghSync } from "@dev-loops/core/github/gh-call-log";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile, readdir, rename, rm } from "node:fs/promises";
@@ -141,7 +141,7 @@ function normalizeAllowedPath(raw) {
 }
 
 async function defaultFetchPr({ repo, pr }) {
-  const out = ghExecFileSync("gh", ["pr", "view", String(pr), "--repo", repo, "--json", "headRefName,headRefOid,baseRefName"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const out = ghSync(["pr", "view", String(pr), "--repo", repo, "--json", "headRefName,headRefOid,baseRefName"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   return JSON.parse(out);
 }
 

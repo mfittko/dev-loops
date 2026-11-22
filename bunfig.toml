@@ -1,2 +1,6 @@
 [install]
 auto = "disable"
+
+[test]
+# Keep tests off the shared gh call log.
+preload = ["./test/_gh-call-log-preload.mjs"]

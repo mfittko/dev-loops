@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { setTimeout as delay } from "node:timers/promises";
-import { spawn } from "node:child_process";
 import { takeGhSlot } from "@dev-loops/core/github/gh-throttle";
 import { rateLimitedError, withSecondaryLimitBackoff } from "@dev-loops/core/github/gh";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, requireTokenValue } from "../_cli-primitives.mjs";
+import { spawnRecorded } from "@dev-loops/core/github/gh-call-log";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { detectInitialCopilotPrState, LINKED_PR_STATE } from "./detect-initial-copilot-pr-state.mjs";
@@ -87,7 +87,7 @@ export async function watchCopilotRunUntilComplete(
 }
 function spawnWatch({ repo, runId, timeoutMs }, { env, ghCommand }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(
+    const child = spawnRecorded(
       ghCommand,
       ["run", "watch", String(runId), "--repo", repo],
       { env, stdio: ["ignore", "ignore", "pipe"] },

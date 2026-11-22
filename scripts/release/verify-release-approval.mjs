@@ -26,6 +26,8 @@
  * jq-output.mjs).
  */
 import { execFileSync } from "node:child_process";
+import { appendFileSync, mkdirSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { resolveNpmDistTag } from "./resolve-npm-dist-tag.mjs";
@@ -277,6 +279,50 @@ export function resolveApprovalState({ version, operator, comments, releaseRef }
   return { applies: true, approved: false, refusal };
 }
 
+/**
+ * Append one record to the shared gh call log (same path and fields as @dev-loops/core's recordGhCall).
+ * Zero-dependency copy: this script runs before `npm ci`. Swallows every error.
+ */
+function recordGhCall(args, { durationMs, status }) {
+  try {
+    const override = String(process.env.DEVLOOPS_GH_CALL_LOG ?? "").trim();
+    let file = override && path.isAbsolute(override) ? override : null;
+    if (file === null) {
+      const listing = execFileSync("git", ["worktree", "list", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 });
+      const main = /^worktree (.+)$/mu.exec(listing)?.[1];
+      if (!main) return;
+      file = path.join(main, "tmp", "gh-calls.jsonl");
+    }
+    // Mirror core describeGhCall/extractPr for the `gh api <endpoint>` shapes this script uses.
+    const words = [];
+    for (const arg of args.slice(0, 3)) {
+      if (arg.startsWith("-") || /^\d+$/u.test(arg)) break;
+      words.push(arg);
+    }
+    const subcommand = words.join(" ");
+    const valueFlags = new Set(["-F", "-f", "--field", "--raw-field", "-H", "--header", "--jq", "-q", "-X", "--method", "--input", "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
+    const endpoint = args[0] === "api" ? args.slice(1).find((a, i, rest) => !a.startsWith("-") && !valueFlags.has(rest[i - 1])) : undefined;
+    const prMatch = endpoint === undefined ? null : /\/(?:pulls|issues)\/(\d+)(?:\/|$)/u.exec(endpoint);
+    const pr = prMatch ? Number(prMatch[1]) : null;
+    mkdirSync(path.dirname(file), { recursive: true });
+    appendFileSync(file, `${JSON.stringify({ timestamp: new Date().toISOString(), script: path.basename(process.argv[1] ?? ""), pr, kind: args[0] === "api" && args[1] !== "graphql" ? "rest" : "graphql", subcommand, durationMs, status, rateLimited: status === 0 ? false : null })}\n`);
+  } catch { /* swallow */ }
+}
+
+/** `execFileSync` that records `gh` calls. Rethrows the original error. */
+function execFileSyncRecorded(command, args, options) {
+  if (command !== "gh") return execFileSync(command, args, options);
+  const started = Date.now();
+  try {
+    const out = execFileSync(command, args, options);
+    recordGhCall(args, { durationMs: Date.now() - started, status: 0 });
+    return out;
+  } catch (err) {
+    recordGhCall(args, { durationMs: Date.now() - started, status: typeof err?.status === "number" ? err.status : 1 });
+    throw err;
+  }
+}
+
 // Release scripts import nothing from @dev-loops/core (import-closure test), so the shared gh throttle
 // is reached by running its slot child by path. A failed slot fails closed. The 60_000 timeout mirrors SYNC_SLOT_TIMEOUT_MS (gh-throttle.mjs), which the closure rule keeps this script from importing.
 const GH_SLOT_SCRIPT = fileURLToPath(new URL("../../packages/core/src/github/gh-throttle-slot.mjs", import.meta.url));
@@ -288,7 +334,7 @@ function ghExecFileSync(command, args, options) {
       throw Object.assign(new Error(`gh throttle unavailable: ${String(error.stderr ?? error.message).trim()}`), { code: "GH_THROTTLE_UNAVAILABLE", cause: error });
     }
   }
-  return execFileSync(command, args, options);
+  return execFileSyncRecorded(command, args, options);
 }
 
 /** Run a bounded `gh` call; throws (fail closed) on any non-zero exit. */
