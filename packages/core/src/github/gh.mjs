@@ -9,10 +9,10 @@
  * no label (probe-ci-status shape) or `<label> failed: <detail>` with one
  * (fetch-ci-logs shape) — always carrying `code: "GH_API_ERROR"`, plus the
  * inline `Invalid JSON from gh: <stdout|<empty>>` malformed-stdout shape
- * (probe-ci-status). The one exception to `GH_API_ERROR` is a second secondary
+ * (probe-ci-status). The exceptions to `GH_API_ERROR` are a second secondary
  * rate limit: after one 30 s backoff and one retry, both
  * helpers throw `code: "RATE_LIMITED"` with `resetAt: null` and their own message
- * prefix. An injected `runChild` runs once with no retry.
+ * prefix, and a `ghJson` child killed at its `timeoutMs` bound (`code: "GH_TIMEOUT"`). An injected `runChild` runs once with no retry.
  * `ghGraphql` reproduces scripts/projects/add-queue-item.mjs's
  * superset (`gh api graphql failed` / `GraphQL errors:` with GH_API_ERROR /
  * GRAPHQL_ERROR; `parseJsonText` → `Invalid JSON input`).
@@ -54,11 +54,11 @@ export function ghCommandFailed(err) {
  * returns the limited result with `rateLimited: true`, so the caller throws
  * RATE_LIMITED with its own message prefix.
  */
-async function runWithBackoff(runChild, command, args, env, { sleep }) {
+async function runWithBackoff(runChild, command, args, env, { sleep, timeoutMs }) {
   if (runChild === defaultRunChild) {
     // The default runChild owns the one retry; map its RATE_LIMITED to the caller's own prefix.
     try {
-      return await runChild(command, args, env, undefined, { sleep });
+      return await runChild(command, args, env, undefined, { sleep, timeoutMs });
     } catch (error) {
       if (error?.code !== "RATE_LIMITED") throw error;
       return { code: 1, stdout: "", stderr: error.message.replace(/^gh command failed: /, ""), rateLimited: true };
@@ -110,11 +110,14 @@ export async function withSecondaryLimitBackoff(attempt, { sleep = realSleep } =
  *   when omitted it reads `gh command failed: <detail>` (the probe-ci-status
  *   shape). Either way the non-zero-exit error carries `code: "GH_API_ERROR"`,
  *   except a second secondary rate limit, which carries `code: "RATE_LIMITED"`
- *   with the same prefix.
+ *   with the same prefix, and a kill at `timeoutMs`, which carries `code: "GH_TIMEOUT"`.
  * @param {(ms: number) => Promise<void>} [opts.sleep] - injectable backoff sleep.
+ * @param {number} [opts.timeoutMs] - the default runner kills the child at this bound and ghJson throws `code: "GH_TIMEOUT"`; an injected runner ignores it.
  */
-export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRunChild, label, sleep } = {}) {
-  const result = await runWithBackoff(runChild, ghCommand, args, env, { sleep });
+export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRunChild, label, sleep, timeoutMs } = {}) {
+  const result = await runWithBackoff(runChild, ghCommand, args, env, { sleep, timeoutMs });
+  // Only the spawn timer's own kill sets `timedOut`; any other signal death keeps its stderr in the GH_API_ERROR below.
+  if (result.timedOut) throw Object.assign(new Error(`${label ? `${label} failed` : "gh command failed"}: timed out after ${timeoutMs}ms`), { code: "GH_TIMEOUT" });
   if (result.code !== 0) {
     const detail = result.stderr.trim() || `exit code ${result.code}`;
     const prefix = label ? `${label} failed` : "gh command failed";

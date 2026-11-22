@@ -1,6 +1,6 @@
 {
   "name": "@dev-loops/core",
-  "version": "1.0.12-pre.5",
+  "version": "1.0.12-pre.6",
   "type": "module",
   "engines": {
     "node": ">=24"

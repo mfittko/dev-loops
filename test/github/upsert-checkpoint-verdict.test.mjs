@@ -353,6 +353,19 @@ test("buildCoordinationEvaluatorInput threads unresolvedThreadCount from coordin
   assert.equal(nonZeroInput.unresolvedThreadCount, 4);
 });
 
+// Issue 3443: the production builder carries the cap-round coverage detail into the evaluator input; a null detail adds no key.
+test("buildCoordinationEvaluatorInput carries draftCapRoundDetail and omits a null one (issue 3443)", () => {
+  const coordinationContext = {
+    repo: "owner/repo", pr: 1, currentHeadSha: "29aa40b7deadbeef", prData: { isDraft: true, state: "OPEN" },
+    interpretation: { state: "pr_draft" }, disposition: { loopDisposition: "action_required" }, snapshot: {},
+    gateEvidence: { draftGate: {}, draftGateMarker: {}, preApprovalGate: {}, preApprovalGateMarker: {} }, refinementArtifact: null,
+  };
+  const base = { coordinationContext, maxCopilotRounds: 2, draftGateConfig: {}, preApprovalGateConfig: {}, reviewMode: null };
+  const draftCapRoundDetail = { uncovered: ["r"], records: [] };
+  assert.deepEqual(buildCoordinationEvaluatorInput({ ...base, draftCapRoundDetail }).draftCapRoundDetail, draftCapRoundDetail);
+  assert.equal(Object.hasOwn(buildCoordinationEvaluatorInput({ ...base, draftCapRoundDetail: null }), "draftCapRoundDetail"), false);
+});
+
 // #1441: buildCoordinationEvaluatorInput is the exact function
 // upsertCheckpointVerdict calls to assemble evaluatePrGateCoordination's
 // input for the pre_approval_gate verdict that a stranded head-advanced

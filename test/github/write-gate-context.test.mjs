@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, link, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -52,6 +52,7 @@ import {
   resolveCapRound,
   isInRoundRewrite,
   resolveCapRoundFixed,
+  capRoundCoverage,
   clearingChainLastCandidates,
   capRoundCovers,
   capRoundActList,
@@ -66,12 +67,13 @@ import {
   resolveReviewGateAngles,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
-import { CAP_ROUND_REFUSAL, evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
+import { CAP_ROUND_REFUSAL, capRoundCoverageDetail, evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
+import { startDeltaSequence, threadsToActList } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DISPOSITION, STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { writePrGateCoordinationSnapshot } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
-import { readSealedGateDeltaRecord, writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
+import { gateCoverRecordPath, readSealedGateDeltaRecord, writeCoverRecord, writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { dispatchUnitScope, expandDispatchUnits, packedUnitName } from "../../scripts/github/_dispatch-units.mjs";
 
@@ -9430,6 +9432,564 @@ test("resolveCapRoundFixed derives the expected refs from the deduped act list, 
     assert.ok(await resolveCapRoundFixed(opts, { repoRoot }), "unstamped findings: every act ref present");
     await writeDeltaRecord(repoRoot, baseSha, headSha, "push", { items: [{ ref: "unrelated", status: "resolved" }] });
     assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "unstamped findings: no act ref present");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443: a commit_only fixer record covers 1 of 3 act refs at the cap head, a later record keyed by the escalated act ref at the next baseline covers it.
+test("resolveCapRoundFixed accepts the union of the chain's records over the cap round's act refs and names a genuinely uncovered ref", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const C = "8".repeat(40);
+    const opts = { repo: "owner/repo", pr: 64, gate: "draft_gate", headSha: C };
+    await seedClosedRounds(repoRoot, 64, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-64", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const q = { ...p, summary: "second defect" };
+    const r = { ...p, summary: "escalated defect" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...q, clusterId: 1 }, { ...r, clusterId: 2 }] }), "utf8");
+    const resolved = (...fs) => ({ items: fs.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) });
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", resolved(p, q));
+    let condition = null;
+    const run = () => resolveCapRoundFixed(opts, { repoRoot, onFailure: (c) => { condition = c; } });
+    assert.equal(await run(), null, "the escalated ref r is uncovered");
+    assert.equal(condition, "items_do_not_cover");
+    await writeDeltaRecord(repoRoot, B, C, "push_to_gate", resolved(r));
+    assert.ok(await run(), "the record keyed by r at the later baseline covers r");
+    await writeDeltaRecord(repoRoot, B, C, "push_to_gate", resolved(p));
+    assert.equal(await run(), null, "a later record that repeats p leaves r genuinely uncovered");
+    assert.equal(condition, "items_do_not_cover");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 design 2: a thread-route record names its items by threadId and thread text is never trusted, so it covers no act ref even when the thread body carries a gate finding marker.
+// The escalated item fixed in the PR gets its own record keyed by its act ref (the ledger fingerprint), which the union counts.
+test("resolveCapRoundFixed never maps a thread-route record's threadId to an act ref, and counts a record keyed by the act ref (issue 3443)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const C = "8".repeat(40);
+    const opts = { repo: "owner/repo", pr: 68, gate: "draft_gate", headSha: C };
+    await seedClosedRounds(repoRoot, 68, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-68", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const r = { ...p, summary: "escalated defect" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...r, clusterId: 1 }] }), "utf8");
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", { items: [{ ref: fingerprintFinding(p), status: "resolved" }] });
+    const sealThread = (body) => {
+      const sequence = startDeltaSequence({ reviewBaselineHead: B, actList: threadsToActList({ ok: true, repo: "owner/repo", pr: 68, threads: [{ trusted: true, threadId: "PRRT_escalated", body, isResolved: false }] }, { repo: "owner/repo", pr: 68 }) });
+      writeGateDeltaRecord({ tmpRoot: path.join(repoRoot, "tmp"), sequence, candidateHead: C, invocation: 1, decision: { outcome: "locally_clear", nextStep: "push_to_gate" }, result: { actionableItems: [{ ref: "PRRT_escalated", status: "resolved" }] } });
+    };
+    let condition = null;
+    const run = () => resolveCapRoundFixed(opts, { repoRoot, onFailure: (c) => { condition = c; } });
+    sealThread(`<!-- dev-loops:finding ${fingerprintFinding(r)} severity=low angle=x round=1 -->\nfix it`);
+    assert.equal(await run(), null, "a thread whose body carries r's marker still leaves r uncovered");
+    assert.equal(condition, "items_do_not_cover");
+    await writeDeltaRecord(repoRoot, B, C, "push_to_gate", { items: [{ ref: fingerprintFinding(r), status: "resolved" }] });
+    assert.ok(await run(), "a record keyed by the act ref covers r");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 review: the detail names the union across the base-only merge link (both records, the one uncovered ref), and a missing SHA renders as `?`.
+test("resolveCapRoundFixed names the union across a base-only merge, and the detail renders a missing SHA as ? (issue 3443)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const M = "7".repeat(40);
+    const C = "8".repeat(40);
+    const opts = { repo: "owner/repo", pr: 69, gate: "draft_gate", headSha: C, baseRefName: "main" };
+    await seedClosedRounds(repoRoot, 69, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-69", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const q = { ...p, summary: "second defect" };
+    const r = { ...p, summary: "escalated defect" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...q, clusterId: 1 }, { ...r, clusterId: 2 }] }), "utf8");
+    const resolved = (...fs) => fs.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" }));
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", { items: resolved(p) });
+    await writeDeltaRecord(repoRoot, M, C, "push_to_gate", { items: resolved(p, q) });
+    let detail = null;
+    const merge = async (args) => args.fromHead === B && args.head === M;
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge: merge, onFailure: (c, d) => { detail = d; } }), null);
+    assert.deepEqual(detail.uncovered, [fingerprintFinding(r)], "the union of A..B and the bridged M..C leaves one ref uncovered");
+    assert.deepEqual(detail.records.map((rec) => rec.baseline), [A, M], "the detail names both records of the bridged chain");
+    assert.match(capRoundCoverageDetail({ uncovered: ["r"], records: [{ baseline: null, candidate: null, refs: [] }] }), /\?\.\.\? \[\]/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 AC3 (review): the union crosses the seeded link from a chain end B to its proven base-only merge M. Three input forms: accepted base-only M with a resolving M..C, rejected non-base-only M, rejected unresolved r on M..C.
+test("resolveCapRoundFixed carries the coverage union across a base-only merge of a chain end (issue 3443 AC3)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const M = "7".repeat(40);
+    const C = "8".repeat(40);
+    const opts = { repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: C, baseRefName: "main" };
+    await seedClosedRounds(repoRoot, 71, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-71", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const q = { ...p, summary: "second defect" };
+    const r = { ...p, summary: "escalated defect" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...q, clusterId: 1 }, { ...r, clusterId: 2 }] }), "utf8");
+    const items = (status, ...fs) => ({ items: fs.map((f) => ({ ref: fingerprintFinding(f), status })) });
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", items("resolved", p, q));
+    const baseOnlyM = async (args) => args.fromHead === B && args.head === M;
+    let detail = null;
+    const run = (deps) => resolveCapRoundFixed(opts, { repoRoot, ...deps, onFailure: (c, d) => { detail = d; } });
+    await writeDeltaRecord(repoRoot, M, C, "push_to_gate", items("resolved", r));
+    assert.ok(await run({ baseOnlyMerge: baseOnlyM }), "accepted: A..B [p, q], base-only merge M of B, M..C [r], head C");
+    assert.equal(await run({ baseOnlyMerge: async () => false }), null, "rejected: M is not a base-only merge of B, so the M..C start joins nothing");
+    assert.deepEqual(detail.uncovered, [fingerprintFinding(r)]);
+    await writeDeltaRecord(repoRoot, M, C, "push_to_gate", items("not_resolved", r));
+    assert.equal(await run({ baseOnlyMerge: baseOnlyM }), null, "rejected: only a resolved item counts on a later link");
+    assert.deepEqual(detail.uncovered, [fingerprintFinding(r)]);
+    // The shared walk reaches the bridged chain end too, so the extension tool and the proof read one chain.
+    await writeDeltaRecord(repoRoot, M, C, "push_to_gate", items("resolved", r));
+    const ends = await clearingChainLastCandidates({ tmpRoot: path.join(repoRoot, "tmp"), capHead: A, repo: "owner/repo", pr: 71, baseRefName: "main", repoRoot, baseOnlyMerge: baseOnlyM });
+    assert.deepEqual(ends, [B, C]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 delta review (high): the coverage walk stops where the proof stops. Head M is a base-only merge of B and r is named only on the bridged M..C (an unpushed or amended-away fix): the proof reaches M at B, so r is not covered.
+test("resolveCapRoundFixed never counts a bridged link past a head that is a base-only merge of the chain end (issue 3443 delta review)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const M = "7".repeat(40);
+    const C = "8".repeat(40);
+    const { p, q, r, items } = await seedThreeActRefs(repoRoot, 77, A);
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", items("resolved", p, q));
+    await writeDeltaRecord(repoRoot, M, C, "push_to_gate", items("resolved", r));
+    const baseOnlyM = async (args) => args.fromHead === B && args.head === M;
+    let detail = null;
+    const onFailure = (c, d) => { detail = { c, ...d }; };
+    assert.equal(await resolveCapRoundFixed({ repo: "owner/repo", pr: 77, gate: "draft_gate", headSha: M, baseRefName: "main" }, { repoRoot, baseOnlyMerge: baseOnlyM, onFailure }), null, "head M with r only on the bridged M..C is not proven");
+    assert.equal(detail.c, "items_do_not_cover");
+    assert.deepEqual(detail.uncovered, [fingerprintFinding(r)]);
+    assert.ok(await resolveCapRoundFixed({ repo: "owner/repo", pr: 77, gate: "draft_gate", headSha: C, baseRefName: "main" }, { repoRoot, baseOnlyMerge: baseOnlyM }), "head C traverses the bridged link and counts r");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 delta review: a clean cap round follows the bridge (A..B plain, base-only merge M of B, M..C plain, C..D docs_tests_only) and stops where the proof stops.
+test("resolveCapRoundFixed follows the bridge for a clean cap round and never past a base-only head (issue 3443 delta review)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const M = "7".repeat(40);
+    const C = "8".repeat(40);
+    const D = "9".repeat(40);
+    await seedClosedRounds(repoRoot, 78, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-78", `draft_gate-${A}.json`);
+    await writeFile(ledger, JSON.stringify({ ...JSON.parse(await readFile(ledger, "utf8")), verdict: "clean", findings: [] }), "utf8");
+    await writeDeltaRecord(repoRoot, A, B, "push", { items: [] });
+    await writeDeltaRecord(repoRoot, M, C, "push", { items: [] });
+    await writeDeltaRecord(repoRoot, C, D, "push", { items: [], extension: "docs_tests_only" });
+    const baseOnlyM = async (args) => args.fromHead === B && args.head === M;
+    assert.ok(await resolveCapRoundFixed({ repo: "owner/repo", pr: 78, gate: "draft_gate", headSha: D, baseRefName: "main" }, { repoRoot, baseOnlyMerge: baseOnlyM }), "the extension C..D is reached across the bridge");
+    assert.equal(await resolveCapRoundFixed({ repo: "owner/repo", pr: 78, gate: "draft_gate", headSha: M, baseRefName: "main" }, { repoRoot, baseOnlyMerge: baseOnlyM }), null, "head M is reached at B, and the extension past the head proves nothing");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 round 4 (operator focus, false clears first): the clean-cap walk honors the history bound under anyHead. A later link, direct or bridged, whose candidate is off the ready head's history never proves the round; an unreadable candidate fails closed.
+test("resolveCapRoundFixed anyHead never proves a clean cap round from an extension record off the head's history (issue 3443)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const child = (parent, msg) => git(repoRoot, ["commit-tree", `${B}^{tree}`, "-p", parent, "-m", msg]).trim();
+    const M = child(B, "base-only merge of B (ready head)");
+    const D = child(B, "abandoned sibling of the head");
+    const onHist = child(B, "on-history extension candidate");
+    const H = child(onHist, "ready head over the extension");
+    const unreadable = "9".repeat(40);
+    await seedClosedRounds(repoRoot, 84, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-84", `draft_gate-${A}.json`);
+    await writeFile(ledger, JSON.stringify({ ...JSON.parse(await readFile(ledger, "utf8")), verdict: "clean", findings: [] }), "utf8");
+    const opts = (headSha) => ({ repo: "owner/repo", pr: 84, gate: "draft_gate", headSha, baseRefName: "main", anyHead: true });
+    const baseOnlyM = async (args) => args.fromHead === B && args.head === M;
+    const reset = async () => { await rm(path.join(repoRoot, "tmp", "gate-delta"), { recursive: true, force: true }); await writeDeltaRecord(repoRoot, A, B, "push", { items: [] }); };
+    await reset();
+    // Direct link B..D: D is an abandoned sibling off the history of the ready head M.
+    await writeDeltaRecord(repoRoot, B, D, "push", { items: [], extension: "docs_tests_only" });
+    assert.equal(await resolveCapRoundFixed(opts(M), { repoRoot }), null, "direct link: the extension candidate D is off the head's history");
+    // Bridged link M..D: the base-only merge M of B bridges to an extension record whose candidate D is off the history of M.
+    await reset();
+    await writeDeltaRecord(repoRoot, M, D, "push", { items: [], extension: "docs_tests_only" });
+    assert.equal(await resolveCapRoundFixed(opts(M), { repoRoot, baseOnlyMerge: baseOnlyM }), null, "bridged link: the extension candidate D is off the head's history");
+    // An unreadable candidate (a commit this clone never fetched) fails closed.
+    await reset();
+    await writeDeltaRecord(repoRoot, B, unreadable, "push", { items: [], extension: "docs_tests_only" });
+    assert.equal(await resolveCapRoundFixed(opts(M), { repoRoot }), null, "an unreadable candidate never proves the clean cap round");
+    // Control: an extension candidate on the head's history still proves the round.
+    await reset();
+    await writeDeltaRecord(repoRoot, B, onHist, "push", { items: [], extension: "docs_tests_only" });
+    assert.ok(await resolveCapRoundFixed(opts(H), { repoRoot }), "control: the extension candidate is an ancestor of the ready head");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 delta review: a clean cap round never counts a record past the head. Head B carries the plain record A..B, and an extension record B..D bound to the head as its baseline belongs to a later range.
+test("resolveCapRoundFixed never reads a clean cap round's extension record past the head (issue 3443 delta review)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const D = "9".repeat(40);
+    await seedClosedRounds(repoRoot, 79, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-79", `draft_gate-${A}.json`);
+    await writeFile(ledger, JSON.stringify({ ...JSON.parse(await readFile(ledger, "utf8")), verdict: "clean", findings: [] }), "utf8");
+    await writeDeltaRecord(repoRoot, A, B, "push", { items: [] });
+    await writeDeltaRecord(repoRoot, B, D, "push", { items: [], extension: "docs_tests_only" });
+    const opts = (headSha) => ({ repo: "owner/repo", pr: 79, gate: "draft_gate", headSha, baseRefName: "main" });
+    assert.equal(await resolveCapRoundFixed(opts(B), { repoRoot }), null, "head B: the extension record B..D lies past the head and proves nothing");
+    assert.ok(await resolveCapRoundFixed(opts(D), { repoRoot }), "control: head D traverses B..D, so its extension proves the clean cap round");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 delta review (high): a candidate that primeStops never probed reads as a stop. Three starts seeded from the cap-round head: while start 1's probe runs, a writer unseals start 2's link B2..X2 (so priming skips X2),
+// and while start 3's probe runs it reseals the link. The head H is a base-only merge of X2, and only the bridged M..C2 names r: the coverage must stop at X2 as the proof does.
+test("resolveCapRoundFixed fails closed for an unprobed chain candidate: a bridge is never followed past it (issue 3443 delta review)", async () => {
+  const { repoRoot, baseSha: A } = await makeBaseDiffRepo();
+  try {
+    const [M1, M2, M3, X1, B2, X2, X3, C2, M, H] = ["5", "6", "7", "4", "a", "b", "c", "d", "9", "e"].map((c) => c.repeat(40));
+    const { p, q, r, items } = await seedThreeActRefs(repoRoot, 80, A);
+    await writeDeltaRecord(repoRoot, M1, X1, "push_to_gate", items("resolved", p, q, r));
+    await writeDeltaRecord(repoRoot, M2, B2, "push_to_gate", items("resolved", p, q));
+    await writeDeltaRecord(repoRoot, B2, X2, "push_to_gate", items("resolved"));
+    await writeDeltaRecord(repoRoot, M3, X3, "push_to_gate", items("resolved"));
+    await writeDeltaRecord(repoRoot, M, C2, "push_to_gate", items("resolved", r));
+    const baseOnlyMerge = async (args) => {
+      if (args.head === H && args.fromHead === X1) await rm(path.join(repoRoot, "tmp", "gate-delta", `${B2}.json.seal`));
+      if (args.head === H && args.fromHead === X3) await writeDeltaRecord(repoRoot, B2, X2, "push_to_gate", items("resolved"));
+      return (args.fromHead === A && [M1, M2, M3].includes(args.head)) || (args.fromHead === X2 && [M, H].includes(args.head));
+    };
+    assert.equal(await resolveCapRoundFixed({ repo: "owner/repo", pr: 80, gate: "draft_gate", headSha: H, baseRefName: "main" }, { repoRoot, baseOnlyMerge }), null, "r is named only past X2, where the proof stops at the head");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 delta review: the early return of the chain starts (no baseRefName) carries an empty `linked`, so the exported walk reads the direct chain instead of throwing.
+test("clearingChainLastCandidates reads the direct chain without a baseRefName (issue 3443 delta review)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate");
+    assert.deepEqual(await clearingChainLastCandidates({ tmpRoot: path.join(repoRoot, "tmp"), capHead: A, repo: "owner/repo", pr: 81, repoRoot }), [B]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 (review): the accepting branch of the history bound. Real commits: the ready head H descends from the B to C link's candidate C, so the later link counts.
+test("resolveCapRoundFixed anyHead counts a later link whose candidate is on the head's history (issue 3443)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const child = (parent, msg) => git(repoRoot, ["commit-tree", `${B}^{tree}`, "-p", parent, "-m", msg]).trim();
+    const C = child(B, "link candidate");
+    const H = child(C, "ready head");
+    await seedClosedRounds(repoRoot, 72, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-72", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const q = { ...p, summary: "second defect" };
+    const r = { ...p, summary: "escalated defect" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...q, clusterId: 1 }, { ...r, clusterId: 2 }] }), "utf8");
+    const resolved = (...fs) => ({ items: fs.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) });
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", resolved(p, q));
+    await writeDeltaRecord(repoRoot, B, C, "push_to_gate", resolved(r));
+    assert.ok(await resolveCapRoundFixed({ repo: "owner/repo", pr: 72, gate: "draft_gate", headSha: H, anyHead: true }, { repoRoot }), "A..B [p, q], B..C [r] with C an ancestor of H: the union covers every ref");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 (review): only merge-base exit 1 without a signal proves a link off the head's history. Exit 128 (a commit this clone never fetched) and a spawn error leave the history unresolved: the proof still fails, but the detail asks for the fetch and lists no ref as uncovered.
+test("resolveCapRoundFixed reads a git failure as unresolved history, never as a proven non-ancestor (issue 3443)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const child = (parent, msg) => git(repoRoot, ["commit-tree", `${B}^{tree}`, "-p", parent, "-m", msg]).trim();
+    const H = child(B, "ready head");
+    const sibling = child(B, "abandoned sibling");
+    await seedClosedRounds(repoRoot, 73, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-73", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const q = { ...p, summary: "second defect" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...q, clusterId: 1 }] }), "utf8");
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", { items: [{ ref: fingerprintFinding(p), status: "resolved" }] });
+    let detail = null;
+    const run = (root = repoRoot) => resolveCapRoundFixed({ repo: "owner/repo", pr: 73, gate: "draft_gate", headSha: H, anyHead: true }, { repoRoot: root, onFailure: (c, d) => { detail = d; } });
+    const never = "9".repeat(40);
+    await writeDeltaRecord(repoRoot, B, never, "push_to_gate", { items: [{ ref: fingerprintFinding(q), status: "resolved" }] });
+    assert.equal(await run(), null, "exit 128: the missing candidate never proves the round");
+    assert.deepEqual(detail.unresolved, [never]);
+    // RECOVERY-COMMAND-REQUIRED: the fetch acts on the repository the check read, never on the caller's cwd.
+    assert.ok(capRoundCoverageDetail(detail).includes(`\`git -C '${path.resolve(repoRoot)}' fetch origin ${never}\``), capRoundCoverageDetail(detail));
+    assert.doesNotMatch(capRoundCoverageDetail(detail), /Uncovered act refs/u, "no ref is presented as proven uncovered");
+    // Exit 1 without a signal: a real sibling commit is proven off history, so the ref is uncovered and nothing is unresolved.
+    await writeDeltaRecord(repoRoot, B, sibling, "push_to_gate", { items: [{ ref: fingerprintFinding(q), status: "resolved" }] });
+    assert.equal(await run(), null);
+    assert.equal(detail.unresolved, undefined);
+    assert.deepEqual(detail.uncovered, [fingerprintFinding(q)]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 (review): coverage and reachability read each start's chain in one loop step. A writer that rewrites a later start's link during an earlier start's base-only probe cannot prove a round no single chain state proves.
+test("resolveCapRoundFixed reads a start's coverage and reachability in one step (issue 3443)", async () => {
+  const { repoRoot, baseSha: A } = await makeBaseDiffRepo();
+  try {
+    const M1 = "5".repeat(40);
+    const M2 = "7".repeat(40);
+    const X1 = "4".repeat(40);
+    const X2 = "6".repeat(40);
+    const HEAD = "8".repeat(40);
+    await seedClosedRounds(repoRoot, 74, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-74", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const r = { ...p, summary: "escalated defect" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...r, clusterId: 1 }] }), "utf8");
+    const resolved = (...fs) => ({ items: fs.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) });
+    // Two starts, both seeded from the cap-round head (it has no record of its own): M1..X1 covers p and r but never reaches the head; M2..X2 covers p and is followed by the SECOND link X2..Y2, which covers r but never reaches the head.
+    const Y2 = "e".repeat(40);
+    await writeDeltaRecord(repoRoot, M1, X1, "push_to_gate", resolved(p, r));
+    await writeDeltaRecord(repoRoot, M2, X2, "push_to_gate", resolved(p));
+    await writeDeltaRecord(repoRoot, X2, Y2, "push_to_gate", resolved(r));
+    const opts = { repo: "owner/repo", pr: 74, gate: "draft_gate", headSha: HEAD, baseRefName: "main" };
+    let rewrite = true;
+    // During start 1's base-only probe (X1 toward the head) a writer replaces the SECOND link of start 2 with one that names the head but covers nothing.
+    // A split read (every start's coverage first, every reachability after) would see r covered by X2..Y2 and the head reached by the replacement.
+    const baseOnlyMerge = async (args) => {
+      if (args.fromHead === A) return args.head === M1 || args.head === M2;
+      if (rewrite && args.fromHead === X1 && args.head === HEAD) await writeDeltaRecord(repoRoot, X2, HEAD, "push_to_gate", { items: [] });
+      return false;
+    };
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge }), null, "the rewritten second link no longer covers r, so no chain state proves the round");
+    rewrite = false;
+    await writeDeltaRecord(repoRoot, X2, HEAD, "push_to_gate", resolved(r));
+    assert.ok(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge }), "control: the same second link covering r proves the round");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 review: shared ledger of act refs p, q, r for the tests below.
+async function seedThreeActRefs(repoRoot, pr, A) {
+  await seedClosedRounds(repoRoot, pr, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+  const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", `pr-${pr}`, `draft_gate-${A}.json`);
+  const log = JSON.parse(await readFile(ledger, "utf8"));
+  const [p] = log.findings;
+  const q = { ...p, summary: "second defect" };
+  const r = { ...p, summary: "escalated defect" };
+  await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...q, clusterId: 1 }, { ...r, clusterId: 2 }] }), "utf8");
+  const items = (status, ...fs) => ({ items: fs.map((f) => ({ ref: fingerprintFinding(f), status })) });
+  return { p, q, r, items, ref: fingerprintFinding };
+}
+
+// Issue 3443 review (high): a bridged merge record is a link of its chain, never a start. A start counts every item of its first record as covered, so the bounded_out M..C record (q and r not_resolved) must not clear q and r once a cover record names p.
+test("resolveCapRoundFixed never reads a bridged merge record as a start: its unresolved items stay uncovered even with a cover record (issue 3443 review)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const M = "7".repeat(40);
+    const C = "8".repeat(40);
+    const { p, q, r, items, ref } = await seedThreeActRefs(repoRoot, 75, A);
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", items("resolved", p));
+    await writeDeltaRecord(repoRoot, M, C, "push_to_gate", items("not_resolved", q, r));
+    const opts = { repo: "owner/repo", pr: 75, gate: "draft_gate", headSha: C, baseRefName: "main" };
+    const baseOnlyMerge = async (args) => args.fromHead === B && args.head === M;
+    let detail = null;
+    const run = (extra = {}) => resolveCapRoundFixed({ ...opts, ...extra }, { repoRoot, baseOnlyMerge, onFailure: (c, d) => { detail = d; } });
+    assert.equal(await run(), null, "q and r are not_resolved on M..C");
+    assert.deepEqual(detail.uncovered, [ref(q), ref(r)], "the coverage is the chain A..B, M..C: p is covered, q and r are not");
+    writeCoverRecord(path.join(repoRoot, "tmp"), { capHead: A, ref: ref(p), candidateHead: C, actSetId: "set", invocation: 1, outcome: "locally_clear", nextStep: "push", status: "resolved" });
+    assert.equal(await run(), null, "a cover record of p leaves q and r uncovered");
+    assert.deepEqual(detail.uncovered, [ref(q), ref(r)]);
+    // The same bridge off the head's history clears nothing either under anyHead: M..X is never a chain a ready head descends from.
+    assert.equal(await run({ anyHead: true, headSha: B }), null, "anyHead: C is not on the history of B, so the M..C link counts nothing");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 review: a bridge target is never walked past the head. Head M is a base-only merge of B, and a sealed M..C exists for an amended-away C: the baseline proved M through the base-only check at B.
+test("resolveCapRoundFixed accepts a head that is a base-only merge of a chain end even when a sealed record of that merge names another candidate (issue 3443 review)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const M0 = "5".repeat(40);
+    const M = "7".repeat(40);
+    const C = "8".repeat(40);
+    const { p, q, r, items } = await seedThreeActRefs(repoRoot, 76, A);
+    await writeDeltaRecord(repoRoot, M0, B, "push_to_gate", items("resolved", p, q, r));
+    await writeDeltaRecord(repoRoot, M, C, "push_to_gate", items("resolved", p));
+    const opts = { repo: "owner/repo", pr: 76, gate: "draft_gate", headSha: M, baseRefName: "main" };
+    const merge = async (args) => (args.fromHead === A && args.head === M0) || (args.fromHead === B && args.head === M);
+    let condition = null;
+    assert.ok(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge: merge, onFailure: (c) => { condition = c; } }), `M0..B covers every ref and M is a base-only merge of B (${condition})`);
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge: async (args) => args.fromHead === A && args.head === M0, onFailure: (c) => { condition = c; } }), null, "without the base-only proof at B the head is not reached");
+    assert.equal(condition, "chain_does_not_reach_head");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 review: two sealed base-only merge records of one chain end. The stale M1..X sorts first and must not hide the covering M2..C.
+test("resolveCapRoundFixed tries every sealed base-only merge record of a chain end, not the first by SHA (issue 3443 review)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const M1 = "5".repeat(40);
+    const M2 = "7".repeat(40);
+    const X = "4".repeat(40);
+    const C = "8".repeat(40);
+    const { p, q, r, items } = await seedThreeActRefs(repoRoot, 77, A);
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", items("resolved", p, q));
+    await writeDeltaRecord(repoRoot, M1, X, "push_to_gate", { items: [] });
+    await writeDeltaRecord(repoRoot, M2, C, "push_to_gate", items("resolved", r));
+    const opts = { repo: "owner/repo", pr: 77, gate: "draft_gate", headSha: C, baseRefName: "main" };
+    const merge = async (args) => args.fromHead === B && (args.head === M1 || args.head === M2);
+    assert.ok(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge: merge }), "A..B [p, q], base-only M2 of B, M2..C [r], with the stale M1..X also a base-only merge of B");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 review: the history detail names the commit this clone lacks. The PR head H is unfetched: the failure names H, never the candidate that is present.
+test("resolveCapRoundFixed names the unfetched PR head, not the present candidate, and probes only clearing cover records the chain needs (issue 3443 review)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const child = (parent, msg) => git(repoRoot, ["commit-tree", `${B}^{tree}`, "-p", parent, "-m", msg]).trim();
+    const C = child(B, "link candidate");
+    const never = "9".repeat(40);
+    const { p, q, r, items, ref } = await seedThreeActRefs(repoRoot, 78, A);
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", items("resolved", p, q));
+    await writeDeltaRecord(repoRoot, B, C, "push_to_gate", items("resolved", r));
+    let detail = null;
+    const run = (headSha, root = repoRoot) => resolveCapRoundFixed({ repo: "owner/repo", pr: 78, gate: "draft_gate", headSha, anyHead: true }, { repoRoot: root, onFailure: (c, d) => { detail = d; } });
+    assert.equal(await run(never), null, "the PR head is not in this clone");
+    assert.deepEqual(detail.unresolved, [never], "the unfetched head is named, not the present candidate C");
+    assert.ok(capRoundCoverageDetail(detail).includes(`\`git -C '${path.resolve(repoRoot)}' fetch origin ${never}\``), capRoundCoverageDetail(detail));
+    assert.doesNotMatch(capRoundCoverageDetail(detail), new RegExp(C, "u"));
+    // A cover record is probed only when it is clearing and its ref is one the chain leaves uncovered.
+    const H = child(C, "ready head");
+    await writeDeltaRecord(repoRoot, B, C, "push_to_gate", items("resolved", p));
+    const cover = (refOf, over) => writeCoverRecord(path.join(repoRoot, "tmp"), { capHead: A, ref: refOf, candidateHead: never, actSetId: "set", invocation: 1, outcome: "locally_clear", nextStep: "push", status: "resolved", ...over });
+    cover(ref(r), { outcome: "needs_fix", nextStep: "fix_and_rereview", status: "not_resolved" });
+    cover(ref(p));
+    assert.equal(await run(H), null, "r is uncovered: only a needs_fix cover record exists for it");
+    assert.equal(detail.unresolved, undefined, "a non-clearing cover record, and the cover record of the already covered p, are never probed");
+    assert.deepEqual(detail.uncovered, [ref(r)]);
+    rmSync(gateCoverRecordPath(path.join(repoRoot, "tmp"), A, ref(r)), { force: true });
+    rmSync(`${gateCoverRecordPath(path.join(repoRoot, "tmp"), A, ref(r))}.seal`, { force: true });
+    cover(ref(r));
+    assert.equal(await run(H), null, "a clearing cover record of r whose candidate this clone lacks leaves the history unresolved");
+    assert.deepEqual(detail.unresolved, [never]);
+    assert.ok(q);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 (review): the cover record counts only while it is sealed, clearing and on the head's history.
+test("capRoundCoverage counts a sealed clearing cover record and nothing else (issue 3443)", async () => {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "cover-record-"));
+  try {
+    const capHead = "a".repeat(40);
+    const candidate = "b".repeat(40);
+    const capRound = { log: { headSha: capHead, findings: [SEEDED_ACT] } };
+    const ref = capRoundActList([SEEDED_ACT], capHead)[0].ref;
+    const first = { reviewBaselineHead: capHead, candidateHead: capHead, items: [] };
+    const cover = (over = {}) => writeCoverRecord(tmpRoot, { capHead, ref, candidateHead: candidate, actSetId: "set", invocation: 1, outcome: "locally_clear", nextStep: "push", status: "resolved", ...over });
+    const uncovered = (bound) => capRoundCoverage(capRound, tmpRoot, first, bound).uncovered;
+    assert.deepEqual(uncovered({ head: candidate }), [ref], "no cover record");
+    cover();
+    assert.deepEqual(uncovered({ head: candidate }), [], "the candidate is the head");
+    assert.deepEqual(uncovered({ head: "c".repeat(40), coverOnHistory: (c) => c === candidate }), [], "the candidate is on the head's history");
+    assert.deepEqual(uncovered({ head: "c".repeat(40) }), [ref], "no history bound and another head: not counted");
+    assert.deepEqual(uncovered({ head: "c".repeat(40), coverOnHistory: () => false }), [ref], "off the head's history: not counted");
+    for (const over of [{ outcome: "needs_fix", nextStep: "fix_and_rereview" }, { status: "not_resolved" }, { outcome: "bounded_out", nextStep: "restart_on_replacement_pr" }]) {
+      rmSync(gateCoverRecordPath(tmpRoot, capHead, ref), { force: true });
+      rmSync(`${gateCoverRecordPath(tmpRoot, capHead, ref)}.seal`, { force: true });
+      cover(over);
+      assert.deepEqual(uncovered({ head: candidate }), [ref], `${JSON.stringify(over)} is not clearing`);
+    }
+    cover();
+    writeFileSync(gateCoverRecordPath(tmpRoot, capHead, ref), JSON.stringify({ capHead, ref, candidateHead: candidate, outcome: "locally_clear", nextStep: "push", status: "resolved", edited: true }));
+    assert.deepEqual(uncovered({ head: candidate }), [ref], "a hand-edited record fails its seal");
+    assert.throws(() => cover(), /unsealed or unreadable and is never overwritten/u, "an unsealed record is never replaced: its invocation count cannot be trusted (issue 3443 review)");
+    rmSync(gateCoverRecordPath(tmpRoot, capHead, ref), { force: true });
+    rmSync(`${gateCoverRecordPath(tmpRoot, capHead, ref)}.seal`, { force: true });
+    cover();
+    assert.throws(() => cover({ candidateHead: "d".repeat(40) }), /never overwritten/u, "a sealed clearing cover record is never replaced");
+    rmSync(gateCoverRecordPath(tmpRoot, capHead, ref), { force: true });
+    rmSync(`${gateCoverRecordPath(tmpRoot, capHead, ref)}.seal`, { force: true });
+    cover({ outcome: "bounded_out", nextStep: "restart_on_replacement_pr", status: "not_resolved", invocation: 3 });
+    assert.throws(() => cover({ invocation: 1 }), /last invocation used and is never overwritten/u, "a record that used the last invocation never restarts the bound");
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 review: the union spans only the links the proof traverses.
+test("resolveCapRoundFixed does not count a link past the head, an unresolved item or an off-history link (issue 3443)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const C = "8".repeat(40);
+    await seedClosedRounds(repoRoot, 66, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-66", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const q = { ...p, summary: "second defect" };
+    const r = { ...p, summary: "escalated defect" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...q, clusterId: 1 }, { ...r, clusterId: 2 }] }), "utf8");
+    const items = (status, ...fs) => ({ items: fs.map((f) => ({ ref: fingerprintFinding(f), status })) });
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", items("resolved", p, q));
+    await writeDeltaRecord(repoRoot, B, C, "push_to_gate", items("resolved", r));
+    let condition = null;
+    const run = (opts) => resolveCapRoundFixed({ repo: "owner/repo", pr: 66, gate: "draft_gate", ...opts }, { repoRoot, onFailure: (c) => { condition = c; } });
+    assert.equal(await run({ headSha: B }), null, "head B: the B to C link is past the head and covers nothing");
+    assert.equal(condition, "items_do_not_cover");
+    assert.equal(await run({ headSha: B, anyHead: true }), null, "anyHead: C is not an ancestor of B, so its link does not count");
+    assert.equal(condition, "items_do_not_cover");
+    assert.ok(await run({ headSha: C }), "head C: the traversed link covers r");
+    await writeDeltaRecord(repoRoot, B, C, "push_to_gate", items("unresolved", r));
+    assert.equal(await run({ headSha: C }), null, "a later link with an unresolved item does not cover it");
+    assert.equal(condition, "items_do_not_cover");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3443 review: with real commits, a ready PR head H descends from B and the B to C link resolves r, but C is an abandoned sibling off H's history.
+test("resolveCapRoundFixed anyHead does not count a link whose real candidate commit is off the head's history (issue 3443)", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const sibling = (msg) => git(repoRoot, ["commit-tree", `${B}^{tree}`, "-p", B, "-m", msg]).trim();
+    const H = sibling("ready head");
+    const C = sibling("abandoned sibling");
+    await seedClosedRounds(repoRoot, 67, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-67", `draft_gate-${A}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [p] = log.findings;
+    const q = { ...p, summary: "second defect" };
+    const r = { ...p, summary: "escalated defect" };
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 0 }, { ...q, clusterId: 1 }, { ...r, clusterId: 2 }] }), "utf8");
+    const resolved = (...fs) => ({ items: fs.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) });
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", resolved(p, q));
+    await writeDeltaRecord(repoRoot, B, C, "push_to_gate", resolved(r));
+    let condition = null;
+    assert.equal(await resolveCapRoundFixed({ repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: H, anyHead: true }, { repoRoot, onFailure: (c) => { condition = c; } }), null);
+    assert.equal(condition, "items_do_not_cover");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

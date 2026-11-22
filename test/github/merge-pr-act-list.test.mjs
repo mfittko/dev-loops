@@ -41,6 +41,7 @@ function makeRuntime(detectEvidence) {
     runtime: {
       env: { GH_TOKEN: "t" },
       ghJson: async (args) => {
+        if (args[0] === "run" && args[1] === "list") return [];
         if (args.join(" ").includes("/pulls/") || args.join(" ").includes("/issues/")) return [];
         if (args.includes("mergeCommit,state")) return { mergeCommit: { oid: MERGE_COMMIT }, state: "MERGED" };
         return view;
