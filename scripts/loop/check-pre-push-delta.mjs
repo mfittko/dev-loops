@@ -766,10 +766,10 @@ export async function runCli(
       return [...new Set([...watched(), ...scannedChain.starts.map(keyOf)])].some((sha) => JSON.stringify(startNow(root, sha)) !== JSON.stringify(scannedAt(sha)));
     };
     refreshChain = async () => {
-      chainCoverage = scannedChain ? await capRoundChainCoverage({ capRound, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), repo: options.repo, pr: options.pr, baseRefName: prBase, repoRoot: resolveRepoRoot(options.worktree), baseOnlyMerge, bound: { head: prHeadSha, onHistory, coverOnHistory: onHistory }, chain: scannedChain }).catch(() => null) : null;
+      chainCoverage = scannedChain ? await capRoundChainCoverage({ capRound, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), bound: { head: prHeadSha, onHistory, coverOnHistory: onHistory }, chain: scannedChain }).catch(() => null) : null;
       // The cover run is useful on a draft PR only while some chain visits the head or ends on its history (ready PRs keep it): the probe runs before the unresolved-history refusal, so a failed probe asks for the fetch.
       coverReachesHead = true;
-      if (chainCoverage && chainCoverage.uncovered.length > 0) coverReachesHead = await coverRunReachesHead({ isDraft: prState.isDraft, head: prHeadSha, onHistory, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), capHead: log.headSha, repo: options.repo, pr: options.pr, baseRefName: prBase, repoRoot: resolveRepoRoot(options.worktree), baseOnlyMerge, chain: scannedChain });
+      if (chainCoverage && chainCoverage.uncovered.length > 0) coverReachesHead = await coverRunReachesHead({ isDraft: prState.isDraft, head: prHeadSha, onHistory, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), capHead: log.headSha, chain: scannedChain });
     };
     await scanChain();
     await refreshChain();

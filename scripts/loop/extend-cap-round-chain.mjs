@@ -259,7 +259,7 @@ async function extendChain(options, {
       // Issue 3443: name the act refs no record on the chain covers and the records that exist, so the operator sees which item is missing. The same shared read the proof uses.
       // The chain starts, the bridges and the reachability are scanned here, before any lock: the lock below reads again only the linked and cover records from this scan, so no directory scan or base-only probe runs under it.
       const chain = cleanCap ? null : await capRoundChainStarts({ tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
-      const coverage = chain ? await capRoundChainCoverage({ capRound: cap, tmpRoot, repo, pr, baseRefName, repoRoot, bound: coverBound, baseOnlyMerge, chain }) : null;
+      const coverage = chain ? await capRoundChainCoverage({ capRound: cap, tmpRoot, bound: coverBound, chain }) : null;
       const { uncovered, records } = coverage ?? { uncovered: [], records: [] };
       // Every ref is covered here but the first proof failed: a cover run that completed after that proof (before the covering read, or between the two reads) changes the state it judged, so no replacement PR is due before the proof runs again.
       // A proof that now passes is already proven (a chain that reaches the head has no ancestor end, so the covering read alone cannot tell). The covering read that computed the chain ends covering no start while this read covers every ref shows a cover run between the two reads: the ends are stale (`record_changed`).
@@ -277,12 +277,12 @@ async function extendChain(options, {
       // A ready PR keeps the cover run when git proves the first candidate off the history (its anyHead proof accepts the first record whatever its candidate): the one candidate rule the cover run and both refusals apply. A draft PR gets the replacement PR, an unreadable history the fetch.
       const candidateOnHistory = onHeadHistory || (state.isDraft === false && !lastUnreadable);
       // On a draft PR the proof needs a chain that reaches the head: a cover run helps only while some chain visits the head or ends on its history. A ready PR keeps it (its anyHead proof accepts the first record whatever its candidate). An unreadable draft state reads as a draft.
-      const chainReaches = !(uncovered.length > 0 && candidateOnHistory) || await coverRunReachesHead({ isDraft: state.isDraft !== false, head, onHistory, tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot, chain });
+      const chainReaches = !(uncovered.length > 0 && candidateOnHistory) || await coverRunReachesHead({ isDraft: state.isDraft !== false, head, onHistory, tmpRoot, capHead: cap.log.headSha, chain });
       if (!(candidateOnHistory && chainReaches) && unresolved.size > 0) return refuseUnresolved();
       // One read of every uncovered ref's cover record under the sequence lock the cover run writes under: a write in progress (the seal removed, the new one not yet linked) is never read as an unsealed dead end. The detail below reuses it.
       // The coverage read above ran before the lock: a cover run that completed during the wait changes it (a clearing record would read as an off-history blocker), so the coverage is read again under the lock and a changed set returns the rerun.
       const blockers = uncovered.length > 0 && candidateOnHistory && chainReaches ? await withLock(tmpRoot, [capHeadSha], async () => {
-        const fresh = await capRoundChainCoverage({ capRound: cap, tmpRoot, repo, pr, baseRefName, repoRoot, bound: coverBound, baseOnlyMerge, chain });
+        const fresh = await capRoundChainCoverage({ capRound: cap, tmpRoot, bound: coverBound, chain });
         if ([...(fresh?.uncovered ?? [])].sort().join("\n") !== [...uncovered].sort().join("\n")) return null;
         return new Map(uncovered.map((ref) => [ref, coverRecordBlocker(tmpRoot, capHeadSha, ref)]));
       }) : new Map();
