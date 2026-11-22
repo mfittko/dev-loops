@@ -1006,7 +1006,9 @@ const shortSha = (sha) => (typeof sha === "string" && sha ? sha.slice(0, 7) : "?
  * An `unresolved` history (candidates this clone cannot read) names the fetch and lists no ref as uncovered: a covered ref on an unreadable link is not proven uncovered.
  */
 export const capRoundCoverageDetail = (coverage) => {
-  if (coverage?.unresolved?.length > 0) return ` The history of ${coverage.unresolved.map(shortSha).join(", ")} cannot be read in this clone, so no act ref is proven uncovered. Remedy: run ${coverage.unresolved.map((sha) => `\`git fetch origin ${sha}\``).join(" and ")}, then rerun the check.`;
+  // RECOVERY-COMMAND-REQUIRED: the fetch acts on the repository the check read (`checkout`), never on the caller's cwd.
+  const gitC = typeof coverage?.checkout === "string" && coverage.checkout ? `git -C ${shellQuote(coverage.checkout)}` : "git";
+  if (coverage?.unresolved?.length > 0) return ` The history of ${coverage.unresolved.map(shortSha).join(", ")} cannot be read in this clone, so no act ref is proven uncovered. Remedy: run ${coverage.unresolved.map((sha) => `\`${gitC} fetch origin ${sha}\``).join(" and ")}, then rerun the check.`;
   return coverage?.uncovered?.length > 0
     ? ` Uncovered act refs: ${coverage.uncovered.join(", ")}. Records on the chain: ${coverage.records.map((r) => `${shortSha(r.baseline)}..${shortSha(r.candidate)} [${r.refs.join(", ")}]`).join("; ")}.`
     : "";

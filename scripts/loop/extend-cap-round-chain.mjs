@@ -123,7 +123,10 @@ export async function extendCapRoundChain(options, {
   const proofArgs = { repo, pr, headSha: head, baseRefName };
   const reached = await resolveProof(proofArgs, { repoRoot });
   if (reached) return { ok: true, action: "already_proven", chainEnd: null, candidateHead: head, files: [] };
-  const cap = await resolveCapRound(proofArgs, { repoRoot });
+  // A ready PR is proven with anyHead (coordination's proof, resolveDraftCapRoundFact): a state that proof accepts is already proven, never a cover run, an extension or a replacement PR. An unreadable draft state reads as a draft.
+  const readyProof = { ...proofArgs, anyHead: true };
+  if (state.isDraft === false && await resolveProof(readyProof, { repoRoot })) return { ok: true, action: "already_proven", chainEnd: null, candidateHead: head, files: [] };
+  const cap =await resolveCapRound(proofArgs, { repoRoot });
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
   // The reviewer-only remedies name the cap-round ledger path when the cap round resolved, so no other log is picked.
   // The path is quoted in every command string: a worktree path with a space must stay one argument.
@@ -227,7 +230,8 @@ export async function extendCapRoundChain(options, {
   }
   // A clean cap round whose sealed record at the cap-round head names a candidate git could not read stays unresolved: the cap-head fallback below would read it as no chain and route back to coordination (RECOVERY-COMMAND-REQUIRED). Exit 1 and no record keep the fallback.
   if (!chainEnd && cleanCap && unresolved.size > 0 && HEX_SHA.test(capHeadSha) && present(capHeadSha) && sealedClearing(capHeadSha)) return refuseUnresolved();
-  if (!chainEnd && capHeadValid && cleanCap) chainEnd = capHeadSha;
+  const capHeadFallback = !chainEnd && capHeadValid && cleanCap;
+  if (capHeadFallback) chainEnd = capHeadSha;
   if (!chainEnd) {
     // A rebase leaves the cap-round head outside the head's history: no extension can bind, so name the replacement-PR restart.
     // Same probe as resolveCapRoundFixed: only merge-base exit 1 with both commits present proves it; the head itself or an unfetched commit (exit 128) does not.
@@ -243,14 +247,14 @@ export async function extendCapRoundChain(options, {
     const sealedCap = capHeadValid ? sealedClearing(capHeadSha) : null;
     const replacement = replacementPrOperatorRecovery(pr);
     if (sealedCap) {
-      // A ready PR is proven with anyHead (coordination's proof, resolveDraftCapRoundFact): a state that proof accepts is already proven, never a cover run or a replacement PR. An unreadable draft state reads as a draft.
-      if (state.isDraft === false && await resolveProof({ ...proofArgs, anyHead: true }, { repoRoot })) return { ok: true, action: "already_proven", chainEnd: null, candidateHead: head, files: [] };
       // Issue 3443: name the act refs no record on the chain covers and the records that exist, so the operator sees which item is missing. The same shared read the proof uses.
       // The chain starts, the bridges and the reachability are scanned here, before any lock: the lock below reads again only the linked and cover records from this scan, so no directory scan or base-only probe runs under it.
       const chain = cleanCap ? null : await capRoundChainStarts({ tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
       const coverage = chain ? await capRoundChainCoverage({ capRound: cap, tmpRoot, repo, pr, baseRefName, repoRoot, bound: coverBound, baseOnlyMerge, chain }) : null;
       const { uncovered, records } = coverage ?? { uncovered: [], records: [] };
-      // The covering read that computed the chain ends covered no start, and this read covers every ref: a cover run completed between the two reads, so the ends are stale and no replacement PR is due.
+      // Every ref is covered here but the first proof failed: a cover run that completed after that proof (before the covering read, or between the two reads) changes the state it judged, so no replacement PR is due before the proof runs again.
+      // A proof that now passes is already proven (a chain that reaches the head has no ancestor end, so the covering read alone cannot tell). The covering read that computed the chain ends covering no start while this read covers every ref shows a cover run between the two reads: the ends are stale (`record_changed`).
+      if (coverage && !cleanCap && uncovered.length === 0 && await resolveProof(state.isDraft === false ? readyProof : proofArgs, { repoRoot })) return { ok: true, action: "already_proven", chainEnd: null, candidateHead: head, files: [] };
       if (coverage && !cleanCap && uncovered.length === 0 && !anyStartCovered) return refuse("record_changed", `the cover records of PR #${pr} changed between this run's two coverage reads (a cover run completed), so the chain ends it computed are stale; nothing was written. Rerun ${again}`, again);
       const named = capRoundCoverageDetail({ uncovered, records });
       const head7 = head.slice(0, 7);
@@ -275,6 +279,8 @@ export async function extendCapRoundChain(options, {
       }) : new Map();
       if (blockers === null) return refuse("record_changed", `the cover records of PR #${pr} changed while this run waited for the sequence lock of the cap-round head ${capHeadSha.slice(0, 7)}, so the coverage read before the lock is stale; nothing was written. Rerun ${again}`, again);
       const blocked = uncovered.find((ref) => blockers.get(ref));
+      // The locked reread probes history too: a clearing cover record whose candidate git could not read under the lock is no proven off-history blocker (the uncovered set is unchanged), so ask for the fetch.
+      if (blocked !== undefined && unresolved.size > 0) return refuseUnresolved();
       if (uncovered.length > 0 && candidateOnHistory && chainReaches && blocked === undefined) return refuse("no_cap_round_chain", `${prefix} Run the cover run over ${capHeadSha.slice(0, 7)}..${head7}: ${coverRecovery(capHeadSha)} (then --result <result-file> --invocation <1-3>) until it is locally_clear; it seals one cover record per uncovered ref and never overwrites a gate-delta record, then rerun \`${again}\`. A reviewer-only run with a chain-end baseline derives an empty act list and covers no act ref, so the cover run is the route for an uncovered ref. Or restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, coverRecovery(capHeadSha));
       // Every act ref is covered and the record's candidate is off the head's history, or a cover record can take no further run: only a replacement PR remains.
       const blocker = blocked === undefined ? null : blockers.get(blocked);
@@ -299,6 +305,8 @@ export async function extendCapRoundChain(options, {
   if (readGateDeltaRecord(tmpRoot, chainEnd) !== null) {
     let clearing = false;
     try { clearing = DELTA_CLEARING_NEXT_STEPS.includes(readSealedGateDeltaRecord(tmpRoot, chainEnd)?.nextStep); } catch { /* unreadable: not a clearing record */ }
+    // A clean cap round whose sealed chain ends only off the head's history (git proved every end a non-ancestor) has no extension point: the record at the cap-round head is never overwritten and coordination routes back to this command, so only the replacement PR remains.
+    if (clearing && capHeadFallback && ends.length > 0 && ancestorEnds.length === 0 && !ends.includes(head)) return refuse("no_cap_round_chain", `the sealed clearing chain from the cap-round head ${capHeadSha.slice(0, 7)} ends at ${ends.map((end) => end.slice(0, 7)).join(", ")}, which ${ends.length > 1 ? "are" : "is"} not on the history of the PR head ${head.slice(0, 7)}, and the record at the cap-round head is never overwritten, so no extension can bind to it. Restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, replacementPrOperatorRecovery(pr));
     if (clearing) return recordExists();
     return refuse("record_not_clearing", `the delta record for ${chainEnd.slice(0, 7)} exists but is not a sealed clearing record and is never overwritten; run ${deltaRecovery(chainEnd)} (then --result <result-file> --invocation <1-3>) until it is locally_clear, then rerun this command`, deltaRecovery(chainEnd));
   }

@@ -1770,12 +1770,14 @@ test("issue 3443 round 4: a clean cap round with an unreadable sealed candidate 
     const refused = await extend(root, D);
     assert.equal(refused.reason, "history_unresolved", JSON.stringify(refused));
     assert.equal(refused.recovery, fetchIn(root, absent));
-    // Control: git proves the candidate off the history (exit 1): the cap-head fallback is kept, so the clearing record at the cap-round head is record_exists.
+    // Control: git proves the candidate off the history (exit 1): the cap-head fallback finds the sealed record at the cap-round head that no extension can bind to, so the exit is the replacement PR (never record_exists, which routes back to coordination and this command).
     const off = sibling(root, A, "abandoned sibling");
     const recordPath = gateDeltaRecordPath(tmp, A);
     rmSync(recordPath); rmSync(`${recordPath}.seal`);
     writeSealedGateDeltaRecord(tmp, A, clearing(A, off));
-    assert.equal((await extend(root, D)).reason, "record_exists");
+    const dead = await extend(root, D);
+    assert.equal(dead.reason, "no_cap_round_chain", JSON.stringify(dead));
+    assert.equal(dead.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1832,6 +1834,104 @@ test("issue 3443 round 4: a cover run that lands between the two pre-lock reads 
     const stable = await extend(root, H);
     assert.equal(stable.reason, "no_cap_round_chain", JSON.stringify(stable));
     assert.equal(stable.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Delta review (false replacement PR): a cover run that completes between the first proof and the covering read leaves a covered chain that already reaches the head (A..H, no strict-ancestor end), so no coverage guard fires. The tool runs the proof again and returns already_proven.
+test("issue 3443 delta review: a cover run that lands between the first proof and the covering read makes a chain that ends at the head already_proven", async () => {
+  const [p, q] = roundFour();
+  const { root, A } = await capFixture({ findings: [p, q] });
+  try {
+    const tmp = path.join(root, "tmp");
+    const H = await commit(root, { "docs/h.md": "h\n" }, "head");
+    writeSealedGateDeltaRecord(tmp, A, clearing(A, H, resolved(p)));
+    assert.equal(await proof(root, H), null, "q is uncovered: the first proof fails");
+    let calls = 0;
+    const resolveProof = async (args, deps) => {
+      const reached = await resolveCapRoundFixed(args, deps);
+      if (++calls === 1) writeCoverRecord(tmp, coverFor(A, fingerprintFinding(q), H));
+      return reached;
+    };
+    const result = await extend(root, H, { resolveProof });
+    assert.equal(result.action, "already_proven", JSON.stringify(result));
+    assert.ok(await proof(root, H), "the cover record completes the chain");
+    // Control: no cover run, no proof: the same chain refuses and names the cover run for the uncovered ref.
+    rmSync(gateCoverRecordPath(tmp, A, fingerprintFinding(q))); rmSync(`${gateCoverRecordPath(tmp, A, fingerprintFinding(q))}.seal`, { force: true });
+    const refused = await extend(root, H);
+    assert.equal(refused.reason, "no_cap_round_chain", JSON.stringify(refused));
+    assert.match(refused.recovery, /--cover-uncovered/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Delta review (command loop): on a ready PR the tool runs coordination's anyHead proof first. A clean cap round whose cap-head record carries an extension with an off-history candidate is accepted by that proof, so the tool returns already_proven instead of delta_range_mismatch (whose reviewer-only recovery refuses 'carries an extension' again).
+test("issue 3443 delta review: a ready clean cap round whose cap-head record carries an extension is already_proven, not a logic-range loop", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const tmp = path.join(root, "tmp");
+    const X = sibling(root, A, "amended-away candidate");
+    const L = await commit(root, { "src/b.mjs": "export const b = 1;\n" }, "logic after the cap-round head");
+    writeSealedGateDeltaRecord(tmp, A, { ...clearing(A, X), extension: "delta_covered" });
+    const ready = await extend(root, L, { fetchPr: async () => ({ headRefOid: L, baseRefName: "main", isDraft: false }) });
+    assert.equal(ready.action, "already_proven", JSON.stringify(ready));
+    const anyHead = await resolveCapRoundFixed({ repo: REPO, pr: PR, headSha: L, baseRefName: "main", anyHead: true }, { repoRoot: root });
+    assert.ok(anyHead, "coordination's proof accepts the state");
+    const draft = await extend(root, L, { fetchPr: async () => ({ headRefOid: L, baseRefName: "main", isDraft: true }) });
+    assert.notEqual(draft.action, "already_proven", "the draft proof needs a chain that reaches the head");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Delta review (dead end): a clean cap round whose sealed chain ends only off the head's history. The anyHead proof correctly fails (the extension of the off-history link never counts), the record at the cap-round head is never overwritten, so the exit is the replacement PR, not record_exists with the coordination command that routes back here.
+test("issue 3443 delta review: a clean cap round whose sealed chain ends off the head's history names the replacement PR, never record_exists", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const tmp = path.join(root, "tmp");
+    const B = await commit(root, { "docs/b.md": "b\n" }, "docs b");
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs d");
+    const X = sibling(root, B, "amended-away extension candidate");
+    writeSealedGateDeltaRecord(tmp, A, clearing(A, B));
+    writeSealedGateDeltaRecord(tmp, B, { ...clearing(B, X), extension: "docs_tests_only" });
+    assert.equal(await resolveCapRoundFixed({ repo: REPO, pr: PR, headSha: D, baseRefName: "main", anyHead: true }, { repoRoot: root }), null, "the proof fails: the off-history extension never counts");
+    for (const isDraft of [false, true]) {
+      const refused = await extend(root, D, { fetchPr: async () => ({ headRefOid: D, baseRefName: "main", isDraft }) });
+      assert.equal(refused.reason, "no_cap_round_chain", JSON.stringify(refused));
+      assert.equal(refused.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
+      assert.match(refused.detail, /never overwritten/u);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Delta review (unknown history under the lock): a clearing cover record that lands during the lock wait with a candidate git cannot read leaves the uncovered set unchanged, so it reads as an off-history blocker. The tool asks for the fetch instead of returning the replacement PR.
+test("issue 3443 delta review: a cover record whose candidate git cannot read under the lock returns the fetch, not the replacement PR", async () => {
+  const [p, q] = roundFour();
+  const { root, A, B } = await capFixture({ findings: [p, q] });
+  try {
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, clearing(A, B, resolved(p)));
+    const cover = { ...coverFor(A, fingerprintFinding(q), B), outcome: "needs_fix", nextStep: "fix_and_rereview", status: "not_resolved" };
+    writeCoverRecord(tmp, cover);
+    const never = "9".repeat(40);
+    let result;
+    await withSequenceLock(tmp, [A], async () => {
+      const attempt = lockAttempt();
+      const pending = extend(root, B, { withLock: attempt.withLock });
+      await attempt.reached;
+      rmSync(gateCoverRecordPath(tmp, A, cover.ref));
+      rmSync(`${gateCoverRecordPath(tmp, A, cover.ref)}.seal`, { force: true });
+      writeCoverRecord(tmp, { ...cover, candidateHead: never, outcome: "locally_clear", nextStep: "push_to_gate", status: "resolved", invocation: 2 });
+      result = pending;
+    });
+    const refused = await result;
+    assert.equal(refused.reason, "history_unresolved", JSON.stringify(refused));
+    assert.equal(refused.recovery, fetchIn(root, never));
+    assert.doesNotMatch(refused.detail, /not on the PR head's history/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

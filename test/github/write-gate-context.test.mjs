@@ -9733,7 +9733,8 @@ test("resolveCapRoundFixed reads a git failure as unresolved history, never as a
     await writeDeltaRecord(repoRoot, B, never, "push_to_gate", { items: [{ ref: fingerprintFinding(q), status: "resolved" }] });
     assert.equal(await run(), null, "exit 128: the missing candidate never proves the round");
     assert.deepEqual(detail.unresolved, [never]);
-    assert.match(capRoundCoverageDetail(detail), new RegExp(`git fetch origin ${never}`, "u"));
+    // RECOVERY-COMMAND-REQUIRED: the fetch acts on the repository the check read, never on the caller's cwd.
+    assert.ok(capRoundCoverageDetail(detail).includes(`\`git -C '${path.resolve(repoRoot)}' fetch origin ${never}\``), capRoundCoverageDetail(detail));
     assert.doesNotMatch(capRoundCoverageDetail(detail), /Uncovered act refs/u, "no ref is presented as proven uncovered");
     // Exit 1 without a signal: a real sibling commit is proven off history, so the ref is uncovered and nothing is unresolved.
     await writeDeltaRecord(repoRoot, B, sibling, "push_to_gate", { items: [{ ref: fingerprintFinding(q), status: "resolved" }] });
@@ -9877,7 +9878,7 @@ test("resolveCapRoundFixed names the unfetched PR head, not the present candidat
     const run = (headSha, root = repoRoot) => resolveCapRoundFixed({ repo: "owner/repo", pr: 78, gate: "draft_gate", headSha, anyHead: true }, { repoRoot: root, onFailure: (c, d) => { detail = d; } });
     assert.equal(await run(never), null, "the PR head is not in this clone");
     assert.deepEqual(detail.unresolved, [never], "the unfetched head is named, not the present candidate C");
-    assert.match(capRoundCoverageDetail(detail), new RegExp(`git fetch origin ${never}`, "u"));
+    assert.ok(capRoundCoverageDetail(detail).includes(`\`git -C '${path.resolve(repoRoot)}' fetch origin ${never}\``), capRoundCoverageDetail(detail));
     assert.doesNotMatch(capRoundCoverageDetail(detail), new RegExp(C, "u"));
     // A cover record is probed only when it is clearing and its ref is one the chain leaves uncovered.
     const H = child(C, "ready head");

@@ -2611,7 +2611,7 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   const condition = orphaned ? "baseline_orphaned" : starts.length === 0 ? (unsealed ? "unsealed_record" : "no_clearing_record") : covering === 0 ? "items_do_not_cover" : "chain_does_not_reach_head";
   // Issue 3443: items_do_not_cover also names the act refs no record on the chain covers and the records that exist. An unresolved history (a commit this clone lacks) is named with it, and the refs are then not proven uncovered.
   const coverage = condition === "items_do_not_cover" && !isCleanCapRound(capRound) ? await capRoundChainCoverage({ capRound, tmpRoot, bound, chain }) : null;
-  onFailure(condition, coverage ? { ...coverage, ...(unresolvedHistory.size > 0 ? { unresolved: [...unresolvedHistory] } : {}) } : undefined);
+  onFailure(condition, coverage ? { ...coverage, ...(unresolvedHistory.size > 0 ? { unresolved: [...unresolvedHistory], checkout: path.resolve(repoRoot) } : {}) } : undefined);
   return null;
 }
 
