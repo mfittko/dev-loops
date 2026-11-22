@@ -2292,6 +2292,18 @@ function promoteLedgerFanout(options, ledger) {
   options.inlineReason = undefined;
 }
 
+// Severity counts of the findings a clean floor reads: every unjudged finding plus every open act item.
+function unresolvedSeverityCounts(findings) {
+  const counts = { high: 0, medium: 0, low: 0, question: 0, nit: 0 };
+  const open = new Set(listOpenActItems(findings));
+  for (const f of findings) {
+    if (f?.judgeDisposition && !open.has(f)) continue;
+    const sev = normalizeSeverity(f?.severity);
+    counts[sev] = (counts[sev] ?? 0) + 1;
+  }
+  return counts;
+}
+
 async function loadMatchingFindingsLedger(options, headSha) {
   if (!options.findingsLedger) {
     return null;
@@ -2801,8 +2813,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     const findings = capRound.log.findings ?? [];
     const n = findings.length;
     // A clean cap round holds no open act item, so the unresolved severity counts the clean floor reads are the act items per severity (zero).
-    const findingsSeverityCounts = { high: 0, medium: 0, low: 0, question: 0, nit: 0 };
-    for (const f of listOpenActItems(findings)) findingsSeverityCounts[normalizeSeverity(f.severity)] = (findingsSeverityCounts[normalizeSeverity(f.severity)] ?? 0) + 1;
+    const findingsSeverityCounts = unresolvedSeverityCounts(findings);
     options = { ...options, headSha: capRound.log.headSha, findingsLedger: capRound.ledgerPath, nextAction: "mark ready for review", findingsSummary: `${n} ${n === 1 ? "finding" : "findings"} from the findings ledger.`, findingsSeverityCounts };
   }
   // Root cause 1: allow resurrected sessions to claim ownership when the previous
@@ -3181,6 +3192,10 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     if (options.findingsLedger) {
       preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
       promoteLedgerFanout(options, preloadedFindingsLedger);
+      // The parser skipped this check because the ledger's mode was unknown; refuse before any later gate check or gh call.
+      if ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent" && options.inlineReason === undefined) {
+        throw new Error(INLINE_REASON_REQUIRED_MESSAGE);
+      }
     }
     // GATE-EXEC-ROUND-CAP: with the cap on, the judged ledger is the only draft_gate input. One choke point
     // refuses every other shape before any cap logic runs. The one exception is an inline clean without findings content (--findings-summary text only, as reconcile-draft-gate posts):
@@ -3247,15 +3262,10 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       const n = (preloadedFindingsLedger.findings ?? []).length;
       options.findingsSummary = `${n} ${n === 1 ? "finding" : "findings"} from the findings ledger.`;
     }
-    // The parser skipped this check because the ledger's mode was unknown; promoteLedgerFanout has now resolved it.
-    if ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent" && options.inlineReason === undefined) {
-      throw new Error(INLINE_REASON_REQUIRED_MESSAGE);
-    }
-    // A clean ledger without --findings-severity-counts: its open act items give them (an empty list still needs counts for the clean floor).
+    // A clean ledger without --findings-severity-counts: its unjudged findings and open act items give them (an empty list still needs counts for the clean floor).
     // Other verdicts keep the verdict-based blocking-severity fallback.
     if (!options.findingsSeverityCounts && preloadedFindingsLedger.overallVerdict === "clean") {
-      options.findingsSeverityCounts = { high: 0, medium: 0, low: 0, question: 0, nit: 0 };
-      for (const f of listOpenActItems(preloadedFindingsLedger.findings ?? [])) options.findingsSeverityCounts[normalizeSeverity(f.severity)] += 1;
+      options.findingsSeverityCounts = unresolvedSeverityCounts(preloadedFindingsLedger.findings ?? []);
     }
     const fanout = (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin";
     if (options.gate !== "review" && fanout) {

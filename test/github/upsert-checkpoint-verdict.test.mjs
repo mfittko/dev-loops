@@ -13401,9 +13401,9 @@ test("upsert-checkpoint-verdict makes one baseRefOid,labels read when the eviden
 // #3347: --findings-ledger alone suffices on every gate
 // ---------------------------------------------------------------------------
 
-async function postLedgerOnly(tempDir, ledgerOverrides, { findings = [], gate = "draft_gate", extra = {} } = {}) {
+async function postLedgerOnly(tempDir, ledgerOverrides, { findings = [], gate = "draft_gate", extra = {}, requireFanout = false } = {}) {
   // No mandatory angles, so the ledger needs no provenance.
-  await writeFile(path.join(tempDir, ".devloops"), ["version: 1", "refinement:", "  maxCopilotRounds: 0", "gates:", "  requireFanoutEvidence: false", ...["draft", "preApproval"].flatMap((g) => [`  ${g}:`, "    angles:", "      - name: pr-description", "        enabled: false", "      - name: holistic", "        enabled: false", "      - name: pr-checklist", "        enabled: false"]), ""].join("\n"), "utf8");
+  await writeFile(path.join(tempDir, ".devloops"), ["version: 1", "refinement:", "  maxCopilotRounds: 0", "gates:", `  requireFanoutEvidence: ${requireFanout}`, ...["draft", "preApproval"].flatMap((g) => [`  ${g}:`, "    angles:", "      - name: pr-description", "        enabled: false", "      - name: holistic", "        enabled: false", "      - name: pr-checklist", "        enabled: false"]), ""].join("\n"), "utf8");
   const ledgerPath = await writeSingleSurfaceLedger(tempDir, findings, { gate, overallVerdict: "clean", executionMode: "fanout_fanin", ...ledgerOverrides });
   const cleanDraft = { id: 707, submitted_at: "2026-08-03T10:00:00Z", html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-707", body: renderGateReviewCommentBody({ gate: "draft_gate", headSha: SINGLE_SURFACE_HEAD, verdict: "clean", findingsSummary: "none", nextAction: "mark ready for review", executionMode: "fanout_fanin", round: 1, nonLocatableFindings: [] }) };
   const { runChild, calls } = makeGhMock([
@@ -13477,4 +13477,39 @@ test("upsert-checkpoint-verdict: the unjudged-ledger refusal names the enriched 
     await assert.rejects(run, /its input is the enriched judge-pass --ledger-out file; the durable output path of that write is the --findings-ledger value/);
     assert.equal(posted().length, 0);
   }, { prefix: "dev-loops-upsert-ledger-only-unjudged-" });
+});
+
+test("upsert-checkpoint-verdict: a ledger-only inline post under requireFanoutEvidence gets the inline-reason refusal before any post (#3347)", async () => {
+  await withTempDir(async (tempDir) => {
+    const { run, posted } = await postLedgerOnly(tempDir, { executionMode: "inline_single_agent" }, { requireFanout: true });
+    await assert.rejects(run, /--inline-reason is required for executionMode inline_single_agent/);
+    assert.equal(posted().length, 0);
+  }, { prefix: "dev-loops-upsert-ledger-only-inline-req-" });
+});
+
+for (const [gate, verdict, nextAction] of [["draft_gate", "findings_present", "stay draft and fix"], ["draft_gate", "blocked", "stay draft and fix"], ["pre_approval_gate", "findings_present", "rerun gate"], ["pre_approval_gate", "blocked", "rerun gate"]]) {
+  test(`upsert-checkpoint-verdict: a ledger-only ${gate} ${verdict} post derives next action "${nextAction}" (#3347)`, async () => {
+    await withTempDir(async (tempDir) => {
+      const { run, posted } = await postLedgerOnly(tempDir, { overallVerdict: verdict }, { gate, findings: [{ ...BODY_FILED_FINDING, judgeDisposition: "act" }] });
+      await run();
+      assert.match(JSON.parse(posted()[0].stdinText).body, new RegExp(`\\*\\*Next action:\\*\\* ${nextAction}`));
+    }, { prefix: "dev-loops-upsert-ledger-only-table-" });
+  });
+}
+
+test("upsert-checkpoint-verdict: explicit --next-action and --findings-severity-counts win over the ledger-derived values (#3347)", async () => {
+  await withTempDir(async (tempDir) => {
+    const { run, posted } = await postLedgerOnly(tempDir, {}, { gate: "pre_approval_gate", extra: { nextAction: "await the maintainer", findingsSeverityCounts: { high: 0, medium: 0, low: 0, question: 0, nit: 0 } } });
+    await run();
+    assert.match(JSON.parse(posted()[0].stdinText).body, /\*\*Next action:\*\* await the maintainer/);
+  }, { prefix: "dev-loops-upsert-ledger-only-explicit-wins-" });
+});
+
+test("upsert-checkpoint-verdict: a partly judged clean ledger keeps its unjudged high finding in the derived counts (#3347)", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [{ ...BODY_FILED_FINDING, severity: "must-fix" }, { ...BODY_FILED_FINDING, summary: "judged away", judgeDisposition: "reject", judgeReason: "n/a" }];
+    const { run, posted } = await postLedgerOnly(tempDir, { executionMode: "inline_single_agent" }, { findings, extra: { inlineReason: "test" } });
+    await assert.rejects(run, /severity|high|blocking/i);
+    assert.equal(posted().length, 0);
+  }, { prefix: "dev-loops-upsert-ledger-only-floor-" });
 });
