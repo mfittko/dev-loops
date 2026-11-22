@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
-import { spawn } from "node:child_process";
+import { spawnRecorded } from "@dev-loops/core/github/gh-call-log";
 import { isUnpaced, takeGhSlot } from "@dev-loops/core/github/gh-throttle";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -98,7 +98,7 @@ export async function watchWorkflowRun(
   {
     env,
     ghCommand,
-    spawnImpl = spawn,
+    spawnImpl = spawnRecorded,
     setTimeoutImpl = setTimeout,
     clearTimeoutImpl = clearTimeout,
   },
@@ -518,7 +518,7 @@ export async function runWatchCycle(
     ensureOwnershipImpl = ensureAsyncRunnerOwnership,
     recordWatchClaimImpl = defaultRecordWatchClaim,
     detectSessionActivity = false,
-    spawnImpl = spawn,
+    spawnImpl = spawnRecorded,
     cwd = process.cwd(),
     checkpointDir,
     now = Date.now,

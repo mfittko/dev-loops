@@ -119,6 +119,7 @@ const RAW_SPAWNERS = /\b(?:spawn|spawnSync|execFile|execFileSync|execFileAsync)\
 const GH_CALL = /(?<![.\w])(\w+)\(\s*(?:"gh"|ghCommand)\s*,/gu;
 const RECORDING_CALLS = new Set(["spawnRecorded", "execFileSyncRecorded"]);
 const GH_COMMAND_SEAM_DEFAULT = /ghCommand[^\n]*\b(?:exec|runChild)\s*=\s*execFileSync\b/u;
+const SPAWN_SEAM_DEFAULT = /\bspawnImpl\s*=\s*spawn\b/u;
 
 /**
  * True when `source` passes the literal "gh" or `ghCommand` as the command to a raw child_process
@@ -127,7 +128,7 @@ const GH_COMMAND_SEAM_DEFAULT = /ghCommand[^\n]*\b(?:exec|runChild)\s*=\s*execFi
  * shortcut: a block is the coarse unit, so a raw spawn beside a record inside one block passes; upgrade with a parser.
  */
 export function hasUnrecordedGhCall(source) {
-  if (GH_COMMAND_SEAM_DEFAULT.test(source)) return true;
+  if (GH_COMMAND_SEAM_DEFAULT.test(source) || (SPAWN_SEAM_DEFAULT.test(source) && /"gh"|ghCommand/u.test(source))) return true;
   let offset = 0;
   const blocks = source.split(/\n(?=\S)/u).map((text) => { const block = { text, start: offset }; offset += text.length + 1; return block; });
   const blockAt = (index) => blocks.findLast((b) => b.start <= index).text;
@@ -170,6 +171,10 @@ test("the call-site guard flags gh passed to raw spawners and local wrappers, an
   assert.equal(hasUnrecordedGhCall(`function spawnResult(c, a) { return spawnSync(c, a); }\nrecordGhCall(x);\nspawnResult("gh", ["auth", "status"])`), true, "a recordGhCall elsewhere in the file does not exempt a raw wrapper");
   assert.equal(hasUnrecordedGhCall(`function runGh(a) { const r = spawnSync("gh", a); recordGhCall(a, {}); return r; }\nrunGh(["pr", "view"])`), false, "a wrapper whose body records is accepted");
   assert.equal(hasUnrecordedGhCall('spawnRecorded("gh", args)'), false);
+  assert.equal(hasUnrecordedGhCall('const { spawnImpl = spawn, ghCommand } = o;'), true);
+  assert.equal(hasUnrecordedGhCall('const { spawnImpl = spawn } = o; run("gh", a);'), true);
+  assert.equal(hasUnrecordedGhCall('const { spawnImpl = spawnRecorded } = o;'), false);
+  assert.equal(hasUnrecordedGhCall('const { spawnImpl = spawn } = o;'), false, "a non-gh spawn seam is accepted");
   assert.equal(hasUnrecordedGhCall("ghSync(args)"), false);
   assert.equal(hasUnrecordedGhCall('spawn("git", args)'), false);
   assert.equal(hasUnrecordedGhCall('runChild(ghCommand, args)'), false, "an imported shared runChild records");
