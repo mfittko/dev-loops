@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import { spawnRecorded } from "@dev-loops/core/github/gh-call-log";
 import { takeGhSlot } from "@dev-loops/core/github/gh-throttle";
 import { withSecondaryLimitBackoff } from "@dev-loops/core/github/gh";
 import { readFile, writeFile } from "node:fs/promises";
@@ -132,7 +133,7 @@ function run(command, args, { cwd, env = process.env } = {}) {
 }
 function spawnChild(command, args, { cwd, env }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnRecorded(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += String(chunk); });
