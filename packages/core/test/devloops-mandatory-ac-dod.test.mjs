@@ -117,3 +117,17 @@ describe(".devloops draft-gate angle drops (draft gate)", () => {
     }
   });
 });
+
+// DESIGN-SIMPLEST-FIRST (issue 3462): kiss and yagni are mandatory draft angles
+// from round 1, and the shipped grill reviewers are kiss and yagni.
+describe(".devloops mandatory kiss and yagni draft angles", () => {
+  test("a code diff lists kiss and yagni in the draft round and the shipped refinement roles are kiss and yagni", async () => {
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
+    const gate = resolveGateConfig(config, "draft");
+    for (const angle of ["kiss", "yagni"]) assert.ok(gate.mandatoryAngles.includes(angle), `${angle} must be mandatory`);
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: { nameStatusOutput: "M\tscripts/x.mjs\n" } });
+    for (const angle of ["kiss", "yagni"]) assert.ok(result.recommendedAngles.includes(angle), `${angle} must run for a code diff`);
+    assert.deepEqual(config.refinement.roles, ["kiss", "yagni"]);
+  });
+});
