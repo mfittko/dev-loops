@@ -85,6 +85,21 @@ test("a parenthesis in a string does not extend the span into an enclosing timeo
   assert.equal(run('log(spawnSync("grep", ["-F", "(", file]), { timeout: 5 });').outcome, "block");
 });
 
+test("a call inside a template expression is seen and a nested template keeps its parity", () => {
+  assert.equal(run('const sha = `${execFileSync("git", ["rev-parse", "HEAD"])}`;').outcome, "block");
+  assert.equal(run('const a = `${x ? `"` : ""}`;\nspawnSync("git");').outcome, "block");
+  assert.equal(run('log(spawnSync("grep", [`${x ? `(` : ""}`]), { timeout: 5 });').outcome, "block");
+  assert.equal(run('const s = `${spawnSync("git", { timeout: 5 })}`;').outcome, "pass");
+});
+
+test("a runChild bound in its own file blocks unless marked", () => {
+  const bound = 'function runChild(c, a, e, s) {}\nrunChild("git", [], {}, "", { timeoutMs: 5 });';
+  assert.equal(run(bound, { lines: [2] }).outcome, "block");
+  assert.match(run(bound, { lines: [2] }).recovery, /bound in its own file/u);
+  assert.equal(run('const f = ({ runChild = exec }) => runChild("gh", [], { timeout: 5 });').outcome, "block");
+  assert.equal(run(`${bound.replace("runChild(\"git\"", `// ${ESCAPE_MARKER} timeout set in callee\nrunChild("git"`)}`, { lines: [3] }).outcome, "pass");
+});
+
 test("an unbalanced or unterminated call blocks", () => {
   assert.equal(run('spawnSync("git", [').outcome, "block");
   assert.equal(run('spawnSync("git, { timeout: 5 });').outcome, "block");

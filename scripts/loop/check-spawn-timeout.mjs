@@ -14,9 +14,13 @@
  * Result shape: { ok, outcome: "pass" | "block", findings: [{ path, line, call }], reasons, recovery? }.
  * `recovery` is present on a block only.
  *
- * shortcut: a masking pass blanks strings, templates, regex literals and comments, but a `${}` expression in a
- * template is blanked with it and a slash after `)` or `}` reads as division; upgrade to a parser if that
- * shows up. Unbalanced or unterminated arguments block.
+ * A `runChild` call in a file that binds the name itself (`function runChild`, `runChild = ...`) blocks
+ * unless marked: the lint cannot tell what that callee reads, so a `timeoutMs` there proves nothing.
+ *
+ * shortcut: a masking pass blanks strings, template text, regex literals and comments (a `${}` expression
+ * is scanned as code), but a slash after `)` or `}` reads as division and an injected `runChild` parameter
+ * with no default reads as the core helper; upgrade to a parser if that shows up. Unbalanced or
+ * unterminated arguments block.
  */
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -34,6 +38,8 @@ const CALL_RE = /(?<![\w$.])(runChild|spawnSync|execFileSync)\s*\(/gu;
 const REASONED_ALLOW_RE = new RegExp(`${ESCAPE_MARKER}[ \\t]+(?:(?!\\*/)[^\\w\\n])*\\w`, "u");
 // Masked text before a call that makes it the declared name, not a call.
 const DECLARED_NAME_PREFIX_RE = /\bfunction\s*\*?\s+$/u;
+// A file that binds `runChild` itself: the core signature does not apply to its calls.
+const LOCAL_RUNCHILD_RE = /\bfunction\s*\*?\s+runChild\b|(?<![\w$.])runChild\s*=(?![=>])/u;
 // The option key each callee reads. runChild reads `timeoutMs` only in its fifth argument; spawnSync and
 // execFileSync read `timeout` in an options object after the command.
 const TIMEOUT_KEY = { runChild: "timeoutMs", spawnSync: "timeout", execFileSync: "timeout" };
@@ -48,13 +54,27 @@ const REGEX_KEYWORD_RE = /(?:^|[^\w$.])(?:return|typeof|case|throw)\s*$/u;
 export function maskSource(text) {
   const out = text.split("");
   const blank = (from, to) => { for (let k = from; k < to; k += 1) if (out[k] !== "\n") out[k] = " "; };
+  // Scans code from `start`; inside a template `${}` it stops at the matching `}` and returns that index.
+  const scan = (start, inTemplate) => {
   let prev = "";
-  let i = 0;
+  let braces = 0;
+  let i = start;
   while (i < text.length) {
     const c = text[i];
-    if (c === '"' || c === "'" || c === "`") {
+    if (inTemplate && c === "{") braces += 1;
+    if (inTemplate && c === "}" && braces-- === 0) return i;
+    if (c === "`") {
+      // Template text is blanked; each `${}` expression is scanned as code, so nested templates keep their parity.
       let j = i + 1;
-      while (j < text.length && text[j] !== c && (c === "`" || text[j] !== "\n")) j += text[j] === "\\" ? 2 : 1;
+      while (j < text.length && text[j] !== "`") {
+        if (text[j] === "$" && text[j + 1] === "{") j = scan(j + 2, true) + 1;
+        else { const w = text[j] === "\\" ? 2 : 1; blank(j, Math.min(j + w, text.length)); j += w; }
+      }
+      i = j + 1;
+      prev = "a";
+    } else if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (j < text.length && text[j] !== c && text[j] !== "\n") j += text[j] === "\\" ? 2 : 1;
       blank(i + 1, Math.min(j, text.length));
       i = j + 1;
       prev = "a";
@@ -83,6 +103,9 @@ export function maskSource(text) {
       i += 1;
     }
   }
+  return text.length;
+  };
+  scan(0, false);
   return out.join("");
 }
 
@@ -138,6 +161,7 @@ export function computeSpawnTimeout({ files = [] } = {}) {
     const lineAt = (index) => offsets.findLastIndex((o) => o <= index) + 1;
     const masked = maskSource(content);
     const maskedLines = masked.split("\n");
+    const localRunChild = LOCAL_RUNCHILD_RE.test(masked);
     for (const match of masked.matchAll(CALL_RE)) {
       const line = lineAt(match.index);
       if (DECLARED_NAME_PREFIX_RE.test(maskedLines[line - 1].slice(0, match.index - offsets[line - 1]))) continue;
@@ -148,13 +172,17 @@ export function computeSpawnTimeout({ files = [] } = {}) {
       // The marker above counts only on a line that holds nothing but a comment (blank once masked).
       const aloneAbove = line > 1 && !maskedLines[line - 2].trim() && REASONED_ALLOW_RE.test(lines[line - 2]);
       if (REASONED_ALLOW_RE.test(lines[line - 1]) || aloneAbove) continue;
-      if (args !== null && hasTimeout(match[1], args.text)) continue;
-      findings.push({ path, line, call: match[1] });
+      const local = localRunChild && match[1] === "runChild";
+      if (!local && args !== null && hasTimeout(match[1], args.text)) continue;
+      findings.push({ path, line, call: match[1], ...(local && { local }) });
     }
   }
   if (!findings.length) return { ok: true, outcome: "pass", findings, reasons: [] };
-  const reasons = findings.map((f) => `${f.path}:${f.line}: ${f.call}() passes no \`${TIMEOUT_KEY[f.call]}\` option; a hung child blocks the lane. Add \`${TIMEOUT_KEY[f.call]}\` or \`${ESCAPE_MARKER} <reason>\`.`);
-  return { ok: false, outcome: "block", findings, reasons, recovery: `Add the timeout option the call reads (\`timeoutMs\` for runChild, \`timeout\` for spawnSync and execFileSync) to each listed call, or mark it \`${ESCAPE_MARKER} <reason>\`, then rerun the check.` };
+  const reasons = findings.map((f) => f.local
+    ? `${f.path}:${f.line}: runChild() is bound in this file, so its timeout option is unknown. Set the timeout inside that callee and mark the call \`${ESCAPE_MARKER} <reason>\`.`
+    : `${f.path}:${f.line}: ${f.call}() passes no \`${TIMEOUT_KEY[f.call]}\` option; a hung child blocks the lane. Add \`${TIMEOUT_KEY[f.call]}\` or \`${ESCAPE_MARKER} <reason>\`.`);
+  const localNote = findings.some((f) => f.local) ? ` A runChild bound in its own file needs its timeout set inside that callee, then the \`${ESCAPE_MARKER} <reason>\` marker.` : "";
+  return { ok: false, outcome: "block", findings, reasons, recovery: `Add the timeout option the call reads (\`timeoutMs\` for runChild, \`timeout\` for spawnSync and execFileSync) to each listed call, or mark it \`${ESCAPE_MARKER} <reason>\`, then rerun the check.${localNote}` };
 }
 
 const assertPlausibleRef = (ref, label) => {
