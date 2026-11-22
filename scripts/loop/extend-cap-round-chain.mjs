@@ -79,7 +79,7 @@ const rerun = (repo, pr) => `${CLI} gate extend-cap-round-chain --repo ${repo} -
 const headMovingRecovery = (repo, pr) => `operator: push one docs or tests commit to the PR branch, then rerun ${rerun(repo, pr)}`;
 const CLI = "node <dev-loops-package-root>/cli/index.mjs";
 const defaultGit = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnvNoDirOverrides(), stdio: ["ignore", "pipe", "pipe"] }).trim();
-const defaultFetchPr = ({ repo, pr }, { env, ghCommand, runChild }) => ghJson(["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,baseRefName"], { env, ghCommand, runChild });
+const defaultFetchPr = ({ repo, pr }, { env, ghCommand, runChild }) => ghJson(["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,headRefName,baseRefName"], { env, ghCommand, runChild });
 
 export async function extendCapRoundChain(options, {
   env = process.env, ghCommand = "gh", runChild, fetchPr = defaultFetchPr, git = defaultGit,
@@ -100,8 +100,10 @@ export async function extendCapRoundChain(options, {
   const head = git(cwd, ["rev-parse", "HEAD"]).toLowerCase();
   if (head !== prHead) {
     // `git pull --ff-only` fast-forwards only a worktree HEAD that the PR head contains (or fetches an absent PR head). An ahead or diverged worktree holds local commits: the operator pushes or reconciles them.
-    const checkoutFixes = (() => { try { git(cwd, ["merge-base", "--is-ancestor", head, prHead]); return true; } catch (error) { return error?.status === 128; } })();
-    return refuse("head_mismatch", `the worktree HEAD ${head.slice(0, 7)} is not the PR head ${prHead.slice(0, 7)}; check out and push the PR head, then rerun`, checkoutFixes ? `git -C ${shellQuote(resolvePath(cwd))} pull --ff-only origin ${prHead}` : "operator: push the local commits to the PR branch, or reset the worktree to the PR head if they are unwanted, then rerun");
+    // The pull moves the checked-out branch, so it runs only on the PR branch: on any other branch (often `main` in the primary checkout) or a detached HEAD it would move the wrong ref.
+    const onPrBranch = (() => { try { return git(cwd, ["symbolic-ref", "--short", "-q", "HEAD"]) === state.headRefName; } catch { return false; } })();
+    const checkoutFixes = onPrBranch && (() => { try { git(cwd, ["merge-base", "--is-ancestor", head, prHead]); return true; } catch (error) { return error?.status === 128; } })();
+    return refuse("head_mismatch", `the worktree HEAD ${head.slice(0, 7)} is not the PR head ${prHead.slice(0, 7)}; check out and push the PR head, then rerun`, checkoutFixes ? `git -C ${shellQuote(resolvePath(cwd))} pull --ff-only origin ${prHead}` : onPrBranch ? "operator: push the local commits to the PR branch, or reset the worktree to the PR head if they are unwanted, then rerun" : `operator: check out the PR branch ${state.headRefName ?? "<PR branch>"} in a worktree and rerun with --worktree <that worktree>; this checkout is on another branch`);
   }
 
   // The proof, the chain-end discovery and the range all read origin/<base>: fetch it fresh (bounded, prompt-free) first or refuse.

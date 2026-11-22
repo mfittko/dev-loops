@@ -114,16 +114,24 @@ test("refuses a PR head that is not the worktree HEAD and a PR with no cap-round
   const { root } = await capFixture();
   try {
     await commit(root, { "docs/y.md": "y\n" }, "docs");
-    const mismatch = await extend(root, "9".repeat(40));
+    const branch = String(runGitFixture(root, ["symbolic-ref", "--short", "HEAD"])).trim();
+    const onBranch = (head) => ({ fetchPr: async () => ({ headRefOid: head, headRefName: branch, baseRefName: "main" }) });
+    const mismatch = await extend(root, "9".repeat(40), onBranch("9".repeat(40)));
     assert.equal(mismatch.reason, "head_mismatch");
+    // A checkout on another branch (the primary checkout on main) must never be fast-forwarded onto the PR head.
+    const otherBranch = await extend(root, "9".repeat(40), { fetchPr: async () => ({ headRefOid: "9".repeat(40), headRefName: "pr-branch", baseRefName: "main" }) });
+    assert.equal(otherBranch.reason, "head_mismatch");
+    assert.match(otherBranch.recovery, /^operator: check out the PR branch pr-branch .*--worktree/u);
+    assert.doesNotMatch(otherBranch.recovery, /pull --ff-only/u);
     // RECOVERY-COMMAND-REQUIRED (issue 3437): the fast-forward runs against the resolved --worktree, never the caller's cwd.
     assert.equal(mismatch.recovery, `git -C ${shellQuote(path.resolve(root))} pull --ff-only origin ${"9".repeat(40)}`);
     // An unpushed local commit ahead of the PR head, or a worktree diverged from it: checkout cannot fast-forward, so the recovery is the operator form.
-    const ahead = await extend(root, String(runGitFixture(root, ["rev-parse", "HEAD~1"])).trim());
+    const aheadHead = String(runGitFixture(root, ["rev-parse", "HEAD~1"])).trim();
+    const ahead = await extend(root, aheadHead, onBranch(aheadHead));
     assert.equal(ahead.reason, "head_mismatch");
     assert.match(ahead.recovery, /^operator: push the local commits to the PR branch/u);
     const side = String(runGitFixture(root, ["commit-tree", "-p", "HEAD~1", "-m", "side", "HEAD^{tree}"])).trim();
-    const diverged = await extend(root, side);
+    const diverged = await extend(root, side, onBranch(side));
     assert.equal(diverged.reason, "head_mismatch");
     assert.match(diverged.recovery, /^operator: push the local commits to the PR branch/u, "a diverged worktree is not fixed by a fast-forward");
   } finally {
