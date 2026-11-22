@@ -10,7 +10,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { readHookInput } from "./_hook-io.mjs";
-import { extractYesApproval, hasApprovalQuestion, writeApprovalRecord, buildApprovalComment, ASK_APPROVAL_RECOVERY, ASK_APPROVAL_KEY_RECOVERY } from "./_ask-merge-approval.mjs";
+import { extractYesApproval, classifyApprovalOutcome, writeApprovalRecord, buildApprovalComment, ASK_APPROVAL_RECOVERY, ASK_APPROVAL_KEY_RECOVERY, ASK_APPROVAL_NO_DIALOG_RECOVERY } from "./_ask-merge-approval.mjs";
 
 const tell = (additionalContext) => process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext } })}\n`);
 
@@ -28,7 +28,14 @@ if (approval) {
   } catch (error) {
     tell(`MERGE-ASK-APPROVAL: could not record or post the approval (${error?.message ?? error}). ${error?.keyProblem ? ASK_APPROVAL_KEY_RECOVERY : ASK_APPROVAL_RECOVERY}`);
   }
-} else if (hasApprovalQuestion(input)) {
-  tell(`MERGE-ASK-APPROVAL: no approval recorded. The answer was not exactly "Yes" to an approval question whose options are exactly Yes and No (single select). ${ASK_APPROVAL_RECOVERY}`);
+} else {
+  const outcome = classifyApprovalOutcome(input);
+  if (outcome === "declined") {
+    tell("MERGE-ASK-APPROVAL: the operator declined the approval. No approval recorded and the merge stays blocked. Do not ask the approval question again; report the decline and wait for the operator.");
+  } else if (outcome === "unknown_shape") {
+    tell(`MERGE-ASK-APPROVAL: no approval recorded. The AskUserQuestion payload has an unknown shape (tool_response.answers is not an object with a string answer for the approval question), so asking again cannot help. ${ASK_APPROVAL_NO_DIALOG_RECOVERY}`);
+  } else if (outcome === "other") {
+    tell(`MERGE-ASK-APPROVAL: no approval recorded. The answer was not exactly "Yes" to an approval question whose options are exactly Yes and No (single select). ${ASK_APPROVAL_RECOVERY}`);
+  }
 }
 process.exitCode = 0;

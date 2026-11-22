@@ -8,10 +8,11 @@
  * script, shell globbing or other shell indirection; in this repository the project settings
  * permission denies (and the sandbox read deny when the sandbox is enabled) are the second layer.
  * A plugin consumer gets this hook alone. It also denies arguments naming the record signing
- * functions (writeApprovalRecord, createKey, loadKey) as whole identifiers, so `uploadKey` or
- * `createKeyPair` pass. A bare mention in a commit message or body flag is denied too. An
+ * functions (writeApprovalRecord, createApprovalHmacKey, loadApprovalHmacKey) as whole identifiers, so a
+ * consumer's own `loadKey` or `createKey` passes. A bare mention in a commit message or body flag is denied too. An
  * error in this hook denies (exit 2), and so does a tool_input with more than 10000 nodes (the whole
- * tree is scanned at any depth). Only the PostToolUse hook touches the directory. Agent posts of
+ * tree is scanned, object keys included, except the string values under content, new_string, old_string,
+ * new_source and description, which are skipped for every tool). Only the PostToolUse hook touches the directory. Agent posts of
  * the `approve merge` line stay denied by the raw comment write deny and the comment writers
  * (OPERATOR-OWNED-LINE).
  */
@@ -34,7 +35,8 @@ function stringArgs(root) {
     // An unscanned value could name the record: fail closed (the catch below denies with exit 2).
     if ((nodes += 1) > MAX_NODES) throw new Error(`a tool argument has more than ${MAX_NODES} nodes and cannot be scanned; split or shrink the arguments`);
     if (typeof value === "string") { if (!BODY_KEYS.has(key)) out.push(value); } else if (value && typeof value === "object") {
-      for (const entry of Object.entries(value)) stack.push(entry);
+      // Object keys are addressable too (`{ "<record dir>": ... }`): scan them like values.
+      for (const entry of Object.entries(value)) { out.push(entry[0]); stack.push(entry); }
     }
   }
   return out;

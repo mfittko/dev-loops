@@ -169,9 +169,10 @@ Merge classes:
              approveMergeLine of merge-pr --check (the only supported source:
              git diff -U3 --binary --no-renames origin/<base>...<head> with pinned
              options, piped to git patch-id --verbatim; a base-only head change
-             keeps it valid). Under Claude Code on a machine that holds the hook
-             key, the comment counts only with its harness record
-             (MERGE-ASK-APPROVAL), so the operator answers the approval question.
+             keeps it valid). On a machine that holds the hook key, the comment
+             counts only with its harness record (MERGE-ASK-APPROVAL): answer the
+             approval question under Claude Code, or use an APPROVED review on the
+             current head.
 
 Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, approvalMatch, approveMergeLine, method, repo, pr, headSha, copilotConvergenceState, copilotDisposition, copilotCarriedConvergence, copilotBodyDisposition, postMerge }
   copilotConvergenceState: current_head_clean | current_head_findings | no_current_head_review,

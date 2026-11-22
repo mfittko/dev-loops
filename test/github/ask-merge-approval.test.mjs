@@ -455,7 +455,20 @@ test("the post hook reports success, a failed post and an unrecorded answer thro
   assert.match(failed.additionalContext, /could not record or post/);
   assert.ok(failed.additionalContext.includes(ASK_APPROVAL_RECOVERY));
   const no = context(runHook(POST_HOOK, askPayload(question(), "No"), f.env));
-  assert.match(no.additionalContext, /no approval recorded/);
+  assert.match(no.additionalContext, /operator declined/);
+  assert.match(no.additionalContext, /merge stays blocked/);
+  assert.ok(!no.additionalContext.includes(ASK_APPROVAL_RECOVERY), "a declined approval gets no ask-again recovery");
+  const maybe = context(runHook(POST_HOOK, askPayload(question(), "Maybe"), f.env));
+  assert.match(maybe.additionalContext, /no approval recorded/);
+  assert.ok(maybe.additionalContext.includes(ASK_APPROVAL_RECOVERY));
+  const q = question();
+  for (const answers of [undefined, null, [{ question: q, answer: "Yes" }], { "other question": "Yes" }, { [q]: ["Yes"] }]) {
+    const payload = { ...askPayload(q), tool_response: { answers } };
+    const shape = context(runHook(POST_HOOK, payload, f.env));
+    assert.match(shape.additionalContext, /unknown shape/, JSON.stringify(answers));
+    assert.ok(shape.additionalContext.includes(ASK_APPROVAL_NO_DIALOG_RECOVERY), "the APPROVED-review recovery is named");
+    assert.ok(!shape.additionalContext.includes(ASK_APPROVAL_RECOVERY), "no ask-again recovery loops");
+  }
   const badOptions = context(runHook(POST_HOOK, askPayload(question(), "Yes", { multiSelect: true }), f.env));
   assert.match(badOptions.additionalContext, /no approval recorded/);
   assert.equal(runHook(POST_HOOK, askPayload("Which color?"), f.env).stdout.trim(), "", "an unrelated question stays silent");
@@ -581,16 +594,20 @@ test("the guard denies a Bash command naming the record signing functions and al
   const f = fixture();
   for (const command of [
     "node script.mjs --call writeApprovalRecord",
-    "grep -n createKey packages",
-    "grep -n loadKey packages",
+    "grep -n createApprovalHmacKey packages",
+    "grep -n loadApprovalHmacKey packages",
   ]) assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Bash", tool_input: { command }, cwd: f.root }, f.env)), "deny", command);
   // Whole identifiers only: unrelated names that contain a signing name stay allowed (accepted and rejected forms).
-  for (const command of ["rg -n uploadKey src", "rg -n downloadKey src", "rg -n preloadKeys src", "rg -n createKeyPair src", "echo"]) {
+  for (const command of ["rg -n uploadKey src", "rg -n downloadKey src", "rg -n preloadKeys src", "rg -n createKeyPair src", "rg -n createKey src", "rg -n loadKey src", "echo"]) {
     assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Bash", tool_input: { command }, cwd: f.root }, f.env)), "allow", command);
   }
   assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Grep", tool_input: { pattern: "downloadKey" }, cwd: f.root }, f.env)), "allow");
-  const named = JSON.parse(runHook(GUARD_HOOK, { tool_name: "Bash", tool_input: { command: "grep -n createKey packages" }, cwd: f.root }, f.env).stdout).hookSpecificOutput.permissionDecisionReason;
-  assert.match(named, /names `createKey`/, "the deny names the matched token");
+  assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Grep", tool_input: { pattern: "loadKey" }, cwd: f.root }, f.env)), "allow", "a consumer's own loadKey is not denied");
+  const named = JSON.parse(runHook(GUARD_HOOK, { tool_name: "Bash", tool_input: { command: "grep -n createApprovalHmacKey packages" }, cwd: f.root }, f.env).stdout).hookSpecificOutput.permissionDecisionReason;
+  assert.match(named, /names `createApprovalHmacKey`/, "the deny names the matched token");
+  // Object keys are scanned like values.
+  assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "mcp__x__y", tool_input: { [f.dir]: "v" }, cwd: f.root }, f.env)), "deny", "a record path as an object key");
+  assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "mcp__x__y", tool_input: { writeApprovalRecord: 1 }, cwd: f.root }, f.env)), "deny", "a signing name as an object key");
   assert.equal(commandNamesApprovalDir("m.writeApprovalRecord({})", {}), true);
   assert.equal(commandNamesApprovalDir("m.writeApprovalRecordX({})", {}), false);
   assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Bash", tool_input: { command: "bun test test/github/ask-merge-approval.test.mjs" }, cwd: f.root }, f.env)), "allow");

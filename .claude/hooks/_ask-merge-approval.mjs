@@ -75,8 +75,8 @@ export function isApprovalPath(target, env = process.env) {
 }
 
 // The record signing and key functions. The module file name stays out of the scan: agents run this module's own tests.
-// They match as whole identifiers (case-sensitive), so `uploadKey`, `preloadKeys` and `createKeyPair` stay allowed.
-const SIGNING_NAMES = ["writeApprovalRecord", "createKey", "loadKey"];
+// They match as whole identifiers (case-sensitive) and carry dev-loops-specific names, so a consumer's own `loadKey` or `createKey` stays allowed.
+const SIGNING_NAMES = ["writeApprovalRecord", "createApprovalHmacKey", "loadApprovalHmacKey"];
 const SIGNING_RES = SIGNING_NAMES.map((n) => ({ name: n, re: new RegExp(`(?<![\\w$])${n}(?![\\w$])`, "u") }));
 
 /** The first approval name a command or argument string mentions (directory, parent, override variable, case-folded; signing function, whole identifier), else null. */
@@ -110,6 +110,21 @@ export function parseApprovalQuestion(text) {
   if (!Number.isSafeInteger(facts.pr) || facts.pr <= 0 || facts.repo.split("/").some((s) => s === "." || s === "..")) return null;
   // An agent-authored question with another meaning must not record an approval.
   return text === buildApprovalQuestion(facts) ? facts : null;
+}
+
+/**
+ * What a payload with an approval question and no yes approval means: "declined" (the answer is exactly No),
+ * "unknown_shape" (`tool_response.answers` is not a plain object or holds no string answer for the question,
+ * so asking again cannot help) or "other" (any other string answer or option set). Null without an approval question.
+ */
+export function classifyApprovalOutcome(payload) {
+  const questions = payload?.tool_input?.questions;
+  const q = Array.isArray(questions) ? questions.find((x) => parseApprovalQuestion(x?.question) !== null) : undefined;
+  if (!q) return null;
+  const answers = payload?.tool_response?.answers;
+  const answer = answers !== null && typeof answers === "object" && !Array.isArray(answers) ? answers[q.question] : undefined;
+  if (typeof answer !== "string") return "unknown_shape";
+  return answer === "No" && isYesNoSingleSelect(q) ? "declined" : "other";
 }
 
 /** True when the payload carries an approval question, whatever the answer. */
@@ -178,7 +193,7 @@ export function approvalKeyPresent(env = process.env) {
   try { fs.lstatSync(path.join(dir, ".key")); return true; } catch (error) { return error?.code !== "ENOENT"; }
 }
 
-function createKey(dir, keyPath) {
+function createApprovalHmacKey(dir, keyPath) {
   // Write a temp file and link it into place: a partial key never appears at the key path, and link refuses an existing key.
   // A random suffix: an orphaned temp file from a crashed hook never collides with this write.
   const tmp = path.join(dir, `.key.${randomBytes(8).toString("hex")}.tmp`);
@@ -187,7 +202,7 @@ function createKey(dir, keyPath) {
   try { fs.linkSync(tmp, keyPath); } catch (error) { if (error?.code !== "EEXIST") throw error; } finally { fs.rmSync(tmp, { force: true }); }
 }
 
-function loadKey(dir, { create }) {
+function loadApprovalHmacKey(dir, { create }) {
   const keyPath = path.join(dir, ".key");
   try {
     if (create) {
@@ -197,7 +212,7 @@ function loadKey(dir, { create }) {
     }
     assertSafeDir(dir);
     if (create) {
-      createKey(dir, keyPath);
+      createApprovalHmacKey(dir, keyPath);
     }
     return readKey(keyPath);
   } catch (error) {
@@ -212,7 +227,7 @@ const idOf = (key, mac) => createHmac("sha256", key).update(`id:${mac}`).digest(
 export function writeApprovalRecord({ approval, session = null, now = new Date() }, env = process.env) {
   const dir = approvalDir(env);
   if (!dir) throw keyProblem("this account has no home directory for the approval directory");
-  const key = loadKey(dir, { create: true });
+  const key = loadApprovalHmacKey(dir, { create: true });
   const record = { repo: approval.repo, pr: approval.pr, headSha: approval.headSha, patchId: approval.patchId ?? null, question: approval.question, answer: approval.answer, time: now.toISOString(), session };
   const mac = sign(key, record);
   const id = idOf(key, mac);
@@ -281,7 +296,7 @@ export function filterAskApprovalComments({ comments, repo, pr, currentHeadSha: 
   let key = null;
   let keyError = null;
   if (keyed) {
-    try { key = loadKey(approvalDir(env), { create: false }); } catch (error) { keyError = error; }
+    try { key = loadApprovalHmacKey(approvalDir(env), { create: false }); } catch (error) { keyError = error; }
   }
   const refuse = (reason, recovery) => refusals.push(`MERGE-ASK-APPROVAL: ${reason} ${recovery ?? ASK_AGAIN}`);
   for (const comment of comments) {
