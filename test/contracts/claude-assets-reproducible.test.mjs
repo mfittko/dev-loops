@@ -197,7 +197,7 @@ test("the vendored sh-syntax files equal the pinned package byte for byte, main.
     assert.ok(fs.readFileSync(path.join(repoRoot, asset.target)).equals(fs.readFileSync(path.join(root, file))), `${file} committed copy`);
   }
   // the bundled adapter requires the vendored entry through a relative specifier
-  assert.match(fs.readFileSync(path.join(repoRoot, ".claude/hooks/_shell-ast.mjs"), "utf8"), /createRequire\(import\.meta\.url\)\("\.\/_vendor\/sh-syntax\/lib\/sync\/index\.cjs"\)/);
+  assert.match(fs.readFileSync(path.join(repoRoot, ".claude/hooks/_shell-ast.mjs"), "utf8"), /require\("\.\/_vendor\/sh-syntax\/lib\/sync\/index\.cjs"\)/);
 });
 
 test("checkAssets flags an orphaned committed asset with no generating source", () => {
