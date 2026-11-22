@@ -88,6 +88,9 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("tee src/a.mjs <<'EOF'\nx\nEOF"),
   deny("TEE src/a.mjs <<'EOF'\nx\nEOF"),
   deny("cat > tmp/worktrees/x/src/a.mjs <<'EOF'\nx\nEOF"),
+  deny("cat > tmp//worktrees/x/a.mjs <<'EOF'\nx\nEOF"),
+  deny("cat > tmp/./worktrees/x/a.mjs <<'EOF'\nx\nEOF"),
+  deny("cat > tmp/Worktrees/x/a.mjs <<'EOF'\nx\nEOF"),
   deny("cat > tmp/../src/a.mjs <<'EOF'\nx\nEOF"),
   deny("cat > $F <<'EOF'\nx\nEOF"),
   // write-then-run of a heredoc-written file in the same command, temp path or not

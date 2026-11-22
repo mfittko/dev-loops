@@ -1906,7 +1906,7 @@ function inspectShell(command, report = false, skipFirst = false) {
         const targets = [...redirs.filter((r) => WRITE_REDIRECTS.some((n) => r.op === R[n]) && (!r.n || r.n.value === "1")).map((r) => wordOf(r.word).value), ...(head === "tee" ? args.filter((a) => !a.value.startsWith("-")).map((a) => a.value) : [])]
           .filter((t) => t && !/^\d+$|^-$/.test(t)).map((t) => t.replace(/^\.\//, "")).filter((t) => !DEVICE_TARGETS.has(t));
         written.push(...targets.map(normPath));
-        if (targets.some((t) => !isTempPath(t))) out.deny = true;
+        if (targets.some((t) => !isTempPath(t) || !isTempPath(normPath(t)))) out.deny = true;
       }
     }
     if (!report || out.deny) return;

@@ -15,7 +15,7 @@ gate evidence/ledgers under `tmp/gate-findings/`; tracked files of a loop worktr
 this boundary: opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open), fail-closed once
 enforced, it denies a tracked-file Write/Edit whose `agent_type` is `dev-loop` or `gate-coordinator`; a worker
 subagent's `agent_type` is unaffected. It is a targeted denylist, not an airtight sandbox:
-Bash-driven tracked mutations (`git commit`, `> file`) stay convention-enforced. `OPS-NO-INLINE-INTERPRETER` in [Loop operations](copilot-loop-operations.md) denies `sed -i` and a `cat`/`tee` heredoc write outside a temp path on the Bash gate. The
+Bash-driven tracked mutations (`git commit`, `> file`, a non-heredoc `tee` write such as `echo x | tee src/a.mjs`) stay convention-enforced. `OPS-NO-INLINE-INTERPRETER` in [Loop operations](copilot-loop-operations.md) denies `sed -i` and a `cat`/`tee` heredoc write outside a temp path on the Bash gate. The
 top-level/inline agent (`agent_type: null`) falls under the opt-in `DEVLOOPS_MAIN_AGENT_READONLY` hook described at the end of this section. On Pi, see
 "Guarded surface and deliberate ceilings" below for what it does and does not cover. **The coordinator also
 delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/
@@ -441,7 +441,7 @@ the full run.
   `Write`/`Edit` tracked-file mutations and its use of a recognized code-verification/build
   command ENTRYPOINT. Three deliberate ceilings apply:
   1. Bash-driven tracked mutations the contract also forbids (`git commit`/`git push`/branch
-     creation, `> file`) are convention-enforced, not denied by either boundary. `OPS-NO-INLINE-INTERPRETER` in
+     creation, `> file`, a non-heredoc `tee` write such as `echo x | tee src/a.mjs`) are convention-enforced, not denied by either boundary. `OPS-NO-INLINE-INTERPRETER` in
      [Loop operations](copilot-loop-operations.md) denies `sed -i` and a `cat`/`tee` heredoc write outside a temp path on the Bash gate.
   2. The top-level/inline agent (`agent_type: null`) is governed by the separate main-agent
      boundary (`DEVLOOPS_MAIN_AGENT_READONLY`), not by `DEVLOOPS_COORDINATOR_READONLY`.
