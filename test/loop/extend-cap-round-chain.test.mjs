@@ -1735,6 +1735,23 @@ const clearing = (baseline, candidate, items = []) => ({ reviewBaselineHead: bas
 const coverFor = (capHead, ref, candidateHead) => ({ capHead, ref, candidateHead, actSetId: "set", invocation: 1, outcome: "locally_clear", nextStep: "push_to_gate", status: "resolved" });
 const resolved = (...findings) => findings.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" }));
 
+// Delta review (no-op recovery): the waiver and the fixer emitter name this tool for a ready PR whose docs commit has no seal. The docs and tests seal runs first, so the named recovery writes the record; already_proven by the anyHead proof is for a refusal only.
+test("issue 3443 delta review: a ready PR with a later docs commit gets the docs seal, not a no-op already_proven", async () => {
+  const [p] = roundFour();
+  const { root, A, B } = await capFixture({ findings: [p] });
+  try {
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, clearing(A, B, resolved(p)));
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs d");
+    const ready = await extend(root, D, { fetchPr: async () => ({ headRefOid: D, baseRefName: "main", isDraft: false }) });
+    assert.equal(ready.action, "chain_extended", JSON.stringify(ready));
+    assert.equal(ready.chainEnd, B);
+    assert.equal(readGateDeltaRecord(tmp, B)?.extension, "docs_tests_only", "the record the waiver's proof needs is written");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 // Round 4 (false replacement-PR path): coordination proves a ready PR with anyHead, so the tool returns already_proven for a state that proof accepts, and a draft PR still refuses.
 test("issue 3443 round 4: a ready PR that the anyHead proof accepts is already_proven, and the same state on a draft PR refuses", async () => {
   const [p, q] = roundFour();
@@ -1774,7 +1791,14 @@ test("issue 3443 round 4: a clean cap round with an unreadable sealed candidate 
     const off = sibling(root, A, "abandoned sibling");
     const recordPath = gateDeltaRecordPath(tmp, A);
     rmSync(recordPath); rmSync(`${recordPath}.seal`);
+    // A plain reviewer-only record of the derived empty act set is replaced by the reviewer-only run over A..D: that run is the recovery, never the replacement PR.
     writeSealedGateDeltaRecord(tmp, A, clearing(A, off));
+    const plain = await extend(root, D);
+    assert.equal(plain.reason, "no_cap_round_chain", JSON.stringify(plain));
+    assert.match(plain.recovery, new RegExp(`loop pre-push-delta --reviewer-only .*--baseline ${A} `, "u"));
+    // A protected record (an extension) is never overwritten: only the replacement PR remains.
+    rmSync(recordPath); rmSync(`${recordPath}.seal`);
+    writeSealedGateDeltaRecord(tmp, A, { ...clearing(A, off), extension: "docs_tests_only" });
     const dead = await extend(root, D);
     assert.equal(dead.reason, "no_cap_round_chain", JSON.stringify(dead));
     assert.equal(dead.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
@@ -1897,6 +1921,16 @@ test("issue 3443 delta review: a clean cap round whose sealed chain ends off the
     writeSealedGateDeltaRecord(tmp, A, clearing(A, B));
     writeSealedGateDeltaRecord(tmp, B, { ...clearing(B, X), extension: "docs_tests_only" });
     assert.equal(await resolveCapRoundFixed({ repo: REPO, pr: PR, headSha: D, baseRefName: "main", anyHead: true }, { repoRoot: root }), null, "the proof fails: the off-history extension never counts");
+    // The record at the cap-round head is a plain reviewer-only record below the bound: the reviewer-only run replaces it, so that run is the recovery on a draft and a ready PR.
+    for (const isDraft of [false, true]) {
+      const plain = await extend(root, D, { fetchPr: async () => ({ headRefOid: D, baseRefName: "main", isDraft }) });
+      assert.equal(plain.reason, "no_cap_round_chain", JSON.stringify(plain));
+      assert.match(plain.recovery, new RegExp(`loop pre-push-delta --reviewer-only .*--baseline ${A} `, "u"));
+    }
+    // At the last invocation the record is never replaced: only the replacement PR remains.
+    const recordPath = gateDeltaRecordPath(tmp, A);
+    rmSync(recordPath); rmSync(`${recordPath}.seal`);
+    writeSealedGateDeltaRecord(tmp, A, { ...clearing(A, B), invocation: 3 });
     for (const isDraft of [false, true]) {
       const refused = await extend(root, D, { fetchPr: async () => ({ headRefOid: D, baseRefName: "main", isDraft }) });
       assert.equal(refused.reason, "no_cap_round_chain", JSON.stringify(refused));

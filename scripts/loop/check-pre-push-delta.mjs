@@ -745,19 +745,25 @@ export async function runCli(
       throw Object.assign(new Error(`reviewer-only: git could not prove whether ${shas.map((sha) => sha.slice(0, 7)).join(", ")} is on the history of the PR head ${prHeadSha.slice(0, 7)} (merge-base failed for a reason other than exit 1: usually a commit this clone has not fetched), so no act ref is proven uncovered. Run ${shas.map((sha) => `${gitC} fetch origin ${sha}`).join(" and ")} (${gitC} fetch --unshallow for a shallow clone) and rerun; if a commit is still absent, restart on a replacement PR: ${replacementRemedy()}`), { recovery: `${gitC} fetch origin ${shas[0]}` });
     };
     const capRound = { log };
+    // The ready-PR candidate rule needs the anyHead proof to accept the record: a clean cap round needs an extension that a plain record at the last invocation lacks, so it keeps the draft rule (the baseline ends in bounded_out).
+    prReady &&= !isCleanCapRound(capRound);
     // Read again under the sequence lock by the plain run: a cover run that completes during the lock wait changes the coverage and the blockers read under that lock.
     // The chain starts, the bridges and the seeded merges are scanned once, before any sequence lock (a directory scan and a base-only probe per clearing record can outlast the lock wait).
     // Under a lock only the linked records and the cover records are read again from this scan.
     let scannedChain = null;
+    // The sealed clearing records at the cap-round head and at the baseline (a base-only merge of the cap-round head) as read just before the scan: a start the scan did not list is compared with its record here.
+    let scannedStarts = new Map();
+    const startNow = (root, sha) => { try { const record = readSealedGateDeltaRecord(root, sha); return record && DELTA_CLEARING_NEXT_STEPS.includes(record.nextStep) ? record : null; } catch { return null; } };
+    const watched = () => [String(log.headSha ?? "").trim().toLowerCase(), baselineSha];
     const scanChain = async () => {
+      scannedStarts = new Map(watched().map((sha) => [sha, startNow(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sha)]));
       scannedChain = isCleanCapRound(capRound) ? null : await capRoundChainStarts({ tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), capHead: log.headSha, repo: options.repo, pr: options.pr, baseRefName: prBase, repoRoot: resolveRepoRoot(options.worktree), baseOnlyMerge }).catch(() => null);
     };
-    startRecordsChanged = (root, capHeadSha) => {
+    startRecordsChanged = (root) => {
       if (!scannedChain) return false;
-      const startNow = (sha) => { try { const record = readSealedGateDeltaRecord(root, sha); return record && DELTA_CLEARING_NEXT_STEPS.includes(record.nextStep) ? record : null; } catch { return null; } };
       const keyOf = (start) => String(start.reviewBaselineHead).trim().toLowerCase();
-      const scannedAt = (sha) => scannedChain.starts.find((start) => keyOf(start) === sha) ?? null;
-      return [...new Set([capHeadSha, ...scannedChain.starts.map(keyOf)])].some((sha) => JSON.stringify(startNow(sha)) !== JSON.stringify(scannedAt(sha)));
+      const scannedAt = (sha) => scannedChain.starts.find((start) => keyOf(start) === sha) ?? scannedStarts.get(sha) ?? null;
+      return [...new Set([...watched(), ...scannedChain.starts.map(keyOf)])].some((sha) => JSON.stringify(startNow(root, sha)) !== JSON.stringify(scannedAt(sha)));
     };
     refreshChain = async () => {
       chainCoverage = scannedChain ? await capRoundChainCoverage({ capRound, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), repo: options.repo, pr: options.pr, baseRefName: prBase, repoRoot: resolveRepoRoot(options.worktree), baseOnlyMerge, bound: { head: prHeadSha, onHistory, coverOnHistory: onHistory }, chain: scannedChain }).catch(() => null) : null;
@@ -841,7 +847,7 @@ export async function runCli(
       noMarker();
       // The chain starts were scanned before this lock: a start record (the cap-round head's or a scanned merge's) that was sealed, resealed or removed since is absent from or stale in that scan, so the coverage below would read a partial record as covering another set of refs.
       // Compare each start record now with the scanned one and return the input-run rerun when it differs; a failed scan (no chain) keeps its unproven coverage.
-      if (startRecordsChanged(root, capHeadSha)) throw Object.assign(new Error(`reviewer-only: the sealed clearing record of the cap-round head ${capHeadSha.slice(0, 7)} or of a base-only merge of it changed while this run waited for the sequence lock, so the chain coverage read before the lock is stale; nothing was written. Rerun the input run: ${reviewerCommand(false)}`), { recovery: reviewerCommand(false) });
+      if (startRecordsChanged(root)) throw Object.assign(new Error(`reviewer-only: the sealed clearing record of the cap-round head ${capHeadSha.slice(0, 7)} or of a base-only merge of it changed while this run waited for the sequence lock, so the chain coverage read before the lock is stale; nothing was written. Rerun the input run: ${reviewerCommand(false)}`), { recovery: reviewerCommand(false) });
       await refreshChain();
       // The cover run is offered only for a readable coverage that leaves an act ref uncovered, on a chain it can bring to the head, and while no uncovered ref's cover record is a dead end (read under this lock, as the cover run does): any other state names the replacement PR.
       const coverable = Boolean(chainCoverage) && chainCoverage.uncovered.length > 0 && coverReachesHead && !chainCoverage.uncovered.some((ref) => coverRecordBlocker(root, capHeadSha, ref));

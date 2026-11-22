@@ -2799,6 +2799,39 @@ test("a plain reviewer-only run returns the input-run rerun when the cap-round h
   } finally { cleanup(repo); }
 });
 
+// Issue 3443 delta review: the baseline of a plain run may be a base-only merge M of the cap-round head. A record sealed at M after the pre-lock scan changes the coverage the run read, so the run returns the input-run rerun, never the replacement PR for a fresh prior record.
+test("a plain reviewer-only run with a merge baseline returns the input-run rerun when the baseline record is sealed after the pre-lock scan (issue 3443 delta review)", async () => {
+  const repo = reviewerOnlyRepo({ commitAfterMerge: true });
+  try {
+    const findings = [CAP_ACT, SECOND_ACT];
+    const [one] = capRoundActList(findings, repo.fix).map((entry) => entry.ref);
+    const args = ["--reviewer-only", "--repo", "owner/repo", "--pr", "70", "--baseline", repo.mergeHead, "--pr-head", repo.head, "--findings-log", capLog(repo.dir, repo.fix, findings), "--worktree", repo.dir, "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")];
+    let prHeadReads = 0;
+    const revParse = (worktree, rev) => {
+      const sha = String(runGitFixture(worktree, ["rev-parse", "--verify", `${rev}^{commit}`])).trim();
+      if (rev === repo.head && ++prHeadReads === 2) writeSealedGateDeltaRecord(repo.tmpRoot, repo.mergeHead, { reviewBaselineHead: repo.mergeHead, candidateHead: repo.head, actSetId: "fixer-act-set", invocation: 1, outcome: "locally_clear", nextStep: "push_to_gate", items: [{ ref: one, status: "resolved" }] });
+      return sha;
+    };
+    await assert.rejects(runDeltaCli(args, { ...seam, revParse }), (error) => {
+      assert.match(error.message, /changed while this run waited for the sequence lock/);
+      assert.match(error.recovery, /loop pre-push-delta --reviewer-only --repo owner\/repo --pr 70 --baseline \S+ --pr-head \S+ .*--worktree \S+$/u, "the recovery is the input-run rerun");
+      assert.doesNotMatch(error.message, /replacement PR|never overwritten/);
+      return true;
+    });
+  } finally { cleanup(repo); }
+});
+
+// Issue 3443 delta review: the ready-PR candidate rule needs the anyHead proof to accept the record. A clean cap round needs an extension that a plain record at the last invocation lacks, so a proven off-history candidate is bounded_out, never the chain-end command that loops.
+test("a locally_clear record at the last invocation of a clean cap round with an off-history candidate is bounded_out on a ready PR (issue 3443 delta review)", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    await reviewerOnlyRun(repo, {}, { findings: [] });
+    const orphan = runGitFixture(repo.dir, ["commit-tree", "-m", "orphan", "HEAD^{tree}"]);
+    seedFixerRecord(repo, { candidateHead: orphan, sameActSet: true, outcome: "locally_clear", invocation: 3 });
+    await assert.rejects(reviewerOnlyRun(repo, {}, { findings: [], invocation: 4 }), /bounded_out, restart_on_replacement_pr/);
+  } finally { cleanup(repo); }
+});
+
 // Issue 3443 delta review: a sealed locally_clear record of the same act set at the last invocation follows the one candidate rule. A history git cannot read names the fetch, never bounded_out and the replacement PR.
 test("a locally_clear record at the last invocation whose candidate git cannot read asks for the fetch, and a proven off-history one is bounded_out on a draft PR (issue 3443 delta review)", async () => {
   const repo = reviewerOnlyRepo();

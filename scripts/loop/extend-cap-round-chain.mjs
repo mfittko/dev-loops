@@ -28,6 +28,7 @@ import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { capRoundChainCoverage, capRoundChainStarts, capRoundCovers, clearingChainLastCandidates, coverRunReachesHead, isCleanCapRound, resolveCapRound, resolveCapRoundFixed } from "../github/write-gate-context.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, coverRecordBlocker, gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
+import { DELTA_MAX_INVOCATIONS } from "@dev-loops/core/loop/pre-push-delta-review";
 import { defaultFetchOrigin } from "./standing-authorization.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
@@ -85,10 +86,18 @@ const HEX_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const defaultGit = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnvNoDirOverrides(), stdio: ["ignore", "pipe", "pipe"] }).trim();
 const defaultFetchPr = ({ repo, pr }, { env, ghCommand, runChild }) => ghJson(["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,headRefName,baseRefName,isDraft"], { env, ghCommand, runChild });
 
-export async function extendCapRoundChain(options, {
+export async function extendCapRoundChain(options, deps = {}) {
+  const ready = {};
+  const result = await extendChain(options, deps, ready);
+  // A ready PR is proven with anyHead (coordination's proof, resolveDraftCapRoundFact). The docs, tests and delta_covered seal for an available chain end runs first (the waiver and the fixer emitter name this command for it): the anyHead proof turns only a refusal into already_proven.
+  if (!result.ok && ready.proves && await ready.proves()) return { ok: true, action: "already_proven", chainEnd: null, candidateHead: ready.head, files: [] };
+  return result;
+}
+
+async function extendChain(options, {
   env = process.env, ghCommand = "gh", runChild, fetchPr = defaultFetchPr, git = defaultGit,
   fetchBaseBranch = defaultFetchOrigin, detectOriginSlug = detectRepoSlug, resolveProof = resolveCapRoundFixed, writeRecord = writeSealedGateDeltaRecord, readRecord = readGateDeltaRecord, withLock = withSequenceLock, baseOnlyMerge = isBaseOnlyMergeSince,
-} = {}) {
+} = {}, ready) {
   const { pr } = options;
   const cwd = options.worktree ?? process.cwd();
   const repoRoot = resolveRepoRoot(cwd);
@@ -123,10 +132,10 @@ export async function extendCapRoundChain(options, {
   const proofArgs = { repo, pr, headSha: head, baseRefName };
   const reached = await resolveProof(proofArgs, { repoRoot });
   if (reached) return { ok: true, action: "already_proven", chainEnd: null, candidateHead: head, files: [] };
-  // A ready PR is proven with anyHead (coordination's proof, resolveDraftCapRoundFact): a state that proof accepts is already proven, never a cover run, an extension or a replacement PR. An unreadable draft state reads as a draft.
+  // An unreadable draft state reads as a draft.
   const readyProof = { ...proofArgs, anyHead: true };
-  if (state.isDraft === false && await resolveProof(readyProof, { repoRoot })) return { ok: true, action: "already_proven", chainEnd: null, candidateHead: head, files: [] };
-  const cap =await resolveCapRound(proofArgs, { repoRoot });
+  if (state.isDraft === false) { ready.head = head; ready.proves = () => resolveProof(readyProof, { repoRoot }); }
+  const cap = await resolveCapRound(proofArgs, { repoRoot });
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
   // The reviewer-only remedies name the cap-round ledger path when the cap round resolved, so no other log is picked.
   // The path is quoted in every command string: a worktree path with a space must stay one argument.
@@ -306,6 +315,10 @@ export async function extendCapRoundChain(options, {
     let clearing = false;
     try { clearing = DELTA_CLEARING_NEXT_STEPS.includes(readSealedGateDeltaRecord(tmpRoot, chainEnd)?.nextStep); } catch { /* unreadable: not a clearing record */ }
     // A clean cap round whose sealed chain ends only off the head's history (git proved every end a non-ancestor) has no extension point: the record at the cap-round head is never overwritten and coordination routes back to this command, so only the replacement PR remains.
+    // The replacement PR is due only when the record at the cap-round head is protected (it carries an extension or another act set) or used the last invocation: a plain reviewer-only record of the derived empty act set below the bound is replaced by the reviewer-only run over cap-round head..head, so that run is the recovery.
+    const capRec = clearing && capHeadFallback ? sealedClearing(capHeadSha) : null;
+    const replaceable = capRec && !capRec.extension && (capRec.items ?? []).length === 0 && !(Number.isInteger(capRec.invocation) && capRec.invocation >= DELTA_MAX_INVOCATIONS);
+    if (replaceable && ends.length > 0 && ancestorEnds.length === 0 && !ends.includes(head)) return refuse("no_cap_round_chain", `the sealed clearing chain from the cap-round head ${capHeadSha.slice(0, 7)} ends at ${ends.map((end) => end.slice(0, 7)).join(", ")}, which ${ends.length > 1 ? "are" : "is"} not on the history of the PR head ${head.slice(0, 7)}, and the record at the cap-round head is a plain reviewer-only record that the reviewer-only run replaces. ${deltaRemedy(capHeadSha)}`, deltaRecovery(capHeadSha));
     if (clearing && capHeadFallback && ends.length > 0 && ancestorEnds.length === 0 && !ends.includes(head)) return refuse("no_cap_round_chain", `the sealed clearing chain from the cap-round head ${capHeadSha.slice(0, 7)} ends at ${ends.map((end) => end.slice(0, 7)).join(", ")}, which ${ends.length > 1 ? "are" : "is"} not on the history of the PR head ${head.slice(0, 7)}, and the record at the cap-round head is never overwritten, so no extension can bind to it. Restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, replacementPrOperatorRecovery(pr));
     if (clearing) return recordExists();
     return refuse("record_not_clearing", `the delta record for ${chainEnd.slice(0, 7)} exists but is not a sealed clearing record and is never overwritten; run ${deltaRecovery(chainEnd)} (then --result <result-file> --invocation <1-3>) until it is locally_clear, then rerun this command`, deltaRecovery(chainEnd));
