@@ -33,7 +33,7 @@ import { resolveRoundCause } from "./_round-cause.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--verdict <clean|findings_present|blocked>] (--findings <json> | --findings-file <path>) [--tmp-root <path>] [--context-tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
-Each log records roundCause: first, developer_findings (the prior round had act items), system_rerun (same head after a retirement, a blocked round or a rerun), base_refresh, body_only or other_head_move (the head moved with no act items and no base-only merge). A prior ledger with a seal mismatch is skipped for this field and named in the result warning.
+Each log records roundCause: first, developer_findings (the prior round had act items), system_rerun (same head after a retirement, a blocked round or a rerun), base_refresh, body_only or other_head_move (the head moved with no act items and no base-only merge). A prior ledger with a seal mismatch, an unreadable retirement record and an unreadable retirement directory are skipped for this field and named in the result warning.
 Required:
   --repo <owner/name>
   --pr <number>

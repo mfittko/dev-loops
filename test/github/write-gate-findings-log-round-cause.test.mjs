@@ -303,3 +303,12 @@ test("W23 a truncated retirement record does not hide a valid record of the same
     });
   }
 });
+
+test("W24 a blocked round at a head still counts when an earlier head's round is rewritten after it", async () => {
+  await withTempDir(async (dir) => {
+    await write(dir, A);
+    await write(dir, B, { verdict: "blocked" });
+    await write(dir, A);
+    assert.equal((await write(dir, B)).log.roundCause, "system_rerun");
+  });
+});

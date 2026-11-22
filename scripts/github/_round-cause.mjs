@@ -36,14 +36,16 @@ async function readLedger(file, warn) {
 }
 
 const isOwnLedger = (log, { repo, gate, pr, head }) => Boolean(log) && String(log.repo).toLowerCase() === String(repo).toLowerCase() && String(log.gate) === gate && Number(log.pr) === Number(pr) && String(log.headSha).toLowerCase() === head;
-const inWindow = (ms, sinceMs, untilMs) => !Number.isFinite(ms) || (ms >= sinceMs && ms <= untilMs);
+// A record without a finite time counts only when no bound applies.
+const inWindow = (ms, sinceMs, untilMs) => (Number.isFinite(ms) ? ms >= sinceMs && ms <= untilMs : sinceMs <= 0 && untilMs === Infinity);
 
 /**
  * The same-head rerun evidence the writer and the round-causes report share: "system_rerun" for a finished blocked round or a whole-round retirement at this head,
- * "body_only" for a scoped retirement, else null. Records count only when their `loggedAt` or `retiredAt` lies in `[sinceMs, untilMs]`.
- * Telemetry only: a sealed-ledger mismatch or an unreadable retirement record is skipped and named through `warn`, and a valid sibling still counts. Gate readers keep `findRetirementAfter`, which fails closed.
+ * "body_only" for a scoped retirement, else null. Records count only when their `loggedAt` or `retiredAt` lies in `[sinceMs, untilMs]` (a retirement always needs a finite `retiredAt`;
+ * a blocked ledger needs a finite `loggedAt` when a bound applies). A blocked ledger is bounded by `blockedSinceMs`, which defaults to `sinceMs`.
+ * Telemetry only: a sealed-ledger mismatch, an unreadable retirement record or an unreadable retirement directory is skipped and named through `warn`, and a valid sibling still counts. Gate readers keep `findRetirementAfter`, which fails closed.
  */
-export async function findSameHeadRerun({ repoRoot, repo, pr, gate, headSha, tmpRoot, extraRoots = [], incoming, sinceMs = 0, untilMs = Infinity, warn }) {
+export async function findSameHeadRerun({ repoRoot, repo, pr, gate, headSha, tmpRoot, extraRoots = [], incoming, sinceMs = 0, blockedSinceMs = sinceMs, untilMs = Infinity, warn }) {
   const head = String(headSha).toLowerCase();
   const liveFile = path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot }));
   // A finished blocked round at this head, live or retained by a later write. An unfinished blocked write is an in-round rewrite, never an earlier round.
@@ -52,13 +54,18 @@ export async function findSameHeadRerun({ repoRoot, repo, pr, gate, headSha, tmp
   let retained = [];
   try { retained = (await readdir(dir)).filter((n) => n.startsWith(`${stem}.round-`) && n.endsWith(".json")).sort(); } catch { /* no ledger directory */ }
   const sameHead = [await readLedger(liveFile, warn), ...(await Promise.all(retained.map((n) => readLedger(path.join(dir, n), warn))))];
-  if (sameHead.some((log) => isOwnLedger(log, { repo, gate, pr, head }) && log.verdict === "blocked" && !isInRoundRewrite(log, incoming) && inWindow(Date.parse(log.loggedAt), sinceMs, untilMs))) return "system_rerun";
+  if (sameHead.some((log) => isOwnLedger(log, { repo, gate, pr, head }) && log.verdict === "blocked" && !isInRoundRewrite(log, incoming) && inWindow(Date.parse(log.loggedAt), blockedSinceMs, untilMs))) return "system_rerun";
   // The builder, the emitter and retire-gate-round write retirements under the checkout they ran in, so scan the ledger root, this checkout's tmp and the extra roots.
   let kind = null;
   for (const root of [...new Set([path.resolve(repoRoot, tmpRoot), path.resolve(repoRoot, "tmp"), ...extraRoots.map((r) => path.resolve(repoRoot, r))])].sort()) {
     const retiredRoot = path.join(root, "retired-gate-rounds", head);
     let rounds = [];
-    try { rounds = (await readdir(retiredRoot, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name).sort(); } catch { continue; }
+    try {
+      rounds = (await readdir(retiredRoot, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+    } catch (err) {
+      if (err?.code !== "ENOENT") warn(`roundCause telemetry skipped retirement directory ${retiredRoot}: unreadable`);
+      continue;
+    }
     for (const round of rounds) {
       const file = path.join(retiredRoot, round, "retirement.json");
       let record;
@@ -78,7 +85,7 @@ export async function findSameHeadRerun({ repoRoot, repo, pr, gate, headSha, tmp
 /**
  * Reads the prior round the same way the round count does, probes git only for a head move, then derives the cause. Returns `{ roundCause, warnings }`.
  * Telemetry only, so it never refuses a write: a git or gate-context read error means no base-only merge, and a prior ledger with a sealed-ledger mismatch is excluded
- * (never trusted) and named in `warnings`. The cap, retention and carry-forward readers stay fail-closed.
+ * (never trusted) and named in `warnings`, as is an unreadable retirement record or directory. The cap, retention and carry-forward readers stay fail-closed.
  * A completed live ledger of the same round keeps its stamped cause, because a later head's ledger must not re-derive it on a repeated write.
  */
 export async function resolveRoundCause(options, { repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
@@ -97,7 +104,7 @@ export async function resolveRoundCause(options, { repoRoot, baseOnlyMerge = isB
 
   // A same-head record only matters before the no-prior and head-move rules; a prior round at this head keeps the digest rule.
   const sameHeadRerun = !prior || String(prior.headSha).toLowerCase() !== head
-    ? await findSameHeadRerun({ repoRoot, repo, pr, gate, headSha, tmpRoot: root, extraRoots: options.contextTmpRoot ? [options.contextTmpRoot] : [], incoming: roundIdentity, sinceMs: Date.parse(prior?.loggedAt) || 0, warn: skipped })
+    ? await findSameHeadRerun({ repoRoot, repo, pr, gate, headSha, tmpRoot: root, extraRoots: options.contextTmpRoot ? [options.contextTmpRoot] : [], incoming: roundIdentity, sinceMs: Date.parse(prior?.loggedAt) || 0, blockedSinceMs: 0, warn: skipped })
     : undefined;
   let baseOnly = false;
   if (!sameHeadRerun && prior && String(prior.headSha).toLowerCase() !== head) {

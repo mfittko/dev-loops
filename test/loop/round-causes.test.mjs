@@ -515,3 +515,54 @@ test("R23 --help states the derivation limit, the out-of-band count and the roun
   assert.match(out, /outOfBandLedgers counts ledgers whose seal does not match/);
   assert.match(out, /the earliest one stamped\s+first/);
 });
+
+const mergedOne = (dir) => json(dir, "merged.json", [{ number: 1, mergedAt: "2026-11-30T00:00:00Z" }]);
+
+test("R25 an unreadable retirement directory is skipped and named, not dropped silently", async () => {
+  await withTempDir(async (dir) => {
+    await ledger(dir, 1, sha("a"), "2026-11-01T01:00:00.000Z", { findings: [] });
+    await mkdir(path.join(dir, "retired-gate-rounds"), { recursive: true });
+    await writeFile(path.join(dir, "retired-gate-rounds", sha("a")), "not a directory");
+    await mergedOne(dir);
+    const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
+    assert.deepEqual(r.perChange[0].byCause, { ...ZERO, first: 1 });
+    assert.equal(r.warnings.length, 1);
+    assert.match(r.warnings[0], /retirement directory .*unreadable/);
+  });
+});
+
+test("R26 a blocked ledger without a loggedAt does not count inside a bounded window", async () => {
+  await withTempDir(async (dir) => {
+    const { a, b } = legacyRepo(dir);
+    await ledger(dir, 1, a, "2026-11-02T00:00:00.000Z", { findings: [] });
+    await ledger(dir, 1, b, "2026-11-03T00:00:00.000Z", { findings: [] });
+    await ledger(dir, 1, b, undefined, { verdict: "blocked", loggedAt: undefined }, 1);
+    await mergedOne(dir);
+    assert.deepEqual((await run(dir, ["--merged-prs", path.join(dir, "merged.json")])).perChange[0].byCause, { ...ZERO, first: 1, other_head_move: 1 });
+  });
+});
+
+test("R27 a retirement record under a subdirectory tmp does not change the cause with the working directory", async () => {
+  for (const sub of [false, true]) {
+    await withTempDir(async (dir) => {
+      legacyRepo(dir);
+      await ledger(dir, 1, sha("a"), "2026-11-01T01:00:00.000Z", { findings: [] });
+      await retiredRecord(path.join(dir, "sub", "tmp"), sha("a"), "r1", { retiredAt: "2026-11-01T00:30:00.000Z" });
+      await mergedOne(dir);
+      let out = "";
+      const cwd = sub ? path.join(dir, "sub") : dir;
+      await runCli(["--repo", "o/r", "--tmp-root", dir, "--merged-prs", path.join(dir, "merged.json")], { stdout: { write: (s) => { out += s; } }, stderr: { write() {} }, repoRoot: cwd });
+      assert.deepEqual(JSON.parse(out).perChange[0].byCause, { ...ZERO, first: 1 });
+    });
+  }
+});
+
+test("R28 a failed worktree listing in a git checkout is named in warnings", async () => {
+  await withTempDir(async (dir) => {
+    await mkdir(path.join(dir, ".git"));
+    await ledger(dir, 1, sha("a"), "2026-11-01T01:00:00.000Z", { findings: [] });
+    await mergedOne(dir);
+    const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
+    assert.ok(r.warnings.some((w) => /worktree listing failed/.test(w)));
+  });
+});
