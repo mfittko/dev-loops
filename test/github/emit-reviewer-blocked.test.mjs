@@ -374,3 +374,24 @@ test("issue 3416: an existing blocked artifact is overwritten by a new blocked r
     assert.notEqual(artifact.reason, "old");
   });
 });
+
+test("issue 3416: an unreadable existing artifact (EISDIR) refuses with a recovery and writes nothing; invalid JSON counts as absent", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const findingsDir = path.join(tmpDir, "findings");
+    await mkdir(path.join(findingsDir, "a.json"), { recursive: true }); // a directory at the artifact path: readFile fails with EISDIR
+    const argv = ["--run", RUN, "--head-sha", HEAD_SHA, "--angles", "a", "--model-turns", "1", "--tool-calls", "1", "--findings-dir", findingsDir];
+    const { code, out } = await runCapturingStdout(argv);
+    assert.equal(code, 1);
+    assert.match(JSON.parse(out).error, /could not read the existing findings artifact/);
+    assert.match(JSON.parse(out).recovery, /^stop: make the artifact path readable/);
+    assert.deepEqual(await readdir(path.join(findingsDir, "a.json")), []);
+  });
+  await withTmpDir(async (tmpDir) => {
+    const findingsDir = path.join(tmpDir, "findings");
+    await mkdir(findingsDir, { recursive: true });
+    await writeFile(path.join(findingsDir, "a.json"), "{ truncated");
+    const { code } = await runCapturingStdout(["--run", RUN, "--head-sha", HEAD_SHA, "--angles", "a", "--model-turns", "1", "--tool-calls", "1", "--findings-dir", findingsDir]);
+    assert.equal(code, 0);
+    assert.equal((await readArtifacts(findingsDir))[0].verdict, "blocked");
+  });
+});

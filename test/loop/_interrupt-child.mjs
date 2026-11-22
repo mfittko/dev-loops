@@ -47,7 +47,7 @@ const UNITS = {
     },
     sentinel: () => {
       const args = [sentinelScript, "--scope", "draft-gate-coverage", "--prefix-hash", prefixHash, ...(process.env.SAME_HEAD_RETRY ? ["--same-head-retry"] : [])];
-      const run = spawnSync("node", args, { cwd: root, encoding: "utf8" });
+      const run = spawnSync("node", args, { cwd: root, encoding: "utf8", env: gitEnv });
       if (run.status !== 0 || !run.stdout.includes('"fresh": true') && !run.stdout.includes('"fresh":true')) { process.stdout.write(run.stdout); process.stderr.write(run.stderr); process.exit(3); }
     },
     "artifact-tmp": () => { mkdirSync(path.dirname(angleFile), { recursive: true }); writeFileSync(`${angleFile}.tmp`, angleArtifact); },

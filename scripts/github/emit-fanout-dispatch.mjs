@@ -153,7 +153,10 @@ Exit codes:
      composed work order exceeds REVIEWER_WORK_ORDER_MAX_BYTES (30 KB) or
      carries an inline "diff --git" line, or a full emission finds a posted verdict
      (a fan-in ledger or findings log) at the head and refuses to retire that round
-     (the "recovery" field names the operator step)
+     (the "recovery" field names the operator step), or a reviewer sentinel at the
+     head has no newer valid findings artifact for its unit and the full emission
+     refuses to retire a round whose reviewer may still run (resume with
+     --pending; the "recovery" field names the step)
   2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, filesystem
      error, or invalid --jq filter)`.trim();
 
@@ -795,9 +798,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   if (!pendingOnly) {
     let stale;
     try {
-      // Sentinels always live under <cwd>/tmp (verify-fresh-review-context); the round's findings follow --tmp-root;
+      // Sentinels always live under <cwd>/tmp (verify-fresh-review-context); the round's findings and dispatch records follow --tmp-root;
       // a verdict marker may sit under --tmp-root, the ledger root or the main worktree's tmp.
-      stale = await retireStaleRound({ repo, pr, gate, headSha, tmpRoot: tmpRootDefault, findingsTmpRoot: tmpRoot, verdictRoots: [...new Set([tmpRoot, ledgerTmpRoot, ledgerTmpRootDefault])] });
+      stale = await retireStaleRound({ repo, pr, gate, headSha, tmpRoot: tmpRootDefault, findingsTmpRoot: tmpRoot, recordsTmpRoot: tmpRoot, verdictRoots: [...new Set([tmpRoot, ledgerTmpRoot, ledgerTmpRootDefault])] });
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;

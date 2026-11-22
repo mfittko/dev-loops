@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { retireStaleRound } from "../../scripts/github/_stale-round-retirement.mjs";
-import { buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 
 const HEAD = "d".repeat(40);
 const KEY = { repo: "owner/repo", pr: 7, gate: "draft_gate", headSha: HEAD };
@@ -159,13 +159,68 @@ test("an artifact older than the sentinel belongs to an earlier round, so the se
   });
 });
 
-test("a group unit sentinel is finished once any valid artifact is newer than it", async () => {
+// Two group units: group-a (angle alpha) and group-b (angle beta). The persisted emit plan maps each scope to its angles.
+async function withGroupRound(planUnits, fn) {
   await withRound(async (tmpRoot) => {
     await rm(path.join(tmpRoot, SENTINEL));
-    await writeFile(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-group-docs-${HEAD}.json`), "{}");
-    await utimes(path.join(buildGateReviewsDir({ ...KEY, tmpRoot }), "coverage.json"), new Date(Date.now() + 5000), new Date(Date.now() + 5000));
-    assert.equal((await retireStaleRound({ ...KEY, tmpRoot })).retiredRound.retired, 1);
+    for (const g of ["a", "b"]) await writeFile(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-group-${g}-${HEAD}.json`), "{}");
+    const dir = buildGateReviewsDir({ ...KEY, tmpRoot });
+    await rm(path.join(dir, "coverage.json"));
+    if (planUnits) {
+      const plan = buildGateEmitPlanPath({ ...KEY, tmpRoot });
+      await mkdir(path.dirname(plan), { recursive: true });
+      await writeFile(plan, JSON.stringify({ units: planUnits }));
+    }
+    return fn(tmpRoot, dir);
   });
+}
+const finishedArtifact = (angle) => JSON.stringify({ angle, verdict: "clean", headSha: HEAD, findings: [] });
+const GROUP_UNITS = [{ scope: "draft-gate-group-a", angles: ["alpha"] }, { scope: "draft-gate-group-b", angles: ["beta"] }];
+
+test("a group unit that finished does not make another running group unit finished: the round is refused and nothing moves", async () => {
+  await withGroupRound(GROUP_UNITS, async (tmpRoot, dir) => {
+    await writeFile(path.join(dir, "alpha.json"), finishedArtifact("alpha")); // group-a finished; group-b still reviewing
+    const result = await retireStaleRound({ ...KEY, tmpRoot });
+    assert.equal(result.retiredRound, undefined);
+    assert.match(result.refusal.error, /1 reviewer sentinel\(s\)[^]*group-b/);
+    assert.equal(existsSync(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-group-a-${HEAD}.json`)), true);
+    assert.equal(existsSync(path.join(dir, "alpha.json")), true);
+  });
+});
+
+test("group units retire once every angle of each unit has a valid newer artifact", async () => {
+  await withGroupRound(GROUP_UNITS, async (tmpRoot, dir) => {
+    for (const angle of ["alpha", "beta"]) await writeFile(path.join(dir, `${angle}.json`), finishedArtifact(angle));
+    assert.equal((await retireStaleRound({ ...KEY, tmpRoot })).retiredRound.retired, 2);
+  });
+});
+
+test("a group sentinel with no emit plan, no plan entry or a plan that is not JSON stays live", async () => {
+  for (const planUnits of [null, [{ scope: "draft-gate-group-a", angles: ["alpha"] }]]) {
+    await withGroupRound(planUnits, async (tmpRoot, dir) => {
+      for (const angle of ["alpha", "beta"]) await writeFile(path.join(dir, `${angle}.json`), finishedArtifact(angle));
+      assert.match((await retireStaleRound({ ...KEY, tmpRoot })).refusal.error, /still be running/);
+    });
+  }
+  await withGroupRound(GROUP_UNITS, async (tmpRoot, dir) => {
+    for (const angle of ["alpha", "beta"]) await writeFile(path.join(dir, `${angle}.json`), finishedArtifact(angle));
+    await writeFile(buildGateEmitPlanPath({ ...KEY, tmpRoot }), "{ truncated");
+    assert.match((await retireStaleRound({ ...KEY, tmpRoot })).refusal.error, /still be running/);
+  });
+});
+
+test("a distinct records root retires the dispatch records the emitter wrote there", async () => {
+  const sentinelRoot = await mkdtemp(path.join(os.tmpdir(), "stale-round-"));
+  const recordsRoot = await mkdtemp(path.join(os.tmpdir(), "stale-round-"));
+  try {
+    await writeFile(path.join(recordsRoot, `checkpoint-dispatch-prompt-draft-gate-coverage-${HEAD}.json`), "{}");
+    const { retiredRound } = await retireStaleRound({ ...KEY, tmpRoot: sentinelRoot, recordsTmpRoot: recordsRoot, liveOnly: true });
+    assert.deepEqual(retiredRound.dispatchPromptRecords, [`checkpoint-dispatch-prompt-draft-gate-coverage-${HEAD}.json`]);
+    assert.equal(existsSync(path.join(recordsRoot, `checkpoint-dispatch-prompt-draft-gate-coverage-${HEAD}.json`)), false);
+  } finally {
+    await rm(sentinelRoot, { recursive: true, force: true });
+    await rm(recordsRoot, { recursive: true, force: true });
+  }
 });
 
 test("an error other than ENOENT reading a verdict marker fails closed instead of retiring (ENOTDIR, EACCES, EIO share one path)", async () => {

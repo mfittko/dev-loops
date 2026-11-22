@@ -2796,6 +2796,7 @@ test("issue 3416: with a distinct --tmp-root the sentinels under cwd/tmp still r
     const second = runEmitCli(args, { cwd: tmpDir });
     assert.equal(second.status, 0, second.stderr || second.stdout);
     assert.equal(JSON.parse(second.stdout).retiredRound.findingsDirRetired, true);
+    assert.equal(JSON.parse(second.stdout).retiredRound.dispatchPromptRecords.length, 3); // the records follow --tmp-root
     assert.equal(existsSync(sentinel), false);
   });
 });

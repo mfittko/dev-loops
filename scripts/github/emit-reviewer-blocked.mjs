@@ -189,10 +189,25 @@ export async function main(argv = process.argv.slice(2), { mkdirFn = mkdir, writ
   // Issue 3416: a reviewer refused by the sentinel never overwrites a finished artifact (any verdict but blocked).
   // An over-budget run that covered every angle blocks them all, over its own clean artifacts, so the guard skips that case.
   const finished = [];
+  const unreadable = [];
   for (const angle of result.unreviewedAngles.length > 0 ? anglesToBlock : []) {
     const existingPath = path.join(findingsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`);
-    const existing = await readFile(existingPath, "utf8").then((text) => JSON.parse(text), () => null);
+    // Only a missing file (ENOENT) or invalid JSON means no finished artifact; any other read error (EACCES, EISDIR, EIO) could hide one.
+    let existing = null;
+    try {
+      existing = JSON.parse(await readFile(existingPath, "utf8"));
+    } catch (err) {
+      if (err instanceof SyntaxError || err?.code === "ENOENT") existing = null;
+      else unreadable.push(`${existingPath} (${err?.code ?? err?.message})`);
+    }
     if (existing && typeof existing === "object" && existing.verdict !== "blocked") finished.push(existingPath);
+  }
+  if (unreadable.length > 0) {
+    return finish({
+      ok: false,
+      error: `refusing to write a blocked artifact: could not read the existing findings artifact(s) ${unreadable.join(", ")} — a finished artifact may stand there, so nothing was written`,
+      recovery: "stop: make the artifact path readable (or remove what blocks it), then re-run emit-reviewer-blocked.mjs; do not overwrite it by hand",
+    }, false);
   }
   if (finished.length > 0) {
     return finish({
