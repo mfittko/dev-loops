@@ -3749,6 +3749,17 @@ test("issue 3251: a smoke-only red head whose failed jobs carry GitHub timeout a
     const timedOut = gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }], ["The action 'Run inspect-run viewer WebKit smoke' has timed out after 10 minutes."]);
     const recovery = `dev-loops-run scripts/github/rerun-failed-ci.mjs --repo ${REPO} --pr ${PR} --head-sha ${fx.head}`;
     await assert.rejects(emitCi(fx, { runChild: timedOut.runChild }, smokeOnly), (error) => /timed-out smoke job.*rerun-failed-ci\.mjs/.test(error.message) && error.recovery === recovery);
+    // The re-run keeps the run id, so the attempt must make the attempt 2 refusal differ from attempt 1 (RECOVERY-COMMAND-REQUIRED).
+    const attempt2 = makeGhMock([
+      { assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", attempt: 2 }]) },
+      { assertArgs: ["view", "7"], stdout: JSON.stringify({ jobs: [{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }, { databaseId: 12, name: "verify", conclusion: "failure" }] }) },
+      { assertArgs: ["api"], stdout: JSON.stringify([{ annotation_level: "failure", message: "The action 'Run inspect-run viewer WebKit smoke' has timed out after 10 minutes." }]) },
+    ]);
+    const refusalMessage = async (mock) => (await emitCi(fx, { runChild: mock.runChild }, smokeOnly).catch((error) => error)).message;
+    const [first, second] = [await refusalMessage(gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }], ["The action 'Run inspect-run viewer WebKit smoke' has timed out after 10 minutes."])), await refusalMessage(attempt2)];
+    assert.match(first, /attempt 1 is a timed-out smoke job/);
+    assert.match(second, /attempt 2 is a timed-out smoke job/);
+    assert.notEqual(first, second);
     const realFailure = gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }], ["Process completed with exit code 1."]);
     assert.equal((await emitCi(fx, { runChild: realFailure.runChild }, smokeOnly)).workOrder.source, "ci-failure");
     // list, view and one annotations read for viewer-smoke; verify annotations are never read.
@@ -3772,7 +3783,7 @@ test("issue 3251: a smoke-only red head whose failed jobs carry GitHub timeout a
     assert.equal(ghCalls(loneVerifyOther), 2);
     // A re-run already started (attempt 2 in progress): emit nothing until CI settles.
     const inProgress = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "in_progress", attempt: 2 }]) }]);
-    await assert.rejects(emitCi(fx, { runChild: inProgress.runChild }, smokeOnly), (error) => /in_progress, not completed.*rerun-failed-ci\.mjs/.test(error.message) && error.recovery === recovery);
+    await assert.rejects(emitCi(fx, { runChild: inProgress.runChild }, smokeOnly), (error) => /attempt 2 is in_progress, not completed.*rerun-failed-ci\.mjs/.test(error.message) && error.recovery === recovery);
     assert.equal(ghCalls(inProgress), 1);
     // The re-run completed green: the red ci file is stale, so no fixer order.
     const green = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", conclusion: "success", attempt: 2 }]) }]);
