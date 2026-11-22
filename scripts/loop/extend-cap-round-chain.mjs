@@ -20,7 +20,7 @@ import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { renderCliText } from "@dev-loops/core/loop/cli-command";
-import { CAP_ROUND_REFUSAL, replacementPrOperatorRecovery } from "@dev-loops/core/loop/pr-gate-coordination";
+import { CAP_ROUND_REFUSAL, capRoundCoverageDetail, replacementPrOperatorRecovery } from "@dev-loops/core/loop/pr-gate-coordination";
 import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -210,7 +210,7 @@ export async function extendCapRoundChain(options, {
     if (sealedCap) {
       // Issue 3443: name the act refs no record on the chain covers and the records that exist, so the operator sees which item is missing.
       const { uncovered, records } = cleanCap ? { uncovered: [], records: [] } : capRoundCoverage(cap, tmpRoot, sealedCap);
-      const named = uncovered.length > 0 ? ` Uncovered act refs: ${uncovered.join(", ")}. Records on the chain: ${records.map((r) => `${String(r.baseline).slice(0, 7)}..${String(r.candidate).slice(0, 7)} [${r.refs.join(", ")}]`).join("; ")}.` : "";
+      const named = capRoundCoverageDetail({ uncovered, records });
       return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}: the sealed record at the cap-round head ${capHeadSha.slice(0, 7)} does not cover the cap round's act set or its candidate is off the PR head's history, and it is never overwritten, so a reviewer-only run at that head refuses.${named} Restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`, replacement);
     }
     // The cap-round head is the PR head: no commit follows it, and a reviewer-only run with baseline equal to the head is refused. Only a new commit moves the head.

@@ -72,6 +72,16 @@ test("the cap-round refusal names its failed condition and the remedy for that c
   }
 });
 
+// Issue 3443: items_do_not_cover names the uncovered act refs and the existing records, and keeps its extend-cap-round-chain agent remedy as the recovery.
+test("items_do_not_cover names the uncovered act refs and the records that exist", () => {
+  const draftCapRoundDetail = { uncovered: ["ref-escalated"], records: [{ baseline: "a".repeat(40), candidate: "b".repeat(40), refs: ["ref-one", "ref-two"] }] };
+  const named = draftAt({ draftRoundRefused: true, draftCapRoundFailure: "items_do_not_cover", draftCapRoundDetail, repo: "o/r" });
+  assert.match(named.reason, /Uncovered act refs: ref-escalated\. Records on the chain: aaaaaaa\.\.bbbbbbb \[ref-one, ref-two\]\./);
+  assert.equal(named.agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 10");
+  assert.ok(!draftAt({ draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record", draftCapRoundDetail }).reason.includes("Uncovered act refs"), "only items_do_not_cover carries the detail");
+  assert.ok(!draftAt({ draftRoundRefused: true, draftCapRoundFailure: "items_do_not_cover" }).reason.includes("Uncovered act refs"), "no detail, no suffix");
+});
+
 test("no source file contains the catch-all 'legacy unsealed delta record' refusal text", () => {
   const grep = spawnSync("git", ["grep", "-l", "legacy unsealed delta record", "--", "*.mjs", "*.js", "*.ts"], { encoding: "utf8", cwd: fileURLToPath(new URL("../../..", import.meta.url)) });
   assert.ok(grep.status === 0 || grep.status === 1, "git grep ran"); // status 1 = no hits

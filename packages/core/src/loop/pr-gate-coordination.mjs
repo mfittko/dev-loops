@@ -966,7 +966,7 @@ function applyDraftGateEvidenceGuard(result, { prDraft = false, input = {} } = {
     allowedNextActions,
     forbiddenActions,
     reason: capRoundFailed
-      ? `Clean draft_gate evidence is required before merge (no gate exemptions, #579), and the cap round's proof failed, so no draft_gate round can supply it. ${Object.hasOwn(CAP_ROUND_REFUSAL, input.draftCapRoundFailure) ? CAP_ROUND_REFUSAL[input.draftCapRoundFailure] : CAP_ROUND_REFUSAL.cap_round_unresolved}`
+      ? `Clean draft_gate evidence is required before merge (no gate exemptions, #579), and the cap round's proof failed, so no draft_gate round can supply it. ${capRoundRefusalText(input)}`
       : evidenceReason,
     gateEvidenceNote: null,
     // The failed cap-round proof carries the same typed condition and exit the write-gate-context refusal names.
@@ -999,7 +999,16 @@ export const CAP_ROUND_REFUSAL = Object.freeze({
 /** RECOVERY-COMMAND-REQUIRED: the replacement-PR restart is an operator decision (ADR 0255), so its `recovery` is the operator form with the full procedure. One renderer serves every refusal that names it. */
 export const replacementPrOperatorRecovery = (pr) => `operator: push HEAD to a new branch that keeps the issue slug (\`git push origin HEAD:<new-branch>\`), record a pre-PR review on the new branch head (\`node <dev-loops-package-root>/cli/index.mjs loop pre-pr-review ...\`), run \`node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr ${pr}\` while PR #${pr} is still open, then close PR #${pr}`;
 
-const CAP_ROUND_COMMAND_CONDITIONS = Object.freeze(["clean_cap_verdict_unposted", "no_clearing_record", "items_do_not_cover", "chain_does_not_reach_head", "unsealed_record"]);
+/** Issue 3443: names the act refs no record on the chain covers and the records that exist (`{ uncovered, records }` from `capRoundCoverage`); empty when nothing is uncovered. */
+export const capRoundCoverageDetail = (coverage) => coverage?.uncovered?.length > 0
+  ? ` Uncovered act refs: ${coverage.uncovered.join(", ")}. Records on the chain: ${coverage.records.map((r) => `${String(r.baseline).slice(0, 7)}..${String(r.candidate).slice(0, 7)} [${r.refs.join(", ")}]`).join("; ")}.`
+  : "";
+
+/** The refusal text of a failed cap-round condition: its remedy, plus the coverage detail of items_do_not_cover. */
+const capRoundRefusalText = (input) => (Object.hasOwn(CAP_ROUND_REFUSAL, input.draftCapRoundFailure) ? CAP_ROUND_REFUSAL[input.draftCapRoundFailure] : CAP_ROUND_REFUSAL.cap_round_unresolved)
+  + (input.draftCapRoundFailure === "items_do_not_cover" ? capRoundCoverageDetail(input.draftCapRoundDetail) : "");
+
+const CAP_ROUND_COMMAND_CONDITIONS =Object.freeze(["clean_cap_verdict_unposted", "no_clearing_record", "items_do_not_cover", "chain_does_not_reach_head", "unsealed_record"]);
 
 /**
  * The one exit of a failed cap-round-fixed condition (issue 3139). ADR 0254: these conditions end at the chain-extension command, except `clean_cap_verdict_unposted`, which ends at `gate upsert-verdict --post-sealed-cap-round`. The chain-extension command seals docs and tests commits or code commits a locally_clear delta covers.
@@ -1728,7 +1737,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
           ? `The PR is still draft at the round cap (\`round_cap_reached\`, ADR 0208) and the current head's act list names a human decision (GATE-EXEC-SOFT-CAP): ${actBlockers.map((b) => b?.item).join("; ")}. Round N+1 never runs.`
           : bodyOnlyList
             ? `The PR is still draft at the round cap (\`round_cap_reached\`, ADR 0208) and every open act item of the current head is a PR-body item (ADR 0271). Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true). Round N+1 never runs.`
-          : `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but ${input.draftCapRoundFailure === "clean_cap_verdict_unposted" ? "the clean cap round's draft_gate verdict is not posted" : "the cap round's fixer pass is not proven landed with a cleared pre-push delta"}. ${Object.hasOwn(CAP_ROUND_REFUSAL, input.draftCapRoundFailure) ? CAP_ROUND_REFUSAL[input.draftCapRoundFailure] : CAP_ROUND_REFUSAL.cap_round_unresolved} Round N+1 never runs.`,
+          : `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but ${input.draftCapRoundFailure === "clean_cap_verdict_unposted" ? "the clean cap round's draft_gate verdict is not posted" : "the cap round's fixer pass is not proven landed with a cleared pre-push delta"}. ${capRoundRefusalText(input)} Round N+1 never runs.`,
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,

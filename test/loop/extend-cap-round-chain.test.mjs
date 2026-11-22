@@ -1282,15 +1282,15 @@ test("issue 3437 ac:1: a cap-round clear sealed for the round's own act set cove
 test("issue 3437 ac:3: no_cap_round_chain names a replacement PR for a non-covering sealed record at the cap-round head, a run at that head when none exists, and gate-coordination when no cap round resolves", async () => {
   const { root, A, head, tmp } = await ciFailedCapFixture();
   try {
-    const B = readSealedGateDeltaRecord(tmp, A).candidateHead;
+    const { candidateHead: B, items: [{ ref: actRef }] } = readSealedGateDeltaRecord(tmp, A);
     writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: B, actSetId: "other", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "unrelated", status: "resolved" }] });
     const refused = await extend(root, head);
     assert.equal(refused.reason, "no_cap_round_chain");
     assert.equal(refused.recovery, renderCliText(replacementPrOperatorRecovery(PR)));
     assert.doesNotMatch(refused.recovery, /pre-push-delta/u, "a run at the cap-round head refuses and names this command again");
     // Issue 3443: the refusal names the records that exist; the act refs they leave uncovered are named too.
-    assert.match(refused.detail, /Records on the chain: .*\[unrelated\]/u);
-    assert.match(refused.detail, /Uncovered act refs: \S+/u);
+    assert.ok(refused.detail.includes(`Uncovered act refs: ${actRef}.`), `names the cap round's own act ref ${actRef}: ${refused.detail}`);
+    assert.ok(refused.detail.includes(`Records on the chain: ${A.slice(0, 7)}..${B.slice(0, 7)} [unrelated].`), refused.detail);
     rmSync(gateDeltaRecordPath(tmp, A), { force: true });
     rmSync(`${gateDeltaRecordPath(tmp, A)}.seal`, { force: true });
     const noRecord = await extend(root, head);

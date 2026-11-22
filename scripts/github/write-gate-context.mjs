@@ -122,11 +122,12 @@ export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied
  */
 export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = resolveCapRoundFixed, requirePostedCleanCap = true, trustRuntime = {} }) {
   let failure = null;
+  let failureDetail = null;
   const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
   const capRound = await resolve(
     { repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName, anyHead: context.prData?.isDraft !== true },
     // `resolveCapRoundFixed` reports no_cap_round below the round cap, the normal state: that is no failure. A cap reached with an unresolvable ledger (cap_round_unresolved) or a thrown resolver error is.
-    { repoRoot, onFailure: (condition) => { if (condition !== "no_cap_round") failure = condition; } },
+    { repoRoot, onFailure: (condition, detail) => { if (condition !== "no_cap_round") { failure = condition; failureDetail = detail ?? null; } } },
   ).catch(() => { failure = "cap_round_unresolved"; return null; });
   // A clean cap round has no fixer pass: only its posted review is visible to CI, so a ledger-only proof is no clean draft_gate evidence.
   // Absent reviews and untrusted authors prove nothing (fail closed), matching the detector and ready-for-review.
@@ -136,7 +137,7 @@ export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = re
     const isTrusted = await resolveTrustedEvidencePredicate(restShaped, trustRuntime);
     if (cleanCapVerdictUnposted(capRound, draftGatePostedHeads(restShaped.filter(isTrusted).map((r) => r.body)))) return { capRoundFixed: false, failure: "clean_cap_verdict_unposted" };
   }
-  return { capRoundFixed: Boolean(capRound), failure };
+  return { capRoundFixed: Boolean(capRound), failure, ...(failureDetail ? { failureDetail } : {}) };
 }
 
 /** True when `capRound` is a clean cap round (ADR 0250) with no posted draft_gate header (`{ head, round }`) at its head and cap round: the proof then lives in a local ledger only. */
@@ -2436,7 +2437,9 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   const mergeBase = Boolean(probeCapHead && head) ? await gitProbe(["merge-base", "--is-ancestor", probeCapHead, head]) : null;
   const orphaned = mergeBase?.code === 1 && !mergeBase.signal
     && (await gitProbe(["cat-file", "-e", `${probeCapHead}^{commit}`])).code === 0 && (await gitProbe(["cat-file", "-e", `${head}^{commit}`])).code === 0;
-  onFailure(orphaned ? "baseline_orphaned" : starts.length === 0 ? (unsealed ?"unsealed_record" : "no_clearing_record") : covering.length === 0 ? "items_do_not_cover" : "chain_does_not_reach_head");
+  const condition = orphaned ? "baseline_orphaned" : starts.length === 0 ? (unsealed ?"unsealed_record" : "no_clearing_record") : covering.length === 0 ? "items_do_not_cover" : "chain_does_not_reach_head";
+  // Issue 3443: items_do_not_cover also names the act refs no record on the chain covers and the records that exist.
+  onFailure(condition, condition === "items_do_not_cover" && !isCleanCapRound(capRound) ? capRoundCoverage(capRound, tmpRoot, starts[0]) : undefined);
   return null;
 }
 

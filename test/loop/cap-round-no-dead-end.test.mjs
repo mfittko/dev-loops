@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -219,6 +219,31 @@ test("the remaining clean-cap needs_fix dead ends clear with the remedy ADR 0255
       assert.ok(READY.includes(end.nextAction), `docs ${docs}: ${end.failure}: ${end.reason}`);
     } finally { rmSync(s.root, { recursive: true, force: true }); }
   }
+});
+
+// Issue 3443 AC3: a cap round with three act refs, covered by a commit_only fixer record (two refs, baseline A) and the thread-route fix of the escalated item (one ref, baseline F), needs no replacement PR.
+test("issue 3443: act refs covered by two locally_clear records reach ready, and a genuinely uncovered ref blocks naming it", async () => {
+  const s = scenario({ clean: false, sequence: "lost", merges: 0, fix: true, docs: true });
+  try {
+    const findings = [ACT, { ...ACT, summary: "second defect", line: 2 }, { ...ACT, summary: "escalated defect", line: 3 }];
+    const ledger = JSON.parse(readFileSync(s.ledgerPath, "utf8"));
+    writeFileSync(s.ledgerPath, JSON.stringify({ ...ledger, findings }));
+    const [one, two, escalated] = capRoundActList(findings, s.A).map((item) => item.ref);
+    assert.equal(new Set([one, two, escalated]).size, 3, "three distinct act refs");
+    const F = String(runGitFixture(s.root, ["rev-parse", "HEAD~1"])).trim();
+    const tmpRoot = path.join(s.root, "tmp");
+    const record = (baseline, candidateHead, refs) => writeSealedGateDeltaRecord(tmpRoot, baseline, { reviewBaselineHead: baseline, candidateHead, actSetId: `set-${baseline.slice(0, 7)}`, invocation: 1, outcome: "locally_clear", nextStep: "push_to_gate", items: refs.map((ref) => ({ ref, status: "resolved" })) });
+    const ctx = { repo: REPO, pr: PR, head: s.head };
+    record(s.A, F, [one, two]);
+    const blocked = await coordinationAt(s.root, ctx);
+    assert.deepEqual({ next: blocked.nextAction, failure: blocked.failure }, { next: "report_blocked", failure: "items_do_not_cover" });
+    assert.match(blocked.reason, new RegExp(`Uncovered act refs: ${escalated}\\.`), "the refusal names the uncovered ref");
+    assert.match(blocked.reason, new RegExp(`Records on the chain: ${s.A.slice(0, 7)}\\.\\.${F.slice(0, 7)} \\[${one}, ${two}\\]`), "and the record that exists");
+    record(F, s.head, [escalated]);
+    const end = await coordinationAt(s.root, ctx);
+    assert.ok(READY.includes(end.nextAction), `${end.failure}: ${end.reason}`);
+    assert.doesNotMatch(String(end.remedy), /replacement|allow-replacement-pr/u, "no replacement PR");
+  } finally { rmSync(s.root, { recursive: true, force: true }); }
 });
 
 // Issue 3139 AC5: the PR 3138 sequence under one toolchain: a cap round with findings, the fixer's needs_fix record, a base-only merge and a half-stamped earlier ledger.
