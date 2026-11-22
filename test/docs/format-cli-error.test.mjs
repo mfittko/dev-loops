@@ -16,6 +16,7 @@ const usageError = Object.assign(new Error("bad flag"), { usage: "USAGE: ..." })
 const CASES = [
   new Error("plain failure"),
   usageError,
+  Object.assign(new Error("refused"), { recovery: "node cli/index.mjs gate extend-cap-round-chain --repo o/r --pr 1" }),
   Object.assign(new Error("config_load_failed: x"), {
     code: "config_load_failed",
     configError: { reason: "config_load_failed", errors: ["x"], unknownKeys: ["k"], runningVersion: "1", checkoutVersion: null },
