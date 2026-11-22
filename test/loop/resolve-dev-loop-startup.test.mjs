@@ -1362,6 +1362,7 @@ test("buildAutoResolvedInput fails closed (not-claimed) when the issue read fail
     // reached — this test is about the gate, not linkage failure.
     const ghStub = await writeGhStubHelper(tmp, [
       noLinkedPrGraphqlEntry(),
+      { assertArgs: ["api", "graphql", "number=999999", ".data.repository.issueOrPullRequest"], stdout: JSON.stringify(grilledFacts()) },
       { assertArgs: ["issue", "view", "999999", "assignees"], exitCode: 1, stderr: "gh: not found\n" },
     ], { matchMode: "claims" });
     assert.throws(
@@ -1427,6 +1428,7 @@ test("buildAutoResolvedInput with local-first tracker source still hits the owne
     // itself doesn't bypass the gate. Stub linkage so the gate is reached.
     const ghStub = await writeGhStubHelper(tmp, [
       noLinkedPrGraphqlEntry(),
+      { assertArgs: ["api", "graphql", "number=999999", ".data.repository.issueOrPullRequest"], stdout: JSON.stringify(grilledFacts()) },
       { assertArgs: ["issue", "view", "999999", "assignees"], exitCode: 1, stderr: "gh: not found\n" },
     ], { matchMode: "claims" });
     assert.throws(
@@ -1642,8 +1644,8 @@ const GRILL_STOP_CASES = [
 ];
 
 for (const preference of ["prefer_local", "prefer_github_first"]) {
-  for (const [label, facts, reason] of GRILL_STOP_CASES) {
-    test(`3462: ${preference} pickup stops before any claim write when ${label}`, async () => {
+  for (const [label, facts, reason] of GRILL_STOP_CASES) for (const claim of [true, false]) {
+    test(`3462: ${preference} pickup stops before any claim write when ${label} (claim ${claim})`, async () => {
       const pick = await withTempDir(async (tempDir) => {
         await initRepoWithOrigin(tempDir);
         const graphql = facts === null
@@ -1655,7 +1657,7 @@ for (const preference of ["prefer_local", "prefer_github_first"]) {
           graphql,
           { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [] }) },
         ], { matchMode: "claims", logCalls: true });
-        const input = buildAutoResolvedInput({ issue: 735, cwd: tempDir, claim: true, targetPreference: preference, env: { ...stub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) } });
+        const input = buildAutoResolvedInput({ issue: 735, cwd: tempDir, claim, targetPreference: preference, env: { ...stub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) } });
         return { input, log: await readFile(stub.ghLogPath, "utf8") };
       }, { prefix: "resolve-dev-loop-grill-stop-" });
       assert.doesNotMatch(pick.log, /issue edit|--add-assignee/);
@@ -1684,6 +1686,81 @@ test("3462: a clean grill proceeds on prefer_local and --issue --lightweight sto
   const stopped = await run({ review: false }, ["--lightweight"]);
   assert.equal(stopped.selectedStrategy, "none");
   assert.match(stopped.nextAction, /loop-grill 735 --auto/);
+});
+
+function grillGraphqlEntry(facts) {
+  const args = ["api", "graphql", "number=735", ".data.repository.issueOrPullRequest"];
+  return facts === null ? { assertArgs: args, exitCode: 1, stderr: "gh: network error\n" } : { assertArgs: args, stdout: JSON.stringify(grilledFacts(facts)) };
+}
+
+for (const [label, facts, reason] of GRILL_STOP_CASES.filter(([label]) => label !== "no simplicity-review line")) {
+  test(`3462: --issue --lightweight --claim stops before any claim write when ${label}`, async () => {
+    const { parsed, log } = await withTempDir(async (tempDir) => {
+      await initRepoWithOrigin(tempDir);
+      const stub = await writeGhStubHelper(tempDir, [
+        noLinkedPrGraphqlEntry(),
+        { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: grilledFacts(facts ?? {}).body }) },
+        grillGraphqlEntry(facts),
+        { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [] }) },
+      ], { matchMode: "claims", logCalls: true });
+      const result = await runNode(["--issue", "735", "--lightweight", "--claim"], { cwd: tempDir, env: { ...stub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) } });
+      assert.equal(result.code, 0, result.stderr);
+      return { parsed: JSON.parse(result.stdout), log: await readFile(stub.ghLogPath, "utf8") };
+    }, { prefix: "resolve-dev-loop-grill-lightweight-" });
+    assert.doesNotMatch(log, /issue edit|--add-assignee/);
+    assert.equal(parsed.selectedStrategy, "none");
+    assert.match(parsed.nextAction, reason === "spec_change_read_failed" ? /loop startup --issue 735/ : /loop-grill 735 --auto/);
+  });
+}
+
+test("3462: a clean grill proceeds on prefer_github_first with a viewer-owned issue", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const stub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
+      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: grilledFacts().body }) },
+      grillGraphqlEntry({}),
+      { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims" });
+    const input = buildAutoResolvedInput({ issue: 735, cwd: tempDir, targetPreference: "prefer_github_first", env: { ...stub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) } });
+    assert.equal(input.issueReadiness, "ready");
+    assert.equal(input.issueReadinessReason, undefined);
+  }, { prefix: "resolve-dev-loop-grill-clean-gh-" });
+});
+
+test("3462 AC3: resuming an issue with an open PR reads no grill facts and does not stop", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const prData = { author: { login: "test-viewer" }, state: "OPEN", isDraft: true, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [{ number: 735 }] };
+    const stub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["api", "graphql"], stdout: linkedPrGraphql(740) },
+      { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify(prData) },
+      { assertArgs: ["issue", "view", "735"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims", logCalls: true });
+    const env = { ...stub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) };
+    const input = buildAutoResolvedInput({ issue: 735, cwd: tempDir, env });
+    assert.equal(input.issueReadinessReason, undefined);
+    assert.equal(input.currentState.target.pr, 740);
+    assert.doesNotMatch(await readFile(stub.ghLogPath, "utf8"), /number=735/);
+    assert.notEqual(buildResolveDevLoopStartupResult(input, { cwd: tempDir, env }).selectedStrategy, "none");
+  }, { prefix: "resolve-dev-loop-grill-resume-" });
+});
+
+test("3462 AC3: --plan-file startup makes no gh call and does not stop at the grill", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const planPath = path.join(tempDir, "plan.md");
+    await writeFile(planPath, "# plan\n\n## Status\n\nin progress\n\n## Objective\n\nProve it.\n\n## In scope\n\n- slice\n\n## Explicit non-goals\n\n- none\n", "utf8");
+    const stub = await writeGhStubHelper(tempDir, [{ stdout: "{}\n" }], { logCalls: true, repeatLastOnOverflow: true });
+    const result = await runNode(["--plan-file", planPath], { cwd: tempDir, env: { ...stub.env, ...resolverTestEnv() } });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.selectedStrategy, "local_implementation");
+    assert.equal(parsed.issueReadinessReason, undefined);
+    assert.equal((await readFile(stub.ghLogPath, "utf8")).trim(), "");
+  }, { prefix: "resolve-dev-loop-grill-plan-file-" });
 });
 
 test("3462: startup and the grill detector read the same comment window above 100 comments", async () => {
@@ -1904,6 +1981,7 @@ test("--issue assigned_to_other fails closed naming the foreign assignee (no rea
     await initRepoWithOrigin(tempDir);
     const ghStub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
+      { assertArgs: ["api", "graphql", "number=511", ".data.repository.issueOrPullRequest"], stdout: JSON.stringify(grilledFacts()) },
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "foreign-dev" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });
@@ -1928,6 +2006,7 @@ test("--issue: a claim-contested race's raced-past loser sees only the tiebreak 
     await initRepoWithOrigin(tempDir);
     const ghStub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
+      { assertArgs: ["api", "graphql", "number=511", ".data.repository.issueOrPullRequest"], stdout: JSON.stringify(grilledFacts()) },
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "tiebreak-winner" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "raced-past-loser" }) },
     ], { matchMode: "claims" });
@@ -1946,6 +2025,7 @@ test("--issue unassigned fails closed naming the exact claim command (no readine
     await initRepoWithOrigin(tempDir);
     const ghStub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
+      { assertArgs: ["api", "graphql", "number=511", ".data.repository.issueOrPullRequest"], stdout: JSON.stringify(grilledFacts()) },
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [] }) },
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "511"], {
@@ -2026,6 +2106,7 @@ test("--issue fails closed with a distinct reason when the viewer login cannot b
     await initRepoWithOrigin(tempDir);
     const ghStub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
+      { assertArgs: ["api", "graphql", "number=511", ".data.repository.issueOrPullRequest"], stdout: JSON.stringify(grilledFacts()) },
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "someone" }] }) },
       { assertArgs: ["api", "user"], exitCode: 1, stderr: "gh: not authenticated\n" },
     ], { matchMode: "claims" });
@@ -2810,11 +2891,13 @@ test("viewer-login memo is reset per buildAutoResolvedInput invocation (no stale
     // (gh api user) differs between the two calls.
     const ghStubAlice = await writeGhStubHelper(tempDirAlice, [
       noLinkedPrGraphqlEntry(),
+      { assertArgs: ["api", "graphql", "number=12", ".data.repository.issueOrPullRequest"], stdout: JSON.stringify(grilledFacts()) },
       { assertArgs: ["issue", "view", "12", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "alice" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "alice" }) },
     ], { matchMode: "claims" });
     const ghStubBob = await writeGhStubHelper(tempDirBob, [
       noLinkedPrGraphqlEntry(),
+      { assertArgs: ["api", "graphql", "number=12", ".data.repository.issueOrPullRequest"], stdout: JSON.stringify(grilledFacts()) },
       { assertArgs: ["issue", "view", "12", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "alice" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "bob" }) },
     ], { matchMode: "claims" });
@@ -2852,6 +2935,7 @@ test("--issue co-assigned to the viewer AND another human is contested (assigned
     await initRepoWithOrigin(tempDir);
     const ghStub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
+      { assertArgs: ["api", "graphql", "number=511", ".data.repository.issueOrPullRequest"], stdout: JSON.stringify(grilledFacts()) },
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }, { login: "someone-else" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });

@@ -1033,8 +1033,8 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     // (read-only inspection, e.g. info.mjs) skips enforcement entirely,
     // regardless of strategy — resolveAuthoritativeStartupResumeBundle itself
     // never shells out, so this peek costs no extra gh calls.
-    // A grill stop with --claim returns before the claim write; without --claim the gate still runs.
-    if (!(issueReadinessReason && claim) && !ownershipGateBypassed(env)) {
+    // A grill stop returns before any ownership error or claim write, with or without --claim.
+    if (!issueReadinessReason && !ownershipGateBypassed(env)) {
       const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
       if (ownershipGateAppliesToStrategy(peekedStrategy)) {
         // --claim only claims an OPEN issue; the extra state read runs only
