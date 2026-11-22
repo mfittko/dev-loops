@@ -220,7 +220,7 @@ durable-approval flags across re-entry:
 ```sh
 dev-loops-run cli/index.mjs gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha <current_head_sha> \
   --findings-file <ledger-path> --judge-verdict <verdict-path> --judge-plan <judge-plan-path> \
-  --out <act-list-path> --ledger-out <enriched-ledger-path> \
+  --out tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<head>/act-list.json --ledger-out <enriched-ledger-path> \
   --spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict <spec-authority-verdict-path> \
   [--prior-approvals <prior-approvals-path> --approvals-out <approvals-out-path>] \
   [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>] \
