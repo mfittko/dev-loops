@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Reconcile board Status columns from live GitHub state. For each queue
 // item it derives the target column from live facts (merged PR / closed issue →
-// Done; open ready non-draft PR → In Progress) and moves ONLY the items whose
+// Done; open PR, draft or ready → In Progress) and moves ONLY the items whose
 // derived column differs from their current Status. Backlog/Next Up ordering is
 // left untouched (items that derive null are skipped). Idempotent: a second run
 // over a converged board performs no moves.

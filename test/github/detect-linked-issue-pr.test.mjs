@@ -612,6 +612,15 @@ test("detectLinkedIssuePrs: an errored alias on a non-zero exit leaves only that
   assert.deepEqual([...map], [[1, true], [3, false]]);
 });
 
+test("detectLinkedIssuePrs: invalid and duplicate issue numbers emit no invalid or duplicate alias", async () => {
+  const { runChild, calls } = batchChild(() => ({ i1: timeline([]), i2: timeline([]) }));
+  const map = await detectLinkedIssuePrs({ repo: "owner/repo", issues: [-1, 1, 1.5, "x", 1, 2] }, { env: {}, runChild });
+  const query = calls[0].find((a) => a.startsWith("query="));
+  assert.equal(calls.length, 1);
+  assert.deepEqual(query.match(/i\S+: issue\(number:[^)]*\)/g), ["i1: issue(number:1)", "i2: issue(number:2)"]);
+  assert.deepEqual([...map.keys()], [1, 2]);
+});
+
 test("detectLinkedIssuePrs: a chunk with no data leaves every issue out", async () => {
   const runChild = async () => ({ code: 1, stdout: "", stderr: "boom" });
   const map = await detectLinkedIssuePrs({ repo: "owner/repo", issues: [1, 2] }, { env: {}, runChild });

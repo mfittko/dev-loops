@@ -618,8 +618,9 @@ function buildLinkedPrBatchQueryArgs({ owner, name, issues }) {
 export async function detectLinkedIssuePrs({ repo, issues }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const { owner, name } = parseRepoSlug(repo);
   const result = new Map();
-  for (let start = 0; start < issues.length; start += LINKED_PR_BATCH_CHUNK) {
-    const chunk = issues.slice(start, start + LINKED_PR_BATCH_CHUNK);
+  const validIssues = [...new Set(issues.filter((n) => Number.isInteger(n) && n > 0))];
+  for (let start = 0; start < validIssues.length; start += LINKED_PR_BATCH_CHUNK) {
+    const chunk = validIssues.slice(start, start + LINKED_PR_BATCH_CHUNK);
     let payload;
     try {
       const out = await runChild(ghCommand, buildLinkedPrBatchQueryArgs({ owner, name, issues: chunk }), env);

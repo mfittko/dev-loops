@@ -204,9 +204,9 @@ describe("reconcile-queue main (#1069)", () => {
       calls.push(argv);
       const query = argv.find((a) => a.startsWith("query=")) ?? "";
       let payload;
-      if (query.includes("i1: issue")) {
+      if (query.includes(": issue(number:")) {
         const repository = {};
-        for (let n = 1; n <= 144; n++) if (query.includes(`i${n}: issue(`)) repository[`i${n}`] = batchTimeline(n === 7 ? [crossRef(900)] : []);
+        for (let n = 1; n <= 144; n++) if (query.includes(`i${n}: issue(`)) repository[`i${n}`] = batchTimeline(n === 7 ? [crossRef(900)] : n === 120 ? [crossRef(901)] : []);
         payload = { data: { repository } };
       } else if (query.includes("projectsV2")) {
         payload = { data: { user: { projectsV2: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ id: "PVT_1", number: 7, title: "Q", url: "u" }] } } } };
@@ -227,8 +227,8 @@ describe("reconcile-queue main (#1069)", () => {
     assert.equal(result.ok, true);
     assert.ok(calls.length <= 15, `made ${calls.length} gh calls`);
     assert.ok(calls.every((argv) => argv[0] !== "issue" && argv[0] !== "pr"));
-    // Issue 7 moves to In Progress and the six merged PR items move to Done.
-    assert.equal(moveCalls.length, 7);
+    // Issues 7 (chunk 1) and 120 (chunk 3) move to In Progress and the six merged PR items move to Done.
+    assert.equal(moveCalls.length, 8);
   });
 
   it("resolves .devloops boardTitle when --project is omitted and forwards projectTitle to list/move", async () => {
