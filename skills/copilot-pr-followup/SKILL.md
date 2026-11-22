@@ -337,16 +337,15 @@ node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
   --pr <number> \
   --gate <draft_gate|pre_approval_gate> \
   --head-sha <current_head_sha> \
-  --verdict <clean|findings_present|blocked> \
-  --findings-json <path-to-per-angle-results.json> \
   --findings-ledger <findings-log-path> \
-  --next-action "<next action>" --findings-severity-counts '<consolidate-fanin severityCounts>' \
-  --execution-mode fanout_fanin
+  --spec-authority <identity-path>
 ```
+
+Add `--size-budget-json <path>` on `pre_approval_gate`. The ledger carries the verdict, findings summary, severity counts, next action and execution mode, so `--findings-ledger` alone suffices on every gate. An explicit `--verdict`, `--findings-summary`, `--next-action` or `--execution-mode` keeps its meaning and checks, and a `--verdict` that contradicts the ledger is refused.
 
 Pass `--findings-ledger` on EVERY round: use the durable log path returned by `write-gate-findings-log.mjs` (`tmp/gate-findings/<owner-name>/pr-<N>/<gate>-<headSha>.json`), NOT the flat `consolidate-fanin --ledger-out` file, which lacks the required repo/pr/gate/headSha identity. Without it there is no finding surface or finding threads.
 
-For a `draft_gate` verdict while `gates.draft.maxReviewRounds` is above 0, drop the `--findings-json` line from the command: pass `--findings-ledger` together with a required `--findings-summary "<summary>"` (the parser needs a findings-body flag), because `GATE-EXEC-ROUND-CAP` refuses `--findings-json`. Keep `--findings-json` for `pre_approval_gate` and for `maxReviewRounds` 0. `--findings-json` accepts per-angle results (`[{angle, verdict?, findings:[{severity, summary, file?, line?, disposition?}]}]`) or flat findings (`[{severity, summary, angle?, ...}]`, grouped by angle); unrecognized non-empty input fails closed. Use the sanctioned fan-in `--out`. If a withheld round removed or never wrote it, DO NOT substitute the unbudgeted `--ledger-out` file: that can exceed the render budget. Instead pass `--findings-summary "<summary>"` PLUS the durable `--findings-ledger <findings-log-path>`, never summary alone. [Phase 3 — Consolidation](../docs/gate-review-sub-loop-contract.md#phase-3--consolidation-fan-in-synthesis-and-disposition-ledger) owns provenance-based mandatory-angle proof and refusal when neither proof artifact is supplied.
+`--findings-json` stays an optional addition on `pre_approval_gate` and with `maxReviewRounds` 0; `GATE-EXEC-ROUND-CAP` refuses it on a `draft_gate` while `gates.draft.maxReviewRounds` is above 0. `--findings-json` accepts per-angle results (`[{angle, verdict?, findings:[{severity, summary, file?, line?, disposition?}]}]`) or flat findings (`[{severity, summary, angle?, ...}]`, grouped by angle); unrecognized non-empty input fails closed. Use the sanctioned fan-in `--out`. If a withheld round removed or never wrote it, DO NOT substitute the unbudgeted `--ledger-out` file: that can exceed the render budget. Instead pass `--findings-summary "<summary>"` PLUS the durable `--findings-ledger <findings-log-path>`, never summary alone. [Phase 3 — Consolidation](../docs/gate-review-sub-loop-contract.md#phase-3--consolidation-fan-in-synthesis-and-disposition-ledger) owns provenance-based mandatory-angle proof and refusal when neither proof artifact is supplied.
 
 For an inline round without structured results:
 

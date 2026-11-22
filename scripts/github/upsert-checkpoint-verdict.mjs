@@ -164,7 +164,7 @@ async function roundStartedAtCurrentBase(options, headSha, repoRoot, base) {
 
 const roundCapReachedError =(round, cap) => new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs and no fixer follows. After the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`; pre_approval_gate judges what remains. When every open act item is a PR-body item, edit the PR body and run \`--converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`);
 
-const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>; on --gate review, --findings-ledger alone suffices; a draft_gate post requires --findings-ledger carrying overallVerdict while gates.draft.maxReviewRounds > 0) [--next-action <text> (required except on --gate review)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
+const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>; on every gate, --findings-ledger alone suffices; a draft_gate post requires --findings-ledger carrying overallVerdict while gates.draft.maxReviewRounds > 0) [--next-action <text> (required except on --gate review or with --findings-ledger)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
    or: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --gate draft_gate --post-sealed-cap-round (head, verdict and findings derive from the sealed clean cap-round ledger)
 The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin, except on --gate draft_gate while gates.draft.maxReviewRounds > 0 (GATE-EXEC-ROUND-CAP): there --findings-ledger carrying overallVerdict is the only accepted input, and --findings-json and --findings-file posts are refused (an inline clean with only --findings-summary stays accepted, as reconcile-draft-gate posts it, except at round N+1, where every post but --converged-json is refused with round_cap_reached, ADR 0208).
 Post the gate round's SINGLE visible surface: one PR review of type COMMENT whose
@@ -1000,11 +1000,11 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   if (options.executionMode !== "inline_single_agent") {
     options.inlineReason = undefined;
   }
-  const missing = ["repo", "pr", ...(options.postSealedCapRound ? [] : ["headSha", "verdict", "findingsSummary"]), ...(options.gate === "review" || options.postSealedCapRound ? [] : ["nextAction"])]
+  const missing = ["repo", "pr", ...(options.postSealedCapRound ? [] : ["headSha", "verdict", "findingsSummary"]), ...(options.gate === "review" || options.postSealedCapRound || options.findingsLedger ? [] : ["nextAction"])]
     .filter((key) => options[key] === undefined);
-  // --findings-file and --findings-json (and --findings-ledger on --gate review)
+  // --findings-file, --findings-json and --findings-ledger (every gate)
   // each provide the findings body, so any of them satisfies the findingsSummary requirement.
-  if (options.findingsFile || options.findingsJson || (options.gate === "review" && options.findingsLedger)) {
+  if (options.findingsFile || options.findingsJson || options.findingsLedger) {
     const fsIdx = missing.indexOf("findingsSummary");
     if (fsIdx !== -1) missing.splice(fsIdx, 1);
   }
@@ -1021,7 +1021,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     if (vIdx !== -1) missing.splice(vIdx, 1);
   }
   if (missing.length > 0) {
-    throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict (or --findings-ledger carrying the consolidator's overallVerdict), --findings-summary (or --findings-file or --findings-json, or --findings-ledger on --gate review), and --next-action (except on --gate review)");
+    throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict (or --findings-ledger carrying the consolidator's overallVerdict), --findings-summary (or --findings-file or --findings-json, or --findings-ledger on any gate), and --next-action (except on --gate review or with --findings-ledger)");
   }
   if (options.convergedJson && (options.gate !== "draft_gate" || !["clean", undefined].includes(options.verdict))) {
     throw parseError("--converged-json requires --gate draft_gate and --verdict clean (or omitted)");
@@ -1031,10 +1031,9 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   // to inline without a reason errors here. fanout_fanin does not require a
   // reason. Checked after required-field validation so an incomplete call still
   // reports the missing-field error first.
-  if (options.executionMode === "inline_single_agent" && options.inlineReason === undefined) {
-    throw parseError(
-      "--inline-reason is required for executionMode inline_single_agent (the default). Pass --execution-mode fanout_fanin for fan-out/fan-in runs, or --inline-reason \"<why>\" to record why the gate ran inline.",
-    );
+  // With --findings-ledger the ledger's recorded mode decides, so the runtime repeats this check after the ledger read.
+  if (!options.findingsLedger && options.executionMode === "inline_single_agent" && options.inlineReason === undefined) {
+    throw parseError(INLINE_REASON_REQUIRED_MESSAGE);
   }
   // --submit is SCOPED TO --gate review ONLY. --gate review is never
   // auto-resolved (must be passed explicitly), so this covers both an
@@ -2278,8 +2277,9 @@ function enforceForeignAngles(foreignAngles, { sourceLabel, gate, gateKey, confi
     process.stderr.write(`WARNING: ${message} (gates.rejectForeignAngles is false; recorded as a warning)\n`);
   }
 }
+const INLINE_REASON_REQUIRED_MESSAGE = "--inline-reason is required for executionMode inline_single_agent (the default). Pass --execution-mode fanout_fanin for fan-out/fan-in runs, or --inline-reason \"<why>\" to record why the gate ran inline.";
 function unjudgedLedgerMessage(options, headSha, count) {
-  return `--findings-ledger "${options.findingsLedger}" for ${options.gate} @ ${headSha} has ${count} finding(s) with no judgeDisposition, so the judge act list is unknown (GATE-COMMENT-VERDICT-VALUES, ADR 0089). Re-write the log with write-gate-findings-log --judge-verdict after the judge pass (the full enriched ledger, judge-pass --ledger-out, not the --out act list), or also pass a --findings-json with the full per-angle input (every finding with its judgeDisposition, covering every mandatory angle under fanout_fanin).`;
+  return `--findings-ledger "${options.findingsLedger}" for ${options.gate} @ ${headSha} has ${count} finding(s) with no judgeDisposition, so the judge act list is unknown (GATE-COMMENT-VERDICT-VALUES, ADR 0089). Re-write the log with write-gate-findings-log --judge-verdict after the judge pass (its input is the enriched judge-pass --ledger-out file; the durable output path of that write is the --findings-ledger value), or also pass a --findings-json with the full per-angle input (every finding with its judgeDisposition, covering every mandatory angle under fanout_fanin).`;
 }
 // Read `--findings-ledger` and confirm it is THIS round's ledger (same
 // repo/pr/gate/head), not a stale or foreign one. Shared by the finding-surface
@@ -3242,10 +3242,20 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     // The angle checks, tick and recorded marker all key on options.executionMode, so a ledger-declared
     // fan-out is promoted onto it rather than enforced only for this local check.
     promoteLedgerFanout(options, preloadedFindingsLedger);
-    // A ledger-only review post has no --findings-summary: derive a counts digest from the ledger.
-    if (options.gate === "review" && !options.findingsSummary) {
+    // A ledger-only post has no --findings-summary: derive a counts digest from the ledger.
+    if (!options.findingsSummary) {
       const n = (preloadedFindingsLedger.findings ?? []).length;
       options.findingsSummary = `${n} ${n === 1 ? "finding" : "findings"} from the findings ledger.`;
+    }
+    // The parser skipped this check because the ledger's mode was unknown; promoteLedgerFanout has now resolved it.
+    if ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent" && options.inlineReason === undefined) {
+      throw new Error(INLINE_REASON_REQUIRED_MESSAGE);
+    }
+    // A clean ledger without --findings-severity-counts: its open act items give them (an empty list still needs counts for the clean floor).
+    // Other verdicts keep the verdict-based blocking-severity fallback.
+    if (!options.findingsSeverityCounts && preloadedFindingsLedger.overallVerdict === "clean") {
+      options.findingsSeverityCounts = { high: 0, medium: 0, low: 0, question: 0, nit: 0 };
+      for (const f of listOpenActItems(preloadedFindingsLedger.findings ?? [])) options.findingsSeverityCounts[normalizeSeverity(f.severity)] += 1;
     }
     const fanout = (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin";
     if (options.gate !== "review" && fanout) {
@@ -3606,6 +3616,8 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate, nextActionItems, (preloadedFindingsLedger?.findings?.length ?? 0) > 0 && !judgedRound);
   if (derivedNextAction !== null) {
     options.nextAction = derivedNextAction;
+  } else if (options.gate === "pre_approval_gate" && options.verdict === "clean" && options.nextAction === undefined) {
+    options.nextAction = "await final human approval";
   }
   // The clean-verdict guard above trusts --findings-severity-counts alone, so a
   // caller could hand-type an all-zero counts object even when --findings-json's

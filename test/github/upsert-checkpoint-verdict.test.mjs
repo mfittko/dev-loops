@@ -13396,3 +13396,85 @@ test("upsert-checkpoint-verdict makes one baseRefOid,labels read when the eviden
     assert.equal(reads.length, 1);
   }, { prefix: "dev-loops-upsert-prview-memo-" });
 });
+
+// ---------------------------------------------------------------------------
+// #3347: --findings-ledger alone suffices on every gate
+// ---------------------------------------------------------------------------
+
+async function postLedgerOnly(tempDir, ledgerOverrides, { findings = [], gate = "draft_gate", extra = {} } = {}) {
+  // No mandatory angles, so the ledger needs no provenance.
+  await writeFile(path.join(tempDir, ".devloops"), ["version: 1", "refinement:", "  maxCopilotRounds: 0", "gates:", "  requireFanoutEvidence: false", ...["draft", "preApproval"].flatMap((g) => [`  ${g}:`, "    angles:", "      - name: pr-description", "        enabled: false", "      - name: holistic", "        enabled: false", "      - name: pr-checklist", "        enabled: false"]), ""].join("\n"), "utf8");
+  const ledgerPath = await writeSingleSurfaceLedger(tempDir, findings, { gate, overallVerdict: "clean", executionMode: "fanout_fanin", ...ledgerOverrides });
+  const cleanDraft = { id: 707, submitted_at: "2026-08-03T10:00:00Z", html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-707", body: renderGateReviewCommentBody({ gate: "draft_gate", headSha: SINGLE_SURFACE_HEAD, verdict: "clean", findingsSummary: "none", nextAction: "mark ready for review", executionMode: "fanout_fanin", round: 1, nonLocatableFindings: [] }) };
+  const { runChild, calls } = makeGhMock([
+    ...singleSurfaceLeadingEntries({ isDraft: gate === "draft_gate", reviews: gate === "draft_gate" ? [] : [cleanDraft] }),
+    { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":731,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-731"}\n' },
+  ]);
+  const run = () => upsertCheckpointVerdict({ repo: "owner/repo", pr: 17, gate, headSha: SINGLE_SURFACE_HEAD, findingsLedger: ledgerPath, ...extra }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+  const posted = () => calls.filter((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+  return { run, posted };
+}
+
+test("upsert-checkpoint-verdict: a ledger-only draft_gate post carries verdict, summary digest and next action from the ledger (#3347)", async () => {
+  await withTempDir(async (tempDir) => {
+    const { run, posted } = await postLedgerOnly(tempDir, {});
+    await run();
+    const body = JSON.parse(posted()[0].stdinText).body;
+    assert.match(body, /\*\*Verdict:\*\* clean/);
+    assert.match(body, /\*\*Findings summary:\*\* 0 findings from the findings ledger\./);
+    assert.match(body, /\*\*Next action:\*\* mark ready for review/);
+  }, { prefix: "dev-loops-upsert-ledger-only-draft-" });
+});
+
+test("upsert-checkpoint-verdict: a ledger-only pre_approval_gate clean round renders 'await final human approval' (#3347)", async () => {
+  await withTempDir(async (tempDir) => {
+    const { run, posted } = await postLedgerOnly(tempDir, {}, { gate: "pre_approval_gate" });
+    await run();
+    assert.match(JSON.parse(posted()[0].stdinText).body, /\*\*Next action:\*\* await final human approval/);
+  }, { prefix: "dev-loops-upsert-ledger-only-preapproval-" });
+});
+
+test("upsert-checkpoint-verdict: a ledger-only post whose ledger records inline mode is refused without --inline-reason (#3347)", async () => {
+  await withTempDir(async (tempDir) => {
+    const { run, posted } = await postLedgerOnly(tempDir, { executionMode: "inline_single_agent" });
+    await assert.rejects(run, /--inline-reason is required for executionMode inline_single_agent/);
+    assert.equal(posted().length, 0);
+  }, { prefix: "dev-loops-upsert-ledger-only-inline-" });
+});
+
+test("upsert-checkpoint-verdict: an explicit --findings-summary wins over the ledger digest (#3347)", async () => {
+  await withTempDir(async (tempDir) => {
+    const { run, posted } = await postLedgerOnly(tempDir, {}, { extra: { findingsSummary: "explicit summary passed" } });
+    await run();
+    assert.match(JSON.parse(posted()[0].stdinText).body, /\*\*Findings summary:\*\* explicit summary passed/);
+  }, { prefix: "dev-loops-upsert-ledger-only-explicit-" });
+});
+
+test("parseUpsertCheckpointVerdictCliArgs: --findings-ledger alone suffices on every gate, and --help says so (#3347)", async () => {
+  for (const gate of ["draft_gate", "pre_approval_gate", "review"]) {
+    assert.doesNotThrow(() => parseUpsertCheckpointVerdictCliArgs(["--repo", "owner/repo", "--pr", "7", "--gate", gate, "--head-sha", "a".repeat(40), "--findings-ledger", "x.json"]));
+  }
+  const result = await runNode(["--help"]);
+  assert.match(result.stdout, /on every gate, --findings-ledger alone suffices/);
+});
+
+test("upsert-checkpoint-verdict: an identity-less ledger is refused with the durable findings-log path shape (#3347, 3379)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = path.join(tempDir, "enriched.json");
+    await writeFile(ledgerPath, JSON.stringify({ findings: [], overallVerdict: "clean" }), "utf8");
+    const { runChild, calls } = makeGhMock(singleSurfaceLeadingEntries(), { repeatLastOnOverflow: true });
+    await assert.rejects(
+      () => upsertCheckpointVerdict({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: SINGLE_SURFACE_HEAD, findingsLedger: ledgerPath }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }),
+      /"repo" must be an owner\/name slug \(the expected file is the durable findings log at tmp\/gate-findings\/<owner-name>\/pr-<N>\/<gate>-<headSha>\.json/,
+    );
+    assert.equal(calls.filter((c) => c.args.includes("POST")).length, 0);
+  }, { prefix: "dev-loops-upsert-identityless-ledger-" });
+});
+
+test("upsert-checkpoint-verdict: the unjudged-ledger refusal names the enriched file as the write input and the durable log as --findings-ledger (#3347, 3379)", async () => {
+  await withTempDir(async (tempDir) => {
+    const { run, posted } = await postLedgerOnly(tempDir, {}, { findings: [BODY_FILED_FINDING] });
+    await assert.rejects(run, /its input is the enriched judge-pass --ledger-out file; the durable output path of that write is the --findings-ledger value/);
+    assert.equal(posted().length, 0);
+  }, { prefix: "dev-loops-upsert-ledger-only-unjudged-" });
+});
