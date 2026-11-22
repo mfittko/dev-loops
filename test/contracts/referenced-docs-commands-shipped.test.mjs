@@ -56,7 +56,7 @@ const HISTORICAL_DOC_SUFFIXES = ["-review-notes.md"];
 // design proposal, not a shipped-reference claim. Exempt from the
 // subcommand-route check only; an npm-run or anchor drift there would still
 // be a real dangling reference.
-const SUBCOMMAND_CHECK_EXCLUDED_PREFIXES = ["docs/specs/"];
+const SUBCOMMAND_CHECK_EXCLUDED_PREFIXES = ["docs/specs/", "docs/atlas/"];
 
 function isHistorical(relPath) {
   return HISTORICAL_DOC_SUFFIXES.some((suffix) => relPath.endsWith(suffix));
