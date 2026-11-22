@@ -44,9 +44,9 @@ stamp is derived in memory (derivedRounds). A derived round counts as undetermin
 when git cannot answer (a missing commit object) or its head is contained in the current origin/<base>
 (the base then holds the landed PR, so a base-only probe misreads it). A derived round reads the blocked ledgers
 and retirement records of its head that lie between the previous round and itself (system_rerun and body_only). The retirement records come from
-<tmp-root> (a relative path resolves against the working directory) and from the tmp directory of the checkout root and of every registered worktree, whatever the working directory; a record elsewhere (for example under a removed checkout)
+<tmp-root> (a relative path resolves against the working directory) and from the tmp directory of the checkout root that contains the working directory and of every registered worktree of it; a record elsewhere (for example under a removed checkout)
 is unread and can undercount system_rerun and body_only. An unreadable retirement record or directory is skipped,
-and warnings names it, as it names a failed worktree listing in a git checkout. A blocked ledger without a valid loggedAt counts only when no bound applies. unreadableLedgers counts ledgers of the --gate read that the findings reader dropped (invalid JSON or an invalid verdict).
+and warnings names it, as it names a failed worktree listing in a git checkout and a run outside any git checkout (the repository .devloops and the worktree retirement records can then be unread). A blocked ledger without a valid loggedAt counts only when no bound applies. unreadableLedgers counts ledgers of the --gate read that the findings reader dropped (invalid JSON or an invalid verdict).
 outOfBandLedgers counts ledgers of the --gate read whose seal does not match; the report excludes them and never trusts their content.
 Both counters skip the extra draft_gate read of the round 1 checklist; a ledger dropped there is named in warnings.
 
@@ -153,15 +153,16 @@ export async function buildReport(values, { repoRoot = process.cwd() } = {}) {
   };
   const checklistAngles = new Set(((await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) })).config.gates?.draft?.angles ?? []).filter((e) => e["developer-checklist"]?.length).map((e) => e.name));
   const cutoff = Date.parse(CHECKLIST_CUTOFF);
-  // The writers put a retirement record under the checkout they ran in, so read the tmp root of the checkout root and of every registered worktree, whatever the cwd.
+  // The writers put a retirement record under the checkout they ran in, so read the tmp root of the checkout root and of every registered worktree, both resolved from the checkout that contains the cwd.
   const checkoutRoot = resolveRepoRoot(repoRoot);
   const warnings = new Set();
   let worktreePaths = [];
   try {
     worktreePaths = listWorktreeEntries(checkoutRoot).map((e) => e.path);
   } catch {
-    // Without a .git the checkout root alone is right; a checkout whose listing fails would silently drop its linked worktrees.
+    // A checkout whose listing fails would silently drop its linked worktrees; a directory with no .git reads neither the repository config nor any worktree record.
     if (await stat(path.join(checkoutRoot, ".git")).then(() => true, () => false)) warnings.add(`worktree listing failed in ${checkoutRoot}: linked-worktree retirement records are unread and can undercount system_rerun and body_only`);
+    else warnings.add(`${checkoutRoot} is no Git checkout: the repository .devloops and the worktree retirement records can be unread`);
   }
   const retirementRoots = [checkoutRoot, ...worktreePaths].map((p) => path.join(p, "tmp"));
 

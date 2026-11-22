@@ -478,6 +478,7 @@ test("R21 a legacy round reads the blocked ledger and the retirement records of 
 test("R22 a truncated retirement record is skipped and named, and a valid sibling still counts in either name order", async () => {
   for (const [bad, good] of [["r1", "r2"], ["r2", "r1"]]) {
     await withTempDir(async (dir) => {
+      git(dir, "init", "-q");
       await ledger(dir, 1, sha("a"), "2026-11-01T01:00:00.000Z", { findings: [] });
       await retiredRecord(dir, sha("a"), bad, "{truncated");
       await retiredRecord(dir, sha("a"), good, { retiredAt: "2026-11-01T00:30:00.000Z" });
@@ -520,6 +521,7 @@ const mergedOne = (dir) => json(dir, "merged.json", [{ number: 1, mergedAt: "202
 
 test("R25 an unreadable retirement directory is skipped and named, not dropped silently", async () => {
   await withTempDir(async (dir) => {
+    git(dir, "init", "-q");
     await ledger(dir, 1, sha("a"), "2026-11-01T01:00:00.000Z", { findings: [] });
     await mkdir(path.join(dir, "retired-gate-rounds"), { recursive: true });
     await writeFile(path.join(dir, "retired-gate-rounds", sha("a")), "not a directory");
@@ -564,6 +566,16 @@ test("R28 a failed worktree listing in a git checkout is named in warnings", asy
     await mergedOne(dir);
     const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
     assert.ok(r.warnings.some((w) => /worktree listing failed/.test(w)));
+  });
+});
+
+test("R30 a run from a directory with no Git checkout warns that the config and worktree records can be unread", async () => {
+  await withTempDir(async (dir) => {
+    await ledger(dir, 1, sha("a"), "2026-11-01T01:00:00.000Z", { findings: [] });
+    await mergedOne(dir);
+    const r = await run(dir, ["--merged-prs", path.join(dir, "merged.json")]);
+    assert.equal(r.warnings.length, 1);
+    assert.match(r.warnings[0], /is no Git checkout/);
   });
 });
 
