@@ -7,24 +7,25 @@ import { evaluatePrGateCoordination } from "@dev-loops/core/loop/pr-gate-coordin
 import { DISPOSITION, STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { resolveDraftCapRoundFact, resolveDraftRoundCap } from "../../scripts/github/write-gate-context.mjs";
-import { readGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
+import { readGateDeltaRecord, readSealedCoverRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { extendCapRoundChain } from "../../scripts/loop/extend-cap-round-chain.mjs";
 import { runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
 
-const seam = { stdout: { write: () => {} }, fetchBase: () => {}, fetchPr: async () => ({ baseRefName: "main" }) };
+const seam = { stdout: { write: () => {} }, fetchBase: () => {}, fetchPr: async () => ({ baseRefName: "main", isDraft: true }) };
 
 export const extendRoute = (root, { repo, pr, head }) => extendCapRoundChain({ repo, pr, worktree: root }, {
-  detectOriginSlug: () => repo, fetchPr: async () => ({ headRefOid: head, baseRefName: "main" }), fetchBaseBranch: () => {},
+  detectOriginSlug: () => repo, fetchPr: async () => ({ headRefOid: head, baseRefName: "main", isDraft: true }), fetchBaseBranch: () => {},
 });
 
 /** The reviewer-only delta for baseline..head: the input run, a sealed reviewer result marking every derived act item `status`, then the result run. */
-export async function reviewerOnlyRoute(root, { baseline, head, ledgerPath, status = "resolved", extraResult = {} }) {
+export async function reviewerOnlyRoute(root, { baseline, head, ledgerPath, status = "resolved", extraResult = {}, cover = false }) {
   const tmp = path.join(root, "tmp");
   const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
   const logPath = ledgerPath; // the canonical ledger itself: the route refuses any other file
   writeFileSync(logPath, JSON.stringify({ ...ledger, provenance: ledger.provenance?.perAngle?.length ? ledger.provenance : { perAngle: [{ angle: "correctness" }] } }));
-  const args = ["--reviewer-only", "--repo", ledger.repo, "--pr", String(ledger.pr), "--baseline", baseline, "--pr-head", head, "--findings-log", logPath, "--worktree", root];
+  // `cover`: the cover run (ADR 0255 amendment): the same reviewer-only CLI limited to the uncovered act refs, sealing one cover record per ref instead of a baseline record.
+  const args = ["--reviewer-only", ...(cover ? ["--cover-uncovered"] : []), "--repo", ledger.repo, "--pr", String(ledger.pr), "--baseline", baseline, "--pr-head", head, "--findings-log", logPath, "--worktree", root];
   const resultPath = path.join(root, "reviewer-result.json");
   const { input } = await runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", resultPath], seam);
   const actionableItems = input.actItems.map((item) => ({ ref: item.ref, status, evidence: ["src/x.mjs:1"] }));
@@ -32,15 +33,15 @@ export async function reviewerOnlyRoute(root, { baseline, head, ledgerPath, stat
   const newFindings = [...new Set((input.staleSurfaceHits ?? []).map((hit) => hit.file ?? hit.site?.split(":")[0]))].map((file) => ({ severity: "nit", summary: `${file}: the removed wording is reworded, not stale`, evidence: [`${file}:1`], site: file }));
   writeFileSync(resultPath, JSON.stringify({ ...input.resultShape, actionableItems, newFindings, widenedReads: [], outcome: status === "resolved" ? "locally_clear" : "needs_fix", ...extraResult }));
   sealDeltaFixture(tmp, resultPath);
-  const prior = readGateDeltaRecord(tmp, baseline);
-  const invocation = (Number.isInteger(prior?.invocation) ? prior.invocation : 0) + 1;
+  const priorCount = cover ? Math.max(0, ...input.actItems.map((item) => readSealedCoverRecord(tmp, baseline, item.ref)?.invocation ?? 0)) : readGateDeltaRecord(tmp, baseline)?.invocation;
+  const invocation = (Number.isInteger(priorCount) ? priorCount : 0) + 1;
   const decision = await runDeltaCli([...args, "--result", resultPath, "--invocation", String(invocation)], seam);
   return { input, decision };
 }
 
 /** The coordinator's view of a draft PR at `head`: the proof as detect-pr-gate-coordination-state computes it, then the real evaluator. */
 export async function coordinationAt(root, { repo, pr, head, ready = false }) {
-  const { capRoundFixed: fixed, failure } = await resolveDraftCapRoundFact({ repo, pr, currentHeadSha: head, prData: { isDraft: !ready, baseRefName: "main" } }, { repoRoot: root, requirePostedCleanCap: false }); // these scenarios exercise the chain-extension exits, not the posted-verdict check
+  const { capRoundFixed: fixed, failure, failureDetail } = await resolveDraftCapRoundFact({ repo, pr, currentHeadSha: head, prData: { isDraft: !ready, baseRefName: "main" } }, { repoRoot: root, requirePostedCleanCap: false }); // these scenarios exercise the chain-extension exits, not the posted-verdict check
   const { round, cap } = await resolveDraftRoundCap({ repo, pr, gate: "draft_gate", headSha: head }, { repoRoot: root, includeLiveCurrentHead: true });
   const marker = { visible: true, headSha: "abc1234", verdict: "blocked", contractComplete: true };
   const result = evaluatePrGateCoordination({
@@ -48,7 +49,7 @@ export async function coordinationAt(root, { repo, pr, head, ready = false }) {
     maxCopilotRounds: 0, copilotReviewRoundCount: 0, unresolvedThreadCount: 0, unresolvedGateThreadCount: 0, prTitle: "feat: x",
     ...(ready ? { sameHeadCleanConverged: true, draftGate: marker, draftGateMarker: marker, preApprovalGate: { visible: false }, preApprovalGateMarker: { visible: false } } : {}),
     // The detector refuses the draft round only past the cap (round > cap): below it the next draft_gate round runs.
-    draftCapRoundFixed: fixed, draftRoundRefused: !ready && !fixed && isRoundRefused(round, cap), draftCapRoundFailure: failure,
+    draftCapRoundFixed: fixed, draftRoundRefused: !ready && !fixed && isRoundRefused(round, cap), draftCapRoundFailure: failure, draftCapRoundDetail: failureDetail,
   });
   return { fixed, failure, nextAction: result.nextAction, remedy: result.agentRemedy?.command ?? null, blockedOn: result.blockedOn ?? null, reason: result.reason };
 }
@@ -74,10 +75,27 @@ export async function followRemedy(root, { repo, pr, head, baseline, ledgerPath,
     trace.push(`recovery: ${recovery}`);
     const named = /loop pre-push-delta --reviewer-only .*--baseline (\S+) /u.exec(recovery);
     if (named || !recovery) {
-      await step("reviewer-only", () => reviewerOnlyRoute(root, { baseline: named?.[1] ?? baseline, head, ledgerPath, status: reviewerStatus }));
+      await step(recovery.includes("--cover-uncovered") ? "cover-run" : "reviewer-only", () => reviewerOnlyRoute(root, { baseline: named?.[1] ?? baseline, head, ledgerPath, status: reviewerStatus, cover: recovery.includes("--cover-uncovered") }));
       await step("extend", () => extendRoute(root, { repo, pr, head }));
     }
   }
   end = await coordinationAt(root, { repo, pr, head });
   return { trace, end };
+}
+
+/**
+ * The thread-route delta for baseline..head (issue 3443): the REAL CLI with a list-review-threads file of one unresolved thread, a sealed reviewer result marking that thread `resolved`, then the result run.
+ * It seals a record whose item ref is the thread id, as a fixer pass over an escalated item in the PR does.
+ */
+export async function threadRoute(root, { repo, pr, baseline, threadId }) {
+  const tmp = path.join(root, "tmp");
+  const threadsFile = path.join(root, "threads.json");
+  writeFileSync(threadsFile, JSON.stringify({ ok: true, repo, pr, threads: [{ trusted: true, threadId, commentId: 1, body: "fix the escalated defect", isResolved: false, path: "src/a.mjs", line: 3 }] }));
+  const args = ["--threads-file", threadsFile, "--repo", repo, "--pr", String(pr), "--baseline", baseline, "--worktree", root];
+  const resultPath = path.join(root, "thread-result.json");
+  const { input } = await runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", resultPath], seam);
+  const newFindings = [...new Set((input.staleSurfaceHits ?? []).map((hit) => hit.file ?? hit.site?.split(":")[0]))].map((file) => ({ severity: "nit", summary: `${file}: the removed wording is reworded, not stale`, evidence: [`${file}:1`], site: file }));
+  writeFileSync(resultPath, JSON.stringify({ ...input.resultShape, actionableItems: input.actItems.map((item) => ({ ref: item.ref, status: "resolved", evidence: ["src/a.mjs:1"] })), newFindings, widenedReads: [], outcome: "locally_clear" }));
+  sealDeltaFixture(tmp, resultPath);
+  return runDeltaCli([...args, "--result", resultPath, "--invocation", "1"], seam);
 }
