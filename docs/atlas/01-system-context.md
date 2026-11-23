@@ -7,7 +7,7 @@ snapshot_date: 2026-11-19
 
 ## System context and architecture
 
-dev-loops is a workflow toolchain that drives GitHub issues to reviewed, tested pull requests. The operator works through an agent harness (Claude Code, Pi or Codex). The harness loads skills and agent definitions, and every deterministic step runs as a Node script behind one CLI. The scripts depend on the shared package `@dev-loops/core`, and core never imports a script. GitHub is the system of record for issues, pull requests, review threads, CI and the queue board. The diagrams below are derived from the code in `cli/`, `lib/`, `scripts/`, `packages/core/src/`, `extension/`, `agents/`, `skills/` and `.claude/`. Every number names the shell command that produced it, run against the checkout on 2026-11-19.
+dev-loops is a workflow toolchain that drives GitHub issues to reviewed, tested pull requests. The operator works through an agent harness (Claude Code, Pi or Codex). The harness loads skills and agent definitions, and every deterministic step runs as a Node script behind one CLI. The scripts depend on the shared package `@dev-loops/core`, and core never imports a script. GitHub is the system of record for issues, pull requests, review threads, CI and the queue board. The diagrams below are derived from the code in `cli/`, `lib/`, `scripts/`, `packages/core/src/`, `extension/`, `agents/`, `skills/` and `.claude/`. Every number names the shell command that produced it, run against the checkout on 2026-11-23.
 
 <a id="d1"></a>
 
@@ -107,7 +107,7 @@ block-beta
 
 Type: `flowchart`
 
-Import and generation edges between the top-level directories. The insight: `.claude/` is a generated tree. `scripts/claude/generate-claude-assets.mjs` writes it from `agents/`, `skills/`, `commands/` and eight vendored core modules, and `--check` fails on drift. Core has zero imports from `scripts/` (`grep -rlE "from ['\"]\.\./(\.\./)?scripts" packages/core/src | wc -l` gives 0). Only 2 of the 6 non-test skill scripts import core, `log-bash-exit-1.mjs` and `phase-files.mjs` (`grep -lE "@dev-loops/core" skills/dev-loop/scripts/*.mjs`); `post-gate-verdict-fallback.mjs` stays zero-dependency on purpose. Derived from `cli/index.mjs`, `lib/dev-loops-core.mjs`, `extension/index.ts`, `scripts/claude/generate-claude-assets.mjs` and `test/core-runtime-boundary.test.mjs`.
+Import and generation edges between the top-level directories. The insight: `.claude/` is a generated tree. `scripts/claude/generate-claude-assets.mjs` writes it from `agents/`, `skills/`, `commands/` and nine vendored core modules, and `--check` fails on drift. Core has zero imports from `scripts/` (`grep -rlE "from ['\"]\.\./(\.\./)?scripts" packages/core/src | wc -l` gives 0). Only 2 of the 6 non-test skill scripts import core, `log-bash-exit-1.mjs` and `phase-files.mjs` (`grep -lE "@dev-loops/core" skills/dev-loop/scripts/*.mjs`); `post-gate-verdict-fallback.mjs` stays zero-dependency on purpose. Derived from `cli/index.mjs`, `lib/dev-loops-core.mjs`, `extension/index.ts`, `scripts/claude/generate-claude-assets.mjs` and `test/core-runtime-boundary.test.mjs`.
 
 ```mermaid
 flowchart LR
@@ -124,7 +124,7 @@ flowchart LR
   agentsDir --> gen
   skillsDir --> gen
   cmdDir --> gen
-  core -. "8 hook modules vendored" .-> gen
+  core -. "9 hook modules vendored" .-> gen
   gen --> claudeDir
   claudeDir -->|"dev-loops-run"| cli
   ext --> lib
@@ -143,18 +143,18 @@ flowchart LR
 
 Type: `sankey-beta`
 
-How many script files in each `scripts/` subdirectory import each `@dev-loops/core` area. A file counts once per area. Only flows of 3 or more files are shown. The insight: `scripts/loop` and `scripts/github` carry almost all core use, and they cross over heavily: 41 github scripts use core loop logic and 40 loop scripts use core github helpers. Counts come from `for f in $(find scripts -name '*.mjs'); do grep -oE "@dev-loops/core/[a-z-]+" $f | sort -u; done` grouped by subdirectory. Derived from `scripts/**/*.mjs` and `packages/core/package.json` (`exports`).
+How many script files in each `scripts/` subdirectory import each `@dev-loops/core` area. A file counts once per area. Only flows of 3 or more files are shown. The insight: `scripts/loop` and `scripts/github` carry almost all core use, and they cross over heavily: 44 github scripts use core loop logic and 48 loop scripts use core github helpers. Counts come from `for f in $(find scripts -name '*.mjs'); do grep -oE "@dev-loops/core/[a-z-]+" $f | sort -u; done` grouped by subdirectory. Derived from `scripts/**/*.mjs` and `packages/core/package.json` (`exports`).
 
 ```mermaid
 sankey-beta
-scripts loop,core loop,68
-scripts loop,core github,40
-scripts loop,core config,37
-scripts loop,core cli,4
+scripts loop,core loop,69
+scripts loop,core github,48
+scripts loop,core config,39
+scripts loop,core cli,5
 scripts loop,core analysis,4
 scripts loop,core harness,3
-scripts github,core github,52
-scripts github,core loop,41
+scripts github,core github,54
+scripts github,core loop,44
 scripts github,core config,19
 scripts github,core cli,4
 scripts github,core analysis,3
@@ -183,8 +183,9 @@ flowchart LR
   tracker[tracker]
   analysis[analysis]
   cli[cli]
-  loop -->|14| github
-  github -->|2| loop
+  debt[debt]
+  loop -->|15| github
+  github -->|3| loop
   loop -->|5| analysis
   loop -->|3| config
   config -->|1| loop
@@ -196,6 +197,8 @@ flowchart LR
   claude -->|2| config
   loop -->|1| cli
   github -->|4| cli
+  cli -->|1| github
+  debt -->|1| github
   projects -->|3| github
   projects -->|2| cli
   tracker -->|1| github
@@ -211,14 +214,14 @@ flowchart LR
 
 Type: `xychart-beta`
 
-Module count per `packages/core/src` directory. The insight: `loop` holds 84 of 127 core modules, two thirds of the package, so most deterministic workflow policy lives in one directory. Counts come from `find packages/core/src/<dir> -name '*.mjs' | wc -l`; the total comes from `find packages/core/src -name '*.mjs' | wc -l`, which also counts `bash-exit-one.mjs` at the root. Derived from `packages/core/src/`.
+Module count per `packages/core/src` directory. The insight: `loop` holds 84 of 132 core modules, almost two thirds of the package, so most deterministic workflow policy lives in one directory. Counts come from `find packages/core/src/<dir> -name '*.mjs' | wc -l`; the total comes from `find packages/core/src -name '*.mjs' | wc -l`, which also counts `bash-exit-one.mjs` at the root. Derived from `packages/core/src/`.
 
 ```mermaid
 xychart-beta
   title "Core modules per directory"
   x-axis [loop, github, debt, harness, tracker, projects, claude, analysis, cli, config, security]
   y-axis "Modules" 0 --> 90
-  bar [84, 13, 6, 5, 4, 4, 3, 2, 2, 2, 1]
+  bar [84, 18, 6, 5, 4, 4, 3, 2, 2, 2, 1]
 ```
 
 <a id="d8"></a>
@@ -227,13 +230,13 @@ xychart-beta
 
 Type: `treemap-beta`
 
-Script modules per `scripts/` subdirectory. The insight: `scripts/loop` (119) and `scripts/github` (88) hold 207 of 272 script modules. Counts come from `find scripts/<dir> -name '*.mjs' | wc -l`; the root count comes from `find scripts -maxdepth 1 -name '*.mjs' | wc -l`; the total comes from `find scripts -name '*.mjs' | wc -l`. Derived from `scripts/`.
+Script modules per `scripts/` subdirectory. The insight: `scripts/loop` (127) and `scripts/github` (94) hold 221 of 286 script modules. Counts come from `find scripts/<dir> -name '*.mjs' | wc -l`; the root count comes from `find scripts -maxdepth 1 -name '*.mjs' | wc -l`; the total comes from `find scripts -name '*.mjs' | wc -l`. Derived from `scripts/`.
 
 ```mermaid
 treemap-beta
 "scripts"
-    "loop": 119
-    "github": 88
+    "loop": 127
+    "github": 94
     "projects": 12
     "lib": 12
     "refine": 12
@@ -251,16 +254,16 @@ treemap-beta
 
 Type: `mindmap`
 
-The eight CLI namespaces and the number of subcommands each one routes to a script. The insight: `loop` (31) and `gate` (17) are the main control surfaces, and `project` is `queue` minus the `run` driver, derived in code and not duplicated. Counts come from a Node one-liner that imports `SUBCOMMAND_ROUTES` from `cli/index.mjs` and prints `Object.keys(routes).length` per namespace. Derived from `cli/index.mjs` (`SUBCOMMAND_ROUTES`, `QUEUE_ROUTES`, `TOP_LEVEL_COMMANDS`).
+The nine CLI namespaces and the number of subcommands each one routes to a script. The insight: `loop` (34) and `gate` (18) are the main control surfaces, and `project` is `queue` minus the `run` driver, derived in code and not duplicated. Counts come from a Node one-liner that imports `SUBCOMMAND_ROUTES` from `cli/index.mjs` and prints `Object.keys(routes).length` per namespace. Derived from `cli/index.mjs` (`SUBCOMMAND_ROUTES`, `QUEUE_ROUTES`, `TOP_LEVEL_COMMANDS`).
 
 ```mermaid
 mindmap
   root((dev-loops CLI))
-    loop 31
+    loop 34
       startup
       coordinator-work-order
       validation-record
-    gate 17
+    gate 18
       judge-pass
       consolidate-fanin
       resolve-validation
@@ -271,6 +274,7 @@ mindmap
       alias of queue minus run
     pr 7
       create always draft
+    decision 1
     issue 2
     inspect 2
     refine 1
@@ -284,15 +288,16 @@ mindmap
 
 Type: `flowchart`
 
-Which `scripts/` subdirectory each CLI namespace routes into, with the route count on each edge. The insight: the `gate` namespace splits across `scripts/github` (9) and `scripts/loop` (8), so a gate step can live in either directory, and the directory name does not predict the namespace. Counts come from the same Node one-liner over `SUBCOMMAND_ROUTES`, grouped by the second path segment of each route. Derived from `cli/index.mjs`.
+Which `scripts/` subdirectory each CLI namespace routes into, with the route count on each edge. The insight: the `gate` namespace splits across `scripts/github` (9) and `scripts/loop` (9), so a gate step can live in either directory, and the directory name does not predict the namespace. Counts come from the same Node one-liner over `SUBCOMMAND_ROUTES`, grouped by the second path segment of each route. Derived from `cli/index.mjs`.
 
 ```mermaid
 flowchart LR
   gate[gate] -->|9| sg["scripts/github"]
-  gate -->|8| sl["scripts/loop"]
-  loopNs[loop] -->|29| sl
+  gate -->|9| sl["scripts/loop"]
+  loopNs[loop] -->|32| sl
   loopNs -->|2| sg
   pr[pr] -->|7| sg
+  decision[decision] -->|1| sg
   issue[issue] -->|2| sg
   queue[queue] -->|11| sp["scripts/projects"]
   queue -->|1| sl
@@ -307,14 +312,14 @@ flowchart LR
 
 Type: `sequenceDiagram`
 
-The path of one routed command from an agent Bash call to GitHub. The insight: the harness asks the PreToolUse hook first, and the hook returns allow or deny before any script runs. The hook does not start the launcher; the harness runs the command after an allow. The hook works using core logic vendored into `.claude/hooks/`, because the hook cannot resolve `@dev-loops/core` from the plugin cache. Derived from `.claude/hooks/hooks.json`, `.claude/hooks/pre-tool-use-bash-gate.mjs`, `.claude/bin/dev-loops-run`, `cli/index.mjs` and `packages/core/src/github/gh.mjs`.
+The path of one routed command from an agent Bash call to GitHub. The insight: the harness asks the PreToolUse hooks first (the approval guard and the Bash gate), and each returns allow or deny before any script runs. The hooks do not start the launcher; the harness runs the command after an allow. The hooks work using core logic vendored into `.claude/hooks/`, because the hook cannot resolve `@dev-loops/core` from the plugin cache. Derived from `.claude/hooks/hooks.json`, `.claude/hooks/pre-tool-use-bash-gate.mjs`, `.claude/bin/dev-loops-run`, `cli/index.mjs` and `packages/core/src/github/gh.mjs`.
 
 ```mermaid
 sequenceDiagram
   autonumber
   participant A as Agent
   participant X as Claude Code
-  participant H as Bash gate hook
+  participant H as Approval guard and Bash gate hooks
   participant L as dev-loops-run
   participant C as cli/index.mjs
   participant S as scripts/loop script
@@ -429,21 +434,27 @@ classDiagram
 
 Type: `flowchart`
 
-The five Claude Code hook entry files, the event that triggers each one, and the local modules each imports. The insight: every hook entry reaches core policy only through `_`-prefixed sibling files, and 8 of those are generated copies of core modules (the `HOOK_BUNDLE` list). `_hook-io.mjs` and `_fixer-grants.mjs` are hand-authored. The count 8 comes from reading the `HOOK_BUNDLE` array in `generate-claude-assets.mjs` (8 `source` entries). The edges come from `grep -oE "from \"\./_[a-z-]+\.mjs\""` per hook file. Derived from `.claude/hooks/hooks.json`, `.claude/hooks/*.mjs` and `scripts/claude/generate-claude-assets.mjs`.
+The eight Claude Code hook entry files, the event that triggers each one, and the local modules each imports. The insight: every hook entry reaches core policy only through `_`-prefixed sibling files, and 9 of those are generated copies of core modules (the `HOOK_BUNDLE` list). `_hook-io.mjs` and `_fixer-grants.mjs` are hand-authored. The count 9 comes from reading the `HOOK_BUNDLE` array in `generate-claude-assets.mjs` (9 `source` entries). The edges come from `grep -oE "from \"\./_[a-z-]+\.mjs\""` per hook file. Derived from `.claude/hooks/hooks.json`, `.claude/hooks/*.mjs` and `scripts/claude/generate-claude-assets.mjs`.
 
 ```mermaid
 flowchart LR
   subgraph events["hooks.json events"]
+    eTools["PreToolUse Bash, Read, Edit, Write, Grep, Glob, MCP"]
+    eAsk["PreToolUse AskUserQuestion"]
     eBash["PreToolUse Bash"]
     eWrite["PreToolUse Edit or Write"]
     eAgent["PreToolUse Agent or Task"]
+    ePostAsk["PostToolUse AskUserQuestion"]
     ePost["PostToolUse Bash"]
     eStop["SubagentStop"]
   end
   subgraph entries["hook entry files"]
+    approvalGuard["approval-guard"]
+    askAnswers["ask-answers-guard"]
     bashGate["bash-gate"]
     writeGuard["write-guard"]
     agentGuard["agent-guard"]
+    askApproval["post-tool-use-ask-approval"]
     merge["post-tool-use-merge"]
     stopGuard["uncommitted-guard"]
   end
@@ -460,13 +471,20 @@ flowchart LR
     ff["_main-checkout-ff"]
     digest["_work-order-digest"]
     retire["_gate-round-retirement"]
+    askMerge["_ask-merge-approval"]
   end
+  eTools --> approvalGuard
+  eAsk --> askAnswers
   eBash --> bashGate
   eWrite --> writeGuard
   eAgent --> agentGuard
+  ePostAsk --> askApproval
   ePost --> merge
   eStop --> stopGuard
-  entries -->|"all 5"| io
+  entries -->|"all 8"| io
+  approvalGuard --> askMerge
+  askAnswers --> askMerge
+  askApproval --> askMerge
   bashGate --> decisions
   bashGate --> classify
   bashGate --> grants
