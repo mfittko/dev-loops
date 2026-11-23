@@ -623,7 +623,7 @@ test("the guard denies a Bash command naming the record signing functions and al
   assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Grep", tool_input: { pattern: "downloadKey" }, cwd: f.root }, f.env)), "allow");
   assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "Grep", tool_input: { pattern: "loadKey" }, cwd: f.root }, f.env)), "allow", "a consumer's own loadKey is not denied");
   const named = JSON.parse(runHook(GUARD_HOOK, { tool_name: "Bash", tool_input: { command: "grep -n createApprovalHmacKey packages" }, cwd: f.root }, f.env).stdout).hookSpecificOutput.permissionDecisionReason;
-  assert.match(named, /names `createApprovalHmacKey`/, "the deny names the matched token");
+  assert.match(named, /names "createApprovalHmacKey"/, "the deny names the matched token");
   // Object keys are scanned like values.
   assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "mcp__x__y", tool_input: { [f.dir]: "v" }, cwd: f.root }, f.env)), "deny", "a record path as an object key");
   assert.equal(decision(runHook(GUARD_HOOK, { tool_name: "mcp__x__y", tool_input: { writeApprovalRecord: 1 }, cwd: f.root }, f.env)), "deny", "a signing name as an object key");
