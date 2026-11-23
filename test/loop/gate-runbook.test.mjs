@@ -114,7 +114,7 @@ test("AC1: the review route skips the lifecycle steps and omits the CI, spec and
   assert.match(runbook, /skip steps 2b, 4, 5, 6 and 11 to 13, omit `--ci-file` \(step 7\), `--spec-authority` \(steps 10 and 14\) and every judge flag/);
   for (const step of ["2b", "4", "5", "6"]) assert.match(runbook, new RegExp(`^${step}\\. [^\\n]*(?:Skip on \`review\`|Skip on \`review\` and)`, "m"), `step ${step} lacks its review skip`);
   assert.match(runbook, /`review` also passes no `--spec-authority`/);
-  assert.match(runbook, /Pass `--ci-file` on `draft_gate` only/);
+  assert.match(runbook, /Pass `--ci-file` on `draft_gate` and `pre_approval_gate`/);
   assert.match(runbook, /The gate token is `draft` for `draft_gate` and `preApproval` for `pre_approval_gate`/);
 });
 
@@ -198,14 +198,14 @@ test("AC3: every rule ID in the runbook resolves to a rule marker, and every coo
 
 test("AC3: the runbook states the retry schedule, hard-4xx escalation, judge-pass rerun and approvals obligations", () => {
   assert.match(runbook, /Retry the same unit on a transient 429 or 5xx after 30s, 60s and 120s \(`planDispatchRetry`\)/);
-  assert.match(runbook, /After about three failed attempts halve the concurrency, then dispatch one unit at a time in the foreground\. Never abort the round on a transient failure\. On a hard 4xx \(for example 402\) retry nothing and escalate to the supervisor at once/);
+  assert.match(runbook, /Never abort the round on a transient failure\. When `planDispatchRetry` returns `reduceConcurrency: true`, halve the concurrency through `backoffMaxConcurrent`, recompute the waves and dispatch in the foreground\. On a hard 4xx \(for example 402\) retry nothing and escalate to the supervisor at once/);
   assert.doesNotMatch(runbook, /retry it once|fails after one retry|dispatch fails after/i);
   assert.match(runbook, /a dispatch fails with a hard 4xx/);
   assert.match(runbook, /On any other failure rerun steps 11 to 13 once at the same head[^.]*; stop on a second failure/);
   assert.match(runbook, /When it fails with `humanDecisionRequired` \(exit 1\), stop at once at the human spec decision/);
   assert.match(usageOf("scripts/loop/judge-pass.mjs").text, /humanDecisionRequired/);
-  assert.match(runbook, /--prior-approvals "\$W\/tmp\/gate-judge\/\$SLUG\/pr-\$N\/\$GATE-\$PREV\/approvals\.json"/);
-  assert.match(runbook, /omit it on a fresh approval chain/);
+  assert.match(runbook, /PREV=<latest of the prior heads the dev-loop coordinator passes in the dispatch arguments; none on round 1>; PRIORS=<all of those prior heads>/);
+  assert.match(runbook, /--prior-approvals "\$W\/tmp\/gate-judge\/\$SLUG\/pr-\$N\/\$GATE-<head>\/approvals\.json"` for the latest head in `\$PRIORS` whose file exists\. When none exists this is a fresh approval chain: omit it and the `--changed-paths`\/`--coverage-map` pair/);
   assert.match(runbook, /`--changed-paths <file> --coverage-map <file>` together/);
 });
 
@@ -292,6 +292,13 @@ test("AC5: a missing contract or an unresolved rule marker fails closed with an 
   }
 });
 
+test("AC5: an unknown flag prints the message and usage as text, exits 1 and writes no stdout", () => {
+  const result = run(["--bogus"]);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /Usage: gate-runbook\.mjs/);
+});
+
 test("AC5: --docs-dir refuses an empty or whitespace-only value and accepts a real directory", () => {
   for (const value of ["", " ", "\t "]) {
     const result = run(["--docs-dir", value]);
@@ -320,7 +327,7 @@ test("AC6: Pi, Claude Code and Codex read the same runbook through the agent def
   assert.equal(probe.status, 0, `git ls-files failed: ${probe.stderr}`);
   assert.doesNotMatch(probe.stdout, /gate-coordinator/, "a generated Pi or Codex gate-coordinator asset is now tracked: assert it here");
   assert.doesNotMatch(runbook, /--harness claude/);
-  const cli = spawnSync(process.execPath, [path.join(ROOT, "cli/index.mjs"), "gate", "runbook"], { encoding: "utf8" });
+  const cli = spawnSync(process.execPath, [path.join(ROOT, "cli/index.mjs"), "gate", "runbook"], { encoding: "utf8", cwd: ROOT, env: { ...process.env, DEVLOOPS_CHECKOUT_DELEGATED: undefined } });
   assert.equal(cli.stdout, runbook);
   // The Pi step on the same runbook keeps the blocking join, and the harness-neutral dispatch rules stay named.
   assert.match(runbook, /On Pi send the wave as ONE `subagent` call/);
