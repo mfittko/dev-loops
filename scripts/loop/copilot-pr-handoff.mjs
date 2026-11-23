@@ -429,7 +429,7 @@ export function isBehindBaseMergeState(snapshot) {
 
 // Default base integration: the sanctioned resolve-pr-conflicts.mjs fetches
 // origin/<base>, merges (auto-resolving ONLY the safe additive CHANGELOG case,
-// else fail-closed), verifies docs, and pushes. It operates on repoRoot's
+// else fail-closed), verifies the resolved files with the base validation.paths, and pushes. It operates on repoRoot's
 // checked-out branch, so repoRoot MUST be the PR head's worktree (the sanctioned
 // per-PR pickup checkout) — the same assumption the resolve-pr-conflicts CLI
 // carries. Injected in tests.

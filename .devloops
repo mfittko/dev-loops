@@ -282,7 +282,7 @@ validation:
   mode: ci-only
   paths:
     - { match: ["skills/docs/**", "skills/*/SKILL.md"], surface: docs, commands: ["bun run test:docs", "bun run test:doc-guard", "bun scripts/run-bun-test.mjs --referencing {path}"] }
-    - { match: "changes/*.md", surface: changeset, commands: ["bun run test:docs"] }
+    - { match: ["changes/*.md", "CHANGELOG.md"], surface: changeset, commands: ["bun run test:docs"] }
     - { match: "packages/core/test/*.test.mjs", surface: core, commands: ["bun scripts/run-bun-test.mjs {path}"], gateSuites: [test:core] }
     - { match: "packages/core/package.json", surface: core, commands: ["bun run test:core", "bun run test:pack"] }
     - { match: "packages/core/**", surface: core, commands: ["bun run assets:check", "bun run test:core"] }
