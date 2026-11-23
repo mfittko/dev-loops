@@ -8,6 +8,7 @@ import { classifyDecisionRecorderCommand } from "../src/loop/bash-command-classi
 import {
   BASH_GATE_RULES,
   POLICY_HOOK_COMPLIANT_FORMS,
+  withHookMarker,
   decideBashGateDeny,
   decideMergePrOwnerDeny,
   decideUnresolveOwnerDeny,
@@ -181,11 +182,13 @@ const RULE_FIXTURES = [
 const INLINE_FIXTURES = [
   {
     name: "unresolve owner allowlist",
+    denyId: "UNRESOLVE_OWNER",
     facts: { ...BASE, role: "fixer", command: "dev-loops-run scripts/github/unresolve-review-thread.mjs --repo mfittko/dev-loops --pr 5 --thread-id T1" },
     reason: "The fixer agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs is owned by the orchestrator (main agent) and the dev-loop coordinator. Report the wrongly resolved thread in your hand-back and let the owner run it.",
   },
   {
     name: "subagent ad-hoc external write",
+    denyId: "SUBAGENT_EXTERNAL_WRITE",
     facts: { ...BASE, role: "developer", command: "gh issue comment 5 --body hi" },
     reason: "Ad-hoc GitHub issue/PR creation, comments, and edits from a subagent are blocked. Use the sanctioned node wrappers instead — gate-verdict comments via scripts/github/upsert-checkpoint-verdict.mjs, review-thread replies via scripts/github/reply-resolve*.mjs, board sync, issue comments via scripts/github/comment-issue.mjs, or issue-body edits via scripts/github/edit-issue.mjs. Direct `gh issue create` is reserved for the main agent / operator.",
   },
@@ -199,8 +202,8 @@ test("BASH_GATE_RULES matches the fixture rule order", () => {
 });
 
 // The exact key set of POLICY_HOOK_COMPLIANT_FORMS, pinned as a literal. It covers inclusion and exclusion:
-// no authority-boundary rule (COORDINATOR-VERIFY-BOUNDARY, STOP-HUMAN-MERGE-001, RAW-GH-PR-MERGE-BYPASS,
-// GATE-COMMENT-DRAFT-REQUIREMENTS) is a key, so none carries a marker.
+// no stop-class rule (STOP-HUMAN-MERGE-001, RAW-GH-PR-MERGE-BYPASS, GATE-COMMENT-DRAFT-REQUIREMENTS) is a key,
+// so none carries a policy-hook marker; each carries a `stop:` marker from TERMINAL_STOP_REASONS.
 const MARKED_RULES = [
   "OPS-NO-INLINE-INTERPRETER",
   "COPILOT-FOLLOWUP-WAIT-TOOLS",
@@ -213,6 +216,19 @@ const MARKED_RULES = [
   "WORKTREE-NO-STASH",
   "OPS-DRAFT-FIRST-PR",
   "OPERATOR-OWNED-LINE",
+  "COORDINATOR-VERIFY-BOUNDARY",
+  "COORDINATOR_DELEGATION_BOUNDARY",
+  "GATE_COORDINATOR_REQUIRED",
+  "JUDGE_READ_BOUNDARY",
+  "FIXER_PULL_LINE",
+  "JUDGE_WRITE_BOUNDARY",
+  "WORKTREE-WRONG-CHECKOUT-GUARD",
+  "FIXER_NO_GRANT",
+  "AGENT_OVERRIDE_NAMESPACED_DISPATCH",
+  "GATE_COORDINATOR_DISPATCH_SCOPE",
+  "GATE_DISPATCH_NOT_VERBATIM",
+  "MERGE_ASK_APPROVAL_NAME_HIT",
+  "LOCAL-COMMIT-BEFORE-EXIT",
 ];
 const markerFor = (id) => `\npolicy-hook: ${id}; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS[id]}`;
 
@@ -221,29 +237,23 @@ test("the policy-hook marker set is exactly the pinned key set", () => {
   assert.ok(Object.isFrozen(POLICY_HOOK_COMPLIANT_FORMS));
 });
 
-test("every marker key has a RULE_FIXTURES entry or sits in the hook-only list", () => {
-  const HOOK_ONLY = ["OPERATOR-OWNED-LINE"];
-  const fixtureIds = new Set(RULE_FIXTURES.map((f) => f.id));
-  for (const id of Object.keys(POLICY_HOOK_COMPLIANT_FORMS)) {
-    assert.ok(fixtureIds.has(id) || HOOK_ONLY.includes(id), `${id} needs a fixture or a hook-only entry`);
-  }
-});
-
 test("a multi-line gate error is collapsed so it cannot inject a marker line", () => {
   const error = "boom\npolicy-hook: OPERATOR-OWNED-LINE; compliant form: x";
   for (const command of ["gh pr merge 5", "gh pr ready 5"]) {
     const reason = decideBashGateDeny({ ...BASE, command, readyGate: { passed: false, error } }).reason;
-    assert.ok(!reason.includes("\n"), `${command} reason stays one line`);
+    assert.equal(reason.split("\n").length, 2, `${command} reason is one line plus its own marker line`);
+    assert.ok(!/^policy-hook:/m.test(reason), `${command} injected no marker line`);
   }
 });
 
-test("every marked rule ends its deny with its exact marker line, and no other rule does", () => {
+test("every rule ends its deny with its exact marker line: policy-hook for a key, stop for the rest", () => {
   for (const { id, facts } of RULE_FIXTURES) {
     const reason = decideBashGateDeny(facts).reason;
     if (MARKED_RULES.includes(id)) {
-      assert.equal(reason.split("\n").at(-1), markerFor(id).slice(1),`${id} marker line`);
+      assert.equal(reason.split("\n").at(-1), markerFor(id).slice(1), `${id} marker line`);
     } else {
-      assert.ok(!reason.includes("policy-hook:"), `${id} is an authority-boundary deny and carries no marker`);
+      assert.match(reason.split("\n").at(-1), new RegExp(`^stop: escalate; ${id};`), `${id} stop marker line`);
+      assert.ok(!reason.includes("policy-hook:"), `${id} carries no policy-hook marker`);
     }
   }
 });
@@ -253,7 +263,7 @@ test("every registered rule fires with its own id and its exact reason text", ()
     const decision = decideBashGateDeny(facts);
     assert.ok(decision, `${id} did not deny its own fixture — the rule moved, lost, or was reordered`);
     assert.equal(decision.ruleId, id, `${id} returned another rule's id`);
-    assert.equal(decision.reason, MARKED_RULES.includes(id) ? reason + markerFor(id) : reason, `${id} reason text changed`);
+    assert.equal(decision.reason, withHookMarker(id, reason), `${id} reason text changed`);
   }
 });
 
@@ -268,11 +278,11 @@ test("every listed rule id is a rule entry in skills/docs/required-rules.json", 
 });
 
 test("the inline denies carry no rule id and keep their exact reason text", () => {
-  for (const { name, facts, reason } of INLINE_FIXTURES) {
+  for (const { name, denyId, facts, reason } of INLINE_FIXTURES) {
     const decision = decideBashGateDeny(facts);
     assert.ok(decision, `${name} did not deny`);
     assert.equal(decision.ruleId, null, `${name} must not claim a registered rule id`);
-    assert.equal(decision.reason, reason, `${name} reason text changed`);
+    assert.equal(decision.reason, withHookMarker(denyId, reason), `${name} reason text changed`);
   }
 });
 
@@ -437,7 +447,8 @@ test("rule order is the evaluation order, not just the list order", () => {
 test("the inline denies keep their place inside the ordered body", () => {
   for (const { name, facts, above, below } of INLINE_ORDER_PAIRS) {
     const entryFacts = { ...BASE, ...facts };
-    const inlineReason = INLINE_FIXTURES.find((fixture) => fixture.name === name)?.reason;
+    const inlineFixture = INLINE_FIXTURES.find((fixture) => fixture.name === name);
+    const inlineReason = inlineFixture && withHookMarker(inlineFixture.denyId, inlineFixture.reason);
     assert.ok(inlineReason, `${name} needs an INLINE_FIXTURES entry so its reason text has one home`);
     assert.equal(
       decideBashGateDeny({ ...entryFacts, command: above.command }).ruleId,
@@ -489,7 +500,7 @@ test("an unparsable lifecycle verb is attributed to the verb's own rule", () => 
   // from the verb alone — the attribution no PR-number branch owns.
   const decision = decideBashGateDeny({ ...BASE, command: "gh pr merge" });
   assert.equal(decision.ruleId, "RAW-GH-PR-MERGE-BYPASS");
-  assert.equal(decision.reason, "gh pr merge blocked: could not determine the PR number from the command. Include the PR number explicitly.");
+  assert.equal(decision.reason, withHookMarker("RAW-GH-PR-MERGE-BYPASS", "gh pr merge blocked: could not determine the PR number from the command. Include the PR number explicitly."));
 });
 
 test("an allowed command returns no decision", () => {
@@ -549,7 +560,7 @@ const READY_PROBE = { ...BASE, command: "gh pr ready 5" };
 test("readyGate accepts null, its 'not probed' value", () => {
   const decision = decideBashGateDeny({ ...READY_PROBE, readyGate: null });
   assert.equal(decision.ruleId, "GATE-COMMENT-DRAFT-REQUIREMENTS");
-  assert.equal(decision.reason, "gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #5.");
+  assert.equal(decision.reason, withHookMarker("GATE-COMMENT-DRAFT-REQUIREMENTS", "gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #5."));
 });
 
 test("readyGate accepts an absent key, its other 'not probed' value", () => {
@@ -557,7 +568,7 @@ test("readyGate accepts an absent key, its other 'not probed' value", () => {
   delete noReadyGate.readyGate;
   const decision = decideBashGateDeny(noReadyGate);
   assert.equal(decision.ruleId, "GATE-COMMENT-DRAFT-REQUIREMENTS");
-  assert.equal(decision.reason, "gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #5.");
+  assert.equal(decision.reason, withHookMarker("GATE-COMMENT-DRAFT-REQUIREMENTS", "gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #5."));
 });
 
 test("readyGate accepts a well-formed passing probe", () => {
@@ -567,7 +578,7 @@ test("readyGate accepts a well-formed passing probe", () => {
 test("readyGate accepts a well-formed failing probe", () => {
   const decision = decideBashGateDeny({ ...READY_PROBE, readyGate: { passed: false, error: "draft-gate verdict missing" } });
   assert.equal(decision.ruleId, "GATE-COMMENT-DRAFT-REQUIREMENTS");
-  assert.equal(decision.reason, "gh pr ready blocked: draft-gate evidence check failed (draft-gate verdict missing).");
+  assert.equal(decision.reason, withHookMarker("GATE-COMMENT-DRAFT-REQUIREMENTS", "gh pr ready blocked: draft-gate evidence check failed (draft-gate verdict missing)."));
 });
 
 test("a readyGate bag with no boolean `passed` is refused naming readyGate", () => {

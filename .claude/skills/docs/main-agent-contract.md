@@ -291,3 +291,7 @@ is the fallback when the resolver inherits (the judge uses it to pin the strong 
 zero config and take a model when `models.roleTiers` (or `models.roles`) names them; `claude-launch`
 and a session started without it resolve the same model for both through the same command.
 Review roles stay on the high tier.
+
+## Hook stop class
+
+- On a hand-back that quotes a `stop: process-change` marker, the main agent files the follow-up named by `OPS-HOOK-STOP-CLASS`. An orchestrator brief follows the command-ban scope of `OPS-HOOK-STOP-CLASS`.

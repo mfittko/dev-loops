@@ -139,9 +139,8 @@ export const BASH_GATE_RULES = Object.freeze([
 
 /**
  * The deny rules whose compliant form the denied actor may run itself (OPS-POLICY-HOOK-DENIAL-RECOVERABLE).
- * A deny for a key here ends with the marker line `policy-hook: <rule-id>; compliant form: <text>`;
- * a deny without the marker line is an authority-boundary deny and stops the actor. The hand-authored
- * `.claude/hooks/pre-tool-use-bash-gate.mjs` reads this map for its own two denies.
+ * A deny for a key here ends with the marker line `policy-hook: <rule-id>; compliant form: <text>`.
+ * The dev-loops denies that stop the actor live in `TERMINAL_STOP_REASONS`; `withHookMarker` builds both marker lines.
  */
 export const POLICY_HOOK_COMPLIANT_FORMS = Object.freeze({
   "OPS-NO-INLINE-INTERPRETER": "rerun the command without the inline interpreter; parse with --jq/--silent and write files with the editor tools",
@@ -155,12 +154,49 @@ export const POLICY_HOOK_COMPLIANT_FORMS = Object.freeze({
   "WORKTREE-NO-STASH": "use `git diff`, a patch file or a scratch worktree",
   "OPS-DRAFT-FIRST-PR": "open the PR with `dev-loops-run cli/index.mjs pr create`",
   "OPERATOR-OWNED-LINE": "write the comment through scripts/github/comment-issue.mjs or edit-comment.mjs with --body-file, and run any read as a separate call",
+  "COORDINATOR-VERIFY-BOUNDARY": "delegate the check to a quality worker; a gate coordinator runs `gate resolve-validation` or returns a typed observation",
+  "COORDINATOR_DELEGATION_BOUNDARY": "delegate the edit to a developer worker; a gate coordinator writes only round artifacts under `tmp/` and returns a typed observation",
+  "GATE_COORDINATOR_REQUIRED": "dispatch one `gate-coordinator` agent for the round",
+  "JUDGE_READ_BOUNDARY": "read with `Read` or a listed read-only search form",
+  "FIXER_PULL_LINE": "run the dispatched pull line again, alone",
+  "JUDGE_WRITE_BOUNDARY": "write only a verdict file at the pulled outputRef",
+  "WORKTREE-WRONG-CHECKOUT-GUARD": "edit the worktree copy",
+  "FIXER_NO_GRANT": "run the exact dispatched pull line alone, then write",
+  "AGENT_OVERRIDE_NAMESPACED_DISPATCH": "dispatch the bare agent type",
+  "GATE_COORDINATOR_DISPATCH_SCOPE": "return the typed round result to the dev-loop coordinator",
+  "GATE_DISPATCH_NOT_VERBATIM": "relay the emitted dispatchPrompt byte for byte",
+  "MERGE_ASK_APPROVAL_NAME_HIT": "read the file with the Read tool, or drop the file name from the command",
+  "LOCAL-COMMIT-BEFORE-EXIT": "commit the dirty paths, then stop",
 });
 
-/** Append the policy-hook marker line to a deny reason when the rule is in the map. */
-export function withPolicyHookMarker(ruleId, reason) {
-  const form = Object.hasOwn(POLICY_HOOK_COMPLIANT_FORMS, ruleId ?? "") ? POLICY_HOOK_COMPLIANT_FORMS[ruleId] : null;
-  return form === null ? reason : `${reason}\npolicy-hook: ${ruleId}; compliant form: ${form}`;
+/**
+ * The dev-loops denies that stop the actor (OPS-HOOK-STOP-CLASS): deny id to `{ class, reason }`.
+ * `escalate`: the agent may not decide this, so an operator or the orchestrator must.
+ * `process-change`: the outcome shows that a rule, contract or tool must change.
+ * The key set is disjoint from `POLICY_HOOK_COMPLIANT_FORMS`.
+ */
+export const TERMINAL_STOP_REASONS = Object.freeze({
+  UNRESOLVE_OWNER: { class: "escalate", reason: "authority: only the orchestrator or the dev-loop coordinator unresolves a review thread." },
+  MERGE_PR_OWNER: { class: "escalate", reason: "authority: only the orchestrator runs merge-pr." },
+  "STOP-HUMAN-MERGE-001": { class: "escalate", reason: "authority: a human merges this repo's pull requests." },
+  "RAW-GH-PR-MERGE-BYPASS": { class: "escalate", reason: "authority: a merge runs only through the orchestrator's merge-pr wrapper." },
+  "GATE-COMMENT-DRAFT-REQUIREMENTS": { class: "escalate", reason: "gate order: the draft_gate evidence must exist before the PR leaves draft." },
+  SUBAGENT_EXTERNAL_WRITE: { class: "escalate", reason: "authority: a subagent writes to GitHub only through the sanctioned wrappers, and anything else, such as issue creation, the orchestrator performs." },
+  MAIN_AGENT_READONLY_BOUNDARY: { class: "escalate", reason: "authority: the main agent mutates no repository file, so the dev-loop subagent does." },
+  FIXER_MUTATION_BOUNDARY: { class: "escalate", reason: "authority: a fixer mutates only inside its work order's grant." },
+  "MERGE-ASK-APPROVAL": { class: "escalate", reason: "authority: only the operator answers the approval question." },
+  HOOK_GUARD_FAILED: { class: "process-change", reason: "the hook failed or lacked a fact, so the hook or its caller needs a fix." },
+});
+
+/**
+ * Append the one marker line for `denyId` to a deny reason: `policy-hook: <id>; compliant form: <text>`
+ * or `stop: <class>; <id>; <reason>`, from whichever map holds the id. The only code that builds either line.
+ */
+export function withHookMarker(denyId, reason) {
+  if (denyId == null) return reason;
+  if (Object.hasOwn(POLICY_HOOK_COMPLIANT_FORMS, denyId)) return `${reason}\npolicy-hook: ${denyId}; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS[denyId]}`;
+  if (Object.hasOwn(TERMINAL_STOP_REASONS, denyId)) return `${reason}\nstop: ${TERMINAL_STOP_REASONS[denyId].class}; ${denyId}; ${TERMINAL_STOP_REASONS[denyId].reason}`;
+  throw new Error(`withHookMarker: unregistered deny id ${denyId}`);
 }
 
 /**
@@ -216,9 +252,9 @@ export function decideUnresolveOwnerDeny({ command, role }) {
     // ponytail: token match only. Quote splitting, globs or variable expansion bypass it; this is a guardrail for cooperative agents.
     return {
       ruleId: null,
-      reason:
-        `The ${actor} agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs ` +
-        "is owned by the orchestrator (main agent) and the dev-loop coordinator. Report the wrongly resolved thread in your hand-back and let the owner run it.",
+      reason: withHookMarker("UNRESOLVE_OWNER",
+        `The ${String(actor).replace(/\s+/g, " ")} agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs ` +
+        "is owned by the orchestrator (main agent) and the dev-loop coordinator. Report the wrongly resolved thread in your hand-back and let the owner run it."),
     };
   }
   return null;
@@ -239,9 +275,9 @@ export function decideMergePrOwnerDeny({ command, role }) {
   if (typeof role !== "string" || !commandMentionsMergePr(command)) return null;
   return {
     ruleId: null,
-    reason:
-      `The ${normalizeAgentType(role)} agent may not run merge-pr: scripts/github/merge-pr.mjs, \`--check\` included, is owned by the orchestrator (main agent). ` +
-      "Hand back the merge-ready evidence instead; the orchestrator runs `merge-pr.mjs --check` and the merge.",
+    reason: withHookMarker("MERGE_PR_OWNER",
+      `The ${normalizeAgentType(role).replace(/\s+/g, " ")} agent may not run merge-pr: scripts/github/merge-pr.mjs, \`--check\` included, is owned by the orchestrator (main agent). ` +
+      "Hand back the merge-ready evidence instead; the orchestrator runs `merge-pr.mjs --check` and the merge."),
   };
 }
 
@@ -281,12 +317,12 @@ export function decideMergePrOwnerDeny({ command, role }) {
  *   probe result for the command's PR; null when the adapter did not probe.
  * @returns {{ruleId: string|null, reason: string}|null} The deny decision, or null to allow.
  *   `ruleId` is null for the three inline denies that carry no registered rule ID and for the
- *   missing-facts deny. A rule in `POLICY_HOOK_COMPLIANT_FORMS` gets its marker line as the last line
- *   of the reason (the one append site).
+ *   missing-facts deny. A deny with a rule ID gets its marker line from `withHookMarker` as the last
+ *   line of the reason; the null-ID denies mark themselves with their own deny id.
  */
 export function decideBashGateDeny(facts = {}) {
   const deny = decideBashGateDenyUnmarked(facts);
-  return deny && { ...deny, reason: withPolicyHookMarker(deny.ruleId, deny.reason) };
+  return deny && { ...deny, reason: withHookMarker(deny.ruleId, deny.reason) };
 }
 
 function decideBashGateDenyUnmarked(facts) {
@@ -297,12 +333,12 @@ function decideBashGateDenyUnmarked(facts) {
   if (missing.length > 0) {
     return {
       ruleId: null,
-      reason:
+      reason: withHookMarker("HOOK_GUARD_FAILED",
         `Bash gate blocked: the caller supplied no valid ${missing.join(", ")} fact(s), so the shared deny ` +
         "decision cannot run. Inject every adapter fact (`command`, `role`, `repoSlug`, `managedRepoSlug`, " +
         "`inManagedContext`, `humanMergeOnly`, `enforceCoordinator`, `readyGate`) instead of omitting one; " +
         "`readyGate` accepts only its 'not probed' shapes (`null` or an absent key) or a " +
-        "`{ passed: boolean, error: string|null }` probe.",
+        "`{ passed: boolean, error: string|null }` probe."),
     };
   }
   // Past the validation `command` is a required string, so the allow path for a non-string command is
@@ -516,12 +552,12 @@ function decideBashGateDenyUnmarked(facts) {
       // Inline deny with no registered rule ID (see BASH_GATE_RULES).
       return {
         ruleId: null,
-        reason:
+        reason: withHookMarker("SUBAGENT_EXTERNAL_WRITE",
           "Ad-hoc GitHub issue/PR creation, comments, and edits from a subagent are blocked. Use the sanctioned " +
           "node wrappers instead — gate-verdict comments via scripts/github/upsert-checkpoint-verdict.mjs, " +
           "review-thread replies via scripts/github/reply-resolve*.mjs, board sync, issue comments via " +
           "scripts/github/comment-issue.mjs, or issue-body edits via scripts/github/edit-issue.mjs. " +
-          "Direct `gh issue create` is reserved for the main agent / operator.",
+          "Direct `gh issue create` is reserved for the main agent / operator."),
       };
     }
   }
