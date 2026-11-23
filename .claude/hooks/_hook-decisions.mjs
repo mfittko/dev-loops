@@ -422,7 +422,7 @@ export function decideWorktreeCheckoutGuard({
   // (or an unresolvable/ambiguous context that fails safe — AC4). This is a
   // wrong-checkout mutation (AC1).
   const fix = suggestedWorktreePath
-    ? ` Edit the worktree copy instead: "${suggestedWorktreePath}".`
+    ? ` Edit the worktree copy instead: ${JSON.stringify(suggestedWorktreePath)}.`
     : "";
   return {
     decision: "deny",
