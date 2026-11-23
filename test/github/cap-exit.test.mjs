@@ -149,10 +149,12 @@ test("AC4 a blocked cap round with a posted review and no delta record reports b
   assert.equal(blocked.capRoundFixed, false);
   const marker = { visible: true, headSha: "bbbbbbb", verdict: "findings_present", contractComplete: true };
   const result = evaluatePrGateCoordination({
-    pr: PR, currentHeadSha: "b".repeat(40), prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
+    repo: REPO, pr: PR, currentHeadSha: "b".repeat(40), prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
     draftGate: marker, draftGateMarker: marker, unresolvedGateThreadCount: 0, draftCapRoundFixed: blocked.capRoundFixed, draftCapRoundFailure: blocked.failure ?? "no_clearing_record", draftRoundRefused: true,
   });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(result.agentRemedy.command, /gate extend-cap-round-chain --repo owner\/repo --pr /, "the no_clearing_record remedy of capRoundExit rides the result");
+  assert.equal(result.blockedOn, undefined);
   // A clearing chain (the resolver proves the cap round fixed) keeps today's result: the chain proof decides.
   const chained = await fact(root, [review(CAP_HEAD, 4, "findings_present")], { resolve: async () => ({ log: { headSha: CAP_HEAD, findings: [] }, round: 4, residue: [] }) });
   assert.equal(chained.capRoundFixed, true);

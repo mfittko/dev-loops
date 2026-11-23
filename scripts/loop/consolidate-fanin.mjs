@@ -60,7 +60,7 @@ import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-pro
 import { resolveGateArtifactTmpRoot, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, countDistinctReviewers, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, countDistinctReviewers, isSeededCapFinding, normalizeSeverity, seededCapDefectKey, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { clusterFindings } from "@dev-loops/core/loop/finding-cluster";
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
@@ -545,8 +545,8 @@ export function seedCapRoundActFindings(rawArtifacts, actList) {
   for (const item of actList) {
     if (typeof item.angle !== "string" || item.angle.trim().length === 0) continue;
     // A carried findings_present angle already holds the item seeded in an earlier round: seeding is idempotent.
-    if (rawArtifacts.some((a) => Array.isArray(a.findings) && a.findings.some((f) => f?.defectKey === `cap:${item.fingerprint}`))) continue;
-    const seeded = { severity: item.severity, summary: item.summary, defectKey: `cap:${item.fingerprint}`, ...(item.file ? { file: item.file } : {}), ...(Number.isInteger(item.line) ? { line: item.line } : {}) };
+    if (rawArtifacts.some((a) => Array.isArray(a.findings) && a.findings.some((f) => f?.defectKey === seededCapDefectKey(item.fingerprint)))) continue;
+    const seeded = { severity: item.severity, summary: item.summary, defectKey: seededCapDefectKey(item.fingerprint), ...(item.file ? { file: item.file } : {}), ...(Number.isInteger(item.line) ? { line: item.line } : {}) };
     const artifact = rawArtifacts.find((a) => a.angle.trim() === item.angle.trim());
     // A blocked artifact keeps its verdict (fan-in returns blocked from it); the seeded item rides a separate synthetic artifact.
     // The synthetic artifact has no head stamp, so no perAngle row exists; resolve-angle-carry-forward exempts `cap:` findings from attribution.
@@ -561,7 +561,7 @@ export function seedCapRoundActFindings(rawArtifacts, actList) {
 export function reserveCapDefectKey(rawArtifacts) {
   for (const a of rawArtifacts) {
     if (typeof a.carriedFromHead === "string" || !Array.isArray(a.findings)) continue;
-    a.findings = a.findings.map((f) => (typeof f?.defectKey === "string" && f.defectKey.startsWith("cap:") ? Object.fromEntries(Object.entries(f).filter(([k]) => k !== "defectKey")) : f));
+    a.findings = a.findings.map((f) => (isSeededCapFinding(f) ? Object.fromEntries(Object.entries(f).filter(([k]) => k !== "defectKey")) : f));
   }
 }
 

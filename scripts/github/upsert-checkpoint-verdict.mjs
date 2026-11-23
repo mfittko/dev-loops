@@ -6,7 +6,7 @@ import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loo
 import { wrapOperatorOwnedPhrases } from "@dev-loops/core/github/operator-owned-lines";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
-import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, isPastRoundCap, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, pastCapBlockers, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, isPastRoundCap, isSeededCapFinding, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, pastCapBlockers, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { composeBodyOnlyConvergedDraftGate, composeConvergedDraftGate, convergedActItemKey, isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
@@ -3506,7 +3506,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),
       ...(isPastRoundCap(completedRound, cap) ? pastCapBlockers(roundFindings, { round: completedRound, cap }) : []),
       // Issue 3460 AC6: a cap-round item the fan-in seeded (defect key `cap:<fingerprint>`) follows the same past-cap blocker rule at pre_approval_gate; a judge reject closes it.
-      ...(options.gate === "pre_approval_gate" && cap > 0 ? pastCapBlockers(roundFindings.filter((f) => String(f?.defectKey ?? "").startsWith("cap:") && f?.judgeDisposition !== "reject"), { round: cap, cap }) : []),
+      ...(options.gate === "pre_approval_gate" && cap > 0 ? pastCapBlockers(roundFindings.filter((f) => isSeededCapFinding(f) && f?.judgeDisposition !== "reject"), { round: cap, cap }) : []),
     ];
     const composedVerdict = composeCheckpointVerdict({ reviewVerdict: ledgerVerdict, blockers: gateBlockers });
     if (options.verdict === undefined) {
