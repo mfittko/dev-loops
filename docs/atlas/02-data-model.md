@@ -15,7 +15,7 @@ The loop keeps its state in small JSON files on disk and validates each file at 
 
 Type: `erDiagram`
 
-The loop records and the keys that join them. The run id links the run-context file to runner claims. The head SHA links the fan-in ledger, the judge verdict and the act list. The judge verdict disposes clusters by `clusterId`. The act list is one possible fixer source: a fixer order pins it as a required read of kind `act-list`, and other fixer orders read a CI, thread or review-body source instead. The hand-back packet carries no key into the coordinator order; the order names the hand-back rule in `ruleReferences`, and the packet closes the round by contract. Derived from `packages/core/src/loop/run-context.mjs`, `scripts/loop/_pr-runner-coordination.mjs`, `packages/core/src/loop/coordinator-work-order.mjs`, `scripts/loop/emit-judge-work-order.mjs`, `scripts/loop/emit-fixer-work-order.mjs`, `scripts/loop/consolidate-fanin.mjs`, `scripts/loop/judge-pass.mjs` and `scripts/loop/checkpoint-contract.mjs`.
+The loop records and the keys that join them. The run id links the run-context file to runner claims. The head SHA links the fan-in ledger, the judge verdict and the act list. The judge verdict disposes clusters by `clusterId`. The act list is one possible fixer source: a fixer order pins it as a required read of kind `act-list`, either as its source or beside a CI-failure source when the round's verdict post was refused for red CI. Other fixer orders read a CI, thread or review-body source only. The hand-back packet carries no key into the coordinator order; the order names the hand-back rule in `ruleReferences`, and the packet closes the round by contract. Derived from `packages/core/src/loop/run-context.mjs`, `scripts/loop/_pr-runner-coordination.mjs`, `packages/core/src/loop/coordinator-work-order.mjs`, `scripts/loop/emit-judge-work-order.mjs`, `scripts/loop/emit-fixer-work-order.mjs`, `scripts/loop/consolidate-fanin.mjs`, `scripts/loop/judge-pass.mjs` and `scripts/loop/checkpoint-contract.mjs`.
 
 ```mermaid
 erDiagram
@@ -61,6 +61,7 @@ erDiagram
         string head
         string nextAction
         bool workerRunning
+        object verdictRefusal
     }
 ```
 
@@ -70,7 +71,7 @@ erDiagram
 
 Type: `block-beta`
 
-The on-disk layout of every record in this section. Long-lived state sits under `.pi/` in the main checkout, and per-round artifacts sit under `tmp/` in families keyed by repo slug, PR number, gate and head SHA. Derived from `packages/core/src/loop/run-context.mjs` (`runContextPath`), `scripts/loop/_pr-runner-coordination.mjs` (`defaultRunnerCoordinationFilePathForTarget`), `scripts/loop/checkpoint-contract.mjs` (`CHECKPOINT_FILE`), `scripts/github/_gate-artifact-paths.mjs`, `scripts/loop/emit-coordinator-work-order.mjs` (`unitDir`), `scripts/loop/emit-fixer-work-order.mjs` (`buildFixerDir`) and `packages/core/src/loop/work-order-digest.mjs` (`executionIndexPath`).
+The on-disk layout of every record in this section. Long-lived state sits under `.pi/` in the main checkout, and per-round artifacts sit under `tmp/` in families keyed by repo slug, PR number, gate and head SHA. A claiming lane also writes `dev-loop-run-context.json` under the `.pi/` directory of its linked worktree, and `resolveRunId` reads that file as its last fallback. Derived from `packages/core/src/loop/run-context.mjs` (`runContextPath`, `ensureLaneRunContext`), `scripts/loop/_pr-runner-coordination.mjs` (`defaultRunnerCoordinationFilePathForTarget`), `scripts/loop/checkpoint-contract.mjs` (`CHECKPOINT_FILE`), `scripts/github/_gate-artifact-paths.mjs`, `scripts/loop/emit-coordinator-work-order.mjs` (`unitDir`), `scripts/loop/emit-fixer-work-order.mjs` (`buildFixerDir`) and `packages/core/src/loop/work-order-digest.mjs` (`executionIndexPath`).
 
 ```mermaid
 block-beta
@@ -223,6 +224,7 @@ classDiagram
     class JudgeWorkOrder {
         +RoundIdentity roundIdentity
         +string headSha
+        +string harness
         +int round
         +int mediumFixWindow
         +object[] priorActItems
@@ -274,7 +276,7 @@ classDiagram
 
 Type: `flowchart`
 
-The order in which a gate round writes its records, and which script writes each one. Fan-in never disposes a finding: it writes `disposition: unjudged` and only the judge sets `judgeDisposition`. The act list is always a bare array. The pinned spec-authority identity rides on the ledgers as one `specAuthority` key, never on the act list. The verifier's `--construct` step writes `fixer-disposition.json`; the fixer agent must not write it by hand. Derived from `packages/core/src/loop/gate-fanin.mjs` (`consolidateFanin`, `UNJUDGED_DISPOSITION`), `scripts/loop/consolidate-fanin.mjs`, `scripts/loop/emit-judge-work-order.mjs`, `scripts/loop/judge-pass.mjs` and `scripts/loop/emit-fixer-work-order.mjs`.
+The order in which a gate round writes its records, and which script writes each one. Fan-in never disposes a finding: it writes `disposition: unjudged` and only the judge sets `judgeDisposition`. The act list is always a bare array. The pinned spec-authority identity rides on the ledgers as one `specAuthority` key, never on the act list. The verifier's `--construct` step writes `fixer-disposition.json`; the fixer agent must not write it by hand. A well-formed empty fan-in ledger with no pinned Copilot body ends the lineage early: `emit-judge-work-order.mjs` writes no order and returns `judgeSkipped`, and no judge or `judge-pass.mjs` runs. Derived from `packages/core/src/loop/gate-fanin.mjs` (`consolidateFanin`, `UNJUDGED_DISPOSITION`), `scripts/loop/consolidate-fanin.mjs`, `scripts/loop/emit-judge-work-order.mjs`, `scripts/loop/judge-pass.mjs` and `scripts/loop/emit-fixer-work-order.mjs`.
 
 ```mermaid
 flowchart LR
@@ -388,6 +390,12 @@ requirementDiagram
         risk: high
         verifymethod: test
     }
+    requirement ci_red_route {
+        id: H3
+        text: "verdictRefusal needs reason ci_red, actListPath and nextAction fix_ci_failure"
+        risk: medium
+        verifymethod: test
+    }
     requirement defer_draft {
         id: J1
         text: "defer requires followUpDraft title and body"
@@ -426,6 +434,7 @@ requirementDiagram
     }
     validateCoordinatorHandback - satisfies -> handback_fields
     validateCoordinatorHandback - satisfies -> worker_joined
+    validateCoordinatorHandback - satisfies -> ci_red_route
     validateJudgeVerdict - satisfies -> defer_draft
     validateJudgeVerdict - satisfies -> unique_index
     applyJudgeDispositions - satisfies -> every_cluster
@@ -438,7 +447,7 @@ requirementDiagram
 
 Type: `sequenceDiagram`
 
-How a coordinator round ends. The coordinator writes the four-field packet, and the validator CLI reads it before the hand-back. A refused packet never exits 0, whatever output flags the caller passes. Derived from `scripts/loop/validate-coordinator-handback.mjs` and `scripts/loop/_coordinator-handback.mjs`.
+How a coordinator round ends. The coordinator writes the four-field packet, plus an optional `verdictRefusal` when a verdict post was refused for red CI, and the validator CLI reads it before the hand-back. A refused packet never exits 0, whatever output flags the caller passes. Derived from `scripts/loop/validate-coordinator-handback.mjs` and `scripts/loop/_coordinator-handback.mjs`.
 
 ```mermaid
 sequenceDiagram
@@ -455,6 +464,8 @@ sequenceDiagram
         V-->>C: ok false, refusal missing_fields, exit 1
     else workerRunning is true
         V-->>C: ok false, refusal worker_running, exit 1
+    else verdictRefusal malformed or nextAction not fix_ci_failure
+        V-->>C: ok false, refusal verdict_refusal_route, recovery, exit 1
     else valid
         V-->>C: ok true, exit 0
         C->>M: hand back with nextAction
@@ -534,14 +545,14 @@ mindmap
 
 Type: `xychart-beta`
 
-The number of property keys declared in each object-valued top-level section of the config schema, nested keys included. The `gates` section holds 125 of the counted keys, about half of the schema. Produced by `jq -r '.properties | to_entries[] | "\(.key) \([.value | .. | objects | select(has("properties")) | .properties | keys | length] | add)"' schemas/dev-loop-config.schema.json`. Sections without nested properties (`version`, `strategy`, `inputSource`, `extraTools`, `extraToolsGuidance`, `internalPathPatterns`) are left out. Derived from `schemas/dev-loop-config.schema.json`.
+The number of property keys declared in each object-valued top-level section of the config schema, nested keys included. The `gates` section holds 128 of the counted keys, about half of the schema. Produced by `jq -r '.properties | to_entries[] | "\(.key) \([.value | .. | objects | select(has("properties")) | .properties | keys | length] | add)"' schemas/dev-loop-config.schema.json`. Sections without nested properties (`version`, `strategy`, `inputSource`, `extraTools`, `extraToolsGuidance`, `internalPathPatterns`) are left out. Derived from `schemas/dev-loop-config.schema.json`.
 
 ```mermaid
 xychart-beta
     title "Config schema property keys per section"
     x-axis ["gates", "uiReview", "models", "queue", "classify", "refinement", "workflow", "postMerge", "localImpl", "validation", "tracker", "worktree", "approval", "autonomy", "trust", "standingAuth", "changelog"]
     y-axis "property keys" 0 --> 130
-    bar [125, 42, 17, 10, 10, 9, 8, 8, 7, 7, 5, 5, 3, 2, 2, 1, 1]
+    bar [128, 42, 17, 11, 10, 9, 8, 8, 7, 7, 5, 5, 3, 2, 2, 1, 1]
 ```
 
 <a id="d27"></a>
@@ -550,7 +561,7 @@ xychart-beta
 
 Type: `treemap-beta`
 
-The top-level field count of each loop record, optional fields included. Values are reviewer hand counts of the writer object literals and their conditional spreads, with no command: `writeRunContext` (2), `createRunnerCoordinationState` (6), the coordinator `workOrder` literal (6), the judge `workOrder` literal (22: 16 fixed plus `copilotBodyClusterId`, `closureRound`, `operatorFocus`, `operatorFocusDigest`, `sliceLinkage` and `sliceLinkageIssues`), the fixer `workOrder` literal (21, with `failedChecks`, `failedChecksOmitted`, `deltaFindings`, `operatorFocus` and `operatorFocusDigest` optional), the handoff `envelope` (26: the 18-key literal plus eight keys set after it, such as `gateConfig`, `unitBoundaries`, `specSource` and `gateState`), the fan-in `ledgerWrapper` after `stampOptionalSpecAuthority` (5), the judge-pass `ledgerRecord` after the stamp (5), the judge verdict (3), the disposition entry (11), the hand-back `FIELD_CHECKS` (4) and the `complete` retrospective payload (5). The spec-authority stamp adds one nested `specAuthority` key, not four top-level keys. The handoff envelope, the judge order and the fixer order are the widest records. The two orders are wide because they pin every input by digest. Derived from `packages/core/src/loop/run-context.mjs`, `scripts/loop/_pr-runner-coordination.mjs`, `packages/core/src/loop/coordinator-work-order.mjs`, `packages/core/src/loop/handoff-envelope.mjs`, `scripts/loop/emit-judge-work-order.mjs`, `scripts/loop/emit-fixer-work-order.mjs`, `scripts/loop/consolidate-fanin.mjs`, `scripts/loop/judge-pass.mjs`, `scripts/loop/_coordinator-handback.mjs`, `scripts/loop/checkpoint-contract.mjs`, `scripts/lib/spec-authority-stamp.mjs` and `packages/core/src/loop/spec-authority.mjs` (`stampSpecAuthorityIdentity`).
+The top-level field count of each loop record, optional fields included. Values are reviewer hand counts of the writer object literals and their conditional spreads, with no command: `writeRunContext` (2), `createRunnerCoordinationState` (6), the coordinator `workOrder` literal (6), the judge `workOrder` literal (23: 17 fixed plus `copilotBodyClusterId`, `closureRound`, `operatorFocus`, `operatorFocusDigest`, `sliceLinkage` and `sliceLinkageIssues`), the fixer `workOrder` literal (22, with `threadsShape`, `failedChecks`, `failedChecksOmitted`, `deltaFindings`, `operatorFocus` and `operatorFocusDigest` optional), the handoff `envelope` (26: the 18-key literal plus eight keys set after it, such as `gateConfig`, `unitBoundaries`, `specSource` and `gateState`), the fan-in `ledgerWrapper` after `stampOptionalSpecAuthority` (5), the judge-pass `ledgerRecord` after the stamp (5), the judge verdict (3), the disposition entry (11), the hand-back `FIELD_CHECKS` (4) and the `complete` retrospective payload (5). The spec-authority stamp adds one nested `specAuthority` key, not four top-level keys. The handoff envelope, the judge order and the fixer order are the widest records. The two orders are wide because they pin every input by digest. Derived from `packages/core/src/loop/run-context.mjs`, `scripts/loop/_pr-runner-coordination.mjs`, `packages/core/src/loop/coordinator-work-order.mjs`, `packages/core/src/loop/handoff-envelope.mjs`, `scripts/loop/emit-judge-work-order.mjs`, `scripts/loop/emit-fixer-work-order.mjs`, `scripts/loop/consolidate-fanin.mjs`, `scripts/loop/judge-pass.mjs`, `scripts/loop/_coordinator-handback.mjs`, `scripts/loop/checkpoint-contract.mjs`, `scripts/lib/spec-authority-stamp.mjs` and `packages/core/src/loop/spec-authority.mjs` (`stampSpecAuthorityIdentity`).
 
 ```mermaid
 treemap-beta
@@ -561,8 +572,8 @@ treemap-beta
 "Work orders"
     "handoff envelope": 26
     "coordinator": 6
-    "judge": 22
-    "fixer": 21
+    "judge": 23
+    "fixer": 22
 "Gate records"
     "fan-in ledger": 5
     "enriched ledger": 5
