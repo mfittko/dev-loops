@@ -352,9 +352,9 @@ export async function buildHandoffEnvelopeCli(
   let verifiedResolverOutput = resolverOutput;
   if (binding?.pr && !STATELESS_UNIT_STRATEGIES.includes(trimmedOrNull(bundle?.selectedStrategy))) {
     const artifact = bundle.activeArtifact ?? bundle.canonicalState?.target;
-    // Any difference from the startup record fails closed; no ownership check ran on a newly linked issue.
+    // Emission rechecks only that the recorded unit is still a live closing issue. A secondary closing issue linked after startup is ownership-checked at the next startup.
     const recorded = artifact?.issue ?? null;
-    const issue = selectPrClosingIssue(binding.pr, recorded ?? undefined);
+    const issue = selectPrClosingIssue(binding.pr, recorded);
     if (recorded !== issue) {
       throw parseError(`PR closing issue changed since startup: startup recorded ${recorded === null ? "no issue" : `issue #${recorded}`}, live linkage is ${issue === null ? "no issue" : `issue #${issue}`}; fail closed.`);
     }
