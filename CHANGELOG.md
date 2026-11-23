@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.12-pre.7
+
+### Added
+
+- Gate findings-log rounds record a `roundCause`, and `dev-loops loop round-causes` reports rounds and issues per merge plus round-1 `draft_gate` findings by developer-checklist coverage (#3426)
+- The 2026-11-19 Atlas as a dated snapshot under `docs/atlas/`, one file per section (#3482)
+
+### Changed
+
+- `merge-pr` waits up to 540 s for Gate evidence, then refuses a failed latest non-cancelled run without `gate-evidence` success, a timeout, or a head change after a wait or failed-run read (#3411)
+- An issue pickup in `loop startup` stops and prints the grill command unless the issue has a clean grill with a `## Simplest design` section and a `simplicity-review:` line (#3462)
+- An issue grilled before this change needs one more grill, because it has no review line; work with an open PR keeps its route (#3462)
+- The grill runs one fresh `review` agent with the `kiss` and `yagni` prompts, the new default of `refinement.roles` (#3462)
+- `kiss` and `yagni` are mandatory draft angles here: a ready PR that passed `draft_gate` earlier fails the fan-out provenance check after a main merge; ADR 0319 records the merge order (#3462)
+
+### Fixed
+
+- Issues created in another repository with `issue create --repo` are no longer added to the current checkout's board (#3386)
+- The operator-decision-recorder hook no longer denies commands that end in a simple output redirection such as `2>&1` or `>/dev/null` (#3450)
+- The gate reviewer bundle no longer follows a changed symlink out of the repository; it records the path as stripped (#3480)
+- Opening or restarting the run viewer no longer terminates an unrelated process that listens on the viewer port (#3489)
+- Base integration verifies a resolved changelog with the default-branch `validation.paths` commands instead of a hard-coded `bun run test:docs` (#3490)
+- `loop startup --issue <n>` now starts a gate round on a PR that closes several issues when `<n>` is one of them, and the refusal for an unnamed unit carries a `recovery` command (#3493)
+- The judge work order and the judge Bash refusal now steer to the worktree read forms the judge is allowed: `Read` at an absolute path or `git show <headSha>:<path>` without `-C` (#3494)
+- A loop startup that reconciles the board now makes about 12 GitHub calls instead of about 300, so it no longer trips the secondary rate limit (#3498)
+
 ## 1.0.12-pre.6
 
 ### Added
