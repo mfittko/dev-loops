@@ -1500,7 +1500,7 @@ export async function consolidateGateFanin(options) {
   // Issue 3460 AC6: pre_approval_gate seeds each open act item of the draft cap round as an ordinary finding, whatever a delta record says, so the judge disposes it.
   // The `cap:<fingerprint>` defect key marks a seeded finding; the verdict poster reads it to apply the past-cap blocker rule. A capClosed item stays context (the residue read).
   if (options.gate === "pre_approval_gate" && emitPlan !== undefined && options.headSha !== undefined) {
-    const capRound = await resolveCapRound({ repo: emitPlan.repo, pr: emitPlan.pr, headSha: options.headSha }, { repoRoot: options.repoRoot ?? process.cwd() }).catch(() => null);
+    const capRound = await resolveCapRound({ repo: emitPlan.repo, pr: emitPlan.pr, headSha: options.headSha }, { repoRoot: options.repoRoot ?? process.cwd(), onFailClosed: () => { throw new Error("cap_round_unreadable: the draft_gate cap-round ledger is unreadable, so pre_approval_gate cannot seed the cap act items (issue 3460 AC6)"); } });
     if (capRound) seedCapRoundActFindings(rawArtifacts, capRoundActList(capRound.log.findings, capRound.log.headSha));
   }
 

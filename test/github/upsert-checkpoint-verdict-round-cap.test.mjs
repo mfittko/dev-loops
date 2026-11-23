@@ -40,10 +40,10 @@ const finding = (severity, judgeDisposition, extra = {}) => ({
   severity, angle: "correctness", summary: `${severity} finding judged ${judgeDisposition}`, judgeDisposition, judgeRationale: "test rationale", ...extra,
 });
 
-async function writeLedger(tempDir, { overallVerdict = "findings_present", findings, name = "ledger.json" }) {
+async function writeLedger(tempDir, { overallVerdict = "findings_present", findings, name = "ledger.json", gate = "draft_gate" }) {
   const ledgerPath = path.join(tempDir, name);
   const ledger = {
-    repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD,
+    repo: "owner/repo", pr: 17, gate, headSha: HEAD,
     verdict: "findings_present", overallVerdict, loggedAt: "2026-10-25T00:00:00.000Z", findings,
   };
   if (overallVerdict === null) delete ledger.overallVerdict;
@@ -675,3 +675,41 @@ test("--post-sealed-cap-round refuses a sealed findings_present cap round and po
     assert.equal(calls.some((c) => /-X (POST|PATCH|PUT)/.test(c)), false);
   }, { prefix: "dev-loops-round-cap-post-sealed-act-" });
 });
+
+// Issue 3460 AC6: a cap-round item the fan-in seeded (defect key `cap:<fingerprint>`) follows the past-cap blocker rule at pre_approval_gate; a judge reject closes it.
+const seeded = (severity, judgeDisposition, extra = {}) => finding(severity, judgeDisposition, { defectKey: "cap:0123456789abcdef", ...extra });
+const visibleCleanDraft = { id: 98, user: { login: "gate-bot" }, author_association: "OWNER", body: `### Gate review: \`draft_gate\`\n\n**Reviewed head SHA:** \`${HEAD}\`\n**Verdict:** clean\n\n**Findings summary:** clean\n\n**Next action:** follow the verdict`, html_url: "https://github.com/owner/repo/pull/17#issuecomment-98", updated_at: "2026-05-30T17:00:00Z" };
+async function postPreApproval(tempDir, findings, overallVerdict) {
+  const sizePath = path.join(tempDir, "size.json");
+  await writeFile(sizePath, JSON.stringify({ ok: true, outcome: "pass", wholeLogicLoc: 10, t1SliceLoc: 0, waiver: { requested: false, t1Valid: false, defaultValid: false } }), "utf8");
+  const root = path.join(tempDir, "no-copilot-root");
+  await mkdir(root, { recursive: true });
+  await writeFile(path.join(root, ".devloops"), "version: 1\nrefinement:\n  maxCopilotRounds: 0\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+  const ledger = await writeLedger(tempDir, { findings, overallVerdict, gate: "pre_approval_gate" });
+  const args = [
+    "--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-ledger", ledger,
+    "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 0, question: 0, nit: 0 }), "--findings-summary", "seeded cap items", "--next-action", "follow the verdict", "--inline-reason", "seeded cap items", "--size-budget-json", sizePath,
+  ];
+  const posted = [];
+  try {
+    const result = await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild(posted, { isDraft: false, issueComments: [visibleCleanDraft] }) });
+    return { result, body: posted.join("\n") };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+for (const [name, findings, overallVerdict, expected] of [
+  ["a seeded high act without a judgeFix composes blocked", [seeded("high", "act")], "findings_present", "blocked"],
+  ["a seeded fail-open medium composes blocked", [seeded("medium", "defer", { failOpen: true })], "findings_present", "blocked"],
+  ["an act-disposed seeded medium composes findings_present", [seeded("medium", "act", { judgeFix: "fix it" })], "findings_present", "findings_present"],
+  ["a rejected seeded high composes clean", [seeded("high", "reject")], "clean", "clean"],
+]) {
+  test(`pre_approval_gate: ${name}`, async () => {
+    await withTempDir(async (tempDir) => {
+      const out = await postPreApproval(tempDir, findings, overallVerdict);
+      assert.equal(out.error, undefined);
+      assert.equal(verdictOf(out), expected);
+    }, { prefix: "dev-loops-round-cap-seeded-" });
+  });
+}

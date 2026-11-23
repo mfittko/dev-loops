@@ -3453,6 +3453,8 @@ test("issue 3460 AC7: a second cap-round pass emits at the pushed head with ever
     const ok = await fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate) });
     assert.equal(ok.workOrder.source, "act-list");
     await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate), fetchVerdictMarkers: async ({ headSha }) => summarizeGateReviewCommentMarkers([], { headSha }) }), (e) => e.refusal === "round_cap_reached" || e.refusal === "verdict_not_posted");
+    const blockedAtCapHead = async ({ headSha }) => summarizeGateReviewCommentMarkers(verdictReviews(fx.head, ["draft_gate"]).map((r) => ({ ...r, body: r.body.replace("Verdict: clean", "Verdict: blocked") })), { headSha });
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate), fetchVerdictMarkers: blockedAtCapHead }), (e) => e.refusal === "round_cap_reached");
   });
 });
 

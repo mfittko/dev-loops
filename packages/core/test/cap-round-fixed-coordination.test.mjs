@@ -167,4 +167,8 @@ test("a cap exit with an open act list routes to the fixer, with ready also allo
   assert.ok(noCommit.allowedNextActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW), "a no-commit pass with resolved threads reaches ready");
   // AC7: coordination reads no delta record; two commit_only passes leave the head moved past the cap-round list, and ready follows the thread check.
   assert.equal(at({ currentHeadSha: "ef".repeat(20), draftGate: { ...m, headSha: "ef".repeat(3) + "e" }, draftGateMarker: { ...m, headSha: "ef".repeat(3) + "e" }, draftOpenActList: { headSha: sha, openActCount: 2, blockers: [] }, unresolvedGateThreadCount: 0 }).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "AC7: the last coordination read, with no delta record input, ends in ready");
+  // AC9: a locally_clear delta that carries a new low at the cap round adds no input to coordination; the pushed head is later than the cap-round list, so ready follows the thread check and never loops back to the fixer.
+  const afterPush = at({ currentHeadSha: "12".repeat(20), draftOpenActList: { headSha: sha, openActCount: 1, blockers: [] }, unresolvedGateThreadCount: 0 });
+  assert.equal(afterPush.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "AC9: a pushed head after a locally_clear delta with a new low ends in ready");
+  assert.ok(!afterPush.allowedNextActions.includes(PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK), "AC9: no second fixer pass");
 });

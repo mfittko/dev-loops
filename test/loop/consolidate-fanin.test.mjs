@@ -18,6 +18,7 @@ import {
 import { execFileSync } from "node:child_process";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { retireGateRound } from "../../scripts/github/retire-gate-round.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
@@ -5101,4 +5102,28 @@ test("#2526: a withheld over-budget round with --out at the keyed ledger is refu
     await assert.rejects(() => consolidateGateFanin({ ...options, out: keyed(root) }), /--out resolves to a ledger target/);
     assert.equal(JSON.parse(await readFile(keyed(root), "utf8")).findings.length, 25 * 30);
   });
+});
+
+// Issue 3460 AC6: a cap-round read failure at pre_approval_gate fails the fan-in; it never skips the seeding.
+test("consolidateGateFanin at pre_approval_gate fails closed on an unreadable cap-round ledger and proceeds when the ledgers are readable", async () => {
+  const draftLedger = (root, head, text) => {
+    const file = path.resolve(root, buildLogPath({ repo: "o/r", pr: "7", gate: "draft_gate", headSha: head, tmpRoot: path.join(root, "tmp") }));
+    return mkdir(path.dirname(file), { recursive: true }).then(() => writeFile(file, text, "utf8"));
+  };
+  for (const unreadable of [false, true]) {
+    await withFindingsDir({ "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } }, (dir) => withTempDir(async (planDir) => {
+      const plan = { ...matchingEmitPlan(), gate: "pre_approval_gate", count: 0, units: [] };
+      const planPath = await writeEmitPlan(planDir, plan);
+      const repoRoot = path.join(planDir, "repo");
+      await mkdir(repoRoot, { recursive: true });
+      await writeFile(path.join(repoRoot, ".devloops"), "version: 1\n", "utf8");
+      for (const [i, c] of [..."1234"].entries()) {
+        const head = c.repeat(40);
+        await draftLedger(repoRoot, head, unreadable && i === 3 ? "{not json" : JSON.stringify({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: head, verdict: "clean", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [] }));
+      }
+      const run = () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "pre_approval_gate", headSha: EMIT_HEAD, tmpRoot: planDir, receiptTmpRoot: planDir, repoRoot });
+      if (unreadable) await assert.rejects(run, /cap_round_unreadable/);
+      else assert.equal((await run()).ok, true);
+    }));
+  }
 });
