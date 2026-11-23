@@ -93,7 +93,7 @@ mindmap
 
 Type: `quadrantChart`
 
-Quadrant chart of twelve selected open issues and epics. The x value is derived from the milestone label (v1.0.12 = 0.1 up to v2.0.0 = 0.95, Later = 0.85). The y value is the analyst's estimate of scope breadth (a single fix is low, an epic or runtime rewrite is high); it is not a measured value. The insight: the broad items (v2 epic 2995, review-expectations epic 2840, bootstrap 2723) all sit on the far horizon, and the near milestone holds narrow fixes plus one broad gate change (merge without operator lines 2937). Positions are not decided. Source: `gh issue list --state open --limit 500 --json number,title,milestone`.
+Quadrant chart of twelve selected open issues and epics. The x value is derived from the milestone label (v1.0.12 = 0.1 up to v2.0.0 = 0.95, Later = 0.85). The y value is the analyst's estimate of scope breadth (a single fix is low, an epic or runtime rewrite is high); it is not a measured value. The insight: the broad items (v2 epic 2995, review-expectations epic 2840, bootstrap 2723) all sit on the far horizon, and the near half holds narrow fixes plus two broad items, merge without operator lines 2937 (v1.0.13) and soft round caps 3105 (v1.1.0). Positions are not decided. Source: `gh issue list --state open --limit 500 --json number,title,milestone`.
 
 ```mermaid
 quadrantChart
