@@ -96,7 +96,7 @@ round resolves to `inline_single_agent`), the severity counts, the fan-in output
 durable findings-log path, the act-list path, the spec-authority identity path, and the judge
 summary. On a zero-finding skip (`GATE-EXEC-JUDGE-PHASE`) the result carries the emitter's `judgeSkipped` and
 `scopeDrift` in place of the judge summary and omits the act-list path. The result also carries the optional `escalations[]` that `judge-pass` returned
-and the optional `escalationsSkipped` reason (`GATE-EXEC-RECURRENCE-ESCALATION`). Reviewer and judge outputs stay in the gate coordinator's context and never propagate
+the optional `escalationsSkipped` reason (`GATE-EXEC-RECURRENCE-ESCALATION`) and the optional `overridden` list. Reviewer and judge outputs stay in the gate coordinator's context and never propagate
 to the dev-loop coordinator. The gate coordinator materializes and binds the round's evidence
 through the context builder's `requiredReads` and emits compact work orders; it never relays bulk
 evidence into a reviewer's task. The gate coordinator never posts the verdict comment, flips ready, pushes, or

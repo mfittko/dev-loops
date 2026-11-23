@@ -2150,6 +2150,18 @@ test("judgePassCli reports no overridden field when a medium act stays act", asy
   assert.equal(payload.overridden, undefined);
 });
 
+test("judgePassCli reports no overridden field when a draft_gate low act stays act", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-draft-low-"));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ severity: "low", summary: "low one" })] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "real" }] })));
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "2724", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
+    { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+  );
+  assert.equal(payload.actCount, 1);
+  assert.equal(payload.overridden, undefined);
+});
+
 test("judgePassCli at pre_approval_gate rejects a coerced low defer when the only target is the PR itself", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-pre-approval-"));
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "clean", findings: [finding({ severity: "low", summary: "low one" })] }));
