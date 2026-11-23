@@ -1398,7 +1398,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const carriedMarker = normalizeGateComment(input.draftGateMarker);
   const markerAtCarriedList = trimmedOrNull(actList?.carriedToHead)?.toLowerCase() === currentHeadSha?.toLowerCase() && carriedMarker.visible && carriedMarker.contractComplete
     && carriedMarker.verdict === "findings_present" && carriedMarker.headSha !== null && String(actList.headSha ?? "").toLowerCase().startsWith(carriedMarker.headSha.toLowerCase());
-  const headActList = !draftReady && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"))
+  // Issue 3460 AC5: at the cap exit the open act list loads before ready, also once the gate threads are resolved.
+  const headActList = (!draftReady || capRoundFixed) && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"))
     && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase())
     && Number.isInteger(actList.openActCount) && actList.openActCount > 0
     // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.
@@ -1564,7 +1565,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // resolving the thread (reject-close or fixer triage) is exactly what
     // this action already means on the post-draft path.
     const capFixedThreadsUnreadable = capRoundFixed && input.unresolvedGateThreadCount === -1;
-    if (draftGate.markerCleanThreadsUnresolved || (capRoundFixed && !capFixedReady && !capFixedThreadsUnreadable)) {
+    // An open act list without a blocker routes to the fixer below (AC5), which also allows ready once the threads are resolved.
+    const capActListToFixer = headActList && actList.bodyOnly !== true && actBlockers.length === 0;
+    if (draftGate.markerCleanThreadsUnresolved || (capRoundFixed && !capFixedReady && !capFixedThreadsUnreadable && !capActListToFixer)) {
       pushUnique(allowedNextActions, [
         PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
         // The reason text names "stop for the operator" as the remedy for an
@@ -1697,6 +1700,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // Issue 3105 AC15 (ADR 0288): a posted findings_present verdict at the current head with an open act list goes to the fixer, not to another round.
     if (headActList && !bodyOnlyList && actBlockers.length === 0) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK]);
+      if (capFixedReady) pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW]);
       pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, ...draftReviewForbidden]);
       return buildResult({
         repo: input.repo ?? null,

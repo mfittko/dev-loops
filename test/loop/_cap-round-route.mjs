@@ -40,8 +40,9 @@ export async function reviewerOnlyRoute(root, { baseline, head, ledgerPath, stat
 }
 
 /** The coordinator's view of a draft PR at `head`: the proof as detect-pr-gate-coordination-state computes it, then the real evaluator. */
-export async function coordinationAt(root, { repo, pr, head, ready = false }) {
-  const { capRoundFixed: fixed, failure, failureDetail } = await resolveDraftCapRoundFact({ repo, pr, currentHeadSha: head, prData: { isDraft: !ready, baseRefName: "main" } }, { repoRoot: root, requirePostedCleanCap: false }); // these scenarios exercise the chain-extension exits, not the posted-verdict check
+export async function coordinationAt(root, { repo, pr, head, ready = false, reviews, trustRuntime, draftOpenActList }) {
+  // Without `reviews` these scenarios exercise the chain-extension exits, not the posted-verdict check or the cap exit; with `reviews` (the PR's posted reviews) the cap exit decides first.
+  const { capRoundFixed: fixed, failure, failureDetail } = await resolveDraftCapRoundFact({ repo, pr, currentHeadSha: head, prData: { isDraft: !ready, baseRefName: "main", ...(reviews ? { reviews } : {}) } }, { repoRoot: root, requirePostedCleanCap: reviews !== undefined, ...(trustRuntime ? { trustRuntime } : {}) });
   const { round, cap } = await resolveDraftRoundCap({ repo, pr, gate: "draft_gate", headSha: head }, { repoRoot: root, includeLiveCurrentHead: true });
   const marker = { visible: true, headSha: "abc1234", verdict: "blocked", contractComplete: true };
   const result = evaluatePrGateCoordination({
@@ -49,6 +50,7 @@ export async function coordinationAt(root, { repo, pr, head, ready = false }) {
     maxCopilotRounds: 0, copilotReviewRoundCount: 0, unresolvedThreadCount: 0, unresolvedGateThreadCount: 0, prTitle: "feat: x",
     ...(ready ? { sameHeadCleanConverged: true, draftGate: marker, draftGateMarker: marker, preApprovalGate: { visible: false }, preApprovalGateMarker: { visible: false } } : {}),
     // The detector refuses the draft round only past the cap (round > cap): below it the next draft_gate round runs.
+    ...(draftOpenActList ? { draftOpenActList } : {}),
     draftCapRoundFixed: fixed, draftRoundRefused: !ready && !fixed && isRoundRefused(round, cap), draftCapRoundFailure: failure, draftCapRoundDetail: failureDetail,
   });
   return { fixed, failure, nextAction: result.nextAction, remedy: result.agentRemedy?.command ?? null, blockedOn: result.blockedOn ?? null, reason: result.reason };

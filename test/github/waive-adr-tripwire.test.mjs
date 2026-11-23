@@ -620,3 +620,19 @@ test("keeps the spike marker as the last non-empty body line when writing the wa
   assert.equal(edits[0].opts.body, `Summary.\n\nCloses #7\n\n${result.line}\n\n${marker}\n`);
   assert.equal(hasSpikePrMarker(edits[0].opts.body), true);
 });
+
+// Issue 3460 AC3: the waiver reads the cap exit (a posted unblocked findings cap review) before the chain proof, with no delta record.
+test("a posted findings cap round qualifies through the cap exit with no chain proof (GATE-EXEC-ROUND-CAP-EXIT)", async () => {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "waive-cap-exit-")));
+  try {
+    for (const [i, headSha] of ["1", "2", "3"].map((c) => c.repeat(40)).concat(HEAD).entries()) {
+      const file = path.resolve(root, buildLogPath({ repo: "o/n", pr: 9, gate: "draft_gate", headSha, tmpRoot: path.join(root, "tmp") }));
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, JSON.stringify({ repo: "o/n", pr: 9, gate: "draft_gate", headSha, verdict: i === 3 ? "findings_present" : "clean", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, specAuthority: { specDigest: DIGEST }, findings: i === 3 ? [{ severity: "medium", summary: "guard missing", files: ["src/a.mjs"], line: 3, angle: "correctness", judgeDisposition: "act", judgeFix: "add it" }] : [] }));
+    }
+    const evidence = (round) => async () => ({ currentHeadClean: false, preApprovalCurrentHeadClean: false, draftGatePostedHeads: [{ head: HEAD.slice(0, 7), round, verdict: "findings_present" }] });
+    const exit = harness({ ...NO_VERDICT, repoRoot: root, fetchDraftGateEvidence: evidence(4) });
+    assert.equal((await exit.run()).action, "waiver_written");
+    await assertRefusal({ ...NO_VERDICT, repoRoot: root, fetchDraftGateEvidence: evidence(3) }, "no_clean_draft_gate");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

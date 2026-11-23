@@ -4508,14 +4508,14 @@ async function seedCapFixedRepo(repoRoot, { headSha, seal = true, record: record
 }
 
 // threads: -1 seeds one gate thread whose login lookup fails, so the gate thread count is unreadable (-1).
-async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, files, threads = 0 }) {
+async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, files, threads = 0, reviews = [] }) {
   const threadNodes = Array.from({ length: Math.abs(threads) }, (_, i) => ({ id: `PRRT_${i}`, isResolved: false, isOutdated: false, path: "src/scope.mjs", line: 4, comments: { nodes: [{ id: `PRRC_${i}`, databaseId: 9000 + i, body: `${buildFindingMarker({ fp: String(i).repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why?`, author: { login: "dev-loops-gate[bot]", __typename: "Bot" } }] } }));
   return writeGhStub(tempDir, [
     {
       stdout: JSON.stringify({
         number: 10, state: "OPEN", isDraft, headRefOid: headSha, baseRefName: "main", mergeStateStatus: "CLEAN", ...(files ? { files: files.map((p) => ({ path: p })) } : {}),
         body: "## Objective\n\nShip.\n\n## In scope\n\n- x\n\n## Explicit non-goals\n\n- y\n\n## Acceptance criteria\n\n- [ ] x\n\n## Definition of done\n\n- [ ] tests pass\n\n## Open questions/risks\n\n- none\n",
-        closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        closingIssuesReferences: [], reviews, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
       }) + "\n",
     },
     { stdout: "{\"users\":[]}\n" },
@@ -4625,6 +4625,27 @@ for (const [source, advisory] of [["ci-failure", false], ["threads", true]]) tes
     const result = await resolveFixerDispositionInput({ repo: "owner/repo", pr: 9, currentHeadSha: head, parsedThreads: { threads: [], comments: [] } }, { repoRoot: tempDir });
     if (advisory) assert.match(result.incomplete[0].failedStep, /^unverified_active_fixer/);
     else assert.equal(result, null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// Issue 3460 AC5: with the cap exit true at the cap-round head, the detector still loads the open act list, so the fixer runs before ready.
+test("detect-pr-gate-coordination-state (3460 AC5): a cap-round head with a trusted posted review and an open act item routes the fixer, not ready", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-act-"));
+  try {
+    const headSha = "abc1234567".repeat(4);
+    await seedCapFixedRepo(tempDir, { headSha, seal: false });
+    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await rm(path.join(findings, `draft_gate-${"c".repeat(40)}.json`));
+    const act = { severity: "medium", summary: "fix x", file: "src/x.mjs", line: 3, judgeDisposition: "act" };
+    await writeFile(path.join(findings, `draft_gate-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z", findings: [act] }), "utf8");
+    const reviews = [{ author: { login: "operator", type: "User" }, authorAssociation: "OWNER", body: `<!-- dev-loops:gate-findings-review draft_gate ${headSha.slice(0, 7)} round=4 -->\n**Verdict:** findings_present` }];
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 medium", nextAction: "fix" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body, reviews });
+    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

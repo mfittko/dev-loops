@@ -1115,3 +1115,23 @@ test("ready-for-review flips the PR once a trusted posted draft_gate review carr
     await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, cleanCapRuntime(wrongRound, tempDir)), /clean but its draft_gate verdict is not posted/);
   } finally { await rm(tempDir, { recursive: true, force: true }); }
 });
+
+// Issue 3460 AC3: ready-for-review reads the cap exit (a posted unblocked cap review, here a findings round) before the chain proof, with no delta record on disk.
+test("ready-for-review flips the PR for a findings cap round whose review is posted, with no delta record and no chain (GATE-EXEC-ROUND-CAP-EXIT)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-cap-exit-"));
+  try {
+    const { buildLogPath } = await import("../../scripts/github/_gate-artifact-paths.mjs");
+    const capHead = "abc123def456".padEnd(40, "0");
+    for (const [i, headSha] of ["1", "2", "3"].map((c) => c.repeat(40)).concat(capHead).entries()) {
+      const file = path.resolve(tempDir, buildLogPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha, tmpRoot: path.join(tempDir, "tmp") }));
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha, verdict: i === 3 ? "findings_present" : "clean", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: i === 3 ? [{ severity: "medium", summary: "guard missing", files: ["src/a.mjs"], line: 3, angle: "correctness", judgeDisposition: "act", judgeFix: "add it" }] : [] }));
+    }
+    const trusted = { user: { login: "owner", type: "User" }, author_association: "OWNER" };
+    const runtime = (stub) => ({ ...capRoundRuntime(stub.env, tempDir, false) });
+    const posted = await capRoundGhStub(tempDir, { bucket: "pass", comment: { ...trusted, body: `${postedHeader(4)}\n**Verdict:** findings_present` } });
+    assert.equal((await readyForReview({ repo: "owner/repo", pr: 17 }, runtime(posted))).action, "marked_ready");
+    const blocked = await capRoundGhStub(tempDir, { bucket: "pass", comment: { ...trusted, body: `${postedHeader(4)}\n**Verdict:** blocked` } });
+    await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, runtime(blocked)), /draft_gate marker does not match|No visible clean draft_gate/);
+  } finally { await rm(tempDir, { recursive: true, force: true }); }
+});

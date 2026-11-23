@@ -143,3 +143,30 @@ test("a ready PR whose clean cap-round verdict is unposted reports blocked with 
   assert.equal(result.draftGateAlreadySatisfied, false);
   assert.equal(result.agentRemedy.command, "dev-loops gate upsert-verdict --repo o/r --pr 10 --gate draft_gate --post-sealed-cap-round");
 });
+
+// Issue 3460 AC5/AC7/AC9: at the cap exit the open act list loads before ready.
+test("a cap exit with an open act list routes to the fixer, with ready also allowed once the gate threads are resolved", () => {
+  const sha = "ab".repeat(20);
+  const m = { visible: true, headSha: sha.slice(0, 7), verdict: "findings_present", contractComplete: true };
+  const at = (overrides = {}) => evaluatePrGateCoordination({
+    pr: 10, currentHeadSha: sha, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
+    draftGate: m, draftGateMarker: m, draftCapRoundFixed: true, draftOpenActList: { headSha: sha, openActCount: 2, blockers: [] }, unresolvedGateThreadCount: 2, ...overrides,
+  });
+  const open = at();
+  assert.equal(open.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, "act list, threads open: the fixer route");
+  assert.ok(!open.allowedNextActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  // The resolved state and the same-head state after a no-commit pass are one row: a no-commit pass leaves the head unmoved and the cap ledger immutable (ng:4, ng:6), so the act list stays open (act list at the head, gate threads resolved by the pass).
+  const resolved = at({ unresolvedGateThreadCount: 0 });
+  assert.equal(resolved.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, "the fixer route stays the next action");
+  assert.ok(resolved.allowedNextActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW), "ready is also allowed once the gate threads are resolved");
+  // Ready is allowed there through the thread check; it never loops back to the thread-resolution route.
+  assert.notEqual(resolved.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
+  assert.equal(at({ draftOpenActList: { headSha: sha, openActCount: 1, bodyOnly: true, blockers: [] }, unresolvedGateThreadCount: 0 }).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "a body-only act list goes to ready");
+  assert.equal(at({ draftOpenActList: { headSha: "cd".repeat(20), openActCount: 2, blockers: [] }, unresolvedGateThreadCount: 0 }).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "a later head: the thread check owns it");
+  // AC7: coordination reads no delta record; two commit_only passes leave the head moved past the cap-round list, and ready follows the thread check.
+  assert.equal(at({ currentHeadSha: "ef".repeat(20), draftGate: { ...m, headSha: "ef".repeat(3) + "e" }, draftGateMarker: { ...m, headSha: "ef".repeat(3) + "e" }, draftOpenActList: { headSha: sha, openActCount: 2, blockers: [] }, unresolvedGateThreadCount: 0 }).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "AC7: the last coordination read, with no delta record input, ends in ready");
+  // AC9: a locally_clear delta that carries a new low at the cap round adds no input to coordination; the pushed head is later than the cap-round list, so ready follows the thread check and never loops back to the fixer.
+  const afterPush = at({ currentHeadSha: "12".repeat(20), draftOpenActList: { headSha: sha, openActCount: 1, blockers: [] }, unresolvedGateThreadCount: 0 });
+  assert.equal(afterPush.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "AC9: a pushed head after a locally_clear delta with a new low ends in ready");
+  assert.ok(!afterPush.allowedNextActions.includes(PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK), "AC9: no second fixer pass");
+});

@@ -33,7 +33,7 @@ import { FANOUT_UNAVAILABLE_MESSAGE, JUDGE_DISPOSITIONS, VALID_SEVERITIES, check
 import { detectMergeBaseChangedFiles } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { cleanCapVerdictUnposted, resolveCapRoundFixed } from "./write-gate-context.mjs";
+import { cleanCapVerdictUnposted, resolveCapExitRound, resolveCapRoundFixed } from "./write-gate-context.mjs";
 import { buildGateContextPath } from "./_gate-artifact-paths.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { crossCheckRoundFromReviewBodies, normalizePrReviewsPayload, resolveTrustedEvidencePredicate, parseFindingMarker, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
@@ -1497,7 +1497,8 @@ async function main() {
     const draftClean = result.draftGate.visible && result.draftGate.verdict === "clean";
     // A clean cap round proven only by its local ledger is no evidence: its draft_gate verdict must be posted by a trusted author.
     const localCapRound = !draftClean && !githubCapFixed && options.baseRefName
-      ? await resolveCapRoundFixed({ repo: result.repo, pr: result.pr, headSha: result.currentHeadSha, baseRefName: options.baseRefName, anyHead: true }, { repoRoot: resolveRepoRoot(process.cwd()) }).catch(() => null)
+      ? await resolveCapExitRound({ repo: result.repo, pr: result.pr, headSha: result.currentHeadSha }, { repoRoot: resolveRepoRoot(process.cwd()), postedHeads: result.draftGatePostedHeads })
+        ?? await resolveCapRoundFixed({ repo: result.repo, pr: result.pr, headSha: result.currentHeadSha, baseRefName: options.baseRefName, anyHead: true }, { repoRoot: resolveRepoRoot(process.cwd()) }).catch(() => null)
       : null;
     const capRoundFixed = !draftClean && (githubCapFixed || (Boolean(localCapRound) && !cleanCapVerdictUnposted(localCapRound, result.draftGatePostedHeads)));
     // Without --patch-id (the CI path) the detector derives it itself when the head contains origin/<base> (ADR 0279); any git error leaves head-only matching.

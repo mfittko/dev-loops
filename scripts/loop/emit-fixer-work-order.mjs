@@ -28,7 +28,7 @@ import { OperatorFocusRefusal, bindOperatorFocusItems, operatorFocusDigestEntry,
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
-import { closureFromHeadOf, clearingChainWalk, readClosedPriorRoundLogs, renderRequiredReadLine, resolveCapRound, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
+import { closureFromHeadOf, clearingChainWalk, readClosedPriorRoundLogs, renderRequiredReadLine, resolveCapExitRound, resolveCapRound, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { fixerEmitCarryAccepts } from "../github/_carried-verdict.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
@@ -36,7 +36,7 @@ import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, listWorktreeE
 import { authenticateOriginalPlan, beginFixerEmission } from "../github/_fixer-emission-evidence.mjs";
 import { captureParsedReviewThreads } from "../github/_review-thread-mutations.mjs";
 import { resolveAuthenticatedLogin, runGhJson } from "../github/post-gate-findings.mjs";
-import { listRestPrReviews, normalizePrReviewsPayload, prReviewsApiArgs } from "../github/_gate-finding-surface.mjs";
+import { draftGatePostedHeads, listRestPrReviews, normalizePrReviewsPayload, prReviewsApiArgs, resolveTrustedEvidencePredicate } from "../github/_gate-finding-surface.mjs";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { isSanctionedCopilotReviewerLogin, isTrustedAssociation, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import { resolveLatestCopilotReview } from "../github/_copilot-body-disposition.mjs";
@@ -146,8 +146,9 @@ async function defaultFetchPr({ repo, pr }) {
 }
 
 // The posted verdict markers at `headSha`, keyed by gate: submitted reviews only (GATE-EXEC-POST-BEFORE-FIX); the head filter is summarizeGateReviewCommentMarkers's own.
-export async function defaultFetchVerdictMarkers({ repo, pr, headSha, runtime }) {
-  const reviews = normalizePrReviewsPayload(await runGhJson(prReviewsApiArgs(repo, pr), runtime));
+export async function defaultFetchVerdictMarkers({ repo, pr, headSha, runtime, readReviews }) {
+  // `readReviews` is the emitter's once-per-run reviews read (issue 3460 AC3); flattening an already flat list is a no-op.
+  const reviews = normalizePrReviewsPayload(readReviews ? await readReviews() : await runGhJson(prReviewsApiArgs(repo, pr), runtime));
   return summarizeGateReviewCommentMarkers(reviews, { headSha });
 }
 
@@ -622,6 +623,10 @@ async function emitPlan({
   const capture = await beginFixerEmission(dir);
   // The two baseRefName reads share one gh read; the mutation-authority read below stays live.
   const prViewMemo = new Map();
+  // One PR reviews read per run: the AC7 cap-exit check and the default verdict-marker read share it (issue 3460 AC3).
+  let reviewsMemo;
+  const readReviewsOnce = () => (reviewsMemo ??= fetchReview({ repo, pr, runtime: { env, ghCommand, runChild } }));
+  if (fetchVerdictMarkers === defaultFetchVerdictMarkers) { const base = fetchVerdictMarkers; fetchVerdictMarkers = (a) => base({ ...a, readReviews: readReviewsOnce }); }
   const memoFetchBase = () => readPrViewOnce({ repo, pr, fields: "headRefName,headRefOid,baseRefName" }, prViewMemo, () => fetchPr({ repo, pr }));
   try {
   const planPath = path.join(dir, PLAN_FILE);
@@ -680,7 +685,8 @@ async function emitPlan({
     ciActParsed = act.parsed;
   }
   const guardFile = actListFile ?? ciActFile, guardParsed = actListFile ? source.parsed : ciActParsed;
-  if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
+  // Issue 3460 AC8: an empty list (every item withheld by the recurrence escalation) is allowed with an operator focus file, which must then bind one item below.
+  if (actListFile && !(Array.isArray(source.parsed) && (source.parsed.length > 0 || operatorFocusFile) && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   }
   // ADR 0188: at pre_approval_gate, low and nit findings never reach the fixer (backstop for hand-built or legacy ledgers). At the draft gate a low act is fixed in every round.
@@ -719,6 +725,9 @@ async function emitPlan({
       return currentHeadLedgerExists() ? null : originHead;
     } catch { return null; }
   })();
+  // One read of the operator focus file for the AC7 later-pass decision and the binding below: a shape error refuses here under GATE-EXEC-OPERATOR-FOCUS, never inside the swallowing cap-round catch.
+  const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
+  let capLedgerActs = []; // the act findings of the cap-round ledger, read at the cap round (issue 3460 AC8)
   if (guardFile && (gate === "draft_gate" || lowNitOnly)) {
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
     let { lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot },{ repoRoot: resolveRepoRoot(cwd) });
@@ -750,6 +759,17 @@ async function emitPlan({
             if (!from || from === headSha) continue; // a chain end equal to the head is no merge base: it would read as a base-only merge and fail open
             if (await isBaseOnlyMergeSince({ fromHead: from, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd })) { baseOnly = true; break; }
           }
+          // Issue 3460 AC7: for an operator-decided item (an operator focus file), the posted, non-blocked cap-round review makes a pushed descendant of the cap-round head a later pass without any delta record.
+          // An operator-decided item: a focus item with a fingerprint and a decision (a text-only focus file or an item without either opens no later pass).
+          const decided = !baseOnly && operatorFocusRaw?.items?.some((item) => item.fingerprint !== undefined && item.decision !== undefined);
+          if (decided && !currentHeadLedgerExists() && headSha !== fromHead) {
+            // The one cap-exit predicate (capExitHolds) over the trusted posted draft_gate headers of the PR reviews, as coordination reads it.
+            const runtime = { env, ghCommand, runChild };
+            const reviews = (await readReviewsOnce()).filter((r) => r?.state !== "PENDING");
+            const isTrusted = await resolveTrustedEvidencePredicate(reviews, runtime);
+            const postedHeads = draftGatePostedHeads(reviews.filter(isTrusted).map((r) => r.body));
+            if (await resolveCapExitRound({ repo, pr, headSha }, { repoRoot: resolveRepoRoot(cwd), postedHeads })) { gitIn(cwd, "merge-base", "--is-ancestor", fromHead, headSha); baseOnly = true; laterPass = true; }
+          }
           chainMiss = !baseOnly && !candidates.includes(headSha);
         }
         if (baseOnly) {
@@ -775,6 +795,7 @@ async function emitPlan({
         if (refusal !== undefined) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist${refusal}; failing closed at the cap round`);
       }
       const { findings: ledgerFindings } = !ledgerExists ? { findings: [] } : await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
+      capLedgerActs = ledgerFindings.filter((f) => f.judgeDisposition === "act");
       // A later cap-round pass fixes only the cap round's findings: an act item outside the cap-round ledger would open a new round past the cap.
       // The bound limits the act items of each pass. The fixer route's own pre-push delta seals the next chain link, so the number of passes has no separate bound. The ADR 0197 base-only merge path skips this bound.
       if (laterPass) {
@@ -787,7 +808,7 @@ async function emitPlan({
         throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-SOFT-CAP): the cap round (cap ${cap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
       }
     }
-    if (lowNitOnly && (lowFixCapped || (actSeverities.every((s) => normalizeSeverity(s) === "nit") && round !== 1))) {
+    if (lowNitOnly && actSeverities.length > 0 && (lowFixCapped || (actSeverities.every((s) => normalizeSeverity(s) === "nit") && round !== 1))) {
       const where = lowFixCapped ? "at pre_approval_gate" : "outside draft_gate round 1";
       throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${guardFile} holds only low or nit items ${where}; low and nit findings no longer reach the fixer`);
     }
@@ -809,11 +830,25 @@ async function emitPlan({
   if (badFingerprint) {
     throw new Refusal(`act list ${guardFile} has an act item (${JSON.stringify(badFingerprint.summary)}) whose fingerprint is ${badFingerprint.fingerprint === undefined ? "missing" : "not the canonical fingerprintFinding value"}; re-run judge-pass to regenerate it`);
   }
+  // Issue 3460 AC8: at the cap round, an operator focus item that names by fingerprint, with a decision, an act finding of the cap-round ledger that the recurrence escalation withheld from the act list binds,
+  // and the emitter adds that finding to the fixer act list (the operator decided to fix it in this PR). A fingerprint that is no act finding of that ledger still refuses at the binding below.
+  if (actListFile && operatorFocusRaw?.items) {
+    const listed = new Set(source.parsed.map((item) => item.fingerprint));
+    const extra = operatorFocusRaw.items.filter((item) => item.fingerprint !== undefined && item.decision !== undefined && !listed.has(item.fingerprint))
+      .flatMap((item) => capLedgerActs.filter((f) => fingerprintFinding(f) === item.fingerprint).slice(0, 1).map((f) => ({ ...f, fingerprint: item.fingerprint })));
+    if (extra.length > 0) {
+      const bytes = Buffer.from(`${JSON.stringify([...source.parsed, ...extra], null, 2)}\n`);
+      // The extended list is its own pinned copy: the handback delta review and the required read both name it.
+      actListCopy = path.join(dir, executionIdentity, "act-list-focus.json");
+      await capture.write(actListCopy, bytes);
+      source = { read: { ...source.read, path: actListCopy, sha256: sha256(bytes), bytes: bytes.length }, parsed: [...source.parsed, ...extra] };
+    }
+  }
+  if (actListFile && source.parsed.length === 0) throw new Refusal(`act list ${actListFile} is empty and no operator focus item bound a cap-ledger act finding (GATE-EXEC-ROUND-CAP-EXIT): pass a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   // An all-body act list has no delta review (ADR 0286), so its commit_only marker could never be closed by an agent step: refuse before any marker write.
   if (actListFile && phase === "commit_only" && source.parsed.every(isDeltaBodyItem)) {
     try { startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }); } catch (error) { throw error.message.startsWith("delta_body_only_act_set:") ? new WorkOrderRefusal("delta_body_only_act_set", error.message) : new Refusal(error.message); }
   }
-  const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
   if (operatorFocusRaw?.items && !actListFile && !threadsFile) throw new OperatorFocusRefusal("GATE-EXEC-OPERATOR-FOCUS: operator focus items need an --act-list-file or --threads-file source");
   if (operatorFocusRaw?.items?.some((item) => (item.threadId !== undefined) !== Boolean(threadsFile))) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus items bind by ${threadsFile ? "threadId" : "fingerprint"} on this source`);
   // A trust-incomplete thread (first comment page all untrusted, more pages exist) stays a blocker but is never a fixer source.
