@@ -17,10 +17,10 @@ import { isDirectCliRun } from "../_core-helpers.mjs";
 
 const USAGE = `Usage: gate-runbook.mjs [--docs-dir <path>]
 Print the gate coordinator round runbook, a pinned projection of skills/docs/gate-review-sub-loop-contract.md.
-Refusal (stderr, JSON, exit 1): { "ok": false, "refused": true, "reason": "docs_dir_empty" | "contract_missing" | "rule_unresolved" | "contract_drift", "error": "...", "recovery": "..." }
+Refusal (stderr, JSON, exit 1): { "ok": false, "refused": true, "reason": "contract_missing" | "rule_unresolved" | "contract_drift", "error": "...", "recovery": "..." }
 Argument error (stderr, text, exit 1): the parseArgs message and this usage, with no JSON envelope
   -h, --help         Print this usage
-  --docs-dir <path>  Directory that holds the canonical docs, non-empty (default: the package's skills/docs)`;
+  --docs-dir <path>  Directory that holds the canonical docs (default: the package's skills/docs)`;
 
 export const CONTRACT_FILE = "gate-review-sub-loop-contract.md";
 export const RUNBOOK_COMMAND = "dev-loops-run --repo-root <checkout> cli/index.mjs gate runbook";
@@ -188,10 +188,6 @@ export function runCli(argv = process.argv.slice(2), { stdout = process.stdout, 
   }
   if (values.help) { stdout.write(`${USAGE}\n`); return 0; }
   const explicit = values["docs-dir"];
-  if (explicit !== undefined && explicit.trim() === "") {
-    stderr.write(`${JSON.stringify(refuse("docs_dir_empty", "--docs-dir is empty or whitespace-only", `Pass a non-empty directory path to --docs-dir, or omit the flag, then rerun ${RUNBOOK_COMMAND}.`))}\n`);
-    return 1;
-  }
   const result = buildGateRunbook({ docsDir: explicit === undefined ? undefined : path.resolve(explicit) });
   if (!result.ok) { stderr.write(`${JSON.stringify(result)}\n`); return 1; }
   stdout.write(result.runbook);

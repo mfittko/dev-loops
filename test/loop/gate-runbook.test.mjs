@@ -303,15 +303,7 @@ test("AC5: an unknown flag prints the message and usage as text, exits 1 and wri
   assert.match(result.stderr, /Usage: gate-runbook\.mjs/);
 });
 
-test("AC5: --docs-dir refuses an empty or whitespace-only value and accepts a real directory", () => {
-  for (const value of ["", " ", "\t "]) {
-    const result = run(["--docs-dir", value]);
-    assert.equal(result.status, 1, `--docs-dir ${JSON.stringify(value)} was accepted`);
-    const body = JSON.parse(result.stderr);
-    assert.equal(body.reason, "docs_dir_empty");
-    assert.match(body.recovery, /non-empty directory path/);
-    assert.equal(result.stdout, "");
-  }
+test("AC5: --docs-dir accepts a real directory", () => {
   const accepted = run(["--docs-dir", "skills/docs"], { cwd: ROOT });
   assert.equal(accepted.status, 0);
   assert.equal(accepted.stdout, runbook);
