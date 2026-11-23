@@ -2139,6 +2139,21 @@ test("judgePassCli at pre_approval_gate defers a low-only act verdict with low_f
   assert.match(payload.overridden[0].reason, /^low_fix_until_cap /);
 });
 
+test("judgePassCli names the stamped cluster index of an overridden low among two stamped findings", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-stamped-override-"));
+  const findings = [finding({ severity: "medium", summary: "med one", clusterId: 0 }), finding({ severity: "low", summary: "low one", clusterId: 1 })];
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
+  const act = (index) => ({ index, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "real" });
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [act(0), act(1)] })));
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "2724", gate: "pre_approval_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
+    { repoRoot: tmpDir, ...stubDeferralDeps({ closing: [99] }).deps },
+  );
+  assert.equal(payload.overridden.length, 1);
+  assert.equal(payload.overridden[0].index, 1);
+  assert.equal(payload.overridden[0].applied, "defer");
+});
+
 test("judgePassCli reports no overridden field when a medium act stays act", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-no-override-"));
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ severity: "medium", summary: "med one" })] }));

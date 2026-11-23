@@ -1163,7 +1163,7 @@ export async function judgePassCli(
   for (const d of judgeVerdict.dispositions) {
     if (d.disposition !== "act") continue;
     const changed = result.enriched.find((f, i) => (Number.isInteger(f.clusterId) ? f.clusterId : i) === d.index && f.judgeDisposition !== "act");
-    if (changed) overridden.push({ index: d.index, applied: changed.judgeDisposition, reason: changed.judgeReason === d.reason?.trim() ? null : changed.judgeReason ?? null });
+    if (changed) overridden.push({ index: d.index, applied: changed.judgeDisposition, reason: changed.judgeReason === (typeof d.reason === "string" ? d.reason.trim() : undefined) ? null : changed.judgeReason ?? null });
   }
 
   const payload = {
