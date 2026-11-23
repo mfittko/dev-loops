@@ -105,9 +105,12 @@ test("the work order states the judge's allowed search commands and the Read off
     const plan = await emitJudgeWorkOrder({ ...(await seed(root)), harness: "codex" });
     const text = await readFile(plan.promptPath, "utf8");
     assert.match(text, /Search with read-only `grep -n`, `rg -n`, `git show` and `git diff`/);
-    assert.match(text, /`git diff` only as a range such as `origin\/main\.\.\.HEAD` or two revisions/);
+    assert.match(text, /`git diff` only as a range such as `origin\/main\.\.\.<headSha>` or two revisions/);
     assert.match(text, /glob characters only inside single quotes/);
     assert.match(text, /Read accepts offset and limit/);
+    assert.ok(text.includes("`git show <headSha>:<path>`"));
+    assert.match(text, /absolute paths under the `worktree:` line of the evidence read/);
+    assert.ok(!text.includes("the work order's worktree root"));
     assert.match(text, /On Claude Code and Pi, Bash otherwise runs only the work-order pull and `check-judge-decision\.mjs`\. The Codex after-pull setup governs Codex\./);
     assert.doesNotMatch(text, /Grep|Glob/);
   });

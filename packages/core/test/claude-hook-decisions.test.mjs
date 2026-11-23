@@ -1629,8 +1629,11 @@ test("the judge refusal names Read, its offset and limit and the allowed search 
   assert.match(reason, /offset and limit/);
   for (const cmd of ["grep -n", "rg -n", "git show", "git diff"]) assert.ok(reason.includes(cmd), cmd);
   assert.match(reason, /single quotes/);
-  assert.match(reason, /`git diff` only as a range such as `origin\/main\.\.\.HEAD` or two revisions/);
+  assert.match(reason, /`git diff` only as a range such as `origin\/main\.\.\.<headSha>` or two revisions/);
   assert.match(reason, /glob characters/);
+  assert.ok(reason.includes("git show <headSha>:<path>"));
+  assert.ok(reason.includes("without `-C`"));
+  assert.match(reason, /`Read` at its absolute path under the evidence read.s `worktree:` line/);
   assert.doesNotMatch(reason, /Grep|Glob/);
 });
 
