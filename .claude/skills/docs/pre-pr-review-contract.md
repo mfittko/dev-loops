@@ -179,7 +179,8 @@ fixer and owns the push. The sequence is:
    `--findings-log <the reviewed gate round's findings log>`; the thread route takes no
    `--findings-log`. It passes `--pr-head <the full PR head SHA just read from GitHub>` to
    the check. Handle authenticated `no_commit` or `head_moved` outcomes first:
-   the matching sequence is closed and `nextStep: push_to_gate` routes to the full
+   the matching sequence is closed (the payload's `reason` says the marker is removed and
+   the push of HEAD and the full gate round follow) and `nextStep: push_to_gate` routes to the full
    gate path, carrying open threads and their full bodies as the full round's
    hash-bound `--known-findings` input, without a live-head-baseline Delta. An unresolved
    gate-authored thread can still block admission to that round; recovery admission is a

@@ -12,6 +12,8 @@ import {
   resolveAdditiveChangelog,
   resolvePrConflicts,
 } from "../../scripts/loop/resolve-pr-conflicts.mjs";
+import { clearSequenceMarker, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { refreshDepsIfChanged } from "../../scripts/loop/_worktree-deps.mjs";
 
 describe("parseResolvePrConflictsCliArgs", () => {
@@ -759,6 +761,63 @@ describe("merge commit identity (#2832)", () => {
         git(workDir, ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"]).trim(),
         "Dev\ndev@example.com\nDev\ndev@example.com",
       );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("base merge inside an open fix sequence (#3528)", () => {
+  const additive = () => ({
+    baseFile: "CHANGELOG.md",
+    baseContent: CHANGELOG_BASE,
+    oursContent: CHANGELOG_BASE.replace("- shared earlier entry (#1)", "- shared earlier entry (#1)\n- ours added (#100)"),
+    theirsContent: CHANGELOG_BASE.replace("- shared earlier entry (#1)", "- shared earlier entry (#1)\n- theirs added (#101)"),
+  });
+  const run = (workDir) => resolvePrConflicts({ repoRoot: workDir, base: "main", verify: false, push: false }, { env: GIT_ENV });
+
+  test("refuses base_merge_inside_sequence, leaves HEAD unchanged, and merges after the marker is cleared", async () => {
+    const { tempDir, workDir } = await setupDivergedRepo(additive());
+    try {
+      const baseline = git(workDir, ["rev-parse", "HEAD"]).trim();
+      await writeFile(path.join(workDir, "fix.txt"), "fix\n", "utf8");
+      git(workDir, ["add", "."]);
+      git(workDir, ["commit", "-q", "-m", "fixer commit"]);
+      const head = git(workDir, ["rev-parse", "HEAD"]).trim();
+      const tmpRoot = resolveGateArtifactTmpRoot(workDir);
+      const marker = writeSequenceMarker({ tmpRoot, baselineHead: baseline, branch: "feature" });
+      await assert.rejects(run(workDir), (error) => {
+        assert.match(error.message, /^base_merge_inside_sequence: /);
+        assert.ok(error.message.includes(marker));
+        assert.match(error.message, /gate close-sequence/);
+        assert.match(error.message, /full-phase push, or with the authenticated head_moved closure; then rerun resolve-pr-conflicts\.mjs\.$/);
+        return true;
+      });
+      assert.equal(git(workDir, ["rev-parse", "HEAD"]).trim(), head);
+      clearSequenceMarker(tmpRoot, baseline);
+      assert.equal((await run(workDir)).action, "resolved");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a marker of another branch does not refuse the merge", async () => {
+    const { tempDir, workDir } = await setupDivergedRepo(additive());
+    try {
+      const baseline = git(workDir, ["rev-parse", "HEAD"]).trim();
+      writeSequenceMarker({ tmpRoot: resolveGateArtifactTmpRoot(workDir), baselineHead: baseline, branch: "other-branch" });
+      assert.equal((await run(workDir)).action, "resolved");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("an active marker with origin/<base> already an ancestor returns clean_merge", async () => {
+    const { tempDir, workDir } = await setupDivergedRepo(additive());
+    try {
+      git(workDir, ["merge", "-q", "-X", "ours", "--no-edit", "origin/main"]);
+      writeSequenceMarker({ tmpRoot: resolveGateArtifactTmpRoot(workDir), baselineHead: git(workDir, ["rev-parse", "HEAD"]).trim(), branch: "feature" });
+      assert.equal((await run(workDir)).action, "clean_merge");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

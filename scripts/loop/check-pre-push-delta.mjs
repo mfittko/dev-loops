@@ -954,7 +954,8 @@ export async function runCli(
         if (!readFileSync(options.fixerPlan).equals(planBytes) || !marker || marker.branch !== plan.workOrder.mutationAuthority.branch || marker.fullGranted || marker.execution?.executionIdentity !== plan.executionIdentity || marker.execution?.workOrderRef !== plan.workOrderRef) throw new Error("sequence closure requires the matching active commit_only branch marker");
         clearSequenceMarker(root, sequence.reviewBaselineHead);
       });
-      const payload = { ok: true, outcome: fixCommitted ? "head_moved" : "no_commit", nextStep: "push_to_gate", reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead };
+      const reason = `The sequence is closed as ${fixCommitted ? "head_moved" : "no_commit"}. Its marker is removed, so the push guard admits the push of HEAD. Next: push HEAD, then run the full gate round.`;
+      const payload = { ok: true, outcome: fixCommitted ? "head_moved" : "no_commit", nextStep: "push_to_gate", reason, reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead };
       process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
       return payload;
     }

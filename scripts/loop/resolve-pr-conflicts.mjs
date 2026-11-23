@@ -10,6 +10,7 @@ import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { resolveTargetedValidation } from "@dev-loops/core/loop/validation-classify";
 import { commandEnv, readBaseValidation } from "./resolve-validation.mjs";
+import { checkFixPushAuthority } from "./check-fix-push-authority.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { defaultInstallDeps, refreshDepsIfChanged } from "./_worktree-deps.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -339,6 +340,16 @@ export async function resolvePrConflicts(options, { env = process.env, runVerifi
   const fetch = await run("git", ["fetch", "origin", base], { cwd, env });
   if (fetch.code !== 0) {
     throw new Error(`git fetch origin ${base} failed: ${fetch.stderr.trim() || `exit ${fetch.code}`}`);
+  }
+
+  // A base merge inside an open fix sequence is a foreign commit that stalls the delta review (#3528); an up-to-date branch merges nothing, so it is exempt.
+  const upToDate = (await run("git", ["merge-base", "--is-ancestor", `origin/${base}`, "HEAD"], { cwd, env })).code === 0;
+  if (!upToDate) {
+    const branch = (await run("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd, env })).stdout.trim();
+    const authority = checkFixPushAuthority(cwd, [{ sha: preMergeHead, ...(branch ? { remoteRef: `refs/heads/${branch}` } : {}) }]);
+    if (!authority.ok) {
+      throw new Error(`base_merge_inside_sequence: ${authority.reason} A fix commit ends the sequence with the delta review and the full-phase push, or with the authenticated head_moved closure; then rerun resolve-pr-conflicts.mjs.`);
+    }
   }
 
   const userEmail = await run("git", ["config", "user.email"], { cwd, env });

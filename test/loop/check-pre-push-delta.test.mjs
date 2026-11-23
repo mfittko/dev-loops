@@ -2216,8 +2216,27 @@ test("a zero-thread focus sequence whose fixer hands back the baseline closes as
   const seam = headAt(A, tmpRoot);
   const result = await runDeltaCli(threadArgs(threadsFile, "--spec-identity", "s", "--worktree", coverageRepo, "--fixer-plan", unit.planPath, "--site-coverage", output), seam);
   assert.equal(result.outcome, "no_commit");
+  assert.match(result.reason, /closed as no_commit\. Its marker is removed.*push of HEAD.*full gate round/);
   assert.equal(readSequenceMarker(tmpRoot, A), null);
 });
+test("a fixer commit plus a base merge closes as head_moved with a reason, and the push guard then admits HEAD (#3528)", async () => {
+  const { pullWorkOrder } = await import("../../scripts/github/_work-order-protocol.mjs");
+  const { checkFixPushAuthority } = await import("../../scripts/loop/check-fix-push-authority.mjs");
+  const { threadsFile, unit } = await focusEmission("tighten the summary wording");
+  const tmpRoot = resolveGateArtifactTmpRoot(coverageRepo);
+  await pullWorkOrder({ ref: unit.workOrderRef, digest: unit.workOrderDigest, execution: unit.executionIdentity, cwd: coverageRepo, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
+  const output = unit.workOrder.outputRefs[0];
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  fs.writeFileSync(output, JSON.stringify({ headSha: A, siteCoverage: [] }));
+  const result = await runDeltaCli(threadArgs(threadsFile, "--spec-identity", "s", "--worktree", coverageRepo, "--fixer-plan", unit.planPath, "--site-coverage", output), headAt(B, tmpRoot));
+  assert.equal(result.outcome, "head_moved");
+  assert.match(result.reason, /closed as head_moved\. Its marker is removed.*push of HEAD.*full gate round/);
+  assert.equal(readSequenceMarker(tmpRoot, A), null);
+  // The shared tmp root can hold a marker that another test left, so assert only that no refusal names this sequence's marker.
+  const authority = checkFixPushAuthority(coverageRepo, [B]);
+  assert.ok(authority.ok || !authority.reason.includes(`${A}.sequence`), authority.reason);
+});
+
 
 test("--threads-file with no unresolved thread records a locally_clear result against the operator-focus item", async () => {
   const { dir, threadsFile, planPath } = await focusEmission("tighten the summary wording");
