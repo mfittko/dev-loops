@@ -262,10 +262,11 @@ Required:
                                             interpret this finding" is
                                             distinguishable from "this finding is
                                             not blocking".
-  --next-action <text>                      (Required except on --gate review, which derives the next
-                                            action from the judge act list and ignores any value. A clean
-                                            draft_gate still requires the flag, ignores its value and derives
-                                            "mark ready for review".)
+  --next-action <text>                      (Required unless --findings-ledger is given, which derives it
+                                            from the ledger. On --gate review the next action comes from
+                                            the judge act list and any value is ignored. A clean draft_gate
+                                            without --findings-ledger still requires the flag, ignores its
+                                            value and derives "mark ready for review".)
 Optional:
   --converged-json <path>                   draft_gate low/nit convergence
                                             (GATE-EXEC-LOW-NIT-CONVERGENCE):
@@ -440,7 +441,8 @@ Optional:
   --findings-severity-counts <json>         JSON object mapping severity to count
                                              (e.g. '{"high":0,"medium":0}').
                                              Required for --verdict clean when
-                                             blockCleanOnFindingSeverities is configured.
+                                             blockCleanOnFindingSeverities is configured,
+                                             unless a clean --findings-ledger supplies them.
                                              Also, when given alongside --findings-json, its
                                              known-severity (high/medium/low/question/nit)
                                              values are SUMMED and used as the posted
@@ -462,7 +464,8 @@ Optional:
                                             short reason recorded for why the gate
                                             ran inline. A bare call with neither
                                             --execution-mode nor --inline-reason
-                                            errors. Optional and ignored (dropped)
+                                            errors, except that with --findings-ledger
+                                            the ledger's executionMode decides. Optional and ignored (dropped)
                                             for --execution-mode fanout_fanin.
   --allowed-refs <csv>                      Comma-separated numeric issue/PR ids to
                                             allow as deliberate cross-references in
@@ -2813,7 +2816,11 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     const findings = capRound.log.findings ?? [];
     const n = findings.length;
     // A clean cap round holds no open act item, so the unresolved severity counts the clean floor reads are the act items per severity (zero).
-    const findingsSeverityCounts = unresolvedSeverityCounts(findings);
+    const findingsSeverityCounts = { high: 0, medium: 0, low: 0, question: 0, nit: 0 };
+    for (const f of listOpenActItems(findings)) {
+      const sev = normalizeSeverity(f?.severity);
+      findingsSeverityCounts[sev] = (findingsSeverityCounts[sev] ?? 0) + 1;
+    }
     options = { ...options, headSha: capRound.log.headSha, findingsLedger: capRound.ledgerPath, nextAction: "mark ready for review", findingsSummary: `${n} ${n === 1 ? "finding" : "findings"} from the findings ledger.`, findingsSeverityCounts };
   }
   // Root cause 1: allow resurrected sessions to claim ownership when the previous
@@ -3143,8 +3150,16 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     ) {
       // Refuse before the transition mutates the PR (draft conversion and restore). Without --verdict the ledger verdict stands in, composed like the later derivation except that it omits the past-cap draft_gate blockers: a fully judged ledger is clean when it has no open act item, whatever its severity overallVerdict says. On a past-cap round a ledger that would compose blocked there is still refused at a stale head, and the merge remedy applies before any post. With --findings-json the act items are not loaded yet, so the final verdict can be findings_present (unchanged by this refusal) and clean (still refused): the early check is skipped and the post-transition refuseStaleBase call decides, restoring ready on error.
       let earlyVerdict = options.verdict;
-      if (earlyVerdict === undefined && options.findingsLedger && !options.findingsJson) {
-        const earlyLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+      let earlyLedger;
+      if (options.findingsLedger) {
+        // The ledger decides the execution mode, so the inline-reason refusal also runs before the transition.
+        earlyLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+        promoteLedgerFanout(options, earlyLedger);
+        if ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent" && options.inlineReason === undefined) {
+          throw new Error(INLINE_REASON_REQUIRED_MESSAGE);
+        }
+      }
+      if (earlyVerdict === undefined && earlyLedger && !options.findingsJson) {
         earlyVerdict = composeReviewVerdict(earlyLedger.overallVerdict, earlyLedger.findings ?? []);
       }
       await refuseStaleBase(earlyVerdict);
