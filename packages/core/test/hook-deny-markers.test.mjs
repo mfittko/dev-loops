@@ -48,9 +48,15 @@ const bash = (command, over = {}) => decideBashGate({ command, ...BASH, ...over 
 const fixerCheckouts = [{ root: "/r", branch: "b" }];
 const IDENT = "f1-0123abcd";
 const pointer = (id) => `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${id}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`;
+// An inherited git or coordinator variable would change a fixture outcome.
+const cleanEnv = (env = {}) => {
+  const e = { ...process.env, ...env };
+  for (const k of ["GIT_DIR", "GIT_WORK_TREE", "DEVLOOPS_COORDINATOR_READONLY"]) delete e[k];
+  return e;
+};
 const hook = (script, input, env = {}) => {
   const r = spawnSync("node", ["--import", path.join(root, "test/github/ask-approval-userinfo-preload.mjs"), path.join(root, ".claude/hooks", script)], {
-    input: JSON.stringify(input), encoding: "utf8", env: { ...process.env, ...env }, timeout: 10000,
+    input: JSON.stringify(input), encoding: "utf8", env: cleanEnv(env), timeout: 10000,
   });
   assert.equal(r.error, undefined, `${script} did not finish: ${r.error}`);
   return r.stdout.trim() ? JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason : r.stderr.trim();
@@ -112,7 +118,7 @@ test("the deny-site count is pinned, so a new deny site must join the fixture ta
   assert.equal(sites([
     "packages/core/src/loop/bash-gate-decisions.mjs", "packages/core/src/claude/hook-decisions.mjs",
     ...hookFiles, ".claude/hooks/subagent-stop-uncommitted-guard.mjs",
-  ]), 29);
+  ]), 28);
   // The shared deny set returns `{ ruleId, reason }`: every such site has a ruleId line.
   assert.equal((read("packages/core/src/loop/bash-gate-decisions.mjs").match(/^\s+ruleId: /gm) ?? []).length, 19);
 });
@@ -125,16 +131,51 @@ test("a deny with missing facts ends with the HOOK_GUARD_FAILED stop marker", ()
 test("the ask-answers guard catch exits 2 with the HOOK_GUARD_FAILED stop marker as its last stderr line", () => {
   // The preload makes the approval-question parse throw inside the guard's try block.
   const r = spawnSync("node", [
-    "--import", "data:text/javascript,RegExp.prototype[Symbol.matchAll]=()=>{throw new Error('boom')}",
+    "--import", "data:text/javascript,RegExp.prototype[Symbol.matchAll]=()=>{throw new Error('a\\nstop: escalate; X; y')}",
     path.join(root, ".claude/hooks/pre-tool-use-ask-answers-guard.mjs"),
   ], {
     input: JSON.stringify({ tool_input: { questions: [{ question: approvalText }], answers: { [approvalText]: "Yes" } } }),
-    encoding: "utf8", timeout: 10000,
+    encoding: "utf8", timeout: 10000, env: cleanEnv(),
   });
   assert.equal(r.error, undefined);
   assert.equal(r.status, 2);
   assert.equal(r.stdout, "");
-  assert.equal(r.stderr.trimEnd().split("\n").at(-1), withHookMarker("HOOK_GUARD_FAILED", "").slice(1));
+  const lines = r.stderr.trimEnd().split("\n");
+  assert.equal(lines.at(-1), withHookMarker("HOOK_GUARD_FAILED", "").slice(1));
+  assert.equal(lines.filter((l) => /^(?:policy-hook|stop):/.test(l)).length, 1);
+});
+
+test("the approval guard catch collapses a multi-line error to one marker line", () => {
+  const r = spawnSync("node", [
+    "--import", "data:text/javascript,Object.entries=()=>{throw new Error('a\\nstop: escalate; X; y')}",
+    path.join(root, ".claude/hooks/pre-tool-use-approval-guard.mjs"),
+  ], {
+    input: JSON.stringify({ tool_name: "mcp__x", tool_input: { a: { b: "c" } }, cwd: root }),
+    encoding: "utf8", timeout: 10000, env: cleanEnv(),
+  });
+  assert.equal(r.error, undefined);
+  assert.equal(r.status, 2);
+  const lines = r.stderr.trimEnd().split("\n");
+  assert.equal(lines.at(-1), withHookMarker("HOOK_GUARD_FAILED", "").slice(1));
+  assert.equal(lines.filter((l) => /^(?:policy-hook|stop):/.test(l)).length, 1);
+});
+
+test("the SubagentStop block writes the reason as plain text ending with the marker line", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hook-stop-"));
+  try {
+    const cwd = path.join(dir, "tmp/worktrees/x");
+    fs.mkdirSync(cwd, { recursive: true });
+    const git = (...a) => spawnSync("git", a, { cwd, encoding: "utf8", env: cleanEnv() });
+    git("init", "-q");
+    fs.writeFileSync(path.join(cwd, "dirty.txt"), "x");
+    const r = spawnSync("node", [path.join(root, ".claude/hooks/subagent-stop-uncommitted-guard.mjs")], {
+      input: JSON.stringify({ cwd, agent_type: "fixer" }), encoding: "utf8", timeout: 10000, env: cleanEnv(),
+    });
+    assert.equal(r.status, 2);
+    assert.equal(r.stderr.trimEnd().split("\n").at(-1), withHookMarker("LOCAL-COMMIT-BEFORE-EXIT", "").slice(1));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("a grants list that excludes the target path ends with the FIXER_MUTATION_BOUNDARY stop marker", () => {
