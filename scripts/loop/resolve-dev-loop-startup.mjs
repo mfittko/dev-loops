@@ -1085,7 +1085,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   if (!review && !uiReview && !prJson?.author?.login) {
     throw new Error(`PR #${pr} author could not be read; fail closed — do not guess routing ownership.`);
   }
-  const closingIssue = review || uiReview ? null : selectPrClosingIssue(prJson);
+  const closingIssue = review || uiReview ? null : selectPrClosingIssue(prJson, expectedIssue);
   // The --issue route names the unit; refuse a different one before any claim write.
   if (expectedIssue !== undefined && closingIssue !== expectedIssue) {
     throw new Error(
