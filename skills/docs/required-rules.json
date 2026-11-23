@@ -827,6 +827,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "OPS-HOOK-STOP-CLASS",
+      "enforcement": "doc"
+    },
+    {
       "id": "RUNNER-HANDOFF-TEARDOWN"
     },
     {

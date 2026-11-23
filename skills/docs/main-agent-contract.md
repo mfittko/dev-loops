@@ -438,6 +438,7 @@ the full run.
   `-C <dir>`, `-S <str>`, `--`, a bare `-`, and their long forms) before the real executable
   (`env -u DEVLOOPS_COORDINATOR_READONLY bun run verify` is still denied), on top of the bare
   leading-assignment and `nice`/`timeout` wrapper forms already covered.
+- **Hook stop class.** On a hand-back that quotes a `stop: process-change` marker, the main agent files the follow-up named by `OPS-HOOK-STOP-CLASS`. An orchestrator brief follows the command-ban scope of `OPS-HOOK-STOP-CLASS`.
 - **Guarded surface and deliberate ceilings.** Both coordinator boundaries are non-bypassable BY
   THE AGENT only for their GUARDED SURFACE: a dispatched coordinator's (`agent_type: "dev-loop"` or `"gate-coordinator"`)
   `Write`/`Edit` tracked-file mutations and its use of a recognized code-verification/build

@@ -20,6 +20,7 @@ import {
   decideUnresolveOwnerDeny,
   isCoordinatorRole,
   normalizeAgentType,
+  withHookMarker,
 } from "./_bash-gate-decisions.mjs";
 
 // The harness-neutral Bash-gate deny rules and the agent-name helpers live in
@@ -170,21 +171,21 @@ export function decideBashGate({
   if (normalizeAgentType(agentType) === JUDGE_AGENT_TYPE) {
     return parseSanctionedPullLine(command) || isJudgeDecisionCheckLine(command) || isJudgeSearchLine(command) ? ALLOW : {
       decision: "deny",
-      reason:
+      reason: withHookMarker("JUDGE_READ_BOUNDARY",
         "Judge read-only boundary (agents/judge.agent.md, ADR 0106): the judge may run only its " +
         "dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line, " +
         "alone, with no chaining, redirection or substitution, or `dev-loops-run scripts/loop/check-judge-decision.mjs --file tmp/gate-judge/<path>.json`. Read " +
-        "files with `Read` (it accepts offset and limit), or search with read-only `grep -n`, `rg -n`, `git show` or `git diff`, with the pattern in single quotes (so `|` and `$` inside it pass), glob characters (`*`, `?`, `[`) only inside single quotes, `git diff` only as a range such as `origin/main...<headSha>` or two revisions, no redirection, pipe, chaining, substitution or write flag; read a PR worktree file with `Read` at its absolute path under the evidence read's `worktree:` line, or with `git show <headSha>:<path>` from your cwd without `-C`, because a git worktree shares one object store with its main checkout; `Read` reaches any file the search refuses; never run other shell, test or build commands.",
+        "files with `Read` (it accepts offset and limit), or search with read-only `grep -n`, `rg -n`, `git show` or `git diff`, with the pattern in single quotes (so `|` and `$` inside it pass), glob characters (`*`, `?`, `[`) only inside single quotes, `git diff` only as a range such as `origin/main...<headSha>` or two revisions, no redirection, pipe, chaining, substitution or write flag; read a PR worktree file with `Read` at its absolute path under the evidence read's `worktree:` line, or with `git show <headSha>:<path>` from your cwd without `-C`, because a git worktree shares one object store with its main checkout; `Read` reaches any file the search refuses; never run other shell, test or build commands."),
     };
   }
   // The fixer's binding is recorded only for the exact pull line (ADR 0107), so a modified one denies with the fix.
   if (normalizeAgentType(agentType) === FIXER_AGENT_TYPE && isFixerPullAttempt(command) && !parseSanctionedPullLine(command)) {
     return {
       decision: "deny",
-      reason:
+      reason: withHookMarker("FIXER_PULL_LINE",
         "Fixer pull boundary (agents/fixer.agent.md, ADR 0107): the fixer's grant binding is recorded only for the exact " +
         `dispatched pull line. Run it again exactly as dispatched: \`dev-loops-run scripts/github/pull-work-order.mjs ${command.match(FIXER_IDENTITY_TOKEN_RE)[0]}\`, ` +
-        "alone, with no prefix, suffix, redirect, chaining or `cd`.",
+        "alone, with no prefix, suffix, redirect, chaining or `cd`."),
     };
   }
   if (typeof command !== "string") {
@@ -248,10 +249,10 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
   }
   return {
     decision: "deny",
-    reason:
+    reason: withHookMarker("MAIN_AGENT_READONLY_BOUNDARY",
       `Main-agent read-only boundary: refusing to mutate repository path "${filePath}". ` +
       "All repository mutations must flow through the dev-loop subagent. " +
-      "See skills/docs/main-agent-contract.md.",
+      "See skills/docs/main-agent-contract.md."),
   };
 }
 
@@ -298,7 +299,7 @@ export function decideCoordinatorWriteGuard({ filePath, isRepoMutation, enforce 
     : `Coordinator→worker delegation boundary: refusing to mutate repository path "${filePath}" as the ` +
       "dev-loop coordinator. Delegate this tracked-file edit to a fresh worker subagent (developer/fixer/" +
       "quality/docs) instead of writing it directly. See skills/docs/main-agent-contract.md.";
-  return { decision: "deny", reason };
+  return { decision: "deny", reason: withHookMarker("COORDINATOR_DELEGATION_BOUNDARY", reason) };
 }
 
 const JUDGE_VERDICT_FILES = new Set(["judge-verdict.json", "spec-authority-verdict.json"]);
@@ -334,10 +335,10 @@ export function decideJudgeWriteGuard({ agentType = null, targetPath = null, gat
     && JUDGE_VERDICT_FILES.has(segments.at(-1));
   return allowed ? ALLOW : {
     decision: "deny",
-    reason:
+    reason: withHookMarker("JUDGE_WRITE_BOUNDARY",
       `Judge write boundary (agents/judge.agent.md, ADR 0106): refusing to write ${JSON.stringify(targetPath)}. ` +
       "The judge writes only its judge-verdict.json and spec-authority-verdict.json at the outputRefs its " +
-      "pulled work order names under a checkout's tmp/gate-judge/, never through a symlink.",
+      "pulled work order names under a checkout's tmp/gate-judge/, never through a symlink."),
   };
 }
 
@@ -425,12 +426,12 @@ export function decideWorktreeCheckoutGuard({
     : "";
   return {
     decision: "deny",
-    reason:
+    reason: withHookMarker("WORKTREE-WRONG-CHECKOUT-GUARD",
       `WORKTREE-WRONG-CHECKOUT-GUARD: wrong-checkout mutation blocked — a worktree cycle is active ` +
       `("${activeWorktreeRoot}") but this Write/Edit targets the MAIN checkout's non-gitignored file ` +
       `"${filePath}".${fix} A file mutation that lands on the main checkout while a worktree is ` +
       "active is silently lost from the branch. Set DEVLOOPS_ALLOW_MAIN=1 only for a deliberate " +
-      "main-checkout edit. See skills/docs/worktree-guidance.md.",
+      "main-checkout edit. See skills/docs/worktree-guidance.md."),
   };
 }
 
@@ -552,12 +553,12 @@ export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthoriza
   }
   return {
     decision: "block",
-    reason:
+    reason: withHookMarker("LOCAL-COMMIT-BEFORE-EXIT",
       "LOCAL-COMMIT-BEFORE-EXIT: the worktree has uncommitted changes — refusing subagent exit " +
       "to prevent silent data loss from post-merge worktree cleanup (cleanup-worktree.mjs runs " +
       "`git worktree remove --force`). Commit your work before stopping. " +
       `Dirty paths (${dirty.length}):\n` +
-      listed.join("\n"),
+      listed.join("\n")),
   };
 }
 
@@ -593,12 +594,12 @@ const inAllowedPaths = (rel, allowedPaths) => Array.isArray(allowedPaths) && all
  */
 export function decideFixerWriteGuard({ agentType = null, targetPath = null, symlinked = false, checkouts = [], grants = [] }) {
   if (normalizeAgentType(agentType) !== FIXER_AGENT_TYPE) return ALLOW;
-  const deny = (why) => ({
+  const deny = (why, denyId = "FIXER_MUTATION_BOUNDARY") => ({
     decision: "deny",
-    reason:
+    reason: withHookMarker(denyId,
       `Fixer mutation boundary (agents/fixer.agent.md, ADR 0107): refusing to write ${JSON.stringify(targetPath)}: ${why}. ` +
       "Run the dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line first. " +
-      "A fixer writes only its work order's outputRef and files under mutationAuthority.allowedPaths in a checkout of mutationAuthority.branch.",
+      "A fixer writes only its work order's outputRef and files under mutationAuthority.allowedPaths in a checkout of mutationAuthority.branch."),
   });
   if (typeof targetPath !== "string" || !targetPath.startsWith("/")) return deny("the target path is missing or relative");
   if (symlinked) return deny("the target crosses a symlink");
@@ -617,7 +618,8 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
   return deny(grants.length === 0
     ? "no current fixer work-order pull grants a mutation authority. A pull line run with a prefix, suffix, redirect or `cd` records no grant; run the exact dispatched pull line again, alone. " +
       "The coordinator emits the work order and dispatches its pointer: `dev-loops-run scripts/loop/emit-fixer-work-order.mjs` with `--act-list-file <path> --gate <gate>`, `--threads-file <path>`, `--review-id <review node id>` or `--ci-file <path>`"
-    : `no current pull grants path ${JSON.stringify(rel)} on branch ${JSON.stringify(checkout.branch)}`);
+    : `no current pull grants path ${JSON.stringify(rel)} on branch ${JSON.stringify(checkout.branch)}`,
+  grants.length === 0 ? "FIXER_NO_GRANT" : "FIXER_MUTATION_BOUNDARY");
 }
 
 const GATE_ROUND_CHILD_ROLES = new Set(["review", "judge"]);
@@ -679,9 +681,9 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
     if (agentOverrides.split(",").map((role) => role.trim()).includes(bare)) {
       return {
         decision: "deny",
-        reason:
+        reason: withHookMarker("AGENT_OVERRIDE_NAMESPACED_DISPATCH",
           `AGENT_OVERRIDE_NAMESPACED_DISPATCH: \`dev-loops-run cli/index.mjs loop claude-launch\` rendered \`${bare}\` with extraTools for this session. ` +
-          `Dispatch the bare agent type \`${bare}\` instead of \`${targetAgentType}\`.`,
+          `Dispatch the bare agent type \`${bare}\` instead of \`${targetAgentType}\`.`),
       };
     }
   }
@@ -692,26 +694,26 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
     ((target === "judge" && !isStandaloneReviewJudgePointer(prompt, judgeWorkOrderRef)) || (typeof prompt === "string" && /pull-work-order/.test(prompt) && GATE_UNIT_TOKEN_RE.test(prompt) && target !== "judge"))) {
     return {
       decision: "deny",
-      reason:
+      reason: withHookMarker("GATE_COORDINATOR_REQUIRED",
         `GATE_COORDINATOR_REQUIRED: GATE-EXEC-GATE-COORDINATOR denied this \`${target}\` dispatch from the dev-loop coordinator. ` +
         "Dispatch one `gate-coordinator` agent for the gate round; it dispatches the round's review and judge agents and returns the typed round result." +
-        dispatchDiagnostic(prompt, target, judgeWorkOrderRef),
+        dispatchDiagnostic(prompt, target, judgeWorkOrderRef)),
     };
   }
   if (caller !== GATE_COORDINATOR_AGENT_TYPE) return ALLOW;
   if (!gateChild) {
     return {
       decision: "deny",
-      reason:
+      reason: withHookMarker("GATE_COORDINATOR_DISPATCH_SCOPE",
         `GATE_COORDINATOR_DISPATCH_SCOPE: GATE-EXEC-GATE-COORDINATOR denied this ${JSON.stringify(targetAgentType ?? null)} dispatch from the gate coordinator. ` +
-        "The gate coordinator dispatches only the round's `review` and `judge` agents; the dev-loop coordinator dispatches fixers and repeat rounds.",
+        "The gate coordinator dispatches only the round's `review` and `judge` agents; the dev-loop coordinator dispatches fixers and repeat rounds."),
     };
   }
   if (isDispatchPointer(prompt, target)) return ALLOW;
   return {
     decision: "deny",
-    reason:
+    reason: withHookMarker("GATE_DISPATCH_NOT_VERBATIM",
       `GATE_DISPATCH_NOT_VERBATIM: GATE-EXEC-GATE-COORDINATOR denied this \`${target}\` dispatch: the prompt is not an emitted \`${target}:\` dispatchPrompt. ` +
-      "Relay the emitter's dispatchPrompt byte for byte (surrounding whitespace is ignored), with no added prose, no `cd` wrapper and no extra flags. A same-head retry recovers through GATE-EXEC-ROUND-RETIREMENT and a fresh round." + dispatchDiagnostic(prompt, target, judgeWorkOrderRef),
+      "Relay the emitter's dispatchPrompt byte for byte (surrounding whitespace is ignored), with no added prose, no `cd` wrapper and no extra flags. A same-head retry recovers through GATE-EXEC-ROUND-RETIREMENT and a fresh round." + dispatchDiagnostic(prompt, target, judgeWorkOrderRef)),
   };
 }
