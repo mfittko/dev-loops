@@ -160,6 +160,15 @@ test("a recorded closing issue still emits when the live PR also closes a second
   }, { prChanges: { closingIssuesReferences: [{ number: 3144 }] } });
 }, 30000);
 
+test("a recorded closing issue absent from several live closing issues refuses with recovery", async () => {
+  await fixture(async (f) => {
+    await f.changePr({ closingIssuesReferences: [{ number: 3144 }, { number: 3145 }] });
+    const emission = await f.emit();
+    assert.notEqual(emission.code, 0);
+    assert.equal(JSON.parse(emission.stderr).recovery, "dev-loops loop startup --issue 3144");
+  }, { prChanges: { closingIssuesReferences: [{ number: 3146 }] } });
+}, 30000);
+
 for (const strategy of ["ui_review", " ui_review "]) for (const state of ["first review", "detached resume"]) {
   test(`UI-review startup-to-envelope preserves provisioning for ${state}${strategy === "ui_review" ? "" : " with padded strategy"}`, async () => {
     await fixture(async (f) => {

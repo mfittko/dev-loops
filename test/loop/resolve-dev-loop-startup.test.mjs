@@ -1927,6 +1927,30 @@ for (const [label, issue, foreign, check] of [
   });
 });
 
+test("--issue on a PR closing 7 and 42 routes like the PR closing only 42", async () => {
+  const routed = async (tempDir, closes) => {
+    const own = { assignees: [{ login: "test-viewer" }] };
+    const pr = { state: "OPEN", author: { login: "test-viewer" }, assignees: [{ login: "test-viewer" }], closingIssuesReferences: closes };
+    const stub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["api", "graphql"], stdout: linkedPrGraphql(740) },
+      { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify(pr) },
+      { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify(pr) },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+      ...closes.map(({ number }) => ({ assertArgs: ["issue", "view", String(number)], stdout: JSON.stringify(own) })),
+    ], { matchMode: "claims" });
+    const env = { ...stub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) };
+    return buildResolveDevLoopStartupResult(buildAutoResolvedInput({ issue: 42, cwd: tempDir, env }), { cwd: tempDir, env });
+  };
+  const run = (closes) => withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    return routed(tempDir, closes);
+  });
+  const multi = await run([{ number: 7 }, { number: 42 }]);
+  const single = await run([{ number: 42 }]);
+  assert.equal(multi.selectedStrategy, single.selectedStrategy);
+  assert.equal(multi.canonicalStateSummary.loopState, single.canonicalStateSummary.loopState);
+});
+
 test("PR startup refuses an unreadable PR on the plain path (gh pr view exits 1)", async () => {
   await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
