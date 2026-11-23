@@ -205,8 +205,9 @@ test("AC3: the runbook states the retry schedule, hard-4xx escalation, judge-pas
   assert.match(runbook, /When it fails with `humanDecisionRequired` \(exit 1\), stop at once at the human spec decision/);
   assert.match(usageOf("scripts/loop/judge-pass.mjs").text, /humanDecisionRequired/);
   assert.match(runbook, /PREV=<latest of the prior heads the dev-loop coordinator passes in the dispatch arguments; none on round 1>; PRIORS=<all of those prior heads>/);
-  assert.match(runbook, /--prior-approvals "\$W\/tmp\/gate-judge\/\$SLUG\/pr-\$N\/\$GATE-<head>\/approvals\.json"` for the latest head in `\$PRIORS` whose file exists\. When none exists this is a fresh approval chain: omit it and the `--changed-paths`\/`--coverage-map` pair/);
+  assert.match(runbook, /--prior-approvals "\$W\/tmp\/gate-judge\/\$SLUG\/pr-\$N\/\$GATE-<head>\/approvals\.json"` for the latest head in `\$PRIORS` whose file exists\. When none exists \(fresh approval chain\) omit it and the `--changed-paths`\/`--coverage-map` pair/);
   assert.match(runbook, /`--changed-paths <file> --coverage-map <file>` together/);
+  assert.match(runbook, /changed-paths --base <approvals head> --head "\$H"`/);
 });
 
 test("AC3: a contract that loses a pinned phrase fails closed as contract_drift", () => {
