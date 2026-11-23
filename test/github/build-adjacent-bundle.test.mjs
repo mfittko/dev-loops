@@ -307,3 +307,16 @@ test("buildAdjacentBundle strips a changed symlink, a path under a symlinked dir
     await rm(outside, { recursive: true, force: true });
   }
 });
+
+test("buildAdjacentBundle keeps a regular file reached through a backslash relPath", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "bundle-backslash-"));
+  try {
+    await mkdir(path.join(root, "dir"));
+    await writeFile(path.join(root, "dir", "a.mjs"), "export const a = 1;\n");
+    const bundle = await buildAdjacentBundle({ changedFiles: ["dir\\a.mjs"], repoRoot: root });
+    assert.equal(bundle.stripped.length, 0);
+    assert.equal(bundle.files.length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

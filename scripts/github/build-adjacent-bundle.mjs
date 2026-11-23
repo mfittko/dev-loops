@@ -280,7 +280,7 @@ async function readGuardedFile(repoRoot, relPath) {
     // Never read through a symlink leaf or a symlinked ancestor; only a real path inside the repo is read.
     if (
       link.isSymbolicLink() ||
-      (await realpath(abs)) !== path.join(await realpath(repoRoot), relPath)
+      (await realpath(abs)) !== path.join(await realpath(repoRoot), path.relative(path.resolve(repoRoot), abs))
     ) {
       return { relPath, bytes: 0, missing: false, strip: "symlink" };
     }
