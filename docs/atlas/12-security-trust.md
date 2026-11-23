@@ -180,7 +180,7 @@ requirementDiagram
   }
   requirement human_merge {
     id: FRESH_HUMAN_APPROVAL
-    text: "Escalated merge needs a head-pinned human approval"
+    text: "Escalated merge needs a head- or patch-id-pinned human approval"
     risk: high
     verifymethod: test
   }
@@ -424,7 +424,7 @@ timeline
 
 Type: `flowchart`
 
-The diagram shows which hook runs for which Claude Code tool event. The main-agent and coordinator write boundaries run only when `DEVLOOPS_MAIN_AGENT_READONLY=1` or `DEVLOOPS_COORDINATOR_READONLY=1` is set. Insight: these hooks bound agent roles independently of comment trust, so a fixer that was steered anyway still cannot write outside its pulled work order's mutation authority, and a coordinator cannot dispatch arbitrary agents. Derived from `.claude/hooks/hooks.json`, `.claude/hooks/pre-tool-use-bash-gate.mjs`, `.claude/hooks/pre-tool-use-write-guard.mjs`, `.claude/hooks/pre-tool-use-agent-guard.mjs` and `.claude/hooks/_bash-gate-decisions.mjs`.
+The diagram shows which hook runs for which Claude Code tool event. The main-agent and coordinator write boundaries run only when `DEVLOOPS_MAIN_AGENT_READONLY=1` or `DEVLOOPS_COORDINATOR_READONLY=1` is set. Insight: these hooks bound agent roles independently of comment trust, so a fixer that was steered anyway still cannot write outside its pulled work order's mutation authority, and a coordinator cannot dispatch arbitrary agents. The approval record guard and the ask answers guard keep an agent from forging the merge approval answer (`MERGE-ASK-APPROVAL`, ADR 0315). Derived from `.claude/hooks/hooks.json`, `.claude/hooks/pre-tool-use-approval-guard.mjs`, `.claude/hooks/pre-tool-use-ask-answers-guard.mjs`, `.claude/hooks/pre-tool-use-bash-gate.mjs`, `.claude/hooks/pre-tool-use-write-guard.mjs`, `.claude/hooks/pre-tool-use-agent-guard.mjs` and `.claude/hooks/_bash-gate-decisions.mjs`.
 
 ```mermaid
 flowchart LR
@@ -432,6 +432,10 @@ flowchart LR
   EV -- Bash --> BG["Bash gate: registered deny rules"]
   EV -- "Edit or Write" --> WG["Write guard"]
   EV -- "Agent or Task" --> DG["Dispatch guard"]
+  EV -- "Bash, file, search or MCP" --> AR["Approval record guard"]
+  EV -- AskUserQuestion --> AQ["Ask answers guard: no pre-filled answers"]
+  AR --> DEC
+  AQ --> DEC
   WG --> W0["Fixer: work-order mutation authority"]
   WG --> W1["Judge: verdict files only"]
   WG --> W2["Wrong-checkout deny"]
@@ -448,6 +452,7 @@ flowchart LR
   DEC -- yes --> DENY["emitDeny with reason"]
   DEC -- no --> ALLOW["emitAllow"]
   AG -. "after Bash" .-> POST["PostToolUse merge hook"]
+  AG -. "after AskUserQuestion" .-> POSTA["PostToolUse approval-answer hook"]
   AG -. "subagent stop" .-> STOP["Uncommitted-work guard"]
 ```
 
@@ -457,7 +462,7 @@ flowchart LR
 
 Type: `flowchart`
 
-The diagram shows how the merge gate decides whether a merge is authorized. Insight: the `approve merge <headSha>` operator line is the only comment that can authorize an escalated merge; it must open its line, come from the named human login and match the current head, and the operator-owned registry refuses it on every agent write path. Derived from `packages/core/src/loop/merge-approval.mjs` (`resolveMergeClass`, `verifyFreshHumanApproval`, `resolveMergeApprovalDecision`), `scripts/github/merge-pr.mjs` and `packages/core/src/github/operator-owned-lines.mjs`.
+The diagram shows how the merge gate decides whether a merge is authorized. Insight: the `approve merge` operator line is the only comment that can authorize an escalated merge; it must open its line, come from the named human login and match the current head, or carry a `patch-id` that matches the current diff so a base-only head change keeps the approval (ADR 0279), and the operator-owned registry refuses it on every agent write path. Derived from `packages/core/src/loop/merge-approval.mjs` (`resolveMergeClass`, `verifyFreshHumanApproval`, `resolveMergeApprovalDecision`), `scripts/github/merge-pr.mjs` and `packages/core/src/github/operator-owned-lines.mjs`.
 
 ```mermaid
 flowchart TD
@@ -471,6 +476,8 @@ flowchart TD
   RV -- yes --> OK
   RV -- no --> CM{"Named login comment opens a line with approve merge headSha?"}
   CM -- yes --> OK
-  CM -- no --> NO["Refuse"]
+  CM -- no --> PM{"Named login comment opens a line with approve merge sha patch-id matching the current patch-id?"}
+  PM -- yes --> OK
+  PM -- no --> NO["Refuse"]
 ```
 
