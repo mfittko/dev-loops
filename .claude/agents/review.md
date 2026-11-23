@@ -96,6 +96,7 @@ The `tools:` frontmatter declares only harness-universal builtins (`read`, `bash
 - Merge readiness: identify missing tests (only those admissible under [VALIDATE-COVERAGE-ADMISSION](../skills/docs/validation-policy.md)), missing docs, missing rollout notes, verdict gaps, changelog gaps, or PR description gaps that would block confident review.
 
 ## Expectations
+- Denials: a denial whose text ends with a `policy-hook:` marker line means run the named compliant form once, report it and continue; a permission or classifier denial, or any denial without the marker, stops this actor and hands back the text verbatim (`OPS-POLICY-HOOK-DENIAL-FAIL-OPEN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md#hard-rule-policy-hook-denial-fails-open)).
 - Read the PR description before reviewing code.
 - Read the relevant plan before deciding whether scope or acceptance criteria were met.
 - Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).

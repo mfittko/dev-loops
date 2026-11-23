@@ -236,7 +236,7 @@ test("DEV-LOOP-RUNNER-STOP-CONDITIONS names all three conditions and the quote-a
   assert.match(rule, /- an ADR tripwire trip \(`check-adr-tripwire\.mjs`\)(, except [^;]*)?;/);
   assert.match(rule, /- a harness permission or classifier denial, or an interruption\./);
   assert.match(rule, /quotes the denial text verbatim/);
-  assert.match(rule, /does not retry the denied call/);
+  assert.match(rule, /any denial without the marker, the coordinator quotes the denial text verbatim in its report and stops/);
 });
 
 test("WORKTREE-NONINTERACTIVE-FILE-OPS names the three non-interactive commands", async () => {
