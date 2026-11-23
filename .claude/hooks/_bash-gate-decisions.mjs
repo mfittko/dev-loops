@@ -401,7 +401,7 @@ function decideBashGateDenyUnmarked(facts) {
     return {
       ruleId: "OPS-NO-TIMEOUT-WRAPPER",
       reason:
-        "OPS-NO-TIMEOUT-WRAPPER: do not wrap sanctioned dev-loops commands in `timeout N`: the wrapper hides the " +
+        "OPS-NO-TIMEOUT-WRAPPER: do not wrap sanctioned dev-loops commands in `timeout N`: it is blocked because the wrapper hides the " +
         "`dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound " +
         "themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
     };

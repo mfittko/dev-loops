@@ -69,7 +69,7 @@ const RULE_FIXTURES = [
   {
     id: "OPS-NO-TIMEOUT-WRAPPER",
     facts: { ...BASE, command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation" },
-    reason: "OPS-NO-TIMEOUT-WRAPPER: do not wrap sanctioned dev-loops commands in `timeout N`: the wrapper hides the `dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
+    reason: "OPS-NO-TIMEOUT-WRAPPER: do not wrap sanctioned dev-loops commands in `timeout N`: it is blocked because the wrapper hides the `dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
   },
   {
     id: "OPERATOR-DECISION-RECORDER",
@@ -241,7 +241,7 @@ test("every marked rule ends its deny with its exact marker line, and no other r
   for (const { id, facts } of RULE_FIXTURES) {
     const reason = decideBashGateDeny(facts).reason;
     if (MARKED_RULES.includes(id)) {
-      assert.equal(reason.split("\n").at(-1), markerFor(id).slice(1), `${id} marker line`);
+      assert.equal(reason.split("\n").at(-1), markerFor(id).slice(1),`${id} marker line`);
     } else {
       assert.ok(!reason.includes("policy-hook:"), `${id} is an authority-boundary deny and carries no marker`);
     }
