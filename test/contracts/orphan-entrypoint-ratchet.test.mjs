@@ -73,6 +73,7 @@ const ORPHAN_ALLOWLIST = new Map([
   ["scripts/github/manage-sub-issues.mjs", "standalone — agent/operator sub-issue tree command (documented in scripts/README)"],
   ["scripts/github/withdraw-copilot-review-request.mjs", "standalone — Copilot review withdrawal step, agent-invoked"],
   ["scripts/loop/check-retro-tooling.mjs", "standalone — retrospective-tooling check (whole script); its analyzeTranscript export is separately ratcheted as a predicate orphan"],
+  ["scripts/loop/check-spawn-timeout.mjs", "standalone — input-validation checklist line I1 spawn-timeout check (issue #3406), agent-invoked"],
   ["scripts/loop/conductor-monitor.mjs", "standalone — agent/operator conductor monitor tool (documented in scripts/README)"],
   ["scripts/loop/detect-refinement-grill-state.mjs", "standalone — refinement-grill state detector, agent-invoked"],
   ["scripts/loop/match-copilot-threads-to-gate-findings.mjs", "standalone — Copilot-thread vs gate-finding matcher (issue #3396), agent/operator-invoked report tool"],
