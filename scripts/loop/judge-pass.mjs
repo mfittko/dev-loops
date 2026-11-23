@@ -108,9 +108,10 @@ Inputs:
                                clusterFingerprints } (clusterFingerprints is [] when
                                no sibling was withheld) and the stdout result
                                carries it too, plus escalationsSkipped when the round head
-                               commit is not in the repository, and overridden ({ index, applied, reason })
-                               when a judge act cluster left the act list, so the durable disposition ledger
+                               commit is not in the repository, so the durable disposition ledger
                                carries what the judge consciously marked act/defer/reject.
+                               It also lists overridden ({ index, applied, reason }) when a
+                               judge act cluster left the act list.
                                Every disposed finding also carries a \`fingerprint\`; a
                                \`defer\` finding additionally carries \`followUpIssueNumber\`
                                — the deferral comment target's number: the PR's linked
