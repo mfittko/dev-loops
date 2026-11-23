@@ -44,6 +44,8 @@ test("the old unscoped stop wording is gone and the runner stop condition stays"
   assert.ok(!fixer.includes("A permission or classifier denial stops this actor immediately"), "fixer bullet is still unscoped");
   const workOrder = await readRepo("scripts/loop/emit-fixer-work-order.mjs");
   assert.ok(!workOrder.includes("A permission or classifier denial stops this actor immediately"), "fixer work order is still unscoped");
+  const judgeOrder = await readRepo("scripts/loop/emit-judge-work-order.mjs");
+  assert.ok(!judgeOrder.includes("A permission/classifier denial stops this actor immediately"), "judge work order is still unscoped");
   assert.ok(!skill.includes("does not retry the denied call in any command form"), "dev-loop skill sentence is still unscoped");
   assert.ok(skill.includes("- a harness permission or classifier denial, or an interruption."), "DEV-LOOP-RUNNER-STOP-CONDITIONS stop bullet is missing");
 });

@@ -498,6 +498,11 @@ test("the hook's own comment and body-write denies end with the policy-hook mark
       lastLine("gh pr comment 5 --body-file tmp/x.md <<'EOF'\nPR comment body\nEOF"),
       `policy-hook: OPERATOR-OWNED-LINE; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS["OPERATOR-OWNED-LINE"]}`,
     );
+    // The decider denies this REST comment write under ADR-TRIPWIRE-STANDING-WAIVER; the hook swaps in the marked comment reason.
+    assert.equal(
+      lastLine("gh api repos/o/r/issues/5/comments -f body=x"),
+      `policy-hook: OPERATOR-OWNED-LINE; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS["OPERATOR-OWNED-LINE"]}`,
+    );
     assert.equal(
       lastLine("gh pr edit 5 --body x"),
       `policy-hook: ADR-TRIPWIRE-STANDING-WAIVER; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS["ADR-TRIPWIRE-STANDING-WAIVER"]}`,
