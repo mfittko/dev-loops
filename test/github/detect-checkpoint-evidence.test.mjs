@@ -5036,7 +5036,7 @@ test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate f
   const headSha = "abc1234";
   const finding = (round, isResolved) => ({ id: `t${round}${isResolved}`, isResolved, comments: { nodes: [{ body: `<!-- dev-loops:finding 0123456789abcdef severity=low angle=scope round=${round} -->` }] } });
   const verdict = (gate, head, v) => ["Gate review: " + gate, `Reviewed head SHA: ${head}`, `Verdict: ${v}`, "Findings summary: x", "Next action: y"].join("\n");
-  const run = async ({ round, rounds = [round], cap, threads, preHead, seedProof = false, cleanCap = false, postedAs, baseRefName }) => {
+  const run = async ({ round, rounds = [round], cap, threads, preHead, seedProof = false, cleanCap = false, noRecord = false, postedAs, baseRefName }) => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-capfixed-"));
     try {
       await writeFile(path.join(tempDir, ".devloops"), `version: 1\ngates:\n  requireFanoutEvidence: false\n${cap === undefined ? "" : `  draft:\n    maxReviewRounds: ${cap}\n`}`, "utf8");
@@ -5057,7 +5057,7 @@ test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate f
           const text = JSON.stringify({ reviewBaselineHead: capHead, candidateHead: "b".repeat(40), nextStep: "push", outcome: "locally_clear", items: [], extension: "docs_tests_only" });
           await writeFile(path.join(recordDir, `${capHead}.json`), text, "utf8");
           await writeFile(path.join(recordDir, `${capHead}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`, "utf8");
-        } else writeGateDeltaRecord({ tmpRoot: path.join(tempDir, "tmp"), sequence: { reviewBaselineHead: capHead, actSetId: "0123456789abcdef" }, candidateHead: "b".repeat(40), invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: items.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) } });
+        } else if (!noRecord) writeGateDeltaRecord({ tmpRoot: path.join(tempDir, "tmp"), sequence: { reviewBaselineHead: capHead, actSetId: "0123456789abcdef" }, candidateHead: "b".repeat(40), invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: items.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) } });
       }
       const env = await writeGhStub(tempDir, [
         { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `{"headRefOid":"${headSha}"}\n` },
@@ -5100,6 +5100,9 @@ test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate f
   assert.equal(await run({ rounds: [], threads: [finding(4, false)], preHead: headSha, seedProof: true, cleanCap: true, postedAs: "OWNER", baseRefName: "main" }), "satisfied", "trusted posted cap-round header");
   assert.equal(await run({ rounds: [], threads: [finding(4, false)], preHead: headSha, seedProof: true, cleanCap: true, postedAs: "NONE", baseRefName: "main" }), "violation", "untrusted posted cap-round header");
   assert.equal(await run({ rounds: [], threads: [finding(4, false)], preHead: headSha, seedProof: true, cleanCap: true, postedAs: "VIEWER", baseRefName: "main" }), "satisfied", "viewer-authored association-NONE cap-round header");
+  // Issue 3460 AC3: the cap exit for a findings cap round reads no delta record: a trusted posted cap-round header alone satisfies it, an untrusted one does not.
+  assert.equal(await run({ rounds: [], threads: [finding(4, false)], preHead: headSha, seedProof: true, noRecord: true, postedAs: "OWNER", baseRefName: "main" }), "satisfied", "cap exit: posted findings round, no delta record");
+  assert.equal(await run({ rounds: [], threads: [finding(4, false)], preHead: headSha, seedProof: true, noRecord: true, postedAs: "NONE", baseRefName: "main" }), "violation", "cap exit: untrusted header, no delta record");
 }, 60000);
 
 test("parseDetectCheckpointEvidenceCliArgs honors --read-only (skips the runner-ownership heartbeat)", () => {

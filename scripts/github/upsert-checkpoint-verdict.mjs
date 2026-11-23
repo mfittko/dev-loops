@@ -3505,6 +3505,8 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     const gateBlockers = [
       ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),
       ...(isPastRoundCap(completedRound, cap) ? pastCapBlockers(roundFindings, { round: completedRound, cap }) : []),
+      // Issue 3460 AC6: a cap-round item the fan-in seeded (defect key `cap:<fingerprint>`) follows the same past-cap blocker rule at pre_approval_gate.
+      ...(options.gate === "pre_approval_gate" && cap > 0 ? pastCapBlockers(roundFindings.filter((f) => String(f?.defectKey ?? "").startsWith("cap:")), { round: cap, cap }) : []),
     ];
     const composedVerdict = composeCheckpointVerdict({ reviewVerdict: ledgerVerdict, blockers: gateBlockers });
     if (options.verdict === undefined) {

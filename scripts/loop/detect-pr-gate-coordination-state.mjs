@@ -1607,7 +1607,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure, failureDetail: draftCapRoundDetail } = await resolveDraftCapRoundFact(context, { repoRoot, resolve: runtime.resolveCapRoundFixed ?? resolveCapRoundFixed, trustRuntime: { env: runtime.env, ghCommand: runtime.ghCommand, runChild: runtime.runChild } });
   const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
     && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot, includeLiveCurrentHead: true }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
-  const draftOpenActList = context.prData?.isDraft === true && !draftCapRoundFixed
+  const draftOpenActList = context.prData?.isDraft === true
     ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0 }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
     : null;
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({

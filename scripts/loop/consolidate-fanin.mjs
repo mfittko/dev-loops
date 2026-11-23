@@ -48,7 +48,7 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { GATE_NAMES, gateScopePrefix } from "../github/_gate-names.mjs";
-import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../github/write-gate-context.mjs";
+import { buildGateEmitPlanPath, buildGateFaninLedgerPath, capRoundActList, resolveCapRound } from "../github/write-gate-context.mjs";
 import { writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { lintFillerPhrases } from "../github/_gate-finding-text.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, requireAbsolutePlanFilePath, validateCarryForwardPlanEntries, validateCarryForwardPlanShape, validateZeroUnitCarryProof, verifyCarryForwardPlanIdentity } from "../github/_carried-angles.mjs";
@@ -540,6 +540,15 @@ async function verifyEmitPlanKey(planPath, { repo, pr, gate, headSha, carriedAng
 // artifacts, plan units and the carry-forward plan; never caller-built. A fresh
 // angle without a stamped artifact gets no entry; a singleton unit (group null)
 // records no `group` key.
+/** Issue 3460 AC6: add each cap-round act item (`capRoundActList`) to the per-angle artifacts as an ordinary finding keyed `cap:<fingerprint>`. */
+export function seedCapRoundActFindings(rawArtifacts, actList) {
+  for (const item of actList) {
+    const seeded = { severity: item.severity, summary: item.summary, defectKey: `cap:${item.fingerprint}`, ...(item.file ? { file: item.file } : {}), ...(Number.isInteger(item.line) ? { line: item.line } : {}) };
+    const artifact = rawArtifacts.find((a) => a.angle.trim() === item.angle);
+    if (artifact) { artifact.verdict = "findings_present"; artifact.findings = [...artifact.findings, seeded]; } else rawArtifacts.push({ angle: item.angle, verdict: "findings_present", findings: [seeded] });
+  }
+}
+
 export function deriveFaninProvenance(rawArtifacts, emitPlan, headSha, carryForwardPlan) {
   const isCarried = (a) => typeof a.carriedFromHead === "string";
   const fresh = new Set(rawArtifacts
@@ -1480,6 +1489,13 @@ export async function consolidateGateFanin(options) {
       const carriedFindings = carriedVerdict === "findings_present" ? planEntry.findings : [];
       rawArtifacts.push({ angle: trimmedAngle, verdict: carriedVerdict, findings: carriedFindings, carriedFromHead: planEntry.carriedFromHead });
     }
+  }
+
+  // Issue 3460 AC6: pre_approval_gate seeds each open act item of the draft cap round as an ordinary finding, whatever a delta record says, so the judge disposes it.
+  // The `cap:<fingerprint>` defect key marks a seeded finding; the verdict poster reads it to apply the past-cap blocker rule. A capClosed item stays context (the residue read).
+  if (options.gate === "pre_approval_gate" && emitPlan !== undefined && options.headSha !== undefined) {
+    const capRound = await resolveCapRound({ repo: emitPlan.repo, pr: emitPlan.pr, headSha: options.headSha }, { repoRoot: options.repoRoot ?? process.cwd() }).catch(() => null);
+    if (capRound) seedCapRoundActFindings(rawArtifacts, capRoundActList(capRound.log.findings, capRound.log.headSha));
   }
 
   const angles = rawArtifacts.map((a) => ({

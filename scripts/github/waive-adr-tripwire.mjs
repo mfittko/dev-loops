@@ -30,7 +30,7 @@ import { buildLogPath } from "./_gate-artifact-paths.mjs";
 import { readSealed } from "./_gate-artifact-seal.mjs";
 import { editPr as realEditPr } from "./edit-pr.mjs";
 import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
-import { cleanCapVerdictUnposted } from "./write-gate-context.mjs";
+import { cleanCapVerdictUnposted, resolveCapExitRound } from "./write-gate-context.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 function noProofRefusal({ repo, pr, headSha }) {
@@ -331,7 +331,7 @@ export async function waiveAdrTripwire(options, {
     // A config or ledger error fails closed here and in ready-for-review.mjs; only a null proof means "no proof".
     let capRound;
     try {
-      capRound = await resolveCapRoundFixed({ repo, pr, headSha, baseRefName: prState.baseRefName }, { repoRoot });
+      capRound = await resolveCapExitRound({ repo, pr, headSha }, { repoRoot, postedHeads: gate?.draftGatePostedHeads ?? [] }) ?? await resolveCapRoundFixed({ repo, pr, headSha, baseRefName: prState.baseRefName }, { repoRoot });
     } catch (error) {
       return refuse("cap_round_unresolved", `${error instanceof Error ? error.message : String(error)}. ${CAP_ROUND_REFUSAL.cap_round_unresolved}`);
     }

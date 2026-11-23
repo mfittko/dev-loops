@@ -4944,3 +4944,37 @@ test("an emit that reaches both baseRefName reads calls fetchPr once for them, a
     assert.equal(calls, 2);
   });
 });
+
+// Issue 3460 AC8 (GATE-EXEC-ROUND-CAP-EXIT): at the cap-round head an operator focus item with a decision binds an act finding of the cap ledger that the recurrence escalation withheld.
+test("AC8: an escalated cap-ledger act finding binds as operator focus and joins the fixer act list; an unknown fingerprint still refuses", async () => {
+  const escalated = { severity: "medium", angle: "correctness", summary: "escalated guard", file: "src/b.mjs", line: 9, judgeDisposition: "act", judgeFix: "guard it" };
+  const escalatedFp = fingerprintFinding(escalated);
+  const setup = async ({ root, wt, head, files }, list, items) => {
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    const prior = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${"d".repeat(40)}.json`);
+    await mkdir(path.dirname(prior), { recursive: true });
+    await writeFile(prior, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+    await writeCurrentLog(path.join(root, "tmp"), head, [{ ...ACT[0], severity: "medium", judgeFix: "guard the deref" }, escalated]);
+    await writeFile(files.actList, JSON.stringify(list));
+    const focusFile = path.join(root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items }));
+    return focusFile;
+  };
+  const sibling = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
+  await withFixture(async (fx) => {
+    const focusFile = await setup(fx, [sibling], [{ fingerprint: escalatedFp, decision: "Fix it in this PR" }]);
+    const plan = await fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile });
+    const read = plan.workOrder.requiredReads.find((r) => r.kind === "act-list");
+    assert.deepEqual(JSON.parse(await readFile(read.path, "utf8")).map((i) => i.fingerprint).sort(), [sibling.fingerprint, escalatedFp].sort(), "the escalated finding joins its sibling");
+    assert.equal(plan.workOrder.operatorFocus.items[0].fingerprint, escalatedFp);
+  });
+  await withFixture(async (fx) => {
+    const focusFile = await setup(fx, [], [{ fingerprint: escalatedFp, decision: "Fix it in this PR" }]);
+    const plan = await fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile });
+    assert.equal(JSON.parse(await readFile(plan.workOrder.requiredReads.find((r) => r.kind === "act-list").path, "utf8")).length, 1, "an all-escalated list carries the bound item");
+  });
+  await withFixture(async (fx) => {
+    const focusFile = await setup(fx, [sibling], [{ fingerprint: "0123456789abcdef", decision: "Fix it in this PR" }]);
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile }), /GATE-EXEC-OPERATOR-FOCUS: operator focus item 0123456789abcdef is not in the act list/);
+  });
+});

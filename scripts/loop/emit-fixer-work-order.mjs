@@ -680,7 +680,8 @@ async function emitPlan({
     ciActParsed = act.parsed;
   }
   const guardFile = actListFile ?? ciActFile, guardParsed = actListFile ? source.parsed : ciActParsed;
-  if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
+  // Issue 3460 AC8: an empty list (every item withheld by the recurrence escalation) is allowed with an operator focus file, which must then bind one item below.
+  if (actListFile && !(Array.isArray(source.parsed) && (source.parsed.length > 0 || operatorFocusFile) && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   }
   // ADR 0188: at pre_approval_gate, low and nit findings never reach the fixer (backstop for hand-built or legacy ledgers). At the draft gate a low act is fixed in every round.
@@ -719,6 +720,7 @@ async function emitPlan({
       return currentHeadLedgerExists() ? null : originHead;
     } catch { return null; }
   })();
+  let capLedgerActs = []; // the act findings of the cap-round ledger, read at the cap round (issue 3460 AC8)
   if (guardFile && (gate === "draft_gate" || lowNitOnly)) {
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
     let { lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot },{ repoRoot: resolveRepoRoot(cwd) });
@@ -775,6 +777,7 @@ async function emitPlan({
         if (refusal !== undefined) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist${refusal}; failing closed at the cap round`);
       }
       const { findings: ledgerFindings } = !ledgerExists ? { findings: [] } : await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
+      capLedgerActs = ledgerFindings.filter((f) => f.judgeDisposition === "act");
       // A later cap-round pass fixes only the cap round's findings: an act item outside the cap-round ledger would open a new round past the cap.
       // The bound limits the act items of each pass. The fixer route's own pre-push delta seals the next chain link, so the number of passes has no separate bound. The ADR 0197 base-only merge path skips this bound.
       if (laterPass) {
@@ -787,7 +790,7 @@ async function emitPlan({
         throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-SOFT-CAP): the cap round (cap ${cap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
       }
     }
-    if (lowNitOnly && (lowFixCapped || (actSeverities.every((s) => normalizeSeverity(s) === "nit") && round !== 1))) {
+    if (lowNitOnly && actSeverities.length > 0 && (lowFixCapped || (actSeverities.every((s) => normalizeSeverity(s) === "nit") && round !== 1))) {
       const where = lowFixCapped ? "at pre_approval_gate" : "outside draft_gate round 1";
       throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${guardFile} holds only low or nit items ${where}; low and nit findings no longer reach the fixer`);
     }
@@ -809,11 +812,26 @@ async function emitPlan({
   if (badFingerprint) {
     throw new Refusal(`act list ${guardFile} has an act item (${JSON.stringify(badFingerprint.summary)}) whose fingerprint is ${badFingerprint.fingerprint === undefined ? "missing" : "not the canonical fingerprintFinding value"}; re-run judge-pass to regenerate it`);
   }
+  const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
+  // Issue 3460 AC8: at the cap round, an operator focus item that names by fingerprint, with a decision, an act finding of the cap-round ledger that the recurrence escalation withheld from the act list binds,
+  // and the emitter adds that finding to the fixer act list (the operator decided to fix it in this PR). A fingerprint that is no act finding of that ledger still refuses at the binding below.
+  if (actListFile && operatorFocusRaw?.items) {
+    const listed = new Set(source.parsed.map((item) => item.fingerprint));
+    const extra = operatorFocusRaw.items.filter((item) => item.fingerprint !== undefined && item.decision !== undefined && !listed.has(item.fingerprint))
+      .flatMap((item) => capLedgerActs.filter((f) => fingerprintFinding(f) === item.fingerprint).slice(0, 1).map((f) => ({ ...f, fingerprint: item.fingerprint })));
+    if (extra.length > 0) {
+      const bytes = Buffer.from(`${JSON.stringify([...source.parsed, ...extra], null, 2)}\n`);
+      // The extended list is its own pinned copy: the handback delta review and the required read both name it.
+      actListCopy = path.join(dir, executionIdentity, "act-list-focus.json");
+      await capture.write(actListCopy, bytes);
+      source = { read: { ...source.read, path: actListCopy, sha256: sha256(bytes), bytes: bytes.length }, parsed: [...source.parsed, ...extra] };
+    }
+  }
+  if (actListFile && source.parsed.length === 0) throw new Refusal(`act list ${actListFile} is empty and no operator focus item bound a cap-ledger act finding (GATE-EXEC-ROUND-CAP-EXIT): pass a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   // An all-body act list has no delta review (ADR 0286), so its commit_only marker could never be closed by an agent step: refuse before any marker write.
   if (actListFile && phase === "commit_only" && source.parsed.every(isDeltaBodyItem)) {
     try { startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }); } catch (error) { throw error.message.startsWith("delta_body_only_act_set:") ? new WorkOrderRefusal("delta_body_only_act_set", error.message) : new Refusal(error.message); }
   }
-  const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
   if (operatorFocusRaw?.items && !actListFile && !threadsFile) throw new OperatorFocusRefusal("GATE-EXEC-OPERATOR-FOCUS: operator focus items need an --act-list-file or --threads-file source");
   if (operatorFocusRaw?.items?.some((item) => (item.threadId !== undefined) !== Boolean(threadsFile))) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus items bind by ${threadsFile ? "threadId" : "fingerprint"} on this source`);
   // A trust-incomplete thread (first comment page all untrusted, more pages exist) stays a blocker but is never a fixer source.

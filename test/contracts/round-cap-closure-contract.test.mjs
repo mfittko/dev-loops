@@ -28,3 +28,14 @@ test("the judge brief names the closure round as superseded by ADR 0208", async 
   assert.match(judge, /closure round \(work order `closureRound: true`, count cap\+1\) is superseded by ADR 0208 \(`GATE-EXEC-ROUND-CAP`\)/);
   assert.doesNotMatch(judge, /In a closure round/);
 });
+
+// Issue 3460 AC8, AC9, AC11: the cap exit rule, the escalation third outcome and the low-nit cap sentence.
+test("GATE-EXEC-ROUND-CAP-EXIT states the exit, the blocked rule, the seeding and the escalated-item binding; the low-nit sentence names the exit at the cap", async () => {
+  const contract = await read("skills/docs/gate-review-sub-loop-contract.md");
+  const rule = contract.split("<!-- rule: GATE-EXEC-ROUND-CAP-EXIT -->")[1].split("\n")[1];
+  for (const text of ["`capExitHolds`", "a trusted posted `draft_gate` review exists at the cap-round head", "reads no delta record", "A blocked round never takes the exit", "`pastCapBlockers`", "seeds each open act item of the cap round as a finding", "`cap:<fingerprint>`", "names by fingerprint, with a `decision`", "choose a third outcome", "ADR 0320"]) assert.ok(rule.includes(text), text);
+  assert.ok(contract.includes("for one of three outcomes") && contract.includes("The third outcome, at the cap round"), "the escalation rule names the fix in this PR");
+  for (const doc of [contract, await read("skills/copilot-pr-followup/SKILL.md")]) assert.match(doc, /at the cap a refusal ends in the cap exit \(`GATE-EXEC-ROUND-CAP-EXIT`\)/i);
+  assert.ok(!contract.includes("Any refusal keeps the full round."), "the unqualified sentence is gone");
+  assert.ok((await read("docs/decisions/0320-cap-exit-from-the-posted-cap-review.md")).includes("Amends ADR 0208, ADR 0218, ADR 0250 and ADR 0317"));
+});

@@ -143,3 +143,22 @@ test("a ready PR whose clean cap-round verdict is unposted reports blocked with 
   assert.equal(result.draftGateAlreadySatisfied, false);
   assert.equal(result.agentRemedy.command, "dev-loops gate upsert-verdict --repo o/r --pr 10 --gate draft_gate --post-sealed-cap-round");
 });
+
+// Issue 3460 AC5/AC7/AC9: at the cap exit the open act list loads before ready.
+test("a cap exit with an open act list routes to the fixer, with ready also allowed once the gate threads are resolved", () => {
+  const sha = "ab".repeat(20);
+  const m = { visible: true, headSha: sha.slice(0, 7), verdict: "findings_present", contractComplete: true };
+  const at = (overrides = {}) => evaluatePrGateCoordination({
+    pr: 10, currentHeadSha: sha, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
+    draftGate: m, draftGateMarker: m, draftCapRoundFixed: true, draftOpenActList: { headSha: sha, openActCount: 2, blockers: [] }, unresolvedGateThreadCount: 2, ...overrides,
+  });
+  const open = at();
+  assert.equal(open.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, "act list, threads open: the fixer route");
+  assert.ok(!open.allowedNextActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  const resolved = at({ unresolvedGateThreadCount: 0 });
+  assert.equal(resolved.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, "the fixer route stays the next action");
+  assert.ok(resolved.allowedNextActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW), "ready is also allowed once the gate threads are resolved");
+  assert.equal(at({ draftOpenActList: { headSha: sha, openActCount: 1, bodyOnly: true, blockers: [] }, unresolvedGateThreadCount: 0 }).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "a body-only act list goes to ready");
+  assert.equal(at({ draftOpenActList: { headSha: "cd".repeat(20), openActCount: 2, blockers: [] }, unresolvedGateThreadCount: 0 }).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "a later head: the thread check owns it");
+  assert.equal(at({ draftOpenActList: null, unresolvedGateThreadCount: 0 }).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "a no-commit pass with no open act list ends in ready");
+});

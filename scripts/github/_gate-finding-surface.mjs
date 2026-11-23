@@ -1445,7 +1445,8 @@ export function collectVerdictHeadShas(comments, gate, headShas) {
 export function draftGatePostedHeads(bodies) {
   return (bodies ?? []).flatMap((body) => {
     const header = typeof body === "string" ? body.match(REVIEW_HEADER_RE) : null;
-    return header && header[1] === "draft_gate" ? [{ head: header[2].toLowerCase(), round: Number(header[3]) }] : [];
+    // `verdict` is the posted verdict (a bare post without one reads as findings_present): the cap exit refuses a posted `blocked` round.
+    return header && header[1] === "draft_gate" ? [{ head: header[2].toLowerCase(), round: Number(header[3]), verdict: body.match(/\*\*Verdict:\*\*\s*(clean|findings_present|blocked)/)?.[1] ?? "findings_present" }] : [];
   });
 }
 
