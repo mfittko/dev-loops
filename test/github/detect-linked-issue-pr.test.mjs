@@ -644,3 +644,12 @@ test("detectLinkedIssuePrs: hasNextPage falls back to paginated detectLinkedIssu
   // 1 batch call + 2 pages for issue 2 only.
   assert.equal(calls.length, 3);
 });
+
+test("detectLinkedIssuePrs: a failed hasNextPage fallback leaves only that issue out", async () => {
+  const runChild = async (cmd, argv) => {
+    if (argv.includes("issue=2")) return { code: 1, stdout: "", stderr: "boom" };
+    return { code: 0, stdout: JSON.stringify({ data: { repository: { i1: timeline([]), i2: timeline([], true), i3: timeline([]) } } }), stderr: "" };
+  };
+  const map = await detectLinkedIssuePrs({ repo: "owner/repo", issues: [1, 2, 3] }, { env: {}, runChild });
+  assert.deepEqual([...map], [[1, false], [3, false]]);
+});

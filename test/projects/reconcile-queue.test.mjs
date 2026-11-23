@@ -180,10 +180,12 @@ describe("reconcile-queue main (#1069)", () => {
     const items = [
       { itemId: "I_1", issueNumber: 1, prNumber: null, status: "Backlog", contentState: "OPEN" },
       { itemId: "I_2", issueNumber: 2, prNumber: null, status: "Backlog" },
+      { itemId: "P_3", issueNumber: null, prNumber: 3, status: "Backlog" },
     ];
     const facts = await gatherLiveFacts(items, "o/r", { env: {}, runChild });
     assert.deepEqual(facts.get("I_1"), UNTOUCHED);
     assert.deepEqual(facts.get("I_2"), UNTOUCHED);
+    assert.deepEqual(facts.get("P_3"), { itemKind: "pr", issueState: null, prState: null, prIsDraft: null });
     const moveCalls = [];
     const result = await run({ items, facts: [...facts], moveCalls });
     assert.equal(result.ok, true);

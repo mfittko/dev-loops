@@ -48,7 +48,7 @@ work around the lag. \`queue move\` and \`queue reorder\` do not depend on it:
 they look items up from the issue side or by item node ID.
 
 Output (stdout):
-  flat:    { ok: true, items: [{ issueNumber, prNumber, title, url, itemId, contentId, status }, ...] }
+  flat:    { ok: true, items: [{ issueNumber, prNumber, title, url, itemId, contentId, contentState, status }, ...] }
   summary: { ok: true, groups: { "<Status>": { count, items: [ <item>, ... ] }, ... } }
 
 ${JQ_OUTPUT_USAGE}
