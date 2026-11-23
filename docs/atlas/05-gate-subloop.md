@@ -134,7 +134,7 @@ xychart-beta
 
 Type: `xychart-beta`
 
-How many reviewer angles each shipped gate catalog declares, and how many named fan-out groups exist. The draft catalog declares more angles than the pre-approval catalog. The pre-approval catalog holds the design-principle angles (`dry`, `kiss`, `yagni`, `srp` and the SOLID set). These are declared counts, not the angles one round reviews. Counts were produced by `awk '/^ [a-zA-Z]+:$/{sec=$1} /^ - name:/{c[sec]++} END{for(s in c) print s, c[s]}' packages/core/src/config/extension-defaults.yaml`. Derived from `packages/core/src/config/extension-defaults.yaml`.
+How many reviewer angles each shipped gate catalog declares, and how many named fan-out groups exist. The draft catalog declares more angles than the pre-approval catalog. The pre-approval catalog holds the design-principle angles (`dry`, `kiss`, `yagni`, `srp` and the SOLID set). These are declared counts, not the angles one round reviews. Counts were produced by `awk '/^  [a-zA-Z]+:$/{sec=$1} /^ +- name:/{c[sec]++} END{for(s in c) print s, c[s]}' packages/core/src/config/extension-defaults.yaml`. Derived from `packages/core/src/config/extension-defaults.yaml`.
 
 ```mermaid
 xychart-beta
