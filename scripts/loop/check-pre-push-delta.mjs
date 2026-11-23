@@ -119,7 +119,7 @@ Output (stdout, JSON):
                     Also writes the cumulative baseline..candidate patch to input.patchPath (<tmp-root>/gate-delta/<baseline>-<candidate>-<runId>.patch); the reviewer reads it with the read tool and needs no shell.
                     Fill input.resultShape; on ACT copy its binding below unchanged.
   without --result, authenticated closure (requires --fixer-plan and --site-coverage, excludes --handback):
-                    { "ok": true, "outcome": "no_commit|head_moved", "nextStep": "push_to_gate",
+                    { "ok": true, "outcome": "no_commit|head_moved", "nextStep": "push_to_gate", "reason": "<closure explanation>",
                       "reviewBaselineHead": "<baseline sha>", "candidateHead": "<current HEAD sha>" }
                     HEAD equal to baseline yields no_commit; otherwise HEAD differing from the authenticated handback yields head_moved.
                     Removes the matching active ungranted branch marker instead of producing reviewer input or a patch.

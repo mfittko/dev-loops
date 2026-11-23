@@ -22,6 +22,8 @@ with its base. Merges \`origin/<base>\` into the current branch and resolves ONL
 safe additive case: a CHANGELOG.md conflict where both sides only ADD list/section
 entries (keep BOTH sides, in order). ANY other conflicted path — or a non-additive
 CHANGELOG edit — FAILS CLOSED, naming the conflicted paths. Never guesses.
+It also refuses with base_merge_inside_sequence while an ungranted fix sequence is open at
+HEAD and origin/<base> is not an ancestor of HEAD.
 
 After an auto-resolved additive CHANGELOG it runs the commands that the default-branch
 \`validation.paths\` in \`.devloops\` select for the resolved files (unless --no-verify)
@@ -56,7 +58,7 @@ with --json; the default non-JSON success summary is unaffected.)
 
 Exit codes:
   0  Clean merge (incl. already up to date) or auto-resolved CHANGELOG
-  1  Argument error, git failure, or UNRESOLVABLE conflict (fail closed)
+  1  Argument error, git failure, base_merge_inside_sequence, or UNRESOLVABLE conflict (fail closed)
   2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
