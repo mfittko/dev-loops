@@ -4,7 +4,7 @@
 
 Accepted — 2026-11-11 (https://github.com/mfittko/dev-loops/issues/3144#issuecomment-6796476929)
 
-Amended by [issue 3493](https://github.com/mfittko/dev-loops/issues/3493): when --issue n names one of several closing issues, the selector binds that issue; otherwise several closing issues refuse with the candidate list and a recovery command.
+Amended by [issue 3493](https://github.com/mfittko/dev-loops/issues/3493): when --issue n names one of several closing issues, the selector binds that issue; otherwise several closing issues refuse with the candidate list and a recovery command. Emission reads no --issue and accepts the startup-recorded issue while it is still one of the live closing issues; a secondary closing issue linked after startup is ownership-checked at the next startup.
 
 ## Context
 
