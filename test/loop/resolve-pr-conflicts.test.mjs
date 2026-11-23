@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
@@ -418,51 +418,222 @@ describe("resolvePrConflicts (real git)", () => {
     }
   });
 
-  test("clean merge verifies with Bun and fails closed on verification errors", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-pr-conflicts-clean-"));
-    const remoteDir = path.join(tempDir, "remote.git");
-    const workDir = path.join(tempDir, "work");
-    try {
-      git(tempDir, ["init", "-q", "--bare", remoteDir]);
-      git(tempDir, ["clone", "-q", remoteDir, workDir]);
-      git(workDir, ["config", "commit.gpgsign", "false"]);
-      git(workDir, ["checkout", "-q", "-b", "main"]);
-      await writeFile(path.join(workDir, "a.txt"), "a\n", "utf8");
-      git(workDir, ["add", "."]);
-      git(workDir, ["commit", "-q", "-m", "base"]);
-      git(workDir, ["push", "-q", "-u", "origin", "main"]);
-      git(workDir, ["checkout", "-q", "-b", "feature"]);
-      git(workDir, ["checkout", "-q", "main"]);
-      await writeFile(path.join(workDir, "b.txt"), "b\n", "utf8");
-      git(workDir, ["add", "."]);
-      git(workDir, ["commit", "-q", "-m", "theirs"]);
-      git(workDir, ["push", "-q", "origin", "main"]);
-      git(workDir, ["checkout", "-q", "feature"]);
-
+  describe("post-resolve verification from the base validation.paths (#3490)", () => {
+    const CL_OURS = CHANGELOG_BASE.replace("- shared earlier entry (#1)", "- shared earlier entry (#1)\n- ours added (#100)");
+    const CL_THEIRS = CHANGELOG_BASE.replace("- shared earlier entry (#1)", "- shared earlier entry (#1)\n- theirs added (#101)");
+    const baseWith = (commands) => () => ({ validation: { paths: commands === null ? [] : [{ match: ["CHANGELOG.md"], surface: "changeset", commands }] } });
+    const thrower = () => { throw new Error("must not be called"); };
+    const setupChangelog = () => setupDivergedRepo({ baseFile: "CHANGELOG.md", baseContent: CHANGELOG_BASE, oursContent: CL_OURS, theirsContent: CL_THEIRS });
+    const recorder = (codes = []) => {
       const calls = [];
-      let verificationCode = 7;
-      const runVerification = async (command, args, options) => {
-        calls.push(`${command} ${args.join(" ")} @ ${options.cwd}`);
-        const result = { code: verificationCode, stdout: "", stderr: verificationCode ? "docs failed" : "" };
-        verificationCode = 0;
-        return result;
+      const runVerification = async (command, args) => {
+        calls.push([command, ...args].join(" "));
+        const code = codes.shift() ?? 0;
+        return { code, stdout: "", stderr: code ? "Script not found" : "" };
       };
-      await assert.rejects(
-        () => resolvePrConflicts({ repoRoot: workDir, base: "main", verify: true, push: false }, { env: GIT_ENV, runVerification }),
-        (error) => error.verifyFailed === true && /bun run test:docs/.test(error.message),
-      );
-      const result = await resolvePrConflicts({ repoRoot: workDir, base: "main", verify: true, push: false }, { env: GIT_ENV, runVerification });
-      assert.equal(result.action, "clean_merge");
-      assert.deepEqual(result.resolvedFiles, []);
-      assert.equal(result.verified, true);
-      assert.deepEqual(calls, Array(2).fill(`bun run test:docs @ ${workDir}`));
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
+      return { calls, runVerification };
+    };
+    const opts = (workDir, extra = {}) => ({ repoRoot: workDir, base: "main", verify: true, push: false, ...extra });
+
+    test("a resolved CHANGELOG runs the base command and reports verified; the checkout block has no effect", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        // The checkout maps CHANGELOG.md to a different command; only the injected base block counts.
+        await writeFile(path.join(workDir, ".devloops"), "validation:\n  paths:\n    - { match: CHANGELOG.md, surface: x, commands: [\"checkout-cmd\"] }\n", "utf8");
+        git(workDir, ["add", ".devloops"]);
+        git(workDir, ["commit", "-q", "-m", "checkout config"]);
+        const { calls, runVerification } = recorder();
+        const result = await resolvePrConflicts(opts(workDir), { env: GIT_ENV, runVerification, readBase: baseWith(["base-cmd"]) });
+        assert.equal(result.action, "resolved");
+        assert.equal(result.verified, true);
+        assert.deepEqual(calls, ["sh -c base-cmd"]);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a resolved file with no mapped command reports verified false and still pushes", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        git(workDir, ["push", "-q", "-u", "origin", "feature"]);
+        const { calls, runVerification } = recorder();
+        const result = await resolvePrConflicts(opts(workDir, { push: true }), { env: GIT_ENV, runVerification, readBase: baseWith(null) });
+        assert.equal(result.verified, false);
+        assert.equal(result.pushed, true);
+        assert.deepEqual(calls, []);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    test("an empty command list reports verified false and still pushes", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        git(workDir, ["push", "-q", "-u", "origin", "feature"]);
+        const { calls, runVerification } = recorder();
+        const result = await resolvePrConflicts(opts(workDir, { push: true }), { env: GIT_ENV, runVerification, readBase: baseWith([]) });
+        assert.equal(result.verified, false);
+        assert.equal(result.pushed, true);
+        assert.deepEqual(calls, []);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a run through a symlinked repo root runs the command at the git toplevel", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        const link = path.join(tempDir, "link");
+        await symlink(workDir, link);
+        const cwds = [];
+        const runVerification = async (_command, _args, spawnOptions) => {
+          cwds.push(spawnOptions.cwd);
+          return { code: 0, stdout: "", stderr: "" };
+        };
+        await resolvePrConflicts(opts(link), { env: GIT_ENV, runVerification, readBase: baseWith(["x"]) });
+        assert.deepEqual(cwds, [realpathSync(workDir)]);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a throwing runner rolls back to the pre-merge head and a re-run repeats the merge", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        const head = git(workDir, ["rev-parse", "HEAD"]).trim();
+        const runVerification = async () => { throw new Error("spawn EAGAIN"); };
+        await assert.rejects(
+          () => resolvePrConflicts(opts(workDir), { env: GIT_ENV, runVerification, readBase: baseWith(["x"]) }),
+          (error) => error.verifyFailed === true && /spawn EAGAIN/.test(error.message),
+        );
+        assert.equal(git(workDir, ["rev-parse", "HEAD"]).trim(), head);
+        const result = await resolvePrConflicts(opts(workDir), { env: GIT_ENV, runVerification: recorder().runVerification, readBase: baseWith(["x"]) });
+        assert.equal(result.action, "resolved");
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a refused rollback still fails with verifyFailed and names the head left behind", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        const runVerification = async () => {
+          await writeFile(path.join(workDir, "CHANGELOG.md"), "edited by the command\n", "utf8");
+          return { code: 1, stdout: "", stderr: "boom" };
+        };
+        await assert.rejects(
+          () => resolvePrConflicts(opts(workDir), { env: GIT_ENV, runVerification, readBase: baseWith(["x"]) }),
+          (error) => error.verifyFailed === true && /boom/.test(error.message) && /rollback failed; HEAD left at [0-9a-f]{40}/.test(error.message),
+        );
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a failing command rolls back to the pre-merge head and a re-run repeats the merge and the command", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        const head = git(workDir, ["rev-parse", "HEAD"]).trim();
+        const { calls, runVerification } = recorder([1, 0]);
+        await assert.rejects(
+          () => resolvePrConflicts(opts(workDir), { env: GIT_ENV, runVerification, readBase: baseWith(["bun run test:docs"]) }),
+          (error) => error.verifyFailed === true && /bun run test:docs/.test(error.message) && /Script not found/.test(error.message),
+        );
+        assert.equal(git(workDir, ["rev-parse", "HEAD"]).trim(), head);
+        const result = await resolvePrConflicts(opts(workDir), { env: GIT_ENV, runVerification, readBase: baseWith(["bun run test:docs"]) });
+        assert.equal(result.action, "resolved");
+        assert.equal(result.verified, true);
+        assert.deepEqual(calls, Array(2).fill("sh -c bun run test:docs"));
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a base reader refusal fails closed with the reason and rolls back", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        const head = git(workDir, ["rev-parse", "HEAD"]).trim();
+        const { calls, runVerification } = recorder();
+        await assert.rejects(
+          () => resolvePrConflicts(opts(workDir), { env: GIT_ENV, runVerification, readBase: () => ({ reason: "cannot read the base branch validation config: boom" }) }),
+          (error) => error.verifyFailed === true && /cannot read the base branch validation config: boom/.test(error.message),
+        );
+        assert.equal(git(workDir, ["rev-parse", "HEAD"]).trim(), head);
+        assert.deepEqual(calls, []);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    test("--no-verify skips the base read and every command, with no verified field", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        const { calls, runVerification } = recorder();
+        const result = await resolvePrConflicts(opts(workDir, { verify: false }), { env: GIT_ENV, runVerification, readBase: thrower });
+        assert.equal(result.action, "resolved");
+        assert.equal("verified" in result, false);
+        assert.deepEqual(calls, []);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a clean merge reads no config, runs no command, reports verified false and pushes", async () => {
+      const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-pr-conflicts-clean-"));
+      const remoteDir = path.join(tempDir, "remote.git");
+      const workDir = path.join(tempDir, "work");
+      try {
+        git(tempDir, ["init", "-q", "--bare", remoteDir]);
+        git(tempDir, ["clone", "-q", remoteDir, workDir]);
+        git(workDir, ["config", "commit.gpgsign", "false"]);
+        git(workDir, ["checkout", "-q", "-b", "main"]);
+        await writeFile(path.join(workDir, "a.txt"), "a\n", "utf8");
+        git(workDir, ["add", "."]);
+        git(workDir, ["commit", "-q", "-m", "base"]);
+        git(workDir, ["push", "-q", "-u", "origin", "main"]);
+        git(workDir, ["checkout", "-q", "-b", "feature"]);
+        git(workDir, ["push", "-q", "-u", "origin", "feature"]);
+        git(workDir, ["checkout", "-q", "main"]);
+        await writeFile(path.join(workDir, "b.txt"), "b\n", "utf8");
+        git(workDir, ["add", "."]);
+        git(workDir, ["commit", "-q", "-m", "theirs"]);
+        git(workDir, ["push", "-q", "origin", "main"]);
+        git(workDir, ["checkout", "-q", "feature"]);
+        const { calls, runVerification } = recorder();
+        const result = await resolvePrConflicts(opts(workDir, { push: true }), { env: GIT_ENV, runVerification, readBase: thrower });
+        assert.equal(result.action, "clean_merge");
+        assert.equal(result.verified, false);
+        assert.equal(result.pushed, true);
+        assert.deepEqual(calls, []);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a resolved CHANGELOG merge whose base also changes bun.lock installs before the base command", async () => {
+      const { tempDir, workDir } = await setupChangelog();
+      try {
+        git(workDir, ["checkout", "-q", "main"]);
+        await writeFile(path.join(workDir, "bun.lock"), "v2\n", "utf8");
+        await writeFile(path.join(workDir, ".gitignore"), "node_modules/\n", "utf8");
+        git(workDir, ["add", "."]);
+        git(workDir, ["commit", "-q", "-m", "base moves lockfile"]);
+        git(workDir, ["push", "-q", "origin", "main"]);
+        git(workDir, ["checkout", "-q", "feature"]);
+        const calls = [];
+        const installDeps = () => { calls.push("install"); return { ok: true }; };
+        const runVerification = async (command, args) => { calls.push([command, ...args].join(" ")); return { code: 0, stdout: "", stderr: "" }; };
+        const result = await resolvePrConflicts(opts(workDir), { env: GIT_ENV, runVerification, installDeps, readBase: baseWith(["base-cmd"]) });
+        assert.equal(result.action, "resolved");
+        assert.deepEqual(calls, ["install", "sh -c base-cmd"]);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
   });
 
   for (const { title, lockChanged } of [
-    { title: "a base merge that changes bun.lock installs once in the worktree before verification", lockChanged: true },
+    { title: "a base merge that changes bun.lock installs once in the worktree", lockChanged: true },
     { title: "a base merge that leaves bun.lock unchanged does not install", lockChanged: false },
   ]) {
     test(title, async () => {
@@ -494,18 +665,13 @@ describe("resolvePrConflicts (real git)", () => {
           calls.push(`install @ ${cwd}`);
           return { ok: true };
         };
-        const runVerification = async () => {
-          calls.push("verify");
-          return { code: 0, stdout: "", stderr: "" };
-        };
-        const result = await resolvePrConflicts({ repoRoot: workDir, base: "main", verify: true, push: false }, { env: GIT_ENV, runVerification, installDeps });
+        const result = await resolvePrConflicts({ repoRoot: workDir, base: "main", verify: true, push: false }, { env: GIT_ENV, installDeps });
         if (lockChanged) {
-          assert.equal(calls.length, 2);
+          assert.equal(calls.length, 1);
           assert.equal(realpathSync(calls[0].slice("install @ ".length)), realpathSync(workDir));
-          assert.equal(calls[1], "verify");
           assert.equal(result.deps.ran, true);
         } else {
-          assert.deepEqual(calls, ["verify"]);
+          assert.deepEqual(calls, []);
           assert.equal(result.deps, undefined);
         }
       } finally {

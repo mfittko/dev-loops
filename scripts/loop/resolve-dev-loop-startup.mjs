@@ -52,10 +52,11 @@ import {
   PLAN_FILE_REFINEMENT_SECTIONS,
 } from "@dev-loops/core/loop/plan-file-intake-contract";
 import { evaluateSpikeIntakeState } from "@dev-loops/core/loop/spike-intake-contract";
+import { buildGrillFactsSnapshot } from "@dev-loops/core/loop/issue-refinement-artifact";
 import {
-  SPEC_CHANGED_SINCE_GRILL_REASON,
+  GRILL_STATE,
   buildSpecChangeFactsGhArgs,
-  detectSpecChangedSinceGrill,
+  interpretRefinementGrillState,
   parseSpecChangeFacts,
 } from "@dev-loops/core/loop/refinement-grill-state";
 import { loadBoardConfig } from "@dev-loops/core/loop/queue-board-sync";
@@ -87,14 +88,15 @@ Use --plan-file to start local planning from a phase-doc-format plan
 Use --spike to start a time-boxed exploratory loop from a local spike
 artifact (read-only: no tracker mutation, no issue/PR number).
 Required (exactly one):
-  --issue <n>    Target an issue by number (auto-resolves all state)
+  --issue <n>    Target an issue by number (auto-resolves all state;
+                 without an open PR it needs a clean grill: a results comment, a valid AC / DoD matrix (or linked refinement doc), Non-goals, a "## Simplest design" section and a "simplicity-review:" line, else it stops and prints the grill command)
   --pr <n>       Target a PR by number (auto-resolves all state)
   --input <path>  Path to a JSON file with canonical-state payload
   --plan-file <path>  Path to a phase-doc-format plan to start locally
   --spike <path>  Path to a spike artifact to start a spike loop locally
 Optional modifier:
   --claim        With --issue <n> or --pr <n> only: if the target is open and unassigned,
-                 assign the current user (the only GitHub write; open targets only; it also writes the local run-context file), then start. Pass it
+                 assign the current user (the only GitHub write; open targets only; it also writes the local run-context file), then start. An issue without a clean grill stops first, before any claim write. Pass it
                  only when the user explicitly asked to start or continue that
                  exact target. With --pr, an unreadable linked issue refuses
                  the claim. Rejected with --review/--ui-review/--input/
@@ -799,10 +801,6 @@ const OWNERSHIP_GATE_BYPASS_VAR = "DEVLOOPS_OWNERSHIP_BYPASS";
 function ownershipGateBypassed(env) {
   return (env?.[OWNERSHIP_GATE_BYPASS_VAR] ?? "").trim() === "1";
 }
-function hasAcSection(body) {
-  if (typeof body !== "string" || body.length === 0) return false;
-  return /##\s*Acceptance Criteria|##\s*AC\b|###\s*Acceptance Criteria|###\s*AC\b/i.test(body);
-}
 function resolveTargetPreference(cwd) {
   const devloopsCandidates = [
     path.join(cwd, ".devloops"),
@@ -939,25 +937,21 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       return buildAutoResolvedInput({ pr: linkagePayload.prNumber, cwd: repoRoot,
         targetPreference: resolvedTargetPreference, inputSource, claim, expectedIssue: issue, env });
     }
-    let issueReadiness;
     let issueReadinessReason;
-    try {
-      const issueJson = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "body"], repoRoot, env);
-      issueReadiness = hasAcSection(issueJson.body) ? "ready" : "needs_clarification";
-    } catch {
-      issueReadiness = "needs_clarification";
-      warnings.push(`issueReadiness: using default "${issueReadiness}" — gh issue view failed`);
-    }
-    // GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL: a ready spec that changed after
-    // its latest grill goes back to the grill. Runs regardless of the AC
-    // heading (linked refinement documents, edited-out headings); the existing
-    // readiness value is kept when no change is found.
+    // GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL: the issue is ready exactly when its grill is clean.
+    let issueReadiness = "ready";
     {
       try {
         const facts = parseSpecChangeFacts(ghJson(buildSpecChangeFactsGhArgs({ repo, number: issue }), repoRoot, env));
-        if (detectSpecChangedSinceGrill({ comments: facts.comments, bodyLastEditedAt: facts.lastEditedAt, commentsTruncated: facts.commentsTruncated })) {
+        const grill = interpretRefinementGrillState(buildGrillFactsSnapshot({
+          body: facts.body,
+          comments: facts.comments,
+          bodyLastEditedAt: facts.lastEditedAt,
+          commentsTruncated: facts.commentsTruncated,
+        }));
+        if (grill.state !== GRILL_STATE.GRILL_CLEAN) {
           issueReadiness = "needs_clarification";
-          issueReadinessReason = SPEC_CHANGED_SINCE_GRILL_REASON;
+          issueReadinessReason = grill.reason ?? grill.state;
         }
       } catch (error) {
         issueReadiness = "needs_clarification";
@@ -1029,6 +1023,9 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     if (!ownershipGateBypassed(env)) {
       const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
       if (ownershipGateAppliesToStrategy(peekedStrategy)) {
+        const ownership = resolveOwnershipState(assignees, repoRoot, env);
+        // A grill stop keeps the foreign-owner refusal and skips the claim write and the unassigned refusal.
+        if (issueReadinessReason && ownership.state !== OWNERSHIP_STATE.ASSIGNED_TO_OTHER) return result;
         // --claim only claims an OPEN issue; the extra state read runs only
         // when a claim write is actually possible.
         let claimNow = false;
@@ -1042,7 +1039,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         }
         // Plain review is PR-only, so issue ownership errors intentionally do
         // not suggest the review selector.
-        enforceOwnershipGate(resolveOwnershipState(assignees, repoRoot, env), {
+        enforceOwnershipGate(ownership, {
           describeArtifact: `Issue #${issue}`,
           claimCommand: `dev-loops-run scripts/github/edit-issue.mjs --repo ${repo} --issue ${issue} --add-assignee @me`,
           claimArgs: ["issue", "edit", String(issue), "--repo", repo, "--add-assignee", "@me"],
@@ -1088,7 +1085,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   if (!review && !uiReview && !prJson?.author?.login) {
     throw new Error(`PR #${pr} author could not be read; fail closed — do not guess routing ownership.`);
   }
-  const closingIssue = review || uiReview ? null : selectPrClosingIssue(prJson);
+  const closingIssue = review || uiReview ? null : selectPrClosingIssue(prJson, expectedIssue);
   // The --issue route names the unit; refuse a different one before any claim write.
   if (expectedIssue !== undefined && closingIssue !== expectedIssue) {
     throw new Error(
@@ -1499,6 +1496,7 @@ export function buildResolveDevLoopStartupResult(input, {
   cwd,
   asyncStartMode = "required",
   config,
+  claim = false,
   resolveHasNewerMerge = inspectNewerMergeSinceCheckpoint,
 } = {}) {
   const effectiveEnv = env ?? adapter.getEnv();
@@ -1558,7 +1556,7 @@ export function buildResolveDevLoopStartupResult(input, {
     return {
       ...buildNeedsReconcileStartupResult(
         bundle,
-        `The spec-change read for issue #${issue} failed (${SPEC_CHANGE_READ_FAILED_REASON}). Retry startup; check the warnings for the read error (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
+        `Stop and reconcile the failed spec-change read for issue #${issue} (it failed: ${SPEC_CHANGE_READ_FAILED_REASON}). Retry with \`loop startup --issue ${issue}${claim ? " --claim" : ""}${canonicalSpecSource === "pr_body" ? " --lightweight" : ""}\`; check the warnings for the read error (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
         pendingRetrospectives,
       ),
       issueReadiness: input.issueReadiness,
@@ -1566,12 +1564,12 @@ export function buildResolveDevLoopStartupResult(input, {
       ...(input.warnings ? { warnings: input.warnings } : {}),
     };
   }
-  if (issueReadinessReason === SPEC_CHANGED_SINCE_GRILL_REASON) {
+  if (issueReadinessReason) {
     const issue = input.currentState?.target?.issue;
     return {
       ...buildNeedsReconcileStartupResult(
         bundle,
-        `Issue #${issue} changed after its latest "🔬 Grill / refinement results" comment (${SPEC_CHANGED_SINCE_GRILL_REASON}). Re-grill it with \`/dev-loops:loop-grill ${issue} --auto\` (or \`/loop-grill ${issue} --auto\` in the dev-loops repo itself), then re-run startup (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
+        `Stop and reconcile issue #${issue}, refusing the claim: no clean grill (${issueReadinessReason}). It needs a "🔬 Grill / refinement results" comment newer than every spec change, a valid AC / DoD matrix (or linked refinement doc), a Non-goals section, a "## Simplest design" section and a "simplicity-review:" line. Run the grill with \`/dev-loops:loop-grill ${issue} --auto\` (or \`/loop-grill ${issue} --auto\` in the dev-loops repo itself), then re-run startup (rules GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL, GRILL-SUBLOOP-SIMPLICITY-REVIEW).`,
         pendingRetrospectives,
       ),
       issueReadiness: input.issueReadiness,
@@ -1764,6 +1762,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     asyncStartMode,
     adapter,
     config: devLoopConfig,
+    claim: options.claim,
   }), { claim: options.claim, env: adapter.getEnv(), cwd: sessionCwd, repoRoot, issue: options.issue, pr: options.pr });
   if (result.ok === false) {
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout: stderr, stderr });

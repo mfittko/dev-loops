@@ -19,6 +19,7 @@
  */
 import path from "node:path";
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
+import { withHookMarker } from "./_bash-gate-decisions.mjs";
 import { isApprovalPath, approvalNameHit, ASK_APPROVAL_RECOVERY } from "./_ask-merge-approval.mjs";
 
 // File bodies are written, not addressed: scanning them would block a doc that mentions the directory.
@@ -61,10 +62,10 @@ try {
     if (hit !== null) break;
   }
   if (hit !== null) {
-    emitDeny(`MERGE-ASK-APPROVAL: the merge approval record directory is written by the harness hook only. No agent tool reads, writes or names it. The call names \`${hit.slice(0, 80)}\`; rephrase it without that name or path. ${ASK_APPROVAL_RECOVERY}`);
+    emitDeny(withHookMarker("MERGE_ASK_APPROVAL_NAME_HIT", `MERGE-ASK-APPROVAL: the merge approval record directory is written by the harness hook only. No agent tool reads, writes or names it. The call names \`${hit.slice(0, 80).replace(/\s+/g, " ")}\`; rephrase it without that name or path. ${ASK_APPROVAL_RECOVERY}`));
   }
 } catch (error) {
-  process.stderr.write(`MERGE-ASK-APPROVAL: the approval guard failed (${error?.message ?? error}), so the call is denied. If the message names the node limit, split or shrink the arguments and call again; otherwise report it to the operator.\n`);
+  process.stderr.write(withHookMarker("HOOK_GUARD_FAILED", `MERGE-ASK-APPROVAL: the approval guard failed (${String(error?.message ?? error).replace(/\s+/g, " ")}), so the call is denied.`) + "\n");
   process.exit(2);
 }
 emitAllow();

@@ -8,6 +8,8 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { resolveTargetedValidation } from "@dev-loops/core/loop/validation-classify";
+import { commandEnv, readBaseValidation } from "./resolve-validation.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { defaultInstallDeps, refreshDepsIfChanged } from "./_worktree-deps.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -20,14 +22,17 @@ safe additive case: a CHANGELOG.md conflict where both sides only ADD list/secti
 entries (keep BOTH sides, in order). ANY other conflicted path — or a non-additive
 CHANGELOG edit — FAILS CLOSED, naming the conflicted paths. Never guesses.
 
-After a clean merge (or an auto-resolved additive CHANGELOG) it runs \`bun run test:docs\`
-(unless --no-verify) and, with --push, pushes the branch.
+After an auto-resolved additive CHANGELOG it runs the commands that the default-branch
+\`validation.paths\` in \`.devloops\` select for the resolved files (unless --no-verify)
+and, with --push, pushes the branch. The selected commands run deduplicated and sorted
+(as resolveTargetedValidation returns them), not in config order. A failed command or an unreadable base config resets
+the branch to its pre-merge head and fails closed. A clean merge runs no command.
 
 Options:
   --base <branch>     Base branch to merge from (default: derived from \`gh pr view\`
                       base, falling back to "main").
   --repo-root <dir>   Repo working tree to operate in (default: cwd).
-  --no-verify         Skip \`bun run test:docs\` after resolving.
+  --no-verify         Skip the post-resolve verification commands.
   --push              Push the resolved branch to origin after verify.
   --json              Emit machine-readable JSON on stdout.
 
@@ -36,8 +41,9 @@ Output (stdout, JSON with --json):
     "base": "main", "resolvedFiles": ["CHANGELOG.md"], "pushed": false,
     "verified": true, "deps"?: { "ok": bool, "ran": bool, "reason"?, "exitCode"?, "stampWritten"? } }
   ("clean_merge" covers an already-up-to-date branch; "resolved" is the
-   auto-resolved additive-CHANGELOG case. "verified" is true when post-resolve
-   verification ran; it is absent with --no-verify. "deps" is present only when the
+   auto-resolved additive-CHANGELOG case. "verified" is true when every base
+   \`validation.paths\` command for the resolved files passed, and false when none applies
+   (a clean merge, or a resolved file with no mapped command); it is absent with --no-verify. "deps" is present only when the
    dependency install ran, that is when the fingerprint of bun.lock and the workspace
    package.json files differs from the stamp or no stamp exists.)
 Error output:
@@ -303,8 +309,13 @@ async function abortMerge({ cwd, env }) {
   await run("git", ["merge", "--abort"], { cwd, env });
 }
 
-export async function resolvePrConflicts(options, { env = process.env, runVerification = run, installDeps = defaultInstallDeps } = {}) {
+export async function resolvePrConflicts(options, { env = process.env, runVerification = run, installDeps = defaultInstallDeps, readBase = readBaseValidation } = {}) {
   const cwd = options.repoRoot;
+  const headResult = await run("git", ["rev-parse", "HEAD"], { cwd, env });
+  const preMergeHead = headResult.stdout.trim();
+  if (headResult.code !== 0 || !preMergeHead) {
+    throw new Error(`git rev-parse HEAD failed: ${headResult.stderr.trim() || `exit ${headResult.code}`}`);
+  }
 
   // Resolve base branch: explicit flag, else `gh pr view`, else "main".
   let base = options.base;
@@ -338,7 +349,7 @@ export async function resolvePrConflicts(options, { env = process.env, runVerifi
   const merge = await run("git", [...identity, "-c", "merge.conflictStyle=diff3", "merge", "--no-edit", `origin/${base}`], { cwd, env });
   if (merge.code === 0) {
     const result = { ok: true, action: "clean_merge", base, resolvedFiles: [], pushed: false };
-    await afterResolve(result, options, { cwd, env, runVerification, installDeps });
+    await afterResolve(result, options, { cwd, env, runVerification, installDeps, readBase, preMergeHead });
     return result;
   }
 
@@ -388,11 +399,11 @@ export async function resolvePrConflicts(options, { env = process.env, runVerifi
   }
 
   const result = { ok: true, action: "resolved", base, resolvedFiles: [SAFE_RESOLVABLE_PATH], pushed: false };
-  await afterResolve(result, options, { cwd, env, runVerification, installDeps });
+  await afterResolve(result, options, { cwd, env, runVerification, installDeps, readBase, preMergeHead });
   return result;
 }
 
-async function afterResolve(result, options, { cwd, env, runVerification, installDeps }) {
+async function afterResolve(result, options, { cwd, env, runVerification, installDeps, readBase, preMergeHead }) {
   // The merge may have pulled in a new dependency; install before verification or a later commit hook runs against stale node_modules.
   let root = cwd;
   try {
@@ -403,13 +414,40 @@ async function afterResolve(result, options, { cwd, env, runVerification, instal
   const deps = refreshDepsIfChanged(root, installDeps);
   if (deps.ran) result.deps = deps;
   if (options.verify) {
-    const verify = await runVerification("bun", ["run", "test:docs"], { cwd, env });
-    if (verify.code !== 0) {
-      const err = new Error(`Post-resolve verification (bun run test:docs) failed: ${verify.stderr.trim() || verify.stdout.trim() || `exit ${verify.code}`}`);
-      err.verifyFailed = true;
-      throw err;
+    result.verified = false;
+    // Git authored a clean merge; current-head CI stays its validation authority.
+    if (result.resolvedFiles.length > 0) {
+      const failVerify = async (message) => {
+        // Drop the unverified merge commit so a re-run repeats the merge and the verification.
+        const reset = await run("git", ["reset", "--keep", preMergeHead], { cwd, env });
+        let full = message;
+        if (reset.code !== 0) {
+          const current = (await run("git", ["rev-parse", "HEAD"], { cwd, env })).stdout.trim();
+          full = `${message}; ${reset.stderr.trim() || `git reset exit ${reset.code}`}; rollback failed; HEAD left at ${current}`;
+        }
+        const err = new Error(full);
+        err.verifyFailed = true;
+        throw err;
+      };
+      try {
+        const base = readBase(root);
+        if (base.reason) await failVerify(`Post-resolve verification refused: ${base.reason}`);
+        // Only the base block runs; the checkout's own validation block is never read.
+        // A full-repository profile (unmapped file) runs nothing here.
+        const selected = resolveTargetedValidation(result.resolvedFiles, base.validation.paths);
+        if (selected.profile === "targeted") {
+          for (const command of selected.commands) {
+            const verify = await runVerification("sh", ["-c", command], { cwd: root, env: commandEnv(env) });
+            if (verify.code !== 0) await failVerify(`Post-resolve verification (${command}) failed: ${verify.stderr.trim() || verify.stdout.trim() || `exit ${verify.code}`}`);
+          }
+          result.verified = true;
+        }
+      } catch (error) {
+        // A thrown base read or spawn error must still drop the unverified merge commit.
+        if (error.verifyFailed) throw error;
+        await failVerify(`Post-resolve verification error: ${error.message}`);
+      }
     }
-    result.verified = true;
   }
   if (options.push) {
     const push = await run("git", ["push"], { cwd, env });

@@ -20,7 +20,15 @@
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { SPEC_CHANGED_SINCE_GRILL_REASON, detectSpecChangedSinceGrill, fetchSpecChangeFacts } from "./refinement-grill-state.mjs";
+import { extractSection, stripFencedCode } from "./markdown-sections.mjs";
+import {
+  SPEC_CHANGED_SINCE_GRILL_REASON,
+  detectGrillProvenance,
+  detectSimplicityReview,
+  detectSpecChangedSinceGrill,
+  fetchSpecChangeFacts,
+  normalizeGrillSnapshot,
+} from "./refinement-grill-state.mjs";
 
 /**
  * This module owns:
@@ -1708,4 +1716,27 @@ export function diffPrBodyAgainstIssue({ prBody = "", issueBody = "" } = {}) {
   }
   compare("non-goals", readNonGoalItems(prBody), issueList(nonGoalPatterns));
   return hits;
+}
+
+/**
+ * The one reader of grill facts: startup and the grill detector both build
+ * their snapshot here, so both see the same comments and the same open-gap
+ * count (GRILL-SUBLOOP-SIMPLICITY-REVIEW). Pure.
+ *
+ * @param {{body?: string, comments?: Array, bodyLastEditedAt?: string|null, commentsTruncated?: boolean, surface?: string}} input
+ */
+export function buildGrillFactsSnapshot({ body = "", comments = [], bodyLastEditedAt = null, commentsTruncated = false, surface = "issue" } = {}) {
+  const provenance = detectGrillProvenance(comments);
+  return normalizeGrillSnapshot({
+    loaded: true,
+    detectRan: true,
+    surface,
+    openGapCount: detectIssueRefinementArtifact({ body }).finding ? 1 : 0,
+    unresolvedGapCount: 0,
+    provenanceRecorded: provenance.provenanceRecorded,
+    provenanceBypass: provenance.bypass,
+    simplestDesign: Boolean(extractSection(stripFencedCode(body), "Simplest design")),
+    simplicityReview: detectSimplicityReview(comments),
+    specChangedSinceGrill: detectSpecChangedSinceGrill({ comments, bodyLastEditedAt, commentsTruncated }),
+  });
 }

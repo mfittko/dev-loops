@@ -154,7 +154,7 @@ test("runCli: creates the issue and idempotently/fail-open attempts the Backlog 
     // the issue creation still succeeds and the run still exits 0.
     const code = await runCli(
       ["--repo", "o/n", "--title", "T", "--body", "b"],
-      { run, stdout, stderr, cwd: tempDir },
+      { run, stdout, stderr, cwd: tempDir, detectOriginSlug: () => null },
     );
     assert.equal(code, 0);
     const out = JSON.parse(stdout.get());
@@ -171,15 +171,47 @@ test("runCli: creates the issue and idempotently/fail-open attempts the Backlog 
   }
 });
 
+test("runCli: skips the board add when --repo differs from the checkout's origin", async () => {
+  const { run, calls } = stubGh({ stdout: "https://github.com/o/n/issues/42\n" });
+  const stdout = captureStream();
+  const stderr = captureStream();
+  const code = await runCli(
+    ["--repo", "o/n", "--title", "T", "--body", "b"],
+    { run, stdout, stderr, detectOriginSlug: () => "consumer/app" },
+  );
+  assert.equal(code, 0);
+  const out = JSON.parse(stdout.get());
+  assert.equal(out.ok, true);
+  assert.deepEqual(out.board, { enqueued: false, reason: "cross-repo" });
+  assert.ok(stderr.get().includes("not enqueued (cross-repo)"));
+  assert.equal(calls.length, 1);
+});
+
+test("runCli: still attempts the board add when --repo matches the origin case-insensitively", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "create-issue-board-"));
+  try {
+    const { run } = stubGh({ stdout: "https://github.com/o/n/issues/42\n" });
+    const stdout = captureStream();
+    const code = await runCli(
+      ["--repo", "O/N", "--title", "T", "--body", "b"],
+      { run, stdout, stderr: captureStream(), cwd: tempDir, detectOriginSlug: () => "o/n" },
+    );
+    assert.equal(code, 0);
+    assert.equal(JSON.parse(stdout.get()).board.reason, "no-board-configured");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("runCli: --jq extracts issueNumber; --silent maps to exit code", async () => {
   const { run } = stubGh();
   const stdout = captureStream();
-  const code = await runCli(["--repo", "o/n", "--title", "T", "--body", "b", "--jq", ".issueNumber"], { run, stdout });
+  const code = await runCli(["--repo", "o/n", "--title", "T", "--body", "b", "--jq", ".issueNumber"], { run, stdout, detectOriginSlug: () => null });
   assert.equal(code, 0);
   assert.equal(stdout.get().trim(), "42");
 
   const { run: run2 } = stubGh();
-  const code2 = await runCli(["--repo", "o/n", "--title", "T", "--body", "b", "--silent"], { run: run2, stdout: captureStream() });
+  const code2 = await runCli(["--repo", "o/n", "--title", "T", "--body", "b", "--silent"], { run: run2, stdout: captureStream(), detectOriginSlug: () => null });
   assert.equal(code2, 0);
 });
 
@@ -188,7 +220,7 @@ test("runCli: fails closed (exit 1) with {ok:false,error} JSON on gh failure", a
   const stderr = captureStream();
   const code = await runCli(
     ["--repo", "o/n", "--title", "T", "--body", "b"],
-    { run, stdout: captureStream(), stderr },
+    { run, stdout: captureStream(), stderr, detectOriginSlug: () => null },
   );
   assert.equal(code, 1);
   const parsed = JSON.parse(stderr.get().trim());

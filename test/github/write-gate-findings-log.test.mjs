@@ -1534,7 +1534,7 @@ test("writeGateFindingsLog records a findings_present carried angle's provenance
         perAngle: [
           { angle: "coverage", reviewer: "review-b", carriedFromHead: "b".repeat(40), carriedVerdict: "findings_present" },
           { angle: "pr-description", reviewer: "review-c" },
-          { angle: "holistic", reviewer: "review-d" },
+          { angle: "holistic", reviewer: "review-d" }, { angle: "kiss", reviewer: "review-d-k" }, { angle: "yagni", reviewer: "review-d-y" },
         ],
       }),
       tmpRoot: dir,
@@ -4244,7 +4244,7 @@ test("3297: a fanout_fanin write without --judge-verdict refuses when a judge pl
     const headSha = "c9".repeat(20);
     const base = { repo: "o/n", pr: 28, gate: "draft_gate", headSha, verdict: "clean", tmpRoot: tmpDir, findings: JSON.stringify([]) };
     assert.equal((await writeGateFindingsLog(base)).ok, true, "no judge plan");
-    const provenance = JSON.stringify({ distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "r1" }, { angle: "holistic", reviewer: "r2" }] });
+    const provenance = JSON.stringify({ distinctReviewers: 4, perAngle: [{ angle: "pr-description", reviewer: "r1" }, { angle: "holistic", reviewer: "r2" }, { angle: "kiss", reviewer: "r2-k" }, { angle: "yagni", reviewer: "r2-y" }] });
     assert.equal((await writeGateFindingsLog({ ...base, pr: 29, executionMode: "fanout_fanin", provenance })).ok, true, "no judge plan, fanout_fanin");
     const judgeDir = path.resolve(buildGateArtifactPath({ repo: "o/n", pr: 28, gate: "draft_gate", headSha, tmpRoot: tmpDir, dir: "gate-judge" }));
     await mkdir(judgeDir, { recursive: true });

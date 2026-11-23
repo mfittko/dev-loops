@@ -48,15 +48,9 @@ function runHook(script, payload, env = {}) {
   } catch {
     json = null;
   }
-  // SubagentStop blocks via exit code 2 + stderr JSON (unlike PreToolUse's stdout JSON), so
+  // SubagentStop blocks via exit code 2 + plain-text stderr (unlike PreToolUse's stdout JSON), so
   // surface stderr for those assertions.
-  let stderrJson = null;
-  try {
-    stderrJson = res.stderr.trim() ? JSON.parse(res.stderr) : null;
-  } catch {
-    stderrJson = null;
-  }
-  return { code: res.status, stdout: res.stdout, stderr: res.stderr, json, stderrJson };
+  return { code: res.status, stdout: res.stdout, stderr: res.stderr, json };
 }
 
 test(".claude/settings.json enables DEVLOOPS_COORDINATOR_READONLY — the only thing making the coordinator→worker write/verify boundaries live in this repo (#2082 pre-PR review)", () => {
@@ -741,9 +735,9 @@ test("SubagentStop hook blocks a subagent stop with a dirty worktree under tmp/w
 test("SubagentStop hook allows a clean worktree under tmp/worktrees/ (#1619)", () => {
   const dir = makeWorktree("clean", false);
   try {
-    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
+    const { code, stderr } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
     assert.equal(code, 0, "clean worktree must stop normally");
-    assert.equal(stderrJson, null, "no block output for a clean worktree");
+    assert.doesNotMatch(stderr, /^(?:policy-hook|stop):/m, "no block output for a clean worktree");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -756,9 +750,9 @@ test("SubagentStop hook is unaffected by a cwd outside tmp/worktrees/ (#1619)", 
   // worktree, so it cannot stand in for the outside case here.)
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-stop-outside-"));
   try {
-    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: outside });
+    const { code, stderr } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: outside });
     assert.equal(code, 0, "cwd outside tmp/worktrees/ must be unaffected");
-    assert.equal(stderrJson, null);
+    assert.doesNotMatch(stderr, /^(?:policy-hook|stop):/m);
   } finally {
     fs.rmSync(outside, { recursive: true, force: true });
   }
@@ -767,13 +761,13 @@ test("SubagentStop hook is unaffected by a cwd outside tmp/worktrees/ (#1619)", 
 test("SubagentStop hook exempts an interactive session awaiting commit authorization (#1619)", () => {
   const dir = makeWorktree("exempt", true);
   try {
-    const { code, stderrJson } = runHook(
+    const { code, stderr } = runHook(
       "subagent-stop-uncommitted-guard.mjs",
       { cwd: dir },
       { DEVLOOPS_COMMIT_AUTH_PENDING: "1" },
     );
     assert.equal(code, 0, "pending-commit-authorization session must be exempt");
-    assert.equal(stderrJson, null);
+    assert.doesNotMatch(stderr, /^(?:policy-hook|stop):/m);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -812,9 +806,9 @@ test("SubagentStop hook fail-safe-allows a mkdir-only (non-git) dir under tmp/wo
   // mkdir only — deliberately NO `git init` (and outside any git repo)
   fs.mkdirSync(dir, { recursive: true });
   try {
-    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
+    const { code, stderr } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
     assert.equal(code, 0, "non-git dir under tmp/worktrees/ must fail-safe allow the stop (exit 0)");
-    assert.equal(stderrJson, null, "fail-safe-allow path must not emit block output");
+    assert.doesNotMatch(stderr, /^(?:policy-hook|stop):/m, "fail-safe-allow path must not emit block output");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

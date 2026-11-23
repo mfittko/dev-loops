@@ -654,6 +654,9 @@
       "id": "GRILL-SUBLOOP-RATIONALE-COMMENT"
     },
     {
+      "id": "GRILL-SUBLOOP-SIMPLICITY-REVIEW"
+    },
+    {
       "id": "GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL"
     },
     {
@@ -815,6 +818,17 @@
     },
     {
       "id": "OPS-NO-INLINE-INTERPRETER"
+    },
+    {
+      "id": "OPS-NO-TIMEOUT-WRAPPER"
+    },
+    {
+      "id": "OPS-POLICY-HOOK-DENIAL-RECOVERABLE",
+      "enforcement": "doc"
+    },
+    {
+      "id": "OPS-HOOK-STOP-CLASS",
+      "enforcement": "doc"
     },
     {
       "id": "RUNNER-HANDOFF-TEARDOWN"

@@ -2,6 +2,127 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.12-pre.7
+
+### Added
+
+- Gate findings-log rounds record a `roundCause`, and `dev-loops loop round-causes` reports rounds and issues per merge plus round-1 `draft_gate` findings by developer-checklist coverage (#3426)
+- The 2026-11-19 Atlas as a dated snapshot under `docs/atlas/`, one file per section (#3482)
+
+### Changed
+
+- `merge-pr` waits up to 540 s for Gate evidence, then refuses a failed latest non-cancelled run without `gate-evidence` success, a timeout, or a head change after a wait or failed-run read (#3411)
+- An issue pickup in `loop startup` stops and prints the grill command unless the issue has a clean grill with a `## Simplest design` section and a `simplicity-review:` line (#3462)
+- An issue grilled before this change needs one more grill, because it has no review line; work with an open PR keeps its route (#3462)
+- The grill runs one fresh `review` agent with the `kiss` and `yagni` prompts, the new default of `refinement.roles` (#3462)
+- `kiss` and `yagni` are mandatory draft angles here: a ready PR that passed `draft_gate` earlier fails the fan-out provenance check after a main merge; ADR 0319 records the merge order (#3462)
+
+### Fixed
+
+- Issues created in another repository with `issue create --repo` are no longer added to the current checkout's board (#3386)
+- The operator-decision-recorder hook no longer denies commands that end in a simple output redirection such as `2>&1` or `>/dev/null` (#3450)
+- The gate reviewer bundle no longer follows a changed symlink out of the repository; it records the path as stripped (#3480)
+- Opening or restarting the run viewer no longer terminates an unrelated process that listens on the viewer port (#3489)
+- Base integration verifies a resolved changelog with the default-branch `validation.paths` commands instead of a hard-coded `bun run test:docs` (#3490)
+- `loop startup --issue <n>` now starts a gate round on a PR that closes several issues when `<n>` is one of them, and the refusal for an unnamed unit carries a `recovery` command (#3493)
+- The judge work order and the judge Bash refusal now steer to the worktree read forms the judge is allowed: `Read` at an absolute path or `git show <headSha>:<path>` without `-C` (#3494)
+- A loop startup that reconciles the board now makes about 12 GitHub calls instead of about 300, so it no longer trips the secondary rate limit (#3498)
+
+## 1.0.12-pre.6
+
+### Added
+
+- A converged `draft_gate` record now carries across a later base merge that leaves the PR patch unchanged, so the lane needs no extra gate round (#2752)
+- A clean base merge that edits a file the PR also changed records `partial_carry` when the PR's own hunks are unchanged, so only the angles for that file re-run (#3284)
+- A base merge with conflict resolutions records `resolution_delta`; re-run reviewers get `resolutionDeltaPaths` as the resolution scope and `resolutionDeltaFullPaths` for full review (#3284)
+- `dev-loops decision record` posts an `accept`, `exempt` or `defer` operator decision behind a `permissions.ask` prompt; Pi refuses it (#3300)
+- The Claude Bash hook denies the recorder from subagents and every non-canonical spelling (#3300)
+- `dev-loops status` reports a settings file that allows the recorder or drops its ask rules (#3300)
+- Calls to `gh` made through `@dev-loops/core` and repo scripts are logged to a shared `tmp/` file; `loop gh-calls` summarizes them. (#3338)
+- The implementation brief carries a config-sourced developer checklist and per-angle constraints; `loop pre-pr-review` requires per-id evidence; `gate finding-classes` reports top classes (#3395)
+- Copilot-only thread matcher and the A3, A4, A6 and A8 checklist lines plus detail merged into the CS1, I2 and K2 lines of the draft_gate angle prompts, shared with the developer checklist (#3396)
+- `RECOVERY-COMMAND-REQUIRED` rule and a CI ratchet over `ok: false` refusals, including the shared `scripts/lib` catch-all; CI fails on any count that differs from the committed baseline (#3420)
+- A test suite interrupts a stubbed gate round and fix pass after each step and checks recovery, with open recovery gaps tracked as known failures (#3421)
+- Rule `REFINE-STATE-RECOVERY-ROWS`: specs adding state or a fail-closed refusal need recovery rows; grill, refiner, checklist C4 and judge enforce it (#3425)
+- Claude Code: a yes answer to the merge approval question is the per-merge approval, via a signed hook record (#3438)
+
+### Changed
+
+- The Bash gate denies any subagent role a command whose raw text names `merge-pr`, `--check` included; the top-level session keeps the script (#2500)
+- The dev-loop skill and handoff contract state that the orchestrator is the only actor that runs `merge-pr.mjs`, and a brief has no merge step (#2500)
+- A `draft_gate` or `pre_approval_gate` round with no findings dispatches no judge pass; the judge emitter returns a skip result and the gate comment states the skip (#2926)
+- The `approve merge` marker may pin the PR patch-id (`approve merge <sha> patch-id <id>`), so a base-only head change keeps the approval; `merge-pr` reports `approvalMatch` (#3048)
+- The judge work order names the checker, carries example verdicts and prints Codex setup only for Codex; the checker prints usage on a wrong file (#3093)
+- The gate-context JSON replaces the `adjacentCode` file contents with an index of path, role, relatedTo and bytes, and the reviewer work order describes the fields of each optional read (#3095)
+- Gate reviewers read the filtered diff as size-capped parts that each fit one Read, cut at file and hunk boundaries, so the read no longer overflows and forces paging (#3095)
+- `.devloops` accepts a `trust` block (`githubActionsBot`, `reviewers`), read from the local default-branch ref, to trust review apps and opt out of Actions bot trust (#3198)
+- A script that reads trust-filtered text needs `origin/HEAD` and a local `origin/<default branch>`; else it exits 3 naming the fix (#3198)
+- `gate wait-for-units` defaults its tmp root, a pull refusal names the searched roots, and `check-retro-tooling.mjs` reads session transcripts (#3225)
+- `pr create --spike-file <findings.md>` opens a spike draft above `waiverLoc`, stamps a no-merge marker, and `ready-for-review` and `merge-pr` refuse that PR (#3249)
+- `loop spec-lint` prints the resolved size band in `checks.sizeForecast.band` and flags forecasts above `softLoc` or below `minLoc` as informational `size_band_*` findings (#3261)
+- A clean base merge carries the gate verdict unless the base delta touches a path that can change a gate outcome; lockfiles and other tooling no longer force a full round (#3306)
+- Copilot review is off (`refinement.maxCopilotRounds: 0`) in this repo until 2026-12-01 because the monthly quota ran out. Issue 3341 restores the cap to 1 (#3324)
+- A gate run now reads a pull request once for repeated identical fields, and the mergeable re-poll reads only the fields that change (#3339)
+- `gh` calls are paced per main checkout (`queue.ghMinIntervalMs`, max 10000). A secondary limit read from stderr backs off once, then fails `RATE_LIMITED` (ADR 0305) (#3340)
+- The gate pre-flight writes one coordination snapshot per PR head; the context writer and verdict poster reuse it, and the poster re-reads PR state live (#3342)
+- A draft_gate round fans out only on settled green current-head CI; red CI routes to the CI-fix route, and a verdict post refused for red CI hands back `fix_ci_failure` with the act list (#3414)
+- `gate consolidate-fanin` and `emit-fanout-dispatch.mjs` accept `--carry-forward-plan-file <path>`; the gate passes the keyed plan path, so carried finding text never reaches the command line (#3415)
+
+### Fixed
+
+- The gate coordinator checks for its dispatch tool first and returns `FANOUT_UNAVAILABLE` before validation when it is absent; the gate coordinator runs at a depth that keeps the `Agent` tool (#2505)
+- Agent-writable `reject=<gate>` and `defer=<gate>` copilot-body-disposition records, bound to the current-head judge ledger, clear a judged low Copilot body finding, also at the round cap (#2650)
+- Security: the Claude Bash hook denies raw `gh` comment, review, close/reopen-with-comment and graphql comment writes for every actor, wrapped forms included (#2701)
+- The Claude Bash hook has one predicate list: `decideBashGate` and the token rules decide every command (#2701)
+- A stray file under `tmp/retired-gate-rounds/<head>/` no longer makes every work-order pull at that head fail with `ENOTDIR` (#2929)
+- In a managed repo, the Claude Bash hook denies raw `gh pr edit` and `gh api` body writes to `pulls/<n>` and `issues/<n>` for every actor, including `--input` and graphql `updatePullRequest` (#3031)
+- In a managed repo, the Claude Bash hook denies a command that holds a brace word with more than 64 expansions (fails closed), even without a gh token (#3031)
+- In a managed repo, Claude Code's Bash hook now denies any `timeout N <sanctioned dev-loops command>` wrapper, for every actor (#3031)
+- The Claude hook denies a command with gh, pr, edit or create and a body flag; gh, api and a body field or --input; or gh, api, graphql and a mutation or body token, in any order (#3031)
+- `emit-fixer-work-order --threads-file` pins full thread bodies from `capture-review-threads --bodies`, so the thread-route fixer no longer works from 200-character excerpts (#3125)
+- `loop handoff` no longer reads the loop's own fixer disposition marker comment as a human comment and stops with `blocked_needs_user_decision` (#3205)
+- The operator focus file now carries a per-thread reply disposition and note, bound by `fingerprint` or `threadId` (#3206)
+- `verify-fixer-disposition.mjs` no longer posts "Fixed in commit" on a no-change or partly fixed thread; it posts the pinned disposition note (#3206)
+- A Claude Code lane keeps its PR runner claim with no `DEVLOOPS_RUN_ID`: `loop startup --claim` saves the run id in the linked worktree and refuses elsewhere (#3224)
+- `gate wait-for-units` heartbeats the PR runner claim during a long wait, and `loop runner-coordination` routes the claim helper (#3224)
+- A hung smoke job now fails after at most 45 minutes instead of 360, and the loop re-runs it with `rerun-failed-ci.mjs` without an operator (#3251)
+- The pre-push push-authority check skips a marker of another repo whose baseline is absent locally, and refuses on a git failure, so a fork checkout still fails closed (#3252)
+- Intake Phase 3b names the launcher forms for issue creation and sub-issue linking, so agents stop copying a raw issue-create form the Claude hook denies (#3259)
+- `refine verify` flags prose linkage only on a line that states parentage and quotes it (#3260)
+- `refine verify` skips `duplicate_ownership` for a line every sibling repeats word for word in a group of three or more siblings (#3260)
+- wait-pr-checks backs off and retries on a secondary rate limit, reads the head over REST when GraphQL is limited, and names the RATE_LIMITED budget (#3263)
+- The Bash gate treats `-h` or `--help` as a help request only when it is the first argument after the gh verb, so `gh pr merge 42 --squash --body -h` no longer bypasses the merge block (#3267)
+- The project board item query selects `__typename`, so pull request items list with `prNumber` set instead of as issues (#3268)
+- `queue add` reports an issue already on the board with `issueNumber` set and `prNumber` null, as `add-queue-item` now selects `__typename` (#3268)
+- The add-queue-item linked-doc test builds its refinement fixture in a temp dir passed as `cwd`, so it no longer deletes the checkout's `tmp/refinement` (#3269)
+- A clean base merge whose remerge diff is empty no longer counts as a PR-own change in the reviewer-only range, so a body-only cap round is not routed to the fixer (#3278)
+- The CI probe reads every page of check runs and commit statuses for a head, so a head with more than 100 check runs no longer reads as `ciStatus: none` (#3280)
+- A zero-thread operator-focus fix pass now gets a delta review on its focus round, and a zero-thread `commit_only` emission without focus refuses (#3286)
+- The draft_gate poster can publish a refused clean cap-round verdict at that round's own head, so `gate-evidence` no longer blocks the merge forever (#3287)
+- The full re-emission refusal test pins `CLAUDECODE`, so it passes under both the bare and the launcher command forms (#3292)
+- The gate coordinator writes the findings log after `judge-pass` from its `--ledger-out`, and the writer refuses an earlier `fanout_fanin` write while a judge plan has no verdict (#3297)
+- `loop spec-lint` flags a contract doc that owns a rule ID cited in the AC / DoD matrix when no row names the doc, so the ADR waiver stays satisfiable (#3304)
+- `edit-pr`, `edit-comment` and `create-pr` refuse an empty, whitespace-only or `null` body; `--allow-empty-body` overrides the guard and is not forwarded to `gh` (#3305)
+- A judge decision with `remedyKind: "pr_body"` marks a PR-body-only finding, so a cap round of such items exits by the body-only converged post, not a refused fixer route (#3309)
+- `write-gate-findings-log.mjs --rejudge-same-round` overlays `remedyKind: "pr_body"` onto the live same-head ledger in place, keeping the round number (`GATE-LEDGER-REJUDGE-SAME-ROUND`) (#3309)
+- A review-thread act item with no file refuses `body_item_locatable`, and a `remedyKind` outside `evidence_only` and `pr_body` is refused by the writer and validator (#3309)
+- Copilot review requests that never become observable no longer block `pre_approval_gate`: two such requests and two timed-out probes report `copilot_unavailable` (#3329)
+- `scripts/run-bun-test.mjs` runs `bun` when launched under Node, so the test wrapper no longer fails with MODULE_NOT_FOUND under `dev-loops-run` (#3331)
+- The Bash gate no longer denies subagent runs of the merge script test files; running `scripts/github/merge-pr.mjs` itself stays orchestrator-owned (#3345)
+- `upsert-verdict` posts a clean `draft_gate` or `pre_approval_gate` verdict with a `Base freshness: stale` line when only the base moved during the round (#3346)
+- `loop gate-coordination` routes a stale head to `resolve_merge_conflicts` before the ready flip and final approval (#3346)
+- The ADR waiver accepts a proof when the only issue change adds contract-doc paths to matrix rows, and pre-PR review flags a changed contract doc that no row names (#3349)
+- `loop pre-push-delta --reviewer-only` reviews the overlap of a clean base merge, a rename on either side counting by its destination (#3356)
+- A delta residue with a blank or whitespace `site` is siteless. It clears on a PR body edit after the sealed result or on a `sitelessSkipReason`, not on `noSitesReason` (#3364)
+- The emitted fixer `handbackCheck` passes `--repo` and `--pr`, and the sealed repo compares case-insensitively. A `--repo`/`--pr` that differs from the plan target is refused (#3364)
+- A clean cap round with an unposted verdict is no draft_gate evidence; `gate upsert-verdict --post-sealed-cap-round` posts it from the sealed ledger (#3366)
+- Reused worktrees and base merges reinstall deps when the dependency fingerprint differs from the install stamp or has none; the secret scanner names a missing package and the fix (#3369)
+- The delta coverage binding checks work order bytes against the emit-time plan and pull receipt hashes, so a fix that edits the fixer renderer no longer deadlocks (#3371)
+- `close-gate-findings` closes a judge-act `pr_body` review thread once the live PR body digest differs from the one recorded at the verdict head (#3373)
+- Rebuilding the gate context or re-emitting the fan-out at the same head retires the stale round and refuses while a reviewer runs (#3416)
+- A cap round whose fixer handed back `ci_failed` no longer dead-ends: the two post-cap refusals name distinct `recovery` commands (#3437)
+- Cap-round coverage is the clearing chain's union; reviewer-only `--cover-uncovered` seals a record per act ref, so no replacement PR; a bridged merge record is a link, not a start (#3443)
+
 ## 1.0.12-pre.5
 
 ### Changed

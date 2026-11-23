@@ -6,7 +6,7 @@
  * uncommitted changes in a worktree are destroyed with no warning — the only data-loss gap in
  * the enforcement audit. `LOCAL-COMMIT-BEFORE-EXIT` existed only as prose; this hook makes it
  * mechanical: when a subagent stops with a dirty worktree under `tmp/worktrees/`, refuse the
- * stop (exit code 2 + stderr JSON naming `LOCAL-COMMIT-BEFORE-EXIT`; a `Dirty paths (N):` header
+ * stop (exit code 2 + plain-text stderr naming `LOCAL-COMMIT-BEFORE-EXIT`; a `Dirty paths (N):` header
  * with the full dirty count, up to 50 listed paths, and — when there are more than 50 — a
  * trailing `… and X more` line with the remaining count) so the subagent commits before
  * exiting. Post-merge cleanup that force-removes worktrees can no longer destroy uncommitted
@@ -27,7 +27,7 @@
  * (git unavailable) allows the stop (nothing to guard).
  *
  * The SubagentStop block contract differs from PreToolUse: block = exit code 2 with the reason
- * as JSON on stderr (fed back to the subagent so it continues), allow = exit 0.
+ * as plain text on stderr (fed back to the subagent so it continues), allow = exit 0.
  */
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -78,7 +78,8 @@ export function runSubagentStopHook({
 } = {}) {
   const decision = evaluateSubagentStop(input, { env });
   if (decision.decision === "block") {
-    stderr.write(JSON.stringify({ decision: "block", reason: decision.reason }) + "\n");
+    // Plain text: exit 2 feeds stderr back raw, so the reason's last line stays a marker line.
+    stderr.write(decision.reason + "\n");
     return 2;
   }
   // Surface an advisory reason for an allowed stop without blocking it.

@@ -23,6 +23,11 @@ test("decideBashGate denies git stash on the target repo (refs/stash is shared a
   assert.match(d.reason, /refs\/stash is shared/);
 });
 
+test("decideBashGate passes the policy-hook marker line through unchanged", () => {
+  const d = decideBashGate({ command: "git stash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET });
+  assert.equal(d.reason.split("\n").at(-1), "policy-hook: WORKTREE-NO-STASH; compliant form: use `git diff`, a patch file or a scratch worktree");
+});
+
 test("decideBashGate allows git stash off the target repo", () => {
   assert.equal(decideBashGate({ command: "git stash pop", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
   assert.equal(decideBashGate({ command: "git stash pop", repoSlug: null, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
@@ -1629,8 +1634,11 @@ test("the judge refusal names Read, its offset and limit and the allowed search 
   assert.match(reason, /offset and limit/);
   for (const cmd of ["grep -n", "rg -n", "git show", "git diff"]) assert.ok(reason.includes(cmd), cmd);
   assert.match(reason, /single quotes/);
-  assert.match(reason, /`git diff` only as a range such as `origin\/main\.\.\.HEAD` or two revisions/);
+  assert.match(reason, /`git diff` only as a range such as `origin\/main\.\.\.<headSha>` or two revisions/);
   assert.match(reason, /glob characters/);
+  assert.ok(reason.includes("git show <headSha>:<path>"));
+  assert.ok(reason.includes("without `-C`"));
+  assert.match(reason, /`Read` at its absolute path under the evidence read.s `worktree:` line/);
   assert.doesNotMatch(reason, /Grep|Glob/);
 });
 

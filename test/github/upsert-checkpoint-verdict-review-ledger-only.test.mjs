@@ -10,9 +10,11 @@ test("#3199: --gate review accepts --findings-ledger as the only findings input"
   assert.equal(options.findingsLedger, "/tmp/ledger.json");
 });
 
-test("#3199: draft_gate and pre_approval_gate still require a findings input", () => {
+test("#3199/#3347: draft_gate and pre_approval_gate accept --findings-ledger alone but refuse a call with no findings input and no ledger", () => {
+  const noLedger = ["--execution-mode", "fanout_fanin", "--repo", "owner/repo", "--pr", "7", "--head-sha", HEAD, "--verdict", "clean", "--next-action", "x"];
   for (const gate of ["draft_gate", "pre_approval_gate"]) {
-    assert.throws(() => parseUpsertCheckpointVerdictCliArgs([...base, "--gate", gate, "--next-action", "x"]), /requires --repo/);
+    assert.equal(parseUpsertCheckpointVerdictCliArgs([...base, "--gate", gate, "--next-action", "x"]).findingsLedger, "/tmp/ledger.json");
+    assert.throws(() => parseUpsertCheckpointVerdictCliArgs([...noLedger, "--gate", gate]), /requires --repo/);
   }
 });
 

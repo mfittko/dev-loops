@@ -162,6 +162,7 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/loop/inspect-run-viewer/server.mjs` | Not a gate decision: read-only viewer |
 | `scripts/loop/inspect-run.mjs` | Not a gate decision: read-only report; a `config_load_failed` from Copilot evidence drops that evidence and is named in the report missing marker, with no default fallback |
 | `scripts/loop/print-gates.mjs` | Not a gate decision: prints gate settings |
+| `scripts/loop/round-causes.mjs` | Fail closed: `config_load_failed`, loaded with `loadDevLoopConfigStrict` from the repository root; not a gate decision, the checklist angle set only splits the retrospective report |
 | `scripts/loop/run-post-merge-actions.mjs` | Not a gate decision: post-merge actions run after the merge |
 | `scripts/loop/spec-context.mjs` | Not a gate decision: default tracker adapter |
 | `scripts/loop/ui-review-drive.mjs` | Not a gate decision: no recipe drives nothing |

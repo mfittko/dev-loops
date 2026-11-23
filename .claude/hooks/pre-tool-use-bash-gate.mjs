@@ -60,6 +60,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { decideBashGate, FIXER_AGENT_TYPE, normalizeAgentType, parseSanctionedPullLine } from "./_hook-decisions.mjs";
+import { withHookMarker } from "./_bash-gate-decisions.mjs";
 import { listCheckouts, parseFixerPullCommand, recordFixerAgentBinding } from "./_fixer-grants.mjs";
 import {
   commandContainsGhPrMerge,
@@ -296,29 +297,33 @@ const bashGateFacts = {
   humanMergeOnly,
   enforceCoordinator,
 };
-const COMMENT_REASON =
+const COMMENT_TEXT =
   "OPERATOR-OWNED-LINE: this command holds the tokens of a raw GitHub comment or review write (gh, issue or pr, comment and a body or editor flag; pr review and a body flag; close or reopen with a comment flag; or a gh api graphql addComment, updateIssueComment or addPullRequestReview mutation, or a REST issues comment write; a `$'...'` ANSI-C word in a command that holds one of the comment, review, close or reopen words is denied too, because the decoded flag is not judged), so it is blocked for every actor. " +
   "Post a new comment with `dev-loops-run scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <f>` and edit one with `dev-loops-run scripts/github/edit-comment.mjs`. " +
   "To read comments, use `gh pr view <n> --json comments`.";
+const COMMENT_REASON = withHookMarker("OPERATOR-OWNED-LINE", COMMENT_TEXT);
 const decision = decideBashGate(bashGateFacts);
 // The decider decides first. Only the decider's raw write denies (the body-write rule and the generic subagent external write deny) are replaced by the comment reason;
 // a registered rule such as COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY keeps its own remedy.
 if (decision.decision === "deny") {
   // The decision object carries no rule ID, so the reason prefix identifies the rule.
-  const genericRawWrite = /^(?:ADR-TRIPWIRE-STANDING-WAIVER:|Ad-hoc GitHub issue\/PR creation)/.test(decision.reason ?? "");
-  emitDeny(writeKind === "comment" && genericRawWrite ? COMMENT_REASON : decision.reason);
+  // The ADR-TRIPWIRE deny gets the recoverable comment text; the subagent ad-hoc write deny keeps its own stop marker.
+  const reason = decision.reason ?? "";
+  const replacement = reason.startsWith("ADR-TRIPWIRE-STANDING-WAIVER:") ? COMMENT_REASON
+    : reason.startsWith("Ad-hoc GitHub issue/PR creation") ? withHookMarker("SUBAGENT_EXTERNAL_WRITE", COMMENT_TEXT) : null;
+  emitDeny(writeKind === "comment" && replacement ? replacement : decision.reason);
 }
 if (writeKind === "comment") {
   emitDeny(COMMENT_REASON);
 }
 if (writeKind === "body") {
-  emitDeny(
+  emitDeny(withHookMarker("ADR-TRIPWIRE-STANDING-WAIVER",
     "ADR-TRIPWIRE-STANDING-WAIVER: this command holds the gh, pr, edit or create and body-flag tokens, or the gh, api and body-field (or --input) tokens, or the gh, api, graphql and updatePullRequest, updateIssue or body tokens, or a brace expansion too large to read, so it is blocked as a raw PR or issue body write. " +
     "To read a body, use `gh pr view <n> --json body`. " +
     "Write a PR body through the launcher: `dev-loops-run cli/index.mjs pr create` or `dev-loops-run cli/index.mjs pr edit` (it refuses a hand-written adr-tripwire:allow line). " +
     "Edit an issue body through `dev-loops-run cli/index.mjs issue edit`. " +
     "If the launcher command itself was denied because its title or body text holds the word gh, rephrase the title or move the text into the body file. " +
     "If a data word with many comma brace groups (a JSON or jq argument) tripped the size limit, write the data to a file and let a launcher command read it.",
-  );
+  ));
 }
 emitAllow();

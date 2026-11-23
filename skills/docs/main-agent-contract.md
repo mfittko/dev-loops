@@ -457,3 +457,7 @@ the full run.
 - Changing dev-loop resolver behavior
 - Modifying the subagent API itself
 <!-- /pi-only -->
+
+## Hook stop class
+
+- On a hand-back that quotes a `stop: process-change` marker, the main agent files the follow-up named by `OPS-HOOK-STOP-CLASS`. An orchestrator brief follows the command-ban scope of `OPS-HOOK-STOP-CLASS`.

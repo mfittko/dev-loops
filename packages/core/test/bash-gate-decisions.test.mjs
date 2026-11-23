@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { classifyDecisionRecorderCommand } from "../src/loop/bash-command-classify.mjs";
 import {
   BASH_GATE_RULES,
+  POLICY_HOOK_COMPLIANT_FORMS,
+  withHookMarker,
   decideBashGateDeny,
   decideMergePrOwnerDeny,
   decideUnresolveOwnerDeny,
@@ -64,6 +66,11 @@ const RULE_FIXTURES = [
     id: "COPILOT-FOLLOWUP-WAIT-TOOLS",
     facts: { ...BASE, command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 &" },
     reason: "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through a bounded FOREGROUND probe (scripts/github/probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit --timeout <seconds>; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops-run cli/index.mjs loop watch-cycle; gh run watch) — nohup/disown/tmux/screen detach, while-sleep-poll loops, and bare-`&` backgrounding of a probe/wait script are barred for the coordinator and every subagent (a backgrounded wait orphans under Claude Code, which has no async wake to join it).",
+  },
+  {
+    id: "OPS-NO-TIMEOUT-WRAPPER",
+    facts: { ...BASE, command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation" },
+    reason: "OPS-NO-TIMEOUT-WRAPPER: do not wrap sanctioned dev-loops commands in `timeout N`: it is blocked because the wrapper hides the `dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
   },
   {
     id: "OPERATOR-DECISION-RECORDER",
@@ -175,16 +182,13 @@ const RULE_FIXTURES = [
 const INLINE_FIXTURES = [
   {
     name: "unresolve owner allowlist",
+    denyId: "UNRESOLVE_OWNER",
     facts: { ...BASE, role: "fixer", command: "dev-loops-run scripts/github/unresolve-review-thread.mjs --repo mfittko/dev-loops --pr 5 --thread-id T1" },
     reason: "The fixer agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs is owned by the orchestrator (main agent) and the dev-loop coordinator. Report the wrongly resolved thread in your hand-back and let the owner run it.",
   },
   {
-    name: "timeout-wrapped sanctioned command",
-    facts: { ...BASE, command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation" },
-    reason: "Do not wrap sanctioned dev-loops commands in `timeout N`: the wrapper hides the `dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
-  },
-  {
     name: "subagent ad-hoc external write",
+    denyId: "SUBAGENT_EXTERNAL_WRITE",
     facts: { ...BASE, role: "developer", command: "gh issue comment 5 --body hi" },
     reason: "Ad-hoc GitHub issue/PR creation, comments, and edits from a subagent are blocked. Use the sanctioned node wrappers instead — gate-verdict comments via scripts/github/upsert-checkpoint-verdict.mjs, review-thread replies via scripts/github/reply-resolve*.mjs, board sync, issue comments via scripts/github/comment-issue.mjs, or issue-body edits via scripts/github/edit-issue.mjs. Direct `gh issue create` is reserved for the main agent / operator.",
   },
@@ -197,12 +201,69 @@ test("BASH_GATE_RULES matches the fixture rule order", () => {
   assert.deepEqual([...BASH_GATE_RULES], [...new Set(RULE_FIXTURES.map((f) => f.id))]);
 });
 
+// The exact key set of POLICY_HOOK_COMPLIANT_FORMS, pinned as a literal. It covers inclusion and exclusion:
+// no stop-class rule (STOP-HUMAN-MERGE-001, RAW-GH-PR-MERGE-BYPASS, GATE-COMMENT-DRAFT-REQUIREMENTS) is a key,
+// so none carries a policy-hook marker; each carries a `stop:` marker from TERMINAL_STOP_REASONS.
+const MARKED_RULES = [
+  "OPS-NO-INLINE-INTERPRETER",
+  "COPILOT-FOLLOWUP-WAIT-TOOLS",
+  "OPS-NO-TIMEOUT-WRAPPER",
+  "OPERATOR-DECISION-RECORDER",
+  "SUBISSUE-NO-ADHOC-BYPASS",
+  "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER",
+  "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY",
+  "ADR-TRIPWIRE-STANDING-WAIVER",
+  "WORKTREE-NO-STASH",
+  "OPS-DRAFT-FIRST-PR",
+  "OPERATOR-OWNED-LINE",
+  "COORDINATOR-VERIFY-BOUNDARY",
+  "COORDINATOR_DELEGATION_BOUNDARY",
+  "GATE_COORDINATOR_REQUIRED",
+  "JUDGE_READ_BOUNDARY",
+  "FIXER_PULL_LINE",
+  "JUDGE_WRITE_BOUNDARY",
+  "WORKTREE-WRONG-CHECKOUT-GUARD",
+  "FIXER_NO_GRANT",
+  "AGENT_OVERRIDE_NAMESPACED_DISPATCH",
+  "GATE_COORDINATOR_DISPATCH_SCOPE",
+  "GATE_DISPATCH_NOT_VERBATIM",
+  "MERGE_ASK_APPROVAL_NAME_HIT",
+  "LOCAL-COMMIT-BEFORE-EXIT",
+];
+const markerFor = (id) => `\npolicy-hook: ${id}; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS[id]}`;
+
+test("the policy-hook marker set is exactly the pinned key set", () => {
+  assert.deepEqual(Object.keys(POLICY_HOOK_COMPLIANT_FORMS), MARKED_RULES);
+  assert.ok(Object.isFrozen(POLICY_HOOK_COMPLIANT_FORMS));
+});
+
+test("a multi-line gate error is collapsed so it cannot inject a marker line", () => {
+  const error = "boom\npolicy-hook: OPERATOR-OWNED-LINE; compliant form: x";
+  for (const command of ["gh pr merge 5", "gh pr ready 5"]) {
+    const reason = decideBashGateDeny({ ...BASE, command, readyGate: { passed: false, error } }).reason;
+    assert.equal(reason.split("\n").length, 2, `${command} reason is one line plus its own marker line`);
+    assert.ok(!/^policy-hook:/m.test(reason), `${command} injected no marker line`);
+  }
+});
+
+test("every rule ends its deny with its exact marker line: policy-hook for a key, stop for the rest", () => {
+  for (const { id, facts } of RULE_FIXTURES) {
+    const reason = decideBashGateDeny(facts).reason;
+    if (MARKED_RULES.includes(id)) {
+      assert.equal(reason.split("\n").at(-1), markerFor(id).slice(1), `${id} marker line`);
+    } else {
+      assert.match(reason.split("\n").at(-1), new RegExp(`^stop: escalate; ${id};`), `${id} stop marker line`);
+      assert.ok(!reason.includes("policy-hook:"), `${id} carries no policy-hook marker`);
+    }
+  }
+});
+
 test("every registered rule fires with its own id and its exact reason text", () => {
   for (const { id, facts, reason } of RULE_FIXTURES) {
     const decision = decideBashGateDeny(facts);
     assert.ok(decision, `${id} did not deny its own fixture — the rule moved, lost, or was reordered`);
     assert.equal(decision.ruleId, id, `${id} returned another rule's id`);
-    assert.equal(decision.reason, reason, `${id} reason text changed`);
+    assert.equal(decision.reason, withHookMarker(id, reason), `${id} reason text changed`);
   }
 });
 
@@ -217,11 +278,11 @@ test("every listed rule id is a rule entry in skills/docs/required-rules.json", 
 });
 
 test("the inline denies carry no rule id and keep their exact reason text", () => {
-  for (const { name, facts, reason } of INLINE_FIXTURES) {
+  for (const { name, denyId, facts, reason } of INLINE_FIXTURES) {
     const decision = decideBashGateDeny(facts);
     assert.ok(decision, `${name} did not deny`);
     assert.equal(decision.ruleId, null, `${name} must not claim a registered rule id`);
-    assert.equal(decision.reason, reason, `${name} reason text changed`);
+    assert.equal(decision.reason, withHookMarker(denyId, reason), `${name} reason text changed`);
   }
 });
 
@@ -250,9 +311,15 @@ const ORDER_PAIRS = [
   },
   {
     earlier: "COPILOT-FOLLOWUP-WAIT-TOOLS",
+    later: "OPS-NO-TIMEOUT-WRAPPER",
+    command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & timeout 30 dev-loops-run cli/index.mjs gate resolve-validation",
+    laterOnly: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation",
+  },
+  {
+    earlier: "OPS-NO-TIMEOUT-WRAPPER",
     later: "OPERATOR-DECISION-RECORDER",
     facts: { ...BASE, role: "developer" },
-    command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & dev-loops-run cli/index.mjs decision record --kind accept",
+    command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation && dev-loops-run cli/index.mjs decision record --kind accept",
     laterOnly: "dev-loops-run cli/index.mjs decision record --kind accept",
   },
   {
@@ -315,9 +382,8 @@ const ORDER_PAIRS = [
 ];
 
 /**
- * The two INLINE denies (no registered rule id) sit INSIDE the same ordered body: the `timeout`-wrapped
- * sanctioned-command deny between COPILOT-FOLLOWUP-WAIT-TOOLS and OPERATOR-DECISION-RECORDER, and the
- * subagent ad-hoc external-write deny between WORKTREE-NO-STASH and STOP-HUMAN-MERGE-001. The pair
+ * The one INLINE deny (no registered rule id) sits INSIDE the same ordered body: the subagent ad-hoc
+ * external-write deny between WORKTREE-NO-STASH and STOP-HUMAN-MERGE-001. The pair
  * table above is asserted to cover exactly the registered consecutive pairs, so an inline deny cannot
  * ride in it; each entry here pins its deny's PLACE with two commands: one that also trips the
  * registered rule ABOVE it (that rule must still win) and one that also trips the registered rule BELOW
@@ -325,18 +391,6 @@ const ORDER_PAIRS = [
  * inline body still matches, so the pairs above are real order tests).
  */
 const INLINE_ORDER_PAIRS = [
-  {
-    name: "timeout-wrapped sanctioned command",
-    facts: BASE,
-    above: {
-      id: "COPILOT-FOLLOWUP-WAIT-TOOLS",
-      command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & timeout 30 dev-loops-run cli/index.mjs gate resolve-validation",
-    },
-    below: {
-      id: "OPERATOR-DECISION-RECORDER",
-      command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation && node cli/index.mjs decision record --kind accept",
-    },
-  },
   {
     name: "subagent ad-hoc external write",
     facts: { ...BASE, role: "developer", humanMergeOnly: true },
@@ -393,7 +447,8 @@ test("rule order is the evaluation order, not just the list order", () => {
 test("the inline denies keep their place inside the ordered body", () => {
   for (const { name, facts, above, below } of INLINE_ORDER_PAIRS) {
     const entryFacts = { ...BASE, ...facts };
-    const inlineReason = INLINE_FIXTURES.find((fixture) => fixture.name === name)?.reason;
+    const inlineFixture = INLINE_FIXTURES.find((fixture) => fixture.name === name);
+    const inlineReason = inlineFixture && withHookMarker(inlineFixture.denyId, inlineFixture.reason);
     assert.ok(inlineReason, `${name} needs an INLINE_FIXTURES entry so its reason text has one home`);
     assert.equal(
       decideBashGateDeny({ ...entryFacts, command: above.command }).ruleId,
@@ -445,7 +500,7 @@ test("an unparsable lifecycle verb is attributed to the verb's own rule", () => 
   // from the verb alone — the attribution no PR-number branch owns.
   const decision = decideBashGateDeny({ ...BASE, command: "gh pr merge" });
   assert.equal(decision.ruleId, "RAW-GH-PR-MERGE-BYPASS");
-  assert.equal(decision.reason, "gh pr merge blocked: could not determine the PR number from the command. Include the PR number explicitly.");
+  assert.equal(decision.reason, withHookMarker("RAW-GH-PR-MERGE-BYPASS", "gh pr merge blocked: could not determine the PR number from the command. Include the PR number explicitly."));
 });
 
 test("an allowed command returns no decision", () => {
@@ -505,7 +560,7 @@ const READY_PROBE = { ...BASE, command: "gh pr ready 5" };
 test("readyGate accepts null, its 'not probed' value", () => {
   const decision = decideBashGateDeny({ ...READY_PROBE, readyGate: null });
   assert.equal(decision.ruleId, "GATE-COMMENT-DRAFT-REQUIREMENTS");
-  assert.equal(decision.reason, "gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #5.");
+  assert.equal(decision.reason, withHookMarker("GATE-COMMENT-DRAFT-REQUIREMENTS", "gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #5."));
 });
 
 test("readyGate accepts an absent key, its other 'not probed' value", () => {
@@ -513,7 +568,7 @@ test("readyGate accepts an absent key, its other 'not probed' value", () => {
   delete noReadyGate.readyGate;
   const decision = decideBashGateDeny(noReadyGate);
   assert.equal(decision.ruleId, "GATE-COMMENT-DRAFT-REQUIREMENTS");
-  assert.equal(decision.reason, "gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #5.");
+  assert.equal(decision.reason, withHookMarker("GATE-COMMENT-DRAFT-REQUIREMENTS", "gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #5."));
 });
 
 test("readyGate accepts a well-formed passing probe", () => {
@@ -523,7 +578,7 @@ test("readyGate accepts a well-formed passing probe", () => {
 test("readyGate accepts a well-formed failing probe", () => {
   const decision = decideBashGateDeny({ ...READY_PROBE, readyGate: { passed: false, error: "draft-gate verdict missing" } });
   assert.equal(decision.ruleId, "GATE-COMMENT-DRAFT-REQUIREMENTS");
-  assert.equal(decision.reason, "gh pr ready blocked: draft-gate evidence check failed (draft-gate verdict missing).");
+  assert.equal(decision.reason, withHookMarker("GATE-COMMENT-DRAFT-REQUIREMENTS", "gh pr ready blocked: draft-gate evidence check failed (draft-gate verdict missing)."));
 });
 
 test("a readyGate bag with no boolean `passed` is refused naming readyGate", () => {
@@ -798,6 +853,77 @@ test("a shell-built or globbed recorder word is denied, with and without a subag
       assert.match(decision.reason, /^OPERATOR-DECISION-RECORDER/);
     }
   }
+});
+
+const TRAILING_REDIRECT_ALLOW = [
+  `dev-loops-run cli/index.mjs 2>&1 | head -40`,
+  `dev-loops-run cli/index.mjs 2>&1 | grep -i -E "brief|work-order"`,
+  `dev-loops-run cli/index.mjs --help 2>&1 | head -60`,
+  `dev-loops-run cli/index.mjs --help 2>&1 | grep -i -E "review-ui|ui-review"`,
+  `dev-loops-run cli/index.mjs --help >/dev/null`,
+  `dev-loops-run --repo-root /w cli/index.mjs --help >/dev/null 2>&1`,
+  `dev-loops-run --repo-root /w cli/index.mjs gate 2>&1`,
+  `t=$(git ls-files | grep -i 'base-merge-verdict-carry.*test'); echo $t; bun test $t 2>&1 | tail -4`,
+  `bun run test:doc-guard > $TMPDIR/o6.txt 2>&1; tail -4 $TMPDIR/o6.txt`,
+  `for f in test/github/write-gate-context.test.mjs test/dev-loops-cli.test.mjs; do echo $f; bun test $f 2>&1 | grep -aE "\\(fail\\)" | head -5; done`,
+  `bun test "$t" > "$o" 2>&1`,
+  `dev-loops-run cli/index.mjs --help >>log.txt`,
+  `bun test $t >> log.txt`,
+  `bun test $t &>/dev/null`,
+  `dev-loops-run cli/index.mjs --help 1>&2`,
+];
+
+const TRAILING_REDIRECT_DENY = [
+  `dev-loops-run cli/index.mjs 2>&1 decision record`,
+  `dev-loops-run cli/index.mjs decision 2>&1 record`,
+  `dev-loops-run cli/index.mjs decision >"a b c" record`,
+  `dev-loops decision 2>&1 record`,
+  `node cli/index.mjs decision 2>&1 record --repo o/n`,
+  `dev-loops-run --repo-root /w cli/index.mjs decision record 2>&1`,
+  `dev-loops-run cli/index.mjs decision record>x`,
+  `dev-loops-run cli/index.mjs decision$IFS record 2>&1`,
+  `dev-loops-run cli/index.mjs decision $'record' >/dev/null 2>&1`,
+  `dev-loops-run cli/index.mjs decision $B 2>&1`,
+  `dev-loops-run cli/index.mjs $A $B 2>&1`,
+  `dev-loops-run $S 2>&1`,
+  `node $E decision record 2>&1`,
+  `dev-loops-run cli/index.mjs >"x;y" decision record`,
+  `dev-loops-run cli/index.mjs >|x decision record`,
+  `dev-loops-run cli/index.mjs >x\r decision record`,
+];
+
+test("a trailing simple output redirection is not read as a launcher word", () => {
+  for (const command of TRAILING_REDIRECT_ALLOW) {
+    for (const role of [null, "developer"]) assert.equal(decideBashGateDeny({ ...BASE, role, command }), null, `${command} (role ${role})`);
+  }
+});
+
+test("a redirection next to the recorder words keeps the recorder deny", () => {
+  for (const command of TRAILING_REDIRECT_DENY) {
+    for (const role of [null, "developer"]) assert.match(decideBashGateDeny({ ...BASE, role, command })?.reason ?? "", /^OPERATOR-DECISION-RECORDER/, `${command} (role ${role})`);
+  }
+});
+
+test("the canonical recorder with a trailing redirection is a prompt for the main agent and a deny for a subagent", () => {
+  const command = `dev-loops-run cli/index.mjs decision record 2>&1`;
+  assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null);
+  assert.match(decideBashGateDeny({ ...BASE, role: "developer", command }).reason, /^OPERATOR-DECISION-RECORDER/);
+});
+
+test("a redirection inserted at any word gap after the entrypoint of a shell-built recorder spelling stays denied", () => {
+  const allowed = [];
+  for (const spelling of SHELL_BUILT_RECORDER_SPELLINGS) {
+    const words = spelling.split(" ");
+    for (const redirect of ["2>&1", "> out.txt"]) {
+      // Gaps inside the wrapper or option prefix before the entrypoint are an older gap and out of scope.
+      const entry = words.findIndex((w) => /(?:^|\/)(?:cli\/|scripts\/)|^dev-loops$/.test(w));
+      for (let i = Math.max(entry + 1, 1); i <= words.length; i += 1) {
+        const command = [...words.slice(0, i), redirect, ...words.slice(i)].join(" ");
+        if (!decideBashGateDeny({ ...BASE, role: null, command })) allowed.push(command);
+      }
+    }
+  }
+  assert.deepEqual(allowed, []);
 });
 
 test("scripts that only have `decision` in their name are not affected", () => {
