@@ -555,6 +555,14 @@ export function seedCapRoundActFindings(rawArtifacts, actList) {
   }
 }
 
+/** Issue 3460 AC6: only the fan-in mints the `cap:` defect key. A freshly reviewed finding that carries it loses the key and keeps its attribution check; a carried finding keeps its earlier seeded key. */
+export function reserveCapDefectKey(rawArtifacts) {
+  for (const a of rawArtifacts) {
+    if (typeof a.carriedFromHead === "string" || !Array.isArray(a.findings)) continue;
+    a.findings = a.findings.map((f) => (typeof f?.defectKey === "string" && f.defectKey.startsWith("cap:") ? Object.fromEntries(Object.entries(f).filter(([k]) => k !== "defectKey")) : f));
+  }
+}
+
 export function deriveFaninProvenance(rawArtifacts, emitPlan, headSha, carryForwardPlan) {
   const isCarried = (a) => typeof a.carriedFromHead === "string";
   const fresh = new Set(rawArtifacts
@@ -1499,8 +1507,9 @@ export async function consolidateGateFanin(options) {
 
   // Issue 3460 AC6: pre_approval_gate seeds each open act item of the draft cap round as an ordinary finding, whatever a delta record says, so the judge disposes it.
   // The `cap:<fingerprint>` defect key marks a seeded finding; the verdict poster reads it to apply the past-cap blocker rule. A capClosed item stays context (the residue read).
+  reserveCapDefectKey(rawArtifacts);
   if (options.gate === "pre_approval_gate" && emitPlan !== undefined && options.headSha !== undefined) {
-    const capRound = await resolveCapRound({ repo: emitPlan.repo, pr: emitPlan.pr, headSha: options.headSha }, { repoRoot: options.repoRoot ?? process.cwd(), onFailClosed: () => { throw new Error("cap_round_unreadable: the draft_gate cap-round ledger is unreadable, so pre_approval_gate cannot seed the cap act items (issue 3460 AC6)"); } });
+    const capRound = await resolveCapRound({ repo: emitPlan.repo, pr: emitPlan.pr, headSha: options.headSha }, { repoRoot: options.repoRoot ?? process.cwd(), onFailClosed: (cause) => { if (cause === "unreadable") throw new Error("cap_round_unreadable: the draft_gate cap-round ledger is unreadable or missing, so pre_approval_gate cannot seed the cap act items (issue 3460 AC6)"); } });
     if (capRound) seedCapRoundActFindings(rawArtifacts, capRoundActList(capRound.log.findings, capRound.log.headSha));
   }
 

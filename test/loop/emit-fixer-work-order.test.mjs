@@ -33,6 +33,7 @@ import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-
 import { addLocalOrigin, ensureOriginHead, makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
+import { coordinationAt } from "./_cap-round-route.mjs";
 
 // Seals a delta result file that exists and parses as an object with heads; fixtures that pin malformed results stay unsealed.
 const sealIfPresent = (tmpRoot, file) => {
@@ -3449,9 +3450,21 @@ test("issue 3460 AC7: a second cap-round pass emits at the pushed head with ever
     await rm(path.join(fx.root, "tmp", "gate-delta"), { recursive: true, force: true });
     const [open] = JSON.parse(await readFile(fx.files.actList));
     const focusFile = path.join(fx.root, "tmp", "focus.json");
+    // Rejected forms: no operator-decided item (plain text, an item without a decision, an item without a fingerprint) opens no later pass.
+    const note = { replyDisposition: "deferred", replyNote: "later" };
+    for (const rejected of [{ round: "text only" }, { items: [{ fingerprint: open.fingerprint, ...note }] }, { items: [{ threadId: "T1", ...note }] }]) {
+      await writeFile(focusFile, JSON.stringify(rejected));
+      await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate) }), (e) => e.refusal === "round_cap_reached");
+    }
     await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: open.fingerprint, decision: "Fix it in this PR" }] }));
     const ok = await fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate) });
     assert.equal(ok.workOrder.source, "act-list");
+    // The coordination read at the pushed head, with every delta record gone and the cap-round review posted, ends in ready.
+    const capReview = { author: { login: "operator", type: "User" }, authorAssociation: "OWNER", body: `<!-- dev-loops:gate-findings-review draft_gate ${fx.head.slice(0, 7)} round=2 -->\n**Verdict:** findings_present` };
+    const viewer = async (_cmd, args) => (args?.includes("user") ? { code: 0, stdout: JSON.stringify({ login: "agent" }), stderr: "" } : { code: 1, stdout: "", stderr: "stub" });
+    const end = await coordinationAt(fx.wt, { repo: REPO, pr: PR, head: candidate, reviews: [capReview], trustRuntime: { runChild: viewer }, draftOpenActList: { headSha: fx.head, openActCount: 1, blockers: [] } });
+    assert.equal(end.fixed, true);
+    assert.equal(end.nextAction, "mark_ready_for_review");
     await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate), fetchVerdictMarkers: async ({ headSha }) => summarizeGateReviewCommentMarkers([], { headSha }) }), (e) => e.refusal === "round_cap_reached" || e.refusal === "verdict_not_posted");
     const blockedAtCapHead = async ({ headSha }) => summarizeGateReviewCommentMarkers(verdictReviews(fx.head, ["draft_gate"]).map((r) => ({ ...r, body: r.body.replace("Verdict: clean", "Verdict: blocked") })), { headSha });
     await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate), fetchVerdictMarkers: blockedAtCapHead }), (e) => e.refusal === "round_cap_reached");

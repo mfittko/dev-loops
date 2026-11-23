@@ -117,8 +117,8 @@ export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied
 /**
  * The one cap-round-fixed fact of a PR coordination context (issue 3139): `{ capRoundFixed, failure }`, `failure` the typed `resolveCapRoundFixed` `onFailure` condition
  * (`cap_round_unresolved` on a throw or a cap reached with an unreadable ledger; a PR below the cap reports `failure: null`), or `clean_cap_verdict_unposted` for a clean cap round with no posted draft_gate review at its head (read from `prData.reviews`, trusted authors only).
- * `requirePostedCleanCap` (default true) turns that posted-verdict check off; `trustRuntime` is the runtime the trusted-evidence predicate reads. The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
- * A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
+ * `requirePostedCleanCap` (default true) turns the posted-verdict check off and also skips the cap exit (GATE-EXEC-ROUND-CAP-EXIT, `capExitHolds`: a posted, non-blocked draft_gate review at the cap-round head reaches `capRoundFixed` with no delta record); `trustRuntime` is the runtime the trusted-evidence predicate reads. The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
+ * A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cap exit or the cleared delta at the current head.
  * @param {{ repo: string, pr: number, currentHeadSha: string, prData?: { isDraft?: boolean, baseRefName?: string, reviews?: object[] } }} context
  */
 export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = resolveCapRoundFixed, requirePostedCleanCap = true, trustRuntime = {} }) {
@@ -146,7 +146,7 @@ export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = re
   return { capRoundFixed: Boolean(capRound), failure, ...(failureDetail ? { failureDetail } : {}) };
 }
 
-/** True when `capRound` is a clean cap round (ADR 0250) with no posted draft_gate header (`{ head, round }`) at its head and cap round: the proof then lives in a local ledger only. */
+/** True when `capRound` is a clean cap round (ADR 0250) with no posted draft_gate header (`{ head, round, verdict }`) at its head and cap round: the proof then lives in a local ledger only. */
 export const cleanCapVerdictUnposted = (capRound, postedHeads) => isCleanCapRound(capRound) && postedAtCapHead(capRound, postedHeads).length === 0;
 
 const postedAtCapHead = (capRound, postedHeads) => {
@@ -2249,6 +2249,7 @@ export const isCleanCapRound = (capRound) => capRound?.log?.verdict === "clean" 
  * The cap round of a draft_gate (ADR 0208): the last closed ledger when the completed rounds reached the cap (the count includes a finished live ledger at the current head; an unfinished or in-rewrite ledger never counts) and
  * that ledger is `findings_present` or `clean` (ADR 0250: a clean cap round has no act ref; its `residue` holds only `capClosed` items). Returns `{ log, residue }` or null. `residue` is the cap round's act items and `capClosed` items as
  * `{ fingerprint, file, line, title, disposition }`, the input `pre_approval_gate` receives.
+ * `onFailClosed(cause)` receives `unreadable` (an unreadable or missing ledger) or `not_cap_round` (a readable last ledger that is not findings_present or clean and holds no open act item, such as a blocked ledger).
  * The candidate set is the closed prior rounds plus the retained rounds of the current head. A finished live ledger at the current head counts and can be the cap round
  * (a PR-body-only edit leaves the head unchanged), the same count the coordination detector uses (`includeLiveCurrentHead`).
  */
@@ -2264,7 +2265,8 @@ export async function resolveCapRound(options, { repoRoot, onFailClosed = () => 
   const picked = (await readClosedPriorRoundLogs(ledger, { repoRoot, includeLiveCurrentHead: true, includeRetainedCurrentHead: true, withPaths: true, onUnreadable: () => { unreadable += 1; } })).at(-1);
   const log = picked?.log;
   // The persisted severity verdict can read `clean` for judge-act mediums whose posted review composes findings_present: an open act item makes the round a cap round too.
-  if (unreadable > 0 || !log || (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0)) { onFailClosed(); return null; }
+  if (unreadable > 0 || !log) { onFailClosed("unreadable"); return null; }
+  if (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0) { onFailClosed("not_cap_round"); return null; }
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
   let items = [];
   try { items = readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), log.headSha)?.items ?? []; } catch { /* unverifiable: keep every item */ }

@@ -14,6 +14,8 @@ import {
   detectMisplacedFindingsDiagnostic,
   fitsRenderBudget,
   parseConsolidateFaninCliArgs,
+  reserveCapDefectKey,
+  seedCapRoundActFindings,
 } from "../../scripts/loop/consolidate-fanin.mjs";
 import { execFileSync } from "node:child_process";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
@@ -5104,13 +5106,30 @@ test("#2526: a withheld over-budget round with --out at the keyed ledger is refu
   });
 });
 
+// Issue 3460 AC6: only the fan-in mints the `cap:` defect key. A fresh reviewer finding keyed `cap:x` loses it; a carried finding and the seeded `cap:<fingerprint>` item keep theirs.
+test("reserveCapDefectKey drops a reviewer-authored cap: key and keeps a seeded or carried one", () => {
+  const raw = [
+    { angle: "a", verdict: "findings_present", findings: [{ severity: "low", summary: "s", defectKey: "cap:x" }, { severity: "low", summary: "t", defectKey: "KEEP" }] },
+    { angle: "b", verdict: "findings_present", carriedFromHead: "abc", findings: [{ severity: "low", summary: "u", defectKey: "cap:carried" }] },
+  ];
+  reserveCapDefectKey(raw);
+  assert.equal("defectKey" in raw[0].findings[0], false, "cap:x authored by a reviewer finding");
+  assert.equal(raw[0].findings[1].defectKey, "KEEP");
+  assert.equal(raw[1].findings[0].defectKey, "cap:carried");
+  seedCapRoundActFindings(raw, [{ angle: "c", severity: "medium", summary: "s", fingerprint: "f1" }]);
+  const seeded = raw.at(-1).findings;
+  assert.equal(seeded[0].defectKey, "cap:f1", "cap:<fingerprint> minted by seedCapRoundActFindings");
+});
+
 // Issue 3460 AC6: a cap-round read failure at pre_approval_gate fails the fan-in; it never skips the seeding.
 test("consolidateGateFanin at pre_approval_gate fails closed on an unreadable cap-round ledger and proceeds when the ledgers are readable", async () => {
   const draftLedger = (root, head, text) => {
     const file = path.resolve(root, buildLogPath({ repo: "o/r", pr: "7", gate: "draft_gate", headSha: head, tmpRoot: path.join(root, "tmp") }));
     return mkdir(path.dirname(file), { recursive: true }).then(() => writeFile(file, text, "utf8"));
   };
-  for (const unreadable of [false, true]) {
+  // `blocked`: a readable last ledger that is no cap round seeds nothing and never throws cap_round_unreadable.
+  for (const mode of ["readable", "unreadable", "blocked"]) {
+    const unreadable = mode === "unreadable";
     await withFindingsDir({ "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } }, (dir) => withTempDir(async (planDir) => {
       const plan = { ...matchingEmitPlan(), gate: "pre_approval_gate", count: 0, units: [] };
       const planPath = await writeEmitPlan(planDir, plan);
@@ -5119,11 +5138,13 @@ test("consolidateGateFanin at pre_approval_gate fails closed on an unreadable ca
       await writeFile(path.join(repoRoot, ".devloops"), "version: 1\n", "utf8");
       for (const [i, c] of [..."1234"].entries()) {
         const head = c.repeat(40);
-        await draftLedger(repoRoot, head, unreadable && i === 3 ? "{not json" : JSON.stringify({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: head, verdict: "clean", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [] }));
+        await draftLedger(repoRoot, head, unreadable && i === 3 ? "{not json" : JSON.stringify({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: head, verdict: mode === "blocked" && i === 3 ? "blocked" : "clean", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [] }));
       }
       const run = () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "pre_approval_gate", headSha: EMIT_HEAD, tmpRoot: planDir, receiptTmpRoot: planDir, repoRoot });
       if (unreadable) await assert.rejects(run, /cap_round_unreadable/);
-      else assert.equal((await run()).ok, true);
+      else {
+        assert.equal((await run()).ok, true);
+      }
     }));
   }
 });

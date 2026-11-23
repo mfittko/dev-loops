@@ -753,7 +753,9 @@ async function emitPlan({
             if (await isBaseOnlyMergeSince({ fromHead: from, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd })) { baseOnly = true; break; }
           }
           // Issue 3460 AC7: for an operator-decided item (an operator focus file), the posted, non-blocked cap-round review makes a pushed descendant of the cap-round head a later pass without any delta record.
-          if (operatorFocusFile && !baseOnly &&!currentHeadLedgerExists() && headSha !== fromHead) {
+          // An operator-decided item: a focus item with a fingerprint and a decision (a text-only focus file or an item without either opens no later pass).
+          const decided = operatorFocusFile && !baseOnly && (await readOperatorFocusFile(abs(operatorFocusFile), { allowItems: true }))?.items?.some((item) => item.fingerprint !== undefined && item.decision !== undefined);
+          if (decided && !currentHeadLedgerExists() && headSha !== fromHead) {
             const posted = (await fetchVerdictMarkers({ repo, pr, headSha: fromHead, gate, runtime: { env, ghCommand, runChild } }))?.[gate];
             if (posted?.visible && posted.contractComplete === true && posted.verdict !== "blocked") { gitIn(cwd, "merge-base", "--is-ancestor", fromHead, headSha); baseOnly = true; laterPass = true; }
           }
