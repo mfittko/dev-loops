@@ -129,7 +129,7 @@ test("AC1: the inline path prints its prerequisites, escalation check and a writ
 });
 
 test("AC1: a resolver fallback continues with full dispatch, CI opt-out continues, and the zero count omits the flag", () => {
-  assert.match(runbook, /jq -e '\.fallback == true' "\$G\/\$GATE-\$H\.carry-forward-plan\.json"/);
+  assert.match(runbook, /jq -e --arg p "\$PREV" '\.fallback == true and \.prevHead == \$p' "\$G\/\$GATE-\$H\.carry-forward-plan\.json"/);
   assert.match(runbook, /carry nothing and continue with the full dispatch\. On any other non-zero exit stop and hand back the refusal/);
   assert.match(runbook, /unless the gate's `requireCi` is false \(`gates\.draft` or `gates\.preApproval`\): stop on that refusal, and continue when `requireCi` is false/);
   assert.match(runbook, /At a `count` of 0 omit `--expected-dispatch-units`/);
@@ -198,7 +198,7 @@ test("AC3: every rule ID in the runbook resolves to a rule marker, and every coo
 
 test("AC3: the runbook states the retry schedule, hard-4xx escalation, judge-pass rerun and approvals obligations", () => {
   assert.match(runbook, /Retry the same unit on a transient 429 or 5xx after 30s, 60s and 120s \(`planDispatchRetry`\)/);
-  assert.match(runbook, /Never abort the round on a transient failure\. When `planDispatchRetry` returns `reduceConcurrency: true`, halve the concurrency through `backoffMaxConcurrent`, recompute the waves and dispatch in the foreground\. On a hard 4xx \(for example 402\) retry nothing and escalate to the supervisor at once/);
+  assert.match(runbook, /Never abort the round on a transient failure\. When `planDispatchRetry` returns `reduceConcurrency: true`, halve the concurrency through `backoffMaxConcurrent`, recompute the waves, then fall back to foreground one-at-a-time dispatch\. On a hard 4xx \(for example 402\) retry nothing and escalate to the supervisor at once/);
   assert.doesNotMatch(runbook, /retry it once|fails after one retry|dispatch fails after/i);
   assert.match(runbook, /a dispatch fails with a hard 4xx/);
   assert.match(runbook, /On any other failure rerun steps 11 to 13 once at the same head[^.]*; stop on a second failure/);
@@ -227,7 +227,10 @@ test("AC3: a contract that loses a pinned phrase fails closed as contract_drift"
 });
 
 test("AC4: every runbook command and prose flag appears in its CLI usage, every --help exits 0, and the runbook stays within 16,000 characters", () => {
-  assert.ok(runbook.length <= 16000, `runbook is ${runbook.length} characters`);
+  // The CONTRACT= line embeds the install path, so measure with a fixed 200-character path budget.
+  const contractPath = path.join(DOCS, CONTRACT_FILE);
+  const budgeted = runbook.length - contractPath.length + 200;
+  assert.ok(budgeted <= 16000, `runbook is ${budgeted} characters with a 200-character path budget`);
   const commands = runbookCommands();
   assert.ok(commands.every((c) => c.script && c.script !== "..."), "the launcher placeholder is not a command");
   const usage = new Map();
@@ -246,7 +249,7 @@ test("AC4: every runbook command and prose flag appears in its CLI usage, every 
   // Flags named in prose must exist in some script the runbook runs (`--review` is the dev-loop route name, not a script flag).
   const everyUsage = [...usage.values()].join("\n");
   for (const flag of new Set(runbook.match(/--[a-z][a-z-]*/g))) {
-    if (flag === "--review") continue;
+    if (flag === "--review" || flag === "--arg") continue; // `--arg` is a jq flag
     assert.match(everyUsage, new RegExp(`${flag}(?![\\w-])`), `no script usage lists the prose flag ${flag}`);
   }
 });

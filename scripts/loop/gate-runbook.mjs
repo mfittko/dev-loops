@@ -19,6 +19,7 @@ const USAGE = `Usage: gate-runbook.mjs [--docs-dir <path>]
 Print the gate coordinator round runbook, a pinned projection of skills/docs/gate-review-sub-loop-contract.md.
 Refusal (stderr, JSON, exit 1): { "ok": false, "refused": true, "reason": "docs_dir_empty" | "contract_missing" | "rule_unresolved" | "contract_drift", "error": "...", "recovery": "..." }
 Argument error (stderr, text, exit 1): the parseArgs message and this usage, with no JSON envelope
+  -h, --help         Print this usage
   --docs-dir <path>  Directory that holds the canonical docs, non-empty (default: the package's skills/docs)`;
 
 export const CONTRACT_FILE = "gate-review-sub-loop-contract.md";
@@ -43,7 +44,8 @@ export const CONTRACT_PINS = [
   ["reduceConcurrency: true", "\`planDispatchRetry\` returns \`reduceConcurrency: true\`"],
   ["prior heads the dev-loop coordinator passes in the dispatch arguments", "prior heads the dev-loop coordinator passes in the dispatch arguments"],
   ["re-runs the judge at the current head", "rerun steps 11 to 13 once at the same head"],
-  ["fallback: true", "`fallback` is true"],
+  ["foreground one-at-a-time dispatch", "foreground one-at-a-time dispatch"],
+  ["fallback: true","`fallback` is true"],
 ];
 
 const renderRunbook = (docsDir) => String.raw`# Gate round runbook
@@ -65,8 +67,7 @@ SLUG="$(echo "$R" | tr / -)"; G="$W/tmp/gate-context/$SLUG/pr-$N"; F="$W/tmp/gat
 A="$W/tmp/gate-judge/$SLUG/pr-$N/$GATE-$H"; mkdir -p "$F" "$A"
 \`\`\`
 
-Operator focus (GATE-EXEC-OPERATOR-FOCUS). When the round arguments carry operator context write \`{ "round": "<text>" }\` to \`$F/focus.json\` and pass \`--operator-focus-file "$F/focus.json"\` to steps 7 and 11. Otherwise pass no focus file.
-
+Operator focus (GATE-EXEC-OPERATOR-FOCUS). When the round arguments carry operator context write \`{ "round": "<text>" }\` to \`$F/focus.json\` and pass \`--operator-focus-file "$F/focus.json"\` to steps 7 and 11.
 ## Steps
 
 0. Dispatch tool. Check tools for \`Agent\` (Claude Code) or \`subagent\` (Pi). When absent, return the \`FANOUT_UNAVAILABLE_MESSAGE\` result (\`FANOUT_UNAVAILABLE\`) at once, with a detail that names the missing tool. Run no other step.
@@ -84,10 +85,10 @@ Operator focus (GATE-EXEC-OPERATOR-FOCUS). When the round arguments carry operat
    \`dev-loops-run --repo-root "$W" scripts/loop/spec-context.mjs --repo "$R" --issue <n> --content-file "$G/$GATE-$H.diff" --head-sha "$H" --spec-out "$G/$GATE-$H.spec.json" --identity-out "$G/$GATE-$H.spec-identity.json" --jq .contentDigest\`
 5. Carry-forward (Phase 1.2). Skip on \`review\` and on the gate's first round (no prior head). Otherwise run the resolver for the latest prior head \`$PREV\`; a re-gate never skips it (GATE-EXEC-ANGLE-CARRY-FORWARD, GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED). Add \`--rerun-angle <angle>\` per GATE-EXEC-RERUN-ANGLE.
    \`dev-loops-run --repo-root "$W" scripts/github/resolve-angle-carry-forward.mjs --repo "$R" --pr "$N" --gate "$GATE" --prev-head "$PREV" --head-sha "$H" --spec-authority "$G/$GATE-$H.spec-identity.json" > "$F/carry.json"\`
-   Keep \`PLAN\` = \`jq -r .carryForwardPlanPath "$F/carry.json"\` and \`CARRIED\` = \`jq -c '[.carried[].angle]' "$F/carry.json"\`. When \`CARRIED\` is not empty, rerun step 3 with \`--carried-angles "$CARRIED"\`. On a non-zero exit run \`jq -e '.fallback == true' "$G/$GATE-$H.carry-forward-plan.json"\`: when the plan of this head records \`fallback\` is true, carry nothing and continue with the full dispatch. On any other non-zero exit stop and hand back the refusal.
+   Keep \`PLAN\` = \`jq -r .carryForwardPlanPath "$F/carry.json"\` and \`CARRIED\` = \`jq -c '[.carried[].angle]' "$F/carry.json"\`. When \`CARRIED\` is not empty, rerun step 3 with \`--carried-angles "$CARRIED"\`. On a non-zero exit run \`jq -e --arg p "$PREV" '.fallback == true and .prevHead == $p' "$G/$GATE-$H.carry-forward-plan.json"\`: when the plan of this head records \`fallback\` is true, carry nothing and continue with the full dispatch. On any other non-zero exit stop and hand back the refusal.
 6. CI check. Skip on \`review\`. Re-read current-head CI just before fan-out. Step 7's emitter refuses a red or unsettled head with \`ci_not_green\` unless the gate's \`requireCi\` is false (\`gates.draft\` or \`gates.preApproval\`): stop on that refusal, and continue when \`requireCi\` is false.
    \`dev-loops-run --repo-root "$W" scripts/github/wait-pr-checks.mjs --repo "$R" --pr "$N" --timeout 0 > "$F/ci.json"\`
-7. Emit (Phase 2). Round 1 of a head uses no \`--pending\`. After a carry-forward with \`CARRIED\`, or to resume at the same head, add \`--pending\` (and \`--carry-forward-plan-file "$PLAN"\` only with carried angles). Pass \`--ci-file\` on \`draft_gate\` and \`pre_approval_gate\`, and \`--operator-focus-file "$F/focus.json"\` when you wrote one.
+7. Emit (Phase 2). Round 1 of a head uses no \`--pending\`. After a carry-forward with \`CARRIED\`, or to resume at the same head, add \`--pending\` (and \`--carry-forward-plan-file "$PLAN"\` only with carried angles). Pass \`--ci-file\` on \`draft_gate\` and \`pre_approval_gate\`.
    \`dev-loops-run --repo-root "$W" scripts/github/emit-fanout-dispatch.mjs --repo "$R" --pr "$N" --gate "$GATE" --head-sha "$H" --ci-file "$F/ci.json" > "$F/emit.json"\`
    Read \`jq -c '{count, maxConcurrent}' "$F/emit.json"\` and \`jq -r '.units[] | .scope, .dispatchPrompt' "$F/emit.json"\`. A \`count\` of 0 means every angle is carried: dispatch no reviewer, skip steps 8 and 9, and continue at step 10.
 8. Waves (GATE-EXEC-FANOUT-CAPACITY, GATE-EXEC-FIRST-WAVE-RELEASE). Split the emitted units into waves of at most \`maxConcurrent\` units (\`gates.fanout.sequential: true\` means 1, GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK). Release the first wave at once, no primer. Run step 9 per wave and join it before the next.
@@ -98,13 +99,13 @@ Operator focus (GATE-EXEC-OPERATOR-FOCUS). When the round arguments carry operat
    Join (GATE-EXEC-HARNESS-JOIN) in the same turn, in the foreground, with an explicit \`--timeout\` and one \`--unit <scope>\` per unit of the wave:
    \`dev-loops-run --repo-root "$W" cli/index.mjs gate wait-for-units --emit-plan "$G/$GATE-$H.emit-plan.json" --unit <scope> --timeout 540\`
    The outcome decides, never a notification. \`all_done\`: continue. \`pending\` (GATE-EXEC-BOUNDED-WAIT-CAP): run \`reissue\` unchanged. \`timeout\`: re-run the original command with the original \`--timeout\`; after three consecutive \`timeout\` outcomes with the same \`missing\` scopes, stop with \`units_stalled\`. \`round_retired\`: stop with \`round_retired\` (GATE-EXEC-ROUND-RETIREMENT). Never join in the background, wait with \`sleep\`, a poll loop or \`Monitor\`, or end the turn to await a child (END-TURN-AND-AWAIT-WAKE). On Pi the blocking \`runs.all\` call is the join.
-   A failed unit follows GATE-EXEC-DISPATCH-RETRY-BACKOFF. Retry the same unit on a transient 429 or 5xx after 30s, 60s and 120s (\`planDispatchRetry\`). Never abort the round on a transient failure. When \`planDispatchRetry\` returns \`reduceConcurrency: true\`, halve the concurrency through \`backoffMaxConcurrent\`, recompute the waves and dispatch in the foreground. On a hard 4xx (for example 402) retry nothing and escalate to the supervisor at once.
+   A failed unit follows GATE-EXEC-DISPATCH-RETRY-BACKOFF. Retry the same unit on a transient 429 or 5xx after 30s, 60s and 120s (\`planDispatchRetry\`). Never abort the round on a transient failure. When \`planDispatchRetry\` returns \`reduceConcurrency: true\`, halve the concurrency through \`backoffMaxConcurrent\`, recompute the waves, then fall back to foreground one-at-a-time dispatch. On a hard 4xx (for example 402) retry nothing and escalate to the supervisor at once.
 10. Fan-in (Phase 3; GATE-EXEC-ARTIFACT-HEAD-STAMP). \`--expected-dispatch-units\` is the emitter's stdout \`count\`. At a \`count\` of 0 omit \`--expected-dispatch-units\`. On a carry-forward round add \`--carried-angles "$CARRIED" --carry-forward-plan-file "$PLAN"\`. A non-zero exit stops the round.
     \`dev-loops-run --repo-root "$W" cli/index.mjs gate consolidate-fanin --repo "$R" --pr "$N" --findings-dir "$W/tmp/gate-reviews/$SLUG/pr-$N/$GATE-$H" --head-sha "$H" --gate "$GATE" --expected-dispatch-units <n> --out "$F/findings.json" --ledger-out "$F/ledger.json" --spec-authority "$G/$GATE-$H.spec-identity.json" --emit-plan "$G/$GATE-$H.emit-plan.json" > "$F/fanin-result.json"\`
     Read \`jq -c '{overallVerdict, severityCounts}' "$F/fanin-result.json"\`.
 11. Judge work order (Phase 3.5; GATE-EXEC-JUDGE-PHASE, GATE-EXEC-JUDGE-NOT-FRESH). Pass no \`--round\`: the emitter derives it. For each head in \`$PRIORS\` add \`--prior-verdict <that head's judge-verdict path>\`, read from its \`judge-emit-plan.json\` \`.workOrder.outputRefs\`.
     \`dev-loops-run --repo-root "$W" scripts/loop/emit-judge-work-order.mjs --repo "$R" --pr "$N" --gate "$GATE" --head-sha "$H" --findings-file "$F/ledger.json" --spec-file "$G/$GATE-$H.spec.json" --identity-file "$G/$GATE-$H.spec-identity.json" --tmp-root "$W/tmp" > "$F/judge-emit.json"\`
-    Add \`--operator-focus-file "$F/focus.json"\` when you wrote a focus file. When it returns \`judgeSkipped\`, dispatch no judge, run no \`judge-pass\`, join no judge, write the log with step 14, and return \`judgeSkipped\` and \`scopeDrift\` in place of the judge summary with no act-list path.
+    When it returns \`judgeSkipped\`, dispatch no judge, run no \`judge-pass\`, join no judge, write the log with step 14, and return \`judgeSkipped\` and \`scopeDrift\` in place of the judge summary with no act-list path.
 12. Dispatch the judge. Read \`jq -r '.planPath, .dispatchPrompt' "$F/judge-emit.json"\`. One \`Agent\` call, \`subagent_type: "dev-loops:judge"\`, \`prompt\` = \`dispatchPrompt\` byte for byte, model per MAIN-CLAUDE-DISPATCH-MODEL (\`gate resolve-role --role judge --harness "$HARNESS"\`). Join it as in step 9:
     \`dev-loops-run --repo-root "$W" cli/index.mjs gate wait-for-units --judge-plan <planPath> --timeout 540\`
     On a judge failure, emit and dispatch once more at the same head; a second failure stops the round.
