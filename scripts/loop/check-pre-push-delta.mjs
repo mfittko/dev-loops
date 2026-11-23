@@ -119,7 +119,7 @@ Output (stdout, JSON):
                     Also writes the cumulative baseline..candidate patch to input.patchPath (<tmp-root>/gate-delta/<baseline>-<candidate>-<runId>.patch); the reviewer reads it with the read tool and needs no shell.
                     Fill input.resultShape; on ACT copy its binding below unchanged.
   without --result, authenticated closure (requires --fixer-plan and --site-coverage, excludes --handback):
-                    { "ok": true, "outcome": "no_commit|head_moved", "nextStep": "push_to_gate",
+                    { "ok": true, "outcome": "no_commit|head_moved", "nextStep": "push_to_gate", "reason": "<closure explanation>",
                       "reviewBaselineHead": "<baseline sha>", "candidateHead": "<current HEAD sha>" }
                     HEAD equal to baseline yields no_commit; otherwise HEAD differing from the authenticated handback yields head_moved.
                     Removes the matching active ungranted branch marker instead of producing reviewer input or a patch.
@@ -954,7 +954,8 @@ export async function runCli(
         if (!readFileSync(options.fixerPlan).equals(planBytes) || !marker || marker.branch !== plan.workOrder.mutationAuthority.branch || marker.fullGranted || marker.execution?.executionIdentity !== plan.executionIdentity || marker.execution?.workOrderRef !== plan.workOrderRef) throw new Error("sequence closure requires the matching active commit_only branch marker");
         clearSequenceMarker(root, sequence.reviewBaselineHead);
       });
-      const payload = { ok: true, outcome: fixCommitted ? "head_moved" : "no_commit", nextStep: "push_to_gate", reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead };
+      const reason = `The sequence is closed as ${fixCommitted ? "head_moved" : "no_commit"}. Its marker is removed, so the push guard admits the push of HEAD. Next: push HEAD, then run the full gate round.`;
+      const payload = { ok: true, outcome: fixCommitted ? "head_moved" : "no_commit", nextStep: "push_to_gate", reason, reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead };
       process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
       return payload;
     }

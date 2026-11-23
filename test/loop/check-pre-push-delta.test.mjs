@@ -2155,13 +2155,13 @@ test("an all-body act list refuses delta_body_only_act_set with the edit-pr and 
 });
 
 // A real zero-thread commit_only emission carrying the focus round, as the fixer pulls it.
-async function focusEmission(round, payload = { ...THREADS, threads: [] }) {
+async function focusEmission(round, payload = { ...THREADS, threads: [] }, { cwd = coverageRepo, head = A } = {}) {
   const { emitFixerWorkOrder } = await import("../../scripts/loop/emit-fixer-work-order.mjs");
   const { dir, threadsFile } = threadsFixture(payload);
   const operatorFocusFile = path.join(dir, "focus.json");
   fs.writeFileSync(operatorFocusFile, JSON.stringify({ round }));
-  const unit = await emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "commit_only", threadsFile, operatorFocusFile, cwd: coverageRepo,
-    fetchPr: async () => ({ headRefName: "issue-1", headRefOid: A }), fetchVerdictMarkers: async () => ({ draft_gate: { visible: true, contractComplete: true } }), executionIdentity: `f${Date.now()}-${Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0")}` });
+  const unit = await emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: head, phase: "commit_only", threadsFile, operatorFocusFile, cwd,
+    fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }), fetchVerdictMarkers: async () => ({ draft_gate: { visible: true, contractComplete: true } }), executionIdentity: `f${Date.now()}-${Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0")}` });
   return { dir, threadsFile, unit, planPath: unit.planPath };
 }
 
@@ -2216,8 +2216,39 @@ test("a zero-thread focus sequence whose fixer hands back the baseline closes as
   const seam = headAt(A, tmpRoot);
   const result = await runDeltaCli(threadArgs(threadsFile, "--spec-identity", "s", "--worktree", coverageRepo, "--fixer-plan", unit.planPath, "--site-coverage", output), seam);
   assert.equal(result.outcome, "no_commit");
+  assert.match(result.reason, /closed as no_commit\. Its marker is removed.*push of HEAD.*full gate round/);
   assert.equal(readSequenceMarker(tmpRoot, A), null);
 });
+test("a fixer commit plus a base merge closes as head_moved with a reason, and the push guard then admits HEAD (#3528)", async () => {
+  const { pullWorkOrder } = await import("../../scripts/github/_work-order-protocol.mjs");
+  const { checkFixPushAuthority } = await import("../../scripts/loop/check-fix-push-authority.mjs");
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "head-moved-")));
+  try {
+    initGitFixture(dir, { branch: "issue-1" });
+    const git = (...args) => runGitFixture(dir, ["-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args]);
+    const baseline = git("rev-parse", "HEAD");
+    git("branch", "main");
+    git("commit", "--allow-empty", "-qm", "fix: the fixer commit");
+    git("checkout", "-q", "main");
+    git("commit", "--allow-empty", "-qm", "base moves");
+    git("checkout", "-q", "issue-1");
+    git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
+    const head = git("rev-parse", "HEAD");
+    const { threadsFile, unit } = await focusEmission("tighten the summary wording", undefined, { cwd: dir, head: baseline });
+    const tmpRoot = resolveGateArtifactTmpRoot(dir);
+    await pullWorkOrder({ ref: unit.workOrderRef, digest: unit.workOrderDigest, execution: unit.executionIdentity, cwd: dir, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
+    const output = unit.workOrder.outputRefs[0];
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    fs.writeFileSync(output, JSON.stringify({ headSha: baseline, siteCoverage: [] }));
+    assert.notEqual(readSequenceMarker(tmpRoot, baseline), null);
+    const result = await runDeltaCli(threadArgs(threadsFile, "--spec-identity", "s", "--worktree", dir, "--fixer-plan", unit.planPath, "--site-coverage", output, "--baseline", baseline), headAt(head, tmpRoot));
+    assert.equal(result.outcome, "head_moved");
+    assert.match(result.reason, /closed as head_moved\. Its marker is removed.*push of HEAD.*full gate round/);
+    assert.equal(readSequenceMarker(tmpRoot, baseline), null);
+    assert.equal(checkFixPushAuthority(dir, [head]).ok, true);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 
 test("--threads-file with no unresolved thread records a locally_clear result against the operator-focus item", async () => {
   const { dir, threadsFile, planPath } = await focusEmission("tighten the summary wording");
