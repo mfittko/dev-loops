@@ -201,7 +201,7 @@ ui_e2e_scoping,run_ui_e2e_suite,1
 
 Type: `stateDiagram-v2`
 
-This is the inner PR loop that the gate evaluator consumes as `lifecycleState`. The table allows only one exit from draft and one from ready-no-feedback. Six states have no outgoing edge: `review_request_unavailable`, `blocked_needs_user_decision`, `low_signal_converged`, `round_cap_reached`, `round_cap_clean_fallback` and `copilot_unavailable`. The gate evaluator, not this table, routes the last four onward to `pre_approval_gate`. `no_pr` also has no edge. Derived from `TRANSITIONS` in `packages/core/src/loop/copilot-loop-state.mjs`.
+This is the inner PR loop that the gate evaluator consumes as `lifecycleState`. The table allows only one exit from draft and one from ready-no-feedback. Six states have no outgoing edge: `review_request_unavailable`, `blocked_needs_user_decision`, `low_signal_converged`, `round_cap_reached`, `round_cap_clean_fallback` and `copilot_unavailable`. The gate evaluator routes the last four onward to `pre_approval_gate`; this table holds no edge for them. `no_pr` also has no edge. Derived from `TRANSITIONS` in `packages/core/src/loop/copilot-loop-state.mjs`.
 
 ```mermaid
 stateDiagram-v2

@@ -368,7 +368,7 @@ sequenceDiagram
   participant AR as ask-record
   participant PM as post-merge
   participant SS as stop-guard
-  A->>CC: Bash, Read, Edit, Write, Grep, Glob or MCP call
+  A->>CC: Bash, Read, Edit, Write, NotebookEdit, Grep, Glob or MCP call
   CC->>AP: PreToolUse
   AP-->>CC: deny when the call names the approval record
   CC->>BG: PreToolUse Bash

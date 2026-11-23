@@ -8,7 +8,7 @@ source_commit: f6619004d3edc2caccc98edd96914a5706c5d59b
 
 ## Ideas and roadmap (not decided)
 
-This section maps what the backlog proposes, not what the code does. Every item here is not decided. Milestones are planning labels that the operator moves, and an open issue can change scope, move or close without shipping. The v2 epic states that it "defines requirements to qualify, not delivered capabilities", and a search of the repository code finds no v2 runtime (no Octokit and no SQLite store), so every v2 diagram is marked spec-only. The only code hits for "sqlite" are the `--experimental-sqlite` Node flag in `packages/core/src/loop/bash-command-classify.mjs` and its hook and test fixture copies. All issue counts come from one snapshot on 2026-11-23 of `gh issue list --state open --limit 500 --json number,title,milestone`, run in the repository checkout, which returned 237 open issues. Local phase status comes from `docs/IMPLEMENTATION_STATE.md` and `docs/phases/phase-8.md`.
+This section maps what the open backlog proposes. Every item here is not decided. Milestones are planning labels that the operator moves, and an open issue can change scope, move or close without shipping. The v2 epic states that it "defines requirements to qualify, not delivered capabilities", and a search of the repository code finds no v2 runtime (no Octokit and no SQLite store), so every v2 diagram is marked spec-only. The only code hits for "sqlite" are the `--experimental-sqlite` Node flag in `packages/core/src/loop/bash-command-classify.mjs` and its hook and test fixture copies. All issue counts come from one snapshot on 2026-11-23 of `gh issue list --state open --limit 500 --json number,title,milestone`, run in the repository checkout, which returned 237 open issues. Local phase status comes from `docs/IMPLEMENTATION_STATE.md` and `docs/phases/phase-8.md`.
 
 <a id="d182"></a>
 
@@ -32,7 +32,7 @@ xychart-beta
 
 Type: `pie`
 
-Share of the 237 open issues by the conventional prefix in the title (`fix`, `feat`, `gate` and so on). The insight: fixes (81) outnumber features (30) by more than two to one, so most open work repairs the existing v1 loop rather than adding surface. The numbers come from `gh issue list --state open --limit 500 --json number,title,milestone` followed by a title-prefix tally (`grep -oE '^[a-zA-Z-]+[(:]'`); "planning" groups epic, rfc, research and design; "other prefix" groups efficiency, refactor, chore, test, fixer, perf, size, recovery, pre-pr, measure, loop, developer and contracts. Not decided.
+Share of the 237 open issues by the conventional prefix in the title (`fix`, `feat`, `gate` and so on). The insight: fixes (81) are the largest prefix group and outnumber features (30) by more than two to one. The numbers come from `gh issue list --state open --limit 500 --json number,title,milestone` followed by a title-prefix tally (`grep -oE '^[a-zA-Z-]+[(:]'`); "planning" groups epic, rfc, research and design; "other prefix" groups efficiency, refactor, chore, test, fixer, perf, size, recovery, pre-pr, measure, loop, developer and contracts. Not decided.
 
 ```mermaid
 pie showData
@@ -145,7 +145,7 @@ timeline
 
 Type: `kanban`
 
-Board view of a sample of open issues, one column per milestone group. The insight: only the first column is the active release lane; the other columns are parked proposals that the operator can reorder at any time. Membership comes from `gh issue list --state open --limit 500 --json number,title,milestone`. The card selection is the analyst's sample, not a priority order. Not decided.
+Board view of a sample of open issues, one column per milestone group. The insight: only the first column is the active release lane; the other columns are parked proposals that the operator can reorder at any time. Membership comes from `gh issue list --state open --limit 500 --json number,title,milestone`. The analyst chose the cards as a sample; their order carries no priority. Not decided.
 
 ```mermaid
 kanban

@@ -60,7 +60,7 @@ flowchart LR
 
 Type: `xychart-beta`
 
-The number of routed subcommands in each namespace. `loop` (34) and `gate` (18) hold most of the surface, so the CLI is mainly a toolbox for the coordinator agents, with few commands meant for the operator. Counts come from an `awk` scan of each table in `cli/index.mjs` (`awk '/^ loop: \{/,/^ \},?/' cli/index.mjs | grep -c '\.mjs"'` and the same scan for `gate`, `pr`, `issue`, `inspect` and `refine`). `decision` (1) is a one-line table, so its count is read directly. The `queue` count (12) is the number of keys in `QUEUE_ROUTES`, and `project` (11) is that table minus `run`. `inspect` shows only its 2 routed subcommands; it also has 5 in-process lifecycle actions. Derived from `cli/index.mjs`.
+The number of routed subcommands in each namespace. `loop` (34) and `gate` (18) hold most of the surface, so the CLI is mainly a toolbox for the coordinator agents, with few commands meant for the operator. Counts come from an `awk` scan of each table in `cli/index.mjs` (`awk '/^  loop: \{/,/^  \},?/' cli/index.mjs | grep -c '\.mjs"'` and the same scan for `gate`, `pr`, `issue`, `inspect` and `refine`). `decision` (1) is a one-line table, so its count is read directly. The `queue` count (12) is the number of keys in `QUEUE_ROUTES`, and `project` (11) is that table minus `run`. `inspect` shows only its 2 routed subcommands; it also has 5 in-process lifecycle actions. Derived from `cli/index.mjs`.
 
 ```mermaid
 xychart-beta

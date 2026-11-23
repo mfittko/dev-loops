@@ -440,7 +440,7 @@ The eight Claude Code hook entry files, the event that triggers each one, and th
 ```mermaid
 flowchart LR
   subgraph events["hooks.json events"]
-    eTools["PreToolUse Bash, Read, Edit, Write, Grep, Glob, MCP"]
+    eTools["PreToolUse Bash, Read, Edit, Write, NotebookEdit, Grep, Glob, MCP"]
     eAsk["PreToolUse AskUserQuestion"]
     eBash["PreToolUse Bash"]
     eWrite["PreToolUse Edit or Write"]
