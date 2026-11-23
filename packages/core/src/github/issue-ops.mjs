@@ -335,15 +335,7 @@ export async function listIssues(options, { env = process.env, ghCommand = "gh",
 
 // ── detect-linked-issue-pr ──────────────────────────────────────────────
 
-export const LINKED_ISSUE_PR_QUERY = [
-  "query($owner:String!, $name:String!, $issue:Int!, $after:String) {",
-  "  repository(owner:$owner, name:$name) {",
-  "    issue(number:$issue) {",
-  "      timelineItems(first:100, after:$after, itemTypes:[CONNECTED_EVENT, CROSS_REFERENCED_EVENT]) {",
-  "        pageInfo {",
-  "          hasNextPage",
-  "          endCursor",
-  "        }",
+const LINKED_PR_NODES_LINES = [
   "        nodes {",
   "          __typename",
   "          ... on ConnectedEvent {",
@@ -372,6 +364,18 @@ export const LINKED_ISSUE_PR_QUERY = [
   "            }",
   "          }",
   "        }",
+];
+
+export const LINKED_ISSUE_PR_QUERY = [
+  "query($owner:String!, $name:String!, $issue:Int!, $after:String) {",
+  "  repository(owner:$owner, name:$name) {",
+  "    issue(number:$issue) {",
+  "      timelineItems(first:100, after:$after, itemTypes:[CONNECTED_EVENT, CROSS_REFERENCED_EVENT]) {",
+  "        pageInfo {",
+  "          hasNextPage",
+  "          endCursor",
+  "        }",
+  ...LINKED_PR_NODES_LINES,
   "      }",
   "    }",
   "  }",
@@ -592,4 +596,60 @@ export async function detectLinkedIssuePr({ repo, issue }, { env = process.env, 
       eventCreatedAt: selected.eventCreatedAt,
     },
   };
+}
+
+const LINKED_PR_BATCH_CHUNK = 50;
+
+function buildLinkedPrBatchQueryArgs({ owner, name, issues }) {
+  const aliases = issues.map((n) => [
+    `  i${n}: issue(number:${n}) {`,
+    "    timelineItems(first:100, itemTypes:[CONNECTED_EVENT, CROSS_REFERENCED_EVENT]) {",
+    "      pageInfo { hasNextPage }",
+    ...LINKED_PR_NODES_LINES,
+    "    }",
+    "  }",
+  ].join("\n"));
+  const query = ["query($owner:String!, $name:String!) {", "  repository(owner:$owner, name:$name) {", ...aliases, "  }", "}"].join("\n");
+  return ["api", "graphql", "--field", `owner=${owner}`, "--field", `name=${name}`, "--field", `query=${query}`];
+}
+
+// Batched detectLinkedIssuePr: one aliased query per 50 issues. Returns Map<issue, hasOpenLinkedPr>.
+// An errored alias, or a chunk whose stdout carries no `data`, leaves those issues out of the map.
+export async function detectLinkedIssuePrs({ repo, issues }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  const { owner, name } = parseRepoSlug(repo);
+  const result = new Map();
+  const validIssues = [...new Set(issues.filter((n) => Number.isInteger(n) && n > 0))];
+  for (let start = 0; start < validIssues.length; start += LINKED_PR_BATCH_CHUNK) {
+    const chunk = validIssues.slice(start, start + LINKED_PR_BATCH_CHUNK);
+    let payload;
+    try {
+      const out = await runChild(ghCommand, buildLinkedPrBatchQueryArgs({ owner, name, issues: chunk }), env);
+      // gh exits non-zero when one alias errors, but stdout still carries the partial `data`.
+      payload = parseJsonText(out.stdout);
+    } catch {
+      continue;
+    }
+    const repository = payload?.data?.repository;
+    if (!repository || typeof repository !== "object") continue;
+    for (const n of chunk) {
+      const connection = repository[`i${n}`]?.timelineItems;
+      if (!connection) continue;
+      if (connection.pageInfo?.hasNextPage) {
+        try {
+          result.set(n, (await detectLinkedIssuePr({ repo, issue: n }, { env, ghCommand, runChild })).hasOpenLinkedPr);
+        } catch {
+          // Leave this issue out of the map: it stays inert.
+        }
+        continue;
+      }
+      const candidates = [];
+      for (const node of Array.isArray(connection.nodes) ? connection.nodes : []) {
+        const normalized = normalizeLinkedPrNode(node);
+        const candidate = normalized && normalizeOpenSameRepoCandidate(normalized, repo);
+        if (candidate) candidates.push(candidate);
+      }
+      result.set(n, selectLinkedIssuePr(candidates) !== null);
+    }
+  }
+  return result;
 }

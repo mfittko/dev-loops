@@ -279,6 +279,24 @@ describe("list-queue-items", () => {
       assert.equal(result.items[0].issueNumber, null);
     });
 
+    it("returns contentState for issue and PR items", async () => {
+      const issue = makeItem("PVTI_i", "I_1", "Issue", 1, "Issue", "https://x/1", "Backlog");
+      issue.content.state = "OPEN";
+      const pr = makeItem("PVTI_p", "PR_2", "PullRequest", 2, "PR", "https://x/2", "Backlog");
+      pr.content.state = "MERGED";
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: getItemsResponse([issue, pr]) },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.deepEqual(result.items.map((i) => i.contentState), ["OPEN", "MERGED"]);
+    });
+
     it("items without content are skipped", async () => {
       const items = [
         { id: "PVTI_no_content", fieldValues: { nodes: [] }, content: null },
@@ -1097,7 +1115,7 @@ describe("table mode wiring through runCli (--table)", () => {
     assert.equal(parsed.ok, true);
     assert.deepEqual(
       Object.keys(parsed.items[0]).sort(),
-      ["contentId", "issueNumber", "itemId", "prNumber", "status", "title", "url"],
+      ["contentId", "contentState", "issueNumber", "itemId", "prNumber", "status", "title", "url"],
     );
   });
 });
