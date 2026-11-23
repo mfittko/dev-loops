@@ -173,7 +173,7 @@ export function decideBashGate({
         "Judge read-only boundary (agents/judge.agent.md, ADR 0106): the judge may run only its " +
         "dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line, " +
         "alone, with no chaining, redirection or substitution, or `dev-loops-run scripts/loop/check-judge-decision.mjs --file tmp/gate-judge/<path>.json`. Read " +
-        "files with `Read` (it accepts offset and limit), or search with read-only `grep -n`, `rg -n`, `git show` or `git diff`, with the pattern in single quotes (so `|` and `$` inside it pass), glob characters (`*`, `?`, `[`) only inside single quotes, `git diff` only as a range such as `origin/main...HEAD` or two revisions, no redirection, pipe, chaining, substitution or write flag; `Read` reaches any file the search refuses; never run other shell, test or build commands.",
+        "files with `Read` (it accepts offset and limit), or search with read-only `grep -n`, `rg -n`, `git show` or `git diff`, with the pattern in single quotes (so `|` and `$` inside it pass), glob characters (`*`, `?`, `[`) only inside single quotes, `git diff` only as a range such as `origin/main...HEAD` or two revisions, no redirection, pipe, chaining, substitution or write flag; read a PR worktree file with `Read` at its absolute path under the evidence read's `worktree:` line, or with `git show <headSha>:<path>` from your cwd without `-C`, because a git worktree shares one object store with its main checkout; `Read` reaches any file the search refuses; never run other shell, test or build commands.",
     };
   }
   // The fixer's binding is recorded only for the exact pull line (ADR 0107), so a modified one denies with the fix.
