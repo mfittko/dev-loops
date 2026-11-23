@@ -7,7 +7,7 @@ snapshot_date: 2026-11-19
 
 ## Ops, CI and release
 
-dev-loops ships through six GitHub Actions workflows and a tag-driven release. Pull requests run on a feature branch inside a worktree under `tmp/worktrees/dev-loops/`. CI on the current head is the validation authority, because this repo's `.devloops` sets `validation.mode: ci-only`. The runbook lands the release commit directly on `main` under the `DEVLOOPS_ALLOW_MAIN=1` override. The recent tags sit on squash-merged release pull requests instead, a path that `merge-pr.mjs --stable-release` supports. Pushing a `v*` tag then creates the GitHub Release and dispatches the npm publish. A stable tag also needs a fresh operator `approve release v<version>` comment, which two workflows check independently. Counts in this section come from `git tag` and `git for-each-ref` on the main checkout on 2026-11-19, unless a caption names another command.
+dev-loops ships through six GitHub Actions workflows and a tag-driven release. Pull requests run on a feature branch inside a worktree under `tmp/worktrees/dev-loops/`. CI on the current head is the validation authority, because this repo's `.devloops` sets `validation.mode: ci-only`. The runbook lands the release commit directly on `main` under the `DEVLOOPS_ALLOW_MAIN=1` override. The recent tags sit on squash-merged release pull requests instead, a path that `merge-pr.mjs --stable-release` supports. Pushing a `v*` tag then creates the GitHub Release and dispatches the npm publish. A stable tag also needs a fresh operator `approve release v<version>` comment, which two workflows check independently. Counts in this section come from `git tag` and `git for-each-ref` on the main checkout on 2026-11-23, unless a caption names another command.
 
 <a id="d129"></a>
 
@@ -71,7 +71,7 @@ block-beta
 
 Type: `gitGraph`
 
-A feature branch created by `ensure-worktree.mjs` from fresh `origin/main`, a squash-merged pull request, then a release branch whose bump is squash-merged and tagged on `main`. The runbook also allows a direct release commit on `main` with `DEVLOOPS_ALLOW_MAIN=1`, which the default-branch guard hooks refuse otherwise. The tags from v1.0.11 to v1.0.12-pre.5 point at release commits whose subjects carry a PR number (`git log -1 --format=%s <tag>`), while v1.0.5 to v1.0.10 carry none. Branch names, tag names and the PR number are synthetic. Derived from `skills/docs/worktree-guidance.md` (`WORKTREE-CREATE-PROVISION`, `WORKTREE-DEFAULT-BRANCH-GUARD`), `skills/docs/release-runbook.md` (Procedure), `scripts/release/bump-version.mjs` and `scripts/github/merge-pr.mjs` (default `--method squash`, `--stable-release`).
+A feature branch created by `ensure-worktree.mjs` from fresh `origin/main`, a squash-merged pull request, then a release branch whose bump is squash-merged and tagged on `main`. The runbook also allows a direct release commit on `main` with `DEVLOOPS_ALLOW_MAIN=1`, which the default-branch guard hooks refuse otherwise. The tags from v1.0.11 to v1.0.12-pre.6 point at release commits whose subjects carry a PR number (`git log -1 --format=%s <tag>`), while v1.0.5 to v1.0.10 carry none. Branch names, tag names and the PR number are synthetic. Derived from `skills/docs/worktree-guidance.md` (`WORKTREE-CREATE-PROVISION`, `WORKTREE-DEFAULT-BRANCH-GUARD`), `skills/docs/release-runbook.md` (Procedure), `scripts/release/bump-version.mjs` and `scripts/github/merge-pr.mjs` (default `--method squash`, `--stable-release`).
 
 ```mermaid
 gitGraph
@@ -251,7 +251,7 @@ sequenceDiagram
 
 Type: `stateDiagram-v2`
 
-The life of a loop-owned worktree. `ensure-worktree.mjs` fetches, then reuses an existing worktree at the canonical path or creates one. An existing worktree on a different branch is a hard conflict. On create, the branch origin is an existing local branch, a tracked remote branch, or a new branch off the base, and only a created worktree gets `bun install --frozen-lockfile`. Both paths install the `pre-commit`, `pre-merge-commit` and `pre-push` guard hooks. After a confirmed merge, `scripts/github/merge-pr.mjs` calls `cleanupWorktree`. Cleanup skips a dirty or locked worktree or one that holds `tmp/gate-findings/` files, and never touches a path outside `tmp/worktrees/dev-loops/`. Derived from `skills/docs/worktree-guidance.md` (`WORKTREE-CREATE-PROVISION`, `WORKTREE-CLEANUP`), `scripts/loop/ensure-worktree.mjs`, `packages/core/src/loop/default-branch-guard.mjs` and `scripts/loop/cleanup-worktree.mjs`.
+The life of a loop-owned worktree. `ensure-worktree.mjs` fetches, then reuses an existing worktree at the canonical path or creates one. An existing worktree on a different branch is a hard conflict. On create, the branch origin is an existing local branch, a tracked remote branch, or a new branch off the base. A created worktree gets `bun install --frozen-lockfile`, and a reused worktree reruns it only when its dependency fingerprint differs from `node_modules/.dev-loops-deps-stamp`. Both paths install the `pre-commit`, `pre-merge-commit` and `pre-push` guard hooks. After a confirmed merge, `scripts/github/merge-pr.mjs` calls `cleanupWorktree`. Cleanup skips a dirty or locked worktree or one that holds `tmp/gate-findings/` files, and never touches a path outside `tmp/worktrees/dev-loops/`. Derived from `skills/docs/worktree-guidance.md` (`WORKTREE-CREATE-PROVISION`, `WORKTREE-CLEANUP`), `scripts/loop/ensure-worktree.mjs`, `packages/core/src/loop/default-branch-guard.mjs` and `scripts/loop/cleanup-worktree.mjs`.
 
 ```mermaid
 stateDiagram-v2
@@ -261,7 +261,7 @@ stateDiagram-v2
   Conflict --> [*]: hard error
   PathCheck --> Reused: worktree at path exists
   PathCheck --> Create: no worktree at path
-  Reused --> Guarded: reused-local or reused-detached
+  Reused --> Guarded: reused-local or reused-detached, bun install if deps fingerprint changed
   Create --> Provisioned: reused-local, tracked-remote or created-from-base
   Provisioned --> Guarded: bun install --frozen-lockfile
   Guarded --> Working: guard hooks installed
@@ -370,13 +370,13 @@ xychart-beta
 
 Type: `pie`
 
-All 68 version tags split by kind. `git tag | grep -c -v -e '-'` gives 35 stable tags, and the prerelease suffixes give 25 `pre`, 7 `rc` and 1 `slim`. Every prerelease kind maps to its own npm dist-tag channel and never to `latest`. Derived from `git tag` and `scripts/release/resolve-npm-dist-tag.mjs`.
+All 69 version tags split by kind. `git tag | grep -c -v -e '-'` gives 35 stable tags, and the prerelease suffixes give 26 `pre`, 7 `rc` and 1 `slim`. Every prerelease kind maps to its own npm dist-tag channel and never to `latest`. Derived from `git tag` and `scripts/release/resolve-npm-dist-tag.mjs`.
 
 ```mermaid
 pie showData
   title Version tags by kind (git tag)
   "stable" : 35
-  "pre" : 25
+  "pre" : 26
   "rc" : 7
   "slim" : 1
 ```
