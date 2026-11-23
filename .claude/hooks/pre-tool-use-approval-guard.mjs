@@ -62,7 +62,7 @@ try {
     if (hit !== null) break;
   }
   if (hit !== null) {
-    emitDeny(withHookMarker("MERGE_ASK_APPROVAL_NAME_HIT", `MERGE-ASK-APPROVAL: the merge approval record directory is written by the harness hook only. No agent tool reads, writes or names it. The call names ${JSON.stringify(hit.slice(0, 80))}; rephrase it without that name or path. ${ASK_APPROVAL_RECOVERY}`));
+    emitDeny(withHookMarker("MERGE_ASK_APPROVAL_NAME_HIT", `MERGE-ASK-APPROVAL: the merge approval record directory is written by the harness hook only. No agent tool reads, writes or names it. The call names \`${hit.slice(0, 80).replace(/\s+/g, " ")}\`; rephrase it without that name or path. ${ASK_APPROVAL_RECOVERY}`));
   }
 } catch (error) {
   process.stderr.write(withHookMarker("HOOK_GUARD_FAILED", `MERGE-ASK-APPROVAL: the approval guard failed (${String(error?.message ?? error).replace(/\s+/g, " ")}), so the call is denied.`) + "\n");
