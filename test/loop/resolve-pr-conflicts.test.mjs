@@ -812,6 +812,17 @@ describe("base merge inside an open fix sequence (#3528)", () => {
     }
   });
 
+  test("a fullGranted marker of this branch does not refuse the merge", async () => {
+    const { tempDir, workDir } = await setupDivergedRepo(additive());
+    try {
+      const baseline = git(workDir, ["rev-parse", "HEAD"]).trim();
+      writeSequenceMarker({ tmpRoot: resolveGateArtifactTmpRoot(workDir), baselineHead: baseline, branch: "feature", fullGranted: true });
+      assert.equal((await run(workDir)).action, "resolved");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("an active marker with origin/<base> already an ancestor returns clean_merge", async () => {
     const { tempDir, workDir } = await setupDivergedRepo(additive());
     try {
