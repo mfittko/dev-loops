@@ -1,3 +1,3 @@
 ### Added
 
-- `dev-loops gate runbook` prints the gate round runbook and fails closed with a `recovery` field when the gate contract changes. Gate agents name it in place of the contract link (#3096)
+- `dev-loops gate runbook` prints the pinned projection of the gate round runbook and fails closed with a `recovery` field when the gate contract changes (#3096)
