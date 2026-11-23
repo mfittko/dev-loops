@@ -33,7 +33,7 @@ export { BASH_GATE_RULES, DEV_LOOP_AGENT_TYPE, GATE_COORDINATOR_AGENT_TYPE, deci
 /**
  * @typedef {Object} HookDecision
  * @property {"allow"|"deny"|"block"} decision — `block` is the SubagentStop vocabulary
- *   (exit 2 + stderr JSON), used by `decideSubagentStopGuard`; `allow`/`deny` are the PreToolUse
+ *   (exit 2 + plain-text stderr), used by `decideSubagentStopGuard`; `allow`/`deny` are the PreToolUse
  *   vocabulary used by `decideBashGate`/`decideWriteGuard`.
  * @property {string} [reason] - Human-readable reason (shown to the agent on deny/block).
  */
@@ -492,7 +492,7 @@ export function isReadOnlySubagentRole(agentType) {
  * protection. An orchestrator that wants one consolidated commit performs the edits itself.
  *
  * Pure and side-effect free. The hook script gathers `cwd` and the `git status --porcelain`
- * output and calls this; the block decision is surfaced via exit code 2 + stderr JSON by the
+ * output and calls this; the block decision is surfaced via exit code 2 + plain-text stderr by the
  * hook (the SubagentStop contract differs from PreToolUse's `permissionDecision` form).
  *
  * @param {Object} params
@@ -682,7 +682,7 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
         decision: "deny",
         reason: withHookMarker("AGENT_OVERRIDE_NAMESPACED_DISPATCH",
           `AGENT_OVERRIDE_NAMESPACED_DISPATCH: \`dev-loops-run cli/index.mjs loop claude-launch\` rendered \`${bare}\` with extraTools for this session. ` +
-          `Dispatch the bare agent type \`${bare}\` instead of \`${targetAgentType}\`.`),
+          `Dispatch the bare agent type \`${bare}\` instead of ${JSON.stringify(targetAgentType)}.`),
       };
     }
   }

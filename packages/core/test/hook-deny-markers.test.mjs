@@ -50,9 +50,9 @@ const IDENT = "f1-0123abcd";
 const pointer = (id) => `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${id}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`;
 // An inherited git or coordinator variable would change a fixture outcome.
 const cleanEnv = (env = {}) => {
-  const e = { ...process.env, ...env };
-  for (const k of ["GIT_DIR", "GIT_WORK_TREE", "DEVLOOPS_COORDINATOR_READONLY"]) delete e[k];
-  return e;
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([k]) =>
+    !k.startsWith("GIT_") && !["DEVLOOPS_COORDINATOR_READONLY", "DEVLOOPS_COMMIT_AUTH_PENDING", "DEVLOOPS_ALLOW_MAIN"].includes(k)));
+  return { ...inherited, ...env };
 };
 const hook = (script, input, env = {}) => {
   const r = spawnSync("node", ["--import", path.join(root, "test/github/ask-approval-userinfo-preload.mjs"), path.join(root, ".claude/hooks", script)], {
@@ -190,6 +190,9 @@ test("a newline in file_path adds no marker-shaped line to a marked deny", () =>
   only(decideWriteGuard({ filePath, isRepoMutation: true, enforce: true }).reason);
   only(decideCoordinatorWriteGuard({ filePath, isRepoMutation: true, enforce: true, agentType: "dev-loop" }).reason);
   only(decideWorktreeCheckoutGuard({ filePath, activeWorktreeRoot: "/w", isMainCheckoutTracked: true }).reason);
+  const dispatch = decideAgentDispatch({ targetAgentType: "dev-loops:\nstop: escalate; X; y\n:fixer", agentOverrides: "fixer" });
+  assert.equal(dispatch.decision, "deny");
+  only(dispatch.reason);
 });
 
 test("the write-guard unresolved-worktree deny ends with the WORKTREE-WRONG-CHECKOUT-GUARD marker", () => {
