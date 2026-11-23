@@ -1157,6 +1157,14 @@ export async function judgePassCli(
     }
   }
 
+  // GATE-EXEC-LOW-FIX-UNTIL-CAP: name each judge `act` cluster a later step changed (derived, no state).
+  const overridden = [];
+  for (const d of judgeVerdict.dispositions) {
+    if (d.disposition !== "act") continue;
+    const changed = result.enriched.find((f, i) => (Number.isInteger(f.clusterId) ? f.clusterId : i) === d.index && f.judgeDisposition !== "act");
+    if (changed) overridden.push({ index: d.index, applied: changed.judgeDisposition, reason: changed.judgeReason ?? null });
+  }
+
   const payload = {
     ok: true,
     gate: options.gate,
@@ -1169,6 +1177,7 @@ export async function judgePassCli(
     act: fixerAct,
     ...(escalationRecords.length > 0 ? { escalations: escalationRecords } : {}),
     ...(escalationsSkipped ? { escalationsSkipped } : {}),
+    ...(overridden.length > 0 ? { overridden } : {}),
     ledgerOut: options.ledgerOut || undefined,
     out: options.out || undefined,
     specAuthority: specAuthority || undefined,
