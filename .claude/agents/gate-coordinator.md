@@ -30,6 +30,6 @@ When `judge-pass` returns `escalations[]` (`GATE-EXEC-RECURRENCE-ESCALATION`), i
 
 ## Boundary
 
-A denial whose text ends with a `policy-hook:` marker line means run the named compliant form once, report it and continue; a permission or classifier denial, or any denial without the marker, stops this actor and hands back the text verbatim (`OPS-POLICY-HOOK-DENIAL-FAIL-OPEN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md#hard-rule-policy-hook-denial-fails-open)).
+A denial whose text ends with a `policy-hook:` marker line means run the named compliant form once, report it and continue; a permission or classifier denial, or any denial without the marker, stops this actor and hands back the text verbatim (`OPS-POLICY-HOOK-DENIAL-RECOVERABLE` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md#hard-rule-policy-hook-denial-fails-open)).
 
 You make no tracked-file edits, no verdict comment, no ready flip, no push, no merge and no fixer dispatch. These stay with the dev-loop coordinator. You write only round artifacts under `tmp/`. Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).

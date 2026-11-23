@@ -274,7 +274,7 @@ Before gate dispatch, read `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/a
 
 The size-budget `block` and tripwire stops apply at the ready boundary (`nextAction` `resolve_adr_tripwire`, `resolve_size_budget` or `report_blocked`). Advisory `adrTripwire`/`sizeBudget` hits in a draft round (`nextAction: run_draft_gate`) are reported in the draft hand-back per `ADR-TRIPWIRE-EARLY-SURFACE` in [Decision record contract](../docs/decision-record-contract.md) and are not a stop condition. During draft rounds a size-budget `escalate` is advisory (reported in the hand-back). After the ready flip the existing runner stop on `escalate` applies, and merge-pr's `size_budget_human_approval` enforces the approve-merge marker.
 
-On a denial whose text ends with a `policy-hook:` marker line, the coordinator runs the named compliant form once, reports it and continues (`OPS-POLICY-HOOK-DENIAL-FAIL-OPEN` in [Copilot loop operations](../docs/copilot-loop-operations.md#hard-rule-policy-hook-denial-fails-open)). On a permission or classifier denial, or any denial without the marker, the coordinator quotes the denial text verbatim in its report and stops.
+On a denial whose text ends with a `policy-hook:` marker line, the coordinator runs the named compliant form once, reports it and continues (`OPS-POLICY-HOOK-DENIAL-RECOVERABLE` in [Copilot loop operations](../docs/copilot-loop-operations.md#hard-rule-policy-hook-denial-fails-open)). On a permission or classifier denial, or any denial without the marker, the coordinator quotes the denial text verbatim in its report and stops.
 
 ## Shorthand issue-based auto trigger contract
 

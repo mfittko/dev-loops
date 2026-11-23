@@ -139,7 +139,7 @@ export const BASH_GATE_RULES = Object.freeze([
 ]);
 
 /**
- * The deny rules whose compliant form the denied actor may run itself (OPS-POLICY-HOOK-DENIAL-FAIL-OPEN).
+ * The deny rules whose compliant form the denied actor may run itself (OPS-POLICY-HOOK-DENIAL-RECOVERABLE).
  * A deny for a key here ends with the marker line `policy-hook: <rule-id>; compliant form: <text>`;
  * a deny without the marker line is an authority-boundary deny and stops the actor. The hand-authored
  * `.claude/hooks/pre-tool-use-bash-gate.mjs` reads this map for its own two denies.

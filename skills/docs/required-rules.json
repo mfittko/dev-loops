@@ -823,7 +823,7 @@
       "id": "OPS-NO-TIMEOUT-WRAPPER"
     },
     {
-      "id": "OPS-POLICY-HOOK-DENIAL-FAIL-OPEN",
+      "id": "OPS-POLICY-HOOK-DENIAL-RECOVERABLE",
       "enforcement": "doc"
     },
     {

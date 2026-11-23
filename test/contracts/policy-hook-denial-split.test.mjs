@@ -1,7 +1,7 @@
 import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
 import { assertRuleOwned } from "./_rule-helpers.mjs";
 
-const RULE = "OPS-POLICY-HOOK-DENIAL-FAIL-OPEN";
+const RULE = "OPS-POLICY-HOOK-DENIAL-RECOVERABLE";
 const OWNER = "skills/docs/copilot-loop-operations.md";
 const ROLE_FILES = [
   "agents/fixer.agent.md",
