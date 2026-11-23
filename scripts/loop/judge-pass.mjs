@@ -108,7 +108,8 @@ Inputs:
                                clusterFingerprints } (clusterFingerprints is [] when
                                no sibling was withheld) and the stdout result
                                carries it too, plus escalationsSkipped when the round head
-                               commit is not in the repository, so the durable disposition ledger
+                               commit is not in the repository, and overridden ({ index, applied, reason })
+                               when a judge act cluster left the act list, so the durable disposition ledger
                                carries what the judge consciously marked act/defer/reject.
                                Every disposed finding also carries a \`fingerprint\`; a
                                \`defer\` finding additionally carries \`followUpIssueNumber\`
@@ -1157,6 +1158,14 @@ export async function judgePassCli(
     }
   }
 
+  // GATE-EXEC-LOW-FIX-UNTIL-CAP: name each judge `act` cluster a later step changed (derived, no state).
+  const overridden = [];
+  for (const d of judgeVerdict.dispositions) {
+    if (d.disposition !== "act") continue;
+    const changed = result.enriched.find((f, i) => (Number.isInteger(f.clusterId) ? f.clusterId : i) === d.index && f.judgeDisposition !== "act");
+    if (changed) overridden.push({ index: d.index, applied: changed.judgeDisposition, reason: changed.judgeReason === (typeof d.reason === "string" ? d.reason.trim() : undefined) ? null : changed.judgeReason ?? null });
+  }
+
   const payload = {
     ok: true,
     gate: options.gate,
@@ -1169,6 +1178,7 @@ export async function judgePassCli(
     act: fixerAct,
     ...(escalationRecords.length > 0 ? { escalations: escalationRecords } : {}),
     ...(escalationsSkipped ? { escalationsSkipped } : {}),
+    ...(overridden.length > 0 ? { overridden } : {}),
     ledgerOut: options.ledgerOut || undefined,
     out: options.out || undefined,
     specAuthority: specAuthority || undefined,

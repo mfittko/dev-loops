@@ -482,6 +482,7 @@ test("judgePassCli: a completed live same-head ledger counts as an earlier round
     { repoRoot: tmpDir, ...stubDeferralDeps().deps },
   );
   assert.equal(payload.actCount, 0, "round 2 closes the all-nit act cluster");
+  assert.equal(payload.overridden[0].applied, "reject");
 });
 
 test("judgePassCli: a re-judge in the same emit round (new j<id>, same roundId) counts the live ledger as the same round, as the writer does", async () => {
@@ -1187,6 +1188,7 @@ test("judgePassCli drops a finding_conflicts finding from the act list even if r
   const payload = await judgePassCli(...specAuthorityArgs(tmpDir, contentDigest));
   assert.equal(payload.ok, true);
   assert.equal(payload.actCount, 1, "the finding_conflicts finding is removed; only the valid_compliant one acts");
+  assert.deepEqual(payload.overridden, [{ index: 0, applied: "reject", reason: null }]);
   assert.equal(payload.act[0].summary, "legit defect");
   assert.deepEqual(payload.specAuthority.findingConflictIndices, [0]);
 });
@@ -2131,6 +2133,49 @@ test("judgePassCli at pre_approval_gate defers a low-only act verdict with low_f
   assert.equal(enriched.judgeDisposition, "defer");
   assert.equal(enriched.followUpIssueNumber, 99);
   assert.match(enriched.judgeReason, /^low_fix_until_cap /);
+  assert.equal(payload.overridden.length, 1);
+  assert.equal(payload.overridden[0].index, 0);
+  assert.equal(payload.overridden[0].applied, "defer");
+  assert.match(payload.overridden[0].reason, /^low_fix_until_cap /);
+});
+
+test("judgePassCli names the stamped cluster index of an overridden low among two stamped findings", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-stamped-override-"));
+  const findings = [finding({ severity: "medium", summary: "med one", clusterId: 0 }), finding({ severity: "low", summary: "low one", clusterId: 1 })];
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
+  const act = (index) => ({ index, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "real" });
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [act(0), act(1)] })));
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "2724", gate: "pre_approval_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
+    { repoRoot: tmpDir, ...stubDeferralDeps({ closing: [99] }).deps },
+  );
+  assert.equal(payload.overridden.length, 1);
+  assert.equal(payload.overridden[0].index, 1);
+  assert.equal(payload.overridden[0].applied, "defer");
+});
+
+test("judgePassCli reports no overridden field when a medium act stays act", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-no-override-"));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ severity: "medium", summary: "med one" })] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "real" }] })));
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "2724", gate: "pre_approval_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
+    { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+  );
+  assert.equal(payload.actCount, 1);
+  assert.equal(payload.overridden, undefined);
+});
+
+test("judgePassCli reports no overridden field when a draft_gate low act stays act", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-draft-low-"));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ severity: "low", summary: "low one" })] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "real" }] })));
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "2724", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
+    { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+  );
+  assert.equal(payload.actCount, 1);
+  assert.equal(payload.overridden, undefined);
 });
 
 test("judgePassCli at pre_approval_gate rejects a coerced low defer when the only target is the PR itself", async () => {
@@ -2143,6 +2188,7 @@ test("judgePassCli at pre_approval_gate rejects a coerced low defer when the onl
   );
   assert.equal(payload.actCount, 0);
   assert.deepEqual(payload.counts, { act: 0, defer: 0, reject: 1 });
+  assert.equal(payload.overridden[0].applied, "reject");
   const enriched = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings[0];
   assert.equal(enriched.judgeDisposition, "reject");
   assert.equal(enriched.followUpIssueNumber, undefined);

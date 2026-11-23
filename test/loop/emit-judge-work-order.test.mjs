@@ -478,6 +478,7 @@ test("the work order carries the round and the medium fix window as judge inputs
     const text = await readFile(plan.promptPath, "utf8");
     assert.match(text, /Dispose each cluster once/);
     assert.match(text, /No rule defers a finding from severity or round alone/);
+    assert.match(text, /GATE-EXEC-LOW-FIX-UNTIL-CAP/);
     assert.match(text, /a cluster that contains a `high` or a `question`, and an all-`nit` cluster, is never deferred/);
     assert.match(text, /`title`.*`detail`.*`fix`.*`reason`/s);
     assert.match(text, /no em dashes and no arrows/);
