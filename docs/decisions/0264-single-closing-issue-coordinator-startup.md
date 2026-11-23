@@ -4,6 +4,8 @@
 
 Accepted — 2026-11-11 (https://github.com/mfittko/dev-loops/issues/3144#issuecomment-6796476929)
 
+Amended by [issue 3493](https://github.com/mfittko/dev-loops/issues/3493): when --issue n names one of several closing issues, the selector binds that issue; otherwise several closing issues refuse with the candidate list and a recovery command.
+
 ## Context
 
 [Issue 3144](https://github.com/mfittko/dev-loops/issues/3144) records PR startup losing its closing issue and assuming Copilot ownership, while issue startup derives different ownership and omits draft continuation. The approved slice keeps the existing target schema and lightweight authority checks.
