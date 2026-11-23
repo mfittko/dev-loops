@@ -1889,8 +1889,8 @@ for (const author of ["some-human-dev", "app/other-bot", "copilot-swe-agent", "a
   });
 }
 
-for (const [label, facts, error] of [
-  ["multiple closing issues", { closingIssuesReferences: [{ number: 42 }, { number: 7 }, { number: 42 }] }, /multiple closing issues.*#7, #42/],
+for (const [label, facts, error, recovery] of [
+  ["multiple closing issues", { closingIssuesReferences: [{ number: 42 }, { number: 7 }, { number: 42 }] }, /multiple closing issues.*#7, #42/, "dev-loops loop startup --issue 7"],
   ["missing author", { author: null }, /author could not be read.*fail closed/],
 ]) test(`PR startup refuses ambiguous or unreadable authority: ${label}`, async () => {
   await withTempDir(async (tempDir) => {
@@ -1898,7 +1898,32 @@ for (const [label, facts, error] of [
     const stub = await writeGhStubHelper(tempDir, [{ stdout: JSON.stringify({ state: "OPEN",
       author: { login: "test-viewer" }, assignees: [{ login: "test-viewer" }], ...facts }) }]);
     assert.throws(() => buildAutoResolvedInput({ pr: 740, cwd: tempDir,
-      env: { ...stub.env, ...resolverTestEnv() } }), error);
+      env: { ...stub.env, ...resolverTestEnv() } }), (e) => error.test(e.message) && e.recovery === recovery);
+  });
+});
+
+for (const [label, issue, foreign, check] of [
+  ["a named closing issue binds the unit", 42, null, (run) => assert.equal(run().currentState.target.issue, 42)],
+  ["a named non-closing issue refuses with recovery", 900, null,
+    (run) => assert.throws(run, (e) => /multiple closing issues.*#7, #42/.test(e.message) && e.recovery === "dev-loops loop startup --issue 7")],
+  ["a foreign-owned secondary closing issue refuses", 7, 42,
+    (run) => assert.throws(run, /linked issue #42 is assigned to foreign-dev/)],
+]) test(`--issue on a PR with several closing issues: ${label}`, async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const own = { assignees: [{ login: "test-viewer" }] };
+    const closes = [{ number: 7 }, { number: 42 }];
+    const pr = { state: "OPEN", author: { login: "test-viewer" }, assignees: [{ login: "test-viewer" }], closingIssuesReferences: closes };
+    const stub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["api", "graphql"], stdout: linkedPrGraphql(740) },
+      { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify(pr) },
+      { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify(pr) },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+      ...closes.map(({ number }) => ({ assertArgs: ["issue", "view", String(number)],
+        stdout: JSON.stringify(number === foreign ? { assignees: [{ login: "foreign-dev" }] } : own) })),
+    ], { matchMode: "claims" });
+    const env = { ...stub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) };
+    check(() => buildAutoResolvedInput({ issue, cwd: tempDir, env }));
   });
 });
 

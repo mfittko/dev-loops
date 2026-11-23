@@ -148,8 +148,17 @@ test("multiple live closing issues refuse emission with deterministic candidates
     assert.notEqual(emission.code, 0);
     assert.equal(JSON.parse(emission.stdout).ok, false);
     assert.match(emission.stdout + emission.stderr, /multiple closing issues.*#7, #42/);
+    assert.equal(JSON.parse(emission.stderr).recovery, "dev-loops loop startup --issue 7");
   });
 });
+
+test("a recorded closing issue still emits when the live PR also closes a secondary issue", async () => {
+  await fixture(async (f) => {
+    await f.changePr({ closingIssuesReferences: [{ number: 3144 }, { number: 3145 }] });
+    const emission = await f.emit();
+    assert.equal(emission.code, 0, emission.stderr);
+  }, { prChanges: { closingIssuesReferences: [{ number: 3144 }] } });
+}, 30000);
 
 for (const strategy of ["ui_review", " ui_review "]) for (const state of ["first review", "detached resume"]) {
   test(`UI-review startup-to-envelope preserves provisioning for ${state}${strategy === "ui_review" ? "" : " with padded strategy"}`, async () => {

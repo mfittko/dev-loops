@@ -351,10 +351,10 @@ export async function buildHandoffEnvelopeCli(
   envelopeOptions.worktreeCwd = binding?.worktreeCwd;
   let verifiedResolverOutput = resolverOutput;
   if (binding?.pr && !STATELESS_UNIT_STRATEGIES.includes(trimmedOrNull(bundle?.selectedStrategy))) {
-    const issue = selectPrClosingIssue(binding.pr);
     const artifact = bundle.activeArtifact ?? bundle.canonicalState?.target;
     // Any difference from the startup record fails closed; no ownership check ran on a newly linked issue.
     const recorded = artifact?.issue ?? null;
+    const issue = selectPrClosingIssue(binding.pr, recorded ?? undefined);
     if (recorded !== issue) {
       throw parseError(`PR closing issue changed since startup: startup recorded ${recorded === null ? "no issue" : `issue #${recorded}`}, live linkage is ${issue === null ? "no issue" : `issue #${issue}`}; fail closed.`);
     }
