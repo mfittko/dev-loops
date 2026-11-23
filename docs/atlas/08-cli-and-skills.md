@@ -1,7 +1,8 @@
 ---
 title: CLI, skills and commands
 status: snapshot
-snapshot_date: 2026-11-19
+snapshot_date: 2026-11-23
+source_commit: f6619004d3edc2caccc98edd96914a5706c5d59b
 ---
 <a id="08-cli-and-skills"></a>
 
@@ -26,6 +27,7 @@ flowchart LR
   root --> gate
   root --> loop
   root --> pr
+  root --> decision
   root --> issue
   root --> queue
   root --> project
@@ -42,6 +44,7 @@ flowchart LR
   pr --> p1["create"] --> s9["scripts/github/create-pr.mjs"]
   pr --> p2["ready-for-review"] --> s10["scripts/github/ready-for-review.mjs"]
   pr -.->|"alias, deprecated"| p3["create-draft"] -.-> p1
+  decision --> d1["record"] --> s17["scripts/github/record-operator-decision.mjs"]
   issue --> i1["create | edit"] --> s11["scripts/github/create-issue.mjs, edit-issue.mjs"]
   queue --> q1["run"] --> s12["scripts/loop/run-queue.mjs"]
   queue --> q2["add | list | move | reconcile ..."] --> s13["scripts/projects/*.mjs"]
@@ -57,14 +60,14 @@ flowchart LR
 
 Type: `xychart-beta`
 
-The number of routed subcommands in each namespace. `loop` (31) and `gate` (17) hold most of the surface, so the CLI is mainly a toolbox for the coordinator agents, with few commands meant for the operator. Counts come from an `awk` scan of each table in `cli/index.mjs` (`awk '/^ loop: \{/,/^ \},?/' cli/index.mjs | grep -c '\.mjs"'` and the same scan for `gate`, `pr`, `issue`, `inspect` and `refine`). The `queue` count (12) is the number of keys in `QUEUE_ROUTES`, and `project` (11) is that table minus `run`. `inspect` shows only its 2 routed subcommands; it also has 5 in-process lifecycle actions. Derived from `cli/index.mjs`.
+The number of routed subcommands in each namespace. `loop` (34) and `gate` (18) hold most of the surface, so the CLI is mainly a toolbox for the coordinator agents, with few commands meant for the operator. Counts come from an `awk` scan of each table in `cli/index.mjs` (`awk '/^  loop: \{/,/^  \},?/' cli/index.mjs | grep -c '\.mjs"'` and the same scan for `gate`, `pr`, `issue`, `inspect` and `refine`). `decision` (1) is a one-line table, so its count is read directly. The `queue` count (12) is the number of keys in `QUEUE_ROUTES`, and `project` (11) is that table minus `run`. `inspect` shows only its 2 routed subcommands; it also has 5 in-process lifecycle actions. Derived from `cli/index.mjs`.
 
 ```mermaid
 xychart-beta
   title "Routed subcommands per namespace"
-  x-axis [loop, gate, queue, project, pr, issue, inspect, refine]
+  x-axis [loop, gate, queue, project, pr, issue, inspect, refine, decision]
   y-axis "subcommands" 0 --> 35
-  bar [31, 17, 12, 11, 7, 2, 2, 1]
+  bar [34, 18, 12, 11, 7, 2, 2, 1, 1]
 ```
 
 <a id="d102"></a>
@@ -73,13 +76,13 @@ xychart-beta
 
 Type: `pie`
 
-Where the 72 distinct routed scripts live. `scripts/loop` holds more than half of them, and `scripts/github` holds the GitHub wrappers that gate and PR commands call. The `project` namespace adds no scripts, because it reuses the `queue` entries. Counts come from `sed -n 246,352p cli/index.mjs | grep -oE '"scripts/[a-z]+/' | sort | uniq -c` (40, 20, 11, 1) and the distinct total from the same range piped through `grep -oE '"scripts/[^"]+"' | sort -u | wc -l` (72). Slash commands also call a few unrouted scripts directly, such as `scripts/github/view-issue.mjs` and `scripts/refine/scaffold-spike-file.mjs`; the chart leaves them out. Derived from `cli/index.mjs`.
+Where the 77 distinct routed scripts live. `scripts/loop` holds more than half of them, and `scripts/github` holds the GitHub wrappers that gate and PR commands call. The `project` namespace adds no scripts, because it reuses the `queue` entries. Counts come from `sed -n 248,359p cli/index.mjs | grep -oE '"scripts/[a-z]+/' | sort | uniq -c` (44, 21, 11, 1) and the distinct total from the same range piped through `grep -oE '"scripts/[^"]+"' | sort -u | wc -l` (77). Slash commands also call a few unrouted scripts directly, such as `scripts/github/view-issue.mjs` and `scripts/refine/scaffold-spike-file.mjs`; the chart leaves them out. Derived from `cli/index.mjs`.
 
 ```mermaid
 pie showData
   title Routed scripts per scripts/ subfolder
-  "scripts/loop" : 40
-  "scripts/github" : 20
+  "scripts/loop" : 44
+  "scripts/github" : 21
   "scripts/projects" : 11
   "scripts/refine" : 1
 ```
@@ -330,13 +333,13 @@ block-beta
 
 Type: `stateDiagram-v2`
 
-The states the managed viewer record can report, and the in-process `inspect` actions that move between them. `open` reuses a running viewer only when it can serve the requested repo; otherwise it stops that viewer and starts a fresh one. Before a fresh start, the manager sends SIGTERM to every listener on the port. It reports `conflict_unmanaged_listener` only when a listener survives that. A managed process that ignores SIGTERM leaves the record in `stale_record`. An unreadable record also counts as `stale_record`. `restart` reuses the recorded repo arguments. Derived from `scripts/loop/inspect-run-viewer/managed-instance.mjs` (`inspectRecord`, `startFresh`, `reclaimPortListeners`, `createInspectRunViewerLifecycleManager`) and `INSPECT_LIFECYCLE_DESCRIPTIONS` in `cli/index.mjs`.
+The states the managed viewer record can report, and the in-process `inspect` actions that move between them. `open` reuses a running viewer only when it can serve the requested repo; otherwise it stops that viewer and starts a fresh one. Before a fresh start, the manager checks the port and never signals a listener there, because only the managed record PID proves ownership. It reports `conflict_unmanaged_listener` when any other listener holds the port. A managed process that ignores SIGTERM leaves the record in `stale_record`. An unreadable record also counts as `stale_record`. `restart` reuses the recorded repo arguments. Derived from `scripts/loop/inspect-run-viewer/managed-instance.mjs` (`inspectRecord`, `startFresh`, `createInspectRunViewerLifecycleManager`) and `INSPECT_LIFECYCLE_DESCRIPTIONS` in `cli/index.mjs`.
 
 ```mermaid
 stateDiagram-v2
   [*] --> stopped
-  stopped --> running: open or restart, port free or reclaimed
-  stopped --> conflict_unmanaged_listener: listener survives SIGTERM
+  stopped --> running: open or restart, port free
+  stopped --> conflict_unmanaged_listener: other listener on the port
   conflict_unmanaged_listener --> running: open after listener exits
   running --> running: open or resume, same repo
   running --> running: open other repo, stop then start

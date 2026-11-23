@@ -1,7 +1,8 @@
 ---
 title: Main flows from issue to merge
 status: snapshot
-snapshot_date: 2026-11-19
+snapshot_date: 2026-11-23
+source_commit: f6619004d3edc2caccc98edd96914a5706c5d59b
 ---
 <a id="04-main-flows"></a>
 
@@ -163,8 +164,9 @@ sequenceDiagram
   participant Det as detect-refinement-grill-state
   participant Lint as loop spec-lint
   participant Tmp as tmp/issues grill file
-  G->>GH: fetch body and comments
-  G->>Det: --body-file, --comments-file
+  G->>GH: fetch body
+  G->>Det: --body-file, --repo, --number
+  Det->>GH: read comments and body lastEditedAt
   Det-->>G: state and reason
   G->>Lint: --body-file
   Lint-->>G: rule, ADR and size-forecast findings
@@ -175,6 +177,7 @@ sequenceDiagram
       G->>G: answer gaps (cited in --auto, asked in interactive)
       G->>G: synthesize AC, DoD matrix, Non-goals, Simplest design
     end
+    G->>G: fresh simplicity review on an issue (kiss, yagni)
     G->>Tmp: raw Q&A transcript
     G->>GH: rewrite body
     G->>GH: post Grill / refinement results comment
@@ -270,7 +273,7 @@ sequenceDiagram
   C1->>W: join every dispatched worker
   W-->>C1: done
   C1->>V: --packet with pr, head, nextAction, workerRunning
-  alt refused (missing_fields or worker_running)
+  alt refused (missing_fields, worker_running or verdict_refusal_route)
     V-->>C1: exit 1
     C1->>C1: fix cause and re-run the check
   else valid
@@ -291,7 +294,7 @@ sequenceDiagram
 
 Type: `flowchart`
 
-The decision `validateCoordinatorHandback` makes on one packet. The insight is that a packet with a running worker is refused even when every field is valid, so a coordinator cannot hand back mid-round. Derived from `FIELD_CHECKS` and `validateCoordinatorHandback` in `scripts/loop/_coordinator-handback.mjs` and the exit-code rule in `scripts/loop/validate-coordinator-handback.mjs`.
+The decision `validateCoordinatorHandback` makes on one packet. The insight is that a packet with a running worker is refused even when every field is valid, so a coordinator cannot hand back mid-round. A packet with a `verdictRefusal` is refused unless it carries `reason: "ci_red"`, a non-empty `actListPath` and `nextAction` `fix_ci_failure`. Derived from `FIELD_CHECKS` and `validateCoordinatorHandback` in `scripts/loop/_coordinator-handback.mjs` and the exit-code rule in `scripts/loop/validate-coordinator-handback.mjs`.
 
 ```mermaid
 flowchart TD
@@ -299,9 +302,13 @@ flowchart TD
   F -->|any field fails| R1["refusal: missing_fields (lists the fields)"]
   F -->|all pass| W{"workerRunning true?"}
   W -->|yes| R2["refusal: worker_running"]
-  W -->|no| OK["ok: true, exit 0"]
+  W -->|no| VR{"verdictRefusal present?"}
+  VR -->|no| OK["ok: true, exit 0"]
+  VR -->|"ci_red, actListPath and fix_ci_failure"| OK
+  VR -->|any other form| R3["refusal: verdict_refusal_route (with recovery)"]
   R1 --> X["exit 1, fix and re-run"]
   R2 --> X
+  R3 --> X
 ```
 
 <a id="d55"></a>
@@ -353,7 +360,7 @@ sequenceDiagram
   C->>GH: upsert-verdict (pre_approval)
   C-->>MA: hand-back at final_approval_ready
   alt escalated merge class
-    Op->>GH: approve merge line pinned to head SHA
+    Op->>GH: approve merge line pinned to head SHA (hook-posted from the approval question under Claude Code)
   end
   MA->>GH: merge-pr.mjs --human-approved-by login
 ```
@@ -378,7 +385,7 @@ flowchart TD
   DR -->|no clean draft_gate| RDG["run_draft_gate"]
   DR -->|clean draft_gate| MRR["mark_ready_for_review"]
   DR -->|ready| CR{"Copilot reviewed head?"}
-  CR -->|Copilot disabled or internal-only| PA
+  CR -->|Copilot disabled, internal-only or unavailable| PA
   CR -->|not requested| RQC["request_copilot_review"]
   CR -->|threads open| ARF["address_review_feedback"]
   CR -->|threads fixed| RRT["reply_resolve_review_threads"]
@@ -393,7 +400,7 @@ flowchart TD
 
 Type: `flowchart`
 
-How `merge-pr.mjs` decides which approval satisfies a merge. The insight is that a standing authorization covers only a drain merge, while a stable release, an escalated or blocked size outcome, or a T1 path forces a fresh human approval on the current head. A fresh approval is a head-pinned APPROVED review by the named login, else a head-pinned "approve merge" comment by that login; a bot login never satisfies it. Derived from `MERGE_CLASS`, `resolveMergeClass` and `verifyFreshHumanApproval` in `packages/core/src/loop/merge-approval.mjs`, `GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE` in `skills/docs/gate-review-sub-loop-contract.md`, and the usage text and argument parser in `scripts/github/merge-pr.mjs`.
+How `merge-pr.mjs` decides which approval satisfies a merge. The insight is that a standing authorization covers only a drain merge, while a stable release, an escalated or blocked size outcome, or a T1 path forces a fresh human approval on the current head. A fresh approval is a head-pinned APPROVED review by the named login, else a head-pinned "approve merge" comment by that login, else an "approve merge" comment by that login whose patch-id matches the current diff; a bot login never satisfies it. Under Claude Code the hook posts that line from the operator's yes answer to the approval question. Derived from `MERGE_CLASS`, `resolveMergeClass` and `verifyFreshHumanApproval` in `packages/core/src/loop/merge-approval.mjs`, `GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE` in `skills/docs/gate-review-sub-loop-contract.md`, and the usage text and argument parser in `scripts/github/merge-pr.mjs`.
 
 ```mermaid
 flowchart TD
@@ -407,7 +414,7 @@ flowchart TD
   T1 -->|yes| ESC
   T1 -->|no| DRN["drain"]
   DRN --> AD{"--standing-authorization (humanMergeOnly false) or fresh approval?"}
-  ESC --> AE{"fresh APPROVED review or approve merge line on head SHA?"}
+  ESC --> AE{"fresh APPROVED review, approve merge line on head SHA, or patch-id line matching the diff?"}
   AD -->|yes| PRE["preconditions: CI, gate evidence, Copilot convergence, ADR tripwire, secret scan, base integrated"]
   AE -->|yes| PRE
   AD -->|no| STOP["refuse"]
@@ -421,7 +428,7 @@ flowchart TD
 
 Type: `journey`
 
-What the operator does and feels along the main path. The insight is that the operator acts at three points only: approving the intake proposal, answering escalations or decision stops, and posting the approve merge line for an escalated merge. Scores are synthetic, chosen by the analyst to show effort, and no command produced them. Derived from `skills/docs/issue-intake-procedure.md`, `skills/loop-grill/SKILL.md`, the operator-question and escalation rules in `skills/docs/main-agent-contract.md`, and `OPERATOR-OWNED-LINE` in `skills/docs/decision-record-contract.md`.
+What the operator does and feels along the main path. The insight is that the operator acts at three points only: approving the intake proposal, answering escalations or decision stops, and approving an escalated merge (the approval question under Claude Code, the approve merge line under Pi). Scores are synthetic, chosen by the analyst to show effort, and no command produced them. Derived from `skills/docs/issue-intake-procedure.md`, `skills/loop-grill/SKILL.md`, the operator-question and escalation rules in `skills/docs/main-agent-contract.md`, and `OPERATOR-OWNED-LINE` in `skills/docs/decision-record-contract.md`.
 
 ```mermaid
 journey
@@ -438,7 +445,7 @@ journey
     Watch draft PR and gate verdicts: 4: Operator, Coordinator
     Answer an escalation or decision stop: 2: Operator, Main agent
   section Merge
-    Post approve merge on head SHA: 3: Operator
+    Approve the merge on head SHA: 3: Operator
     Merge and read the retro: 4: Main agent, Operator
 ```
 
