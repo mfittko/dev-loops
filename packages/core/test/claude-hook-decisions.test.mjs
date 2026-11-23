@@ -23,6 +23,11 @@ test("decideBashGate denies git stash on the target repo (refs/stash is shared a
   assert.match(d.reason, /refs\/stash is shared/);
 });
 
+test("decideBashGate passes the policy-hook marker line through unchanged", () => {
+  const d = decideBashGate({ command: "git stash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET });
+  assert.equal(d.reason.split("\n").at(-1), "policy-hook: WORKTREE-NO-STASH; compliant form: use `git diff`, a patch file or a scratch worktree");
+});
+
 test("decideBashGate allows git stash off the target repo", () => {
   assert.equal(decideBashGate({ command: "git stash pop", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
   assert.equal(decideBashGate({ command: "git stash pop", repoSlug: null, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");

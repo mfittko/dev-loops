@@ -115,9 +115,8 @@ function commandContainsEvidenceWrite(command) {
  * fixture — and `packages/core/test/bash-gate-decisions.test.mjs` asserts this exact list and each
  * rule's exact reason literal, so a reordered or reworded rule fails.
  *
- * Four denies below are inline denials with no registered rule ID — the unresolve owner allowlist,
- * the `timeout`-wrapped sanctioned command deny, the subagent ad-hoc external-write deny and the
- * subagent merge-pr deny — so they
+ * Three denies below are inline denials with no registered rule ID — the unresolve owner allowlist,
+ * the subagent ad-hoc external-write deny and the subagent merge-pr deny — so they
  * return `ruleId: null` and stay out of this list: listing them would mint rule IDs the rule registry
  * does not own.
  */
@@ -125,6 +124,7 @@ export const BASH_GATE_RULES = Object.freeze([
   "COORDINATOR-VERIFY-BOUNDARY",
   "OPS-NO-INLINE-INTERPRETER",
   "COPILOT-FOLLOWUP-WAIT-TOOLS",
+  "OPS-NO-TIMEOUT-WRAPPER",
   "OPERATOR-DECISION-RECORDER",
   "SUBISSUE-NO-ADHOC-BYPASS",
   "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER",
@@ -136,6 +136,32 @@ export const BASH_GATE_RULES = Object.freeze([
   "RAW-GH-PR-MERGE-BYPASS",
   "GATE-COMMENT-DRAFT-REQUIREMENTS",
 ]);
+
+/**
+ * The deny rules whose compliant form the denied actor may run itself (OPS-POLICY-HOOK-DENIAL-RECOVERABLE).
+ * A deny for a key here ends with the marker line `policy-hook: <rule-id>; compliant form: <text>`;
+ * a deny without the marker line is an authority-boundary deny and stops the actor. The hand-authored
+ * `.claude/hooks/pre-tool-use-bash-gate.mjs` reads this map for its own two denies.
+ */
+export const POLICY_HOOK_COMPLIANT_FORMS = Object.freeze({
+  "OPS-NO-INLINE-INTERPRETER": "rerun the command without the inline interpreter; parse with --jq/--silent and write files with the editor tools",
+  "COPILOT-FOLLOWUP-WAIT-TOOLS": "run a bounded foreground probe with an explicit --timeout <seconds>",
+  "OPS-NO-TIMEOUT-WRAPPER": "run the command bare, without the `timeout N` prefix",
+  "OPERATOR-DECISION-RECORDER": "the main agent runs `dev-loops-run cli/index.mjs decision record ...`; a subagent returns the decision in its hand-back",
+  "SUBISSUE-NO-ADHOC-BYPASS": "use the sanctioned manage-sub-issues wrapper",
+  "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER": "use scripts/github/reply-resolve-review-thread.mjs or reply-resolve-review-threads.mjs",
+  "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY": "use scripts/github/request-copilot-review.mjs",
+  "ADR-TRIPWIRE-STANDING-WAIVER": "write the body through `dev-loops-run cli/index.mjs pr edit` or `issue edit`, and run any read as a separate call",
+  "WORKTREE-NO-STASH": "use `git diff`, a patch file or a scratch worktree",
+  "OPS-DRAFT-FIRST-PR": "open the PR with `dev-loops-run cli/index.mjs pr create`",
+  "OPERATOR-OWNED-LINE": "write the comment through scripts/github/comment-issue.mjs or edit-comment.mjs with --body-file, and run any read as a separate call",
+});
+
+/** Append the policy-hook marker line to a deny reason when the rule is in the map. */
+export function withPolicyHookMarker(ruleId, reason) {
+  const form = Object.hasOwn(POLICY_HOOK_COMPLIANT_FORMS, ruleId ?? "") ? POLICY_HOOK_COMPLIANT_FORMS[ruleId] : null;
+  return form === null ? reason : `${reason}\npolicy-hook: ${ruleId}; compliant form: ${form}`;
+}
 
 /**
  * The adapter-supplied facts this decision reads, each with the shape it must have. A missing or
@@ -254,10 +280,16 @@ export function decideMergePrOwnerDeny({ command, role }) {
  * @param {{passed: boolean, error: string|null}|null} [params.readyGate] - Draft-gate evidence
  *   probe result for the command's PR; null when the adapter did not probe.
  * @returns {{ruleId: string|null, reason: string}|null} The deny decision, or null to allow.
- *   `ruleId` is null for the four inline denies that carry no registered rule ID and for the
- *   missing-facts deny.
+ *   `ruleId` is null for the three inline denies that carry no registered rule ID and for the
+ *   missing-facts deny. A rule in `POLICY_HOOK_COMPLIANT_FORMS` gets its marker line as the last line
+ *   of the reason (the one append site).
  */
 export function decideBashGateDeny(facts = {}) {
+  const deny = decideBashGateDenyUnmarked(facts);
+  return deny && { ...deny, reason: withPolicyHookMarker(deny.ruleId, deny.reason) };
+}
+
+function decideBashGateDenyUnmarked(facts) {
   // A null BAG is coerced, never destructured directly: a throw does not block a PreToolUse command,
   // so throwing here would lose the very deny this validation exists to produce.
   const injected = facts ?? {};
@@ -277,7 +309,8 @@ export function decideBashGateDeny(facts = {}) {
   // gone: "nothing to gate" no longer means "run no rule", it means a missing fact.
   const { command, role, repoSlug, managedRepoSlug, inManagedContext, humanMergeOnly, enforceCoordinator, readyGate = null } = injected;
   const gatePassed = readyGate?.passed === true;
-  const gateError = readyGate?.error ?? null;
+  // Collapse newlines so probe stderr cannot inject a marker-looking last line into a deny reason.
+  const gateError = readyGate?.error?.replace(/\s+/g, " ") ?? null;
 
   // Unresolve ownership (issue 2577) is the FIRST rule, so this shared set reproduces the Claude
   // seam's evaluation order exactly (there the owner allowlist is checked before the judge and fixer
@@ -361,14 +394,13 @@ export function decideBashGateDeny(facts = {}) {
     };
   }
 
-  // `timeout N <sanctioned command>` hides the `dev-loops-run` head from operator allow rules
-  // (issue 2755). Sanctioned wait tools bound themselves with `--timeout <seconds>`. Inline deny with
-  // no registered rule ID (see BASH_GATE_RULES).
+  // OPS-NO-TIMEOUT-WRAPPER: `timeout N <sanctioned command>` hides the `dev-loops-run` head from operator allow rules
+  // (issue 2755). Sanctioned wait tools bound themselves with `--timeout <seconds>`.
   if (inManagedRepo && commandContainsTimeoutWrappedSanctionedTool(command)) {
     return {
-      ruleId: null,
+      ruleId: "OPS-NO-TIMEOUT-WRAPPER",
       reason:
-        "Do not wrap sanctioned dev-loops commands in `timeout N`: the wrapper hides the " +
+        "OPS-NO-TIMEOUT-WRAPPER: do not wrap sanctioned dev-loops commands in `timeout N`: it is blocked because the wrapper hides the " +
         "`dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound " +
         "themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
     };

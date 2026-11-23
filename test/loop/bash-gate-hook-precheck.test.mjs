@@ -14,6 +14,7 @@
 // (Claude exposes `agent_type` only inside a subagent, so its absence IS the main agent) and for
 // every worker role.
 import assert from "node:assert/strict";
+import { POLICY_HOOK_COMPLIANT_FORMS } from "../../packages/core/src/loop/bash-gate-decisions.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { mkdir, realpath } from "node:fs/promises";
@@ -237,7 +238,7 @@ test("a subagent merge-pr.mjs call, --check included, is denied at the hook entr
 test("timeout-wrapped sanctioned commands are denied for every Claude actor", async () => {
   await withManagedRepo(async (root) => {
     const command = "timeout 300 dev-loops-run scripts/github/wait-pr-checks.mjs --repo acme/widgets --pr 5";
-    denyForEveryActor(root, command, /Do not wrap sanctioned dev-loops commands in `timeout N`/);
+    denyForEveryActor(root, command, /OPS-NO-TIMEOUT-WRAPPER: do not wrap sanctioned dev-loops commands in `timeout N`/);
     // The bare form still reaches the decider: the wrapper is the deny, not the sanctioned script.
     assert.equal(bash(root, "dev-loops-run scripts/github/wait-pr-checks.mjs --repo acme/widgets --pr 5", undefined).decision, "allow");
   });
@@ -465,6 +466,15 @@ for (const command of COMMENT_WRITES) {
   });
 }
 
+test("a subagent raw comment write replaced from the unmarked ad-hoc deny carries no policy-hook marker", async () => {
+  await withManagedRepo(async (root) => {
+    const { decision, reason } = bash(root, "gh issue comment 5 --body x", "developer");
+    assert.equal(decision, "deny");
+    assert.match(reason, /OPERATOR-OWNED-LINE[\s\S]*comment-issue\.mjs/);
+    assert.ok(!reason.includes("policy-hook:"), "the unmarked ad-hoc deny must stay unmarked");
+  });
+});
+
 test("PR body edits, graphql updatePullRequest and PR review comment writes keep the body reason", async () => {
   await withManagedRepo(async (root) => {
     for (const command of [
@@ -477,6 +487,26 @@ test("PR body edits, graphql updatePullRequest and PR review comment writes keep
       assert.equal(decision, "deny", command);
       assert.match(reason, /ADR-TRIPWIRE-STANDING-WAIVER/, command);
     }
+  });
+});
+
+test("the hook's own comment and body-write denies end with the policy-hook marker line (OPS-POLICY-HOOK-DENIAL-RECOVERABLE)", async () => {
+  await withManagedRepo(async (root) => {
+    const lastLine = (command) => bash(root, command, undefined).reason.split("\n").at(-1);
+    // A raw `gh pr comment ... <<EOF` whose heredoc text holds "PR", "comment" and "body" tokens: a genuine raw comment write.
+    assert.equal(
+      lastLine("gh pr comment 5 --body-file tmp/x.md <<'EOF'\nPR comment body\nEOF"),
+      `policy-hook: OPERATOR-OWNED-LINE; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS["OPERATOR-OWNED-LINE"]}`,
+    );
+    // The wrapped REST comment write is the form the decider denies under ADR-TRIPWIRE-STANDING-WAIVER; the hook swaps in the marked comment reason.
+    assert.equal(
+      lastLine(`sh -c "gh api repos/o/r/issues/5/comments -f body=x"`),
+      `policy-hook: OPERATOR-OWNED-LINE; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS["OPERATOR-OWNED-LINE"]}`,
+    );
+    assert.equal(
+      lastLine("gh pr edit 5 --body x"),
+      `policy-hook: ADR-TRIPWIRE-STANDING-WAIVER; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS["ADR-TRIPWIRE-STANDING-WAIVER"]}`,
+    );
   });
 });
 

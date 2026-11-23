@@ -61,6 +61,8 @@ Prose task composition is a fallback only when `buildDevLoopHandoffEnvelope()` i
 
 ## Operating contract
 
+A denial whose text ends with a `policy-hook:` marker line means run the named compliant form once, report it and continue; a permission or classifier denial, or any denial without the marker, stops this actor and hands back the text verbatim (`OPS-POLICY-HOOK-DENIAL-RECOVERABLE` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md#hard-rule-policy-hook-denial-is-recoverable)).
+
 After the handoff envelope is built and read, load the `dev-loop` skill ([Dev Loop Skill](../skills/dev-loop/SKILL.md)) for the routed strategy's execution procedures.
 
 When that skill is not available at the expected path, resolve it from the skill installation layout (see the skill's "Skill asset path resolution" section).

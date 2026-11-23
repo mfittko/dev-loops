@@ -820,6 +820,13 @@
       "id": "OPS-NO-INLINE-INTERPRETER"
     },
     {
+      "id": "OPS-NO-TIMEOUT-WRAPPER"
+    },
+    {
+      "id": "OPS-POLICY-HOOK-DENIAL-RECOVERABLE",
+      "enforcement": "doc"
+    },
+    {
       "id": "RUNNER-HANDOFF-TEARDOWN"
     },
     {

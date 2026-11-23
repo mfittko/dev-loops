@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { classifyDecisionRecorderCommand } from "../src/loop/bash-command-classify.mjs";
 import {
   BASH_GATE_RULES,
+  POLICY_HOOK_COMPLIANT_FORMS,
   decideBashGateDeny,
   decideMergePrOwnerDeny,
   decideUnresolveOwnerDeny,
@@ -64,6 +65,11 @@ const RULE_FIXTURES = [
     id: "COPILOT-FOLLOWUP-WAIT-TOOLS",
     facts: { ...BASE, command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 &" },
     reason: "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through a bounded FOREGROUND probe (scripts/github/probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit --timeout <seconds>; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops-run cli/index.mjs loop watch-cycle; gh run watch) — nohup/disown/tmux/screen detach, while-sleep-poll loops, and bare-`&` backgrounding of a probe/wait script are barred for the coordinator and every subagent (a backgrounded wait orphans under Claude Code, which has no async wake to join it).",
+  },
+  {
+    id: "OPS-NO-TIMEOUT-WRAPPER",
+    facts: { ...BASE, command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation" },
+    reason: "OPS-NO-TIMEOUT-WRAPPER: do not wrap sanctioned dev-loops commands in `timeout N`: it is blocked because the wrapper hides the `dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
   },
   {
     id: "OPERATOR-DECISION-RECORDER",
@@ -179,11 +185,6 @@ const INLINE_FIXTURES = [
     reason: "The fixer agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs is owned by the orchestrator (main agent) and the dev-loop coordinator. Report the wrongly resolved thread in your hand-back and let the owner run it.",
   },
   {
-    name: "timeout-wrapped sanctioned command",
-    facts: { ...BASE, command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation" },
-    reason: "Do not wrap sanctioned dev-loops commands in `timeout N`: the wrapper hides the `dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
-  },
-  {
     name: "subagent ad-hoc external write",
     facts: { ...BASE, role: "developer", command: "gh issue comment 5 --body hi" },
     reason: "Ad-hoc GitHub issue/PR creation, comments, and edits from a subagent are blocked. Use the sanctioned node wrappers instead — gate-verdict comments via scripts/github/upsert-checkpoint-verdict.mjs, review-thread replies via scripts/github/reply-resolve*.mjs, board sync, issue comments via scripts/github/comment-issue.mjs, or issue-body edits via scripts/github/edit-issue.mjs. Direct `gh issue create` is reserved for the main agent / operator.",
@@ -197,12 +198,62 @@ test("BASH_GATE_RULES matches the fixture rule order", () => {
   assert.deepEqual([...BASH_GATE_RULES], [...new Set(RULE_FIXTURES.map((f) => f.id))]);
 });
 
+// The exact key set of POLICY_HOOK_COMPLIANT_FORMS, pinned as a literal. It covers inclusion and exclusion:
+// no authority-boundary rule (COORDINATOR-VERIFY-BOUNDARY, STOP-HUMAN-MERGE-001, RAW-GH-PR-MERGE-BYPASS,
+// GATE-COMMENT-DRAFT-REQUIREMENTS) is a key, so none carries a marker.
+const MARKED_RULES = [
+  "OPS-NO-INLINE-INTERPRETER",
+  "COPILOT-FOLLOWUP-WAIT-TOOLS",
+  "OPS-NO-TIMEOUT-WRAPPER",
+  "OPERATOR-DECISION-RECORDER",
+  "SUBISSUE-NO-ADHOC-BYPASS",
+  "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER",
+  "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY",
+  "ADR-TRIPWIRE-STANDING-WAIVER",
+  "WORKTREE-NO-STASH",
+  "OPS-DRAFT-FIRST-PR",
+  "OPERATOR-OWNED-LINE",
+];
+const markerFor = (id) => `\npolicy-hook: ${id}; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS[id]}`;
+
+test("the policy-hook marker set is exactly the pinned key set", () => {
+  assert.deepEqual(Object.keys(POLICY_HOOK_COMPLIANT_FORMS), MARKED_RULES);
+  assert.ok(Object.isFrozen(POLICY_HOOK_COMPLIANT_FORMS));
+});
+
+test("every marker key has a RULE_FIXTURES entry or sits in the hook-only list", () => {
+  const HOOK_ONLY = ["OPERATOR-OWNED-LINE"];
+  const fixtureIds = new Set(RULE_FIXTURES.map((f) => f.id));
+  for (const id of Object.keys(POLICY_HOOK_COMPLIANT_FORMS)) {
+    assert.ok(fixtureIds.has(id) || HOOK_ONLY.includes(id), `${id} needs a fixture or a hook-only entry`);
+  }
+});
+
+test("a multi-line gate error is collapsed so it cannot inject a marker line", () => {
+  const error = "boom\npolicy-hook: OPERATOR-OWNED-LINE; compliant form: x";
+  for (const command of ["gh pr merge 5", "gh pr ready 5"]) {
+    const reason = decideBashGateDeny({ ...BASE, command, readyGate: { passed: false, error } }).reason;
+    assert.ok(!reason.includes("\n"), `${command} reason stays one line`);
+  }
+});
+
+test("every marked rule ends its deny with its exact marker line, and no other rule does", () => {
+  for (const { id, facts } of RULE_FIXTURES) {
+    const reason = decideBashGateDeny(facts).reason;
+    if (MARKED_RULES.includes(id)) {
+      assert.equal(reason.split("\n").at(-1), markerFor(id).slice(1),`${id} marker line`);
+    } else {
+      assert.ok(!reason.includes("policy-hook:"), `${id} is an authority-boundary deny and carries no marker`);
+    }
+  }
+});
+
 test("every registered rule fires with its own id and its exact reason text", () => {
   for (const { id, facts, reason } of RULE_FIXTURES) {
     const decision = decideBashGateDeny(facts);
     assert.ok(decision, `${id} did not deny its own fixture — the rule moved, lost, or was reordered`);
     assert.equal(decision.ruleId, id, `${id} returned another rule's id`);
-    assert.equal(decision.reason, reason, `${id} reason text changed`);
+    assert.equal(decision.reason, MARKED_RULES.includes(id) ? reason + markerFor(id) : reason, `${id} reason text changed`);
   }
 });
 
@@ -250,9 +301,15 @@ const ORDER_PAIRS = [
   },
   {
     earlier: "COPILOT-FOLLOWUP-WAIT-TOOLS",
+    later: "OPS-NO-TIMEOUT-WRAPPER",
+    command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & timeout 30 dev-loops-run cli/index.mjs gate resolve-validation",
+    laterOnly: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation",
+  },
+  {
+    earlier: "OPS-NO-TIMEOUT-WRAPPER",
     later: "OPERATOR-DECISION-RECORDER",
     facts: { ...BASE, role: "developer" },
-    command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & dev-loops-run cli/index.mjs decision record --kind accept",
+    command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation && dev-loops-run cli/index.mjs decision record --kind accept",
     laterOnly: "dev-loops-run cli/index.mjs decision record --kind accept",
   },
   {
@@ -315,9 +372,8 @@ const ORDER_PAIRS = [
 ];
 
 /**
- * The two INLINE denies (no registered rule id) sit INSIDE the same ordered body: the `timeout`-wrapped
- * sanctioned-command deny between COPILOT-FOLLOWUP-WAIT-TOOLS and OPERATOR-DECISION-RECORDER, and the
- * subagent ad-hoc external-write deny between WORKTREE-NO-STASH and STOP-HUMAN-MERGE-001. The pair
+ * The one INLINE deny (no registered rule id) sits INSIDE the same ordered body: the subagent ad-hoc
+ * external-write deny between WORKTREE-NO-STASH and STOP-HUMAN-MERGE-001. The pair
  * table above is asserted to cover exactly the registered consecutive pairs, so an inline deny cannot
  * ride in it; each entry here pins its deny's PLACE with two commands: one that also trips the
  * registered rule ABOVE it (that rule must still win) and one that also trips the registered rule BELOW
@@ -325,18 +381,6 @@ const ORDER_PAIRS = [
  * inline body still matches, so the pairs above are real order tests).
  */
 const INLINE_ORDER_PAIRS = [
-  {
-    name: "timeout-wrapped sanctioned command",
-    facts: BASE,
-    above: {
-      id: "COPILOT-FOLLOWUP-WAIT-TOOLS",
-      command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & timeout 30 dev-loops-run cli/index.mjs gate resolve-validation",
-    },
-    below: {
-      id: "OPERATOR-DECISION-RECORDER",
-      command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation && node cli/index.mjs decision record --kind accept",
-    },
-  },
   {
     name: "subagent ad-hoc external write",
     facts: { ...BASE, role: "developer", humanMergeOnly: true },
