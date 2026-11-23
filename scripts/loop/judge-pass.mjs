@@ -108,7 +108,8 @@ Inputs:
                                clusterFingerprints } (clusterFingerprints is [] when
                                no sibling was withheld) and the stdout result
                                carries it too, plus escalationsSkipped when the round head
-                               commit is not in the repository, so the durable disposition ledger
+                               commit is not in the repository, and overridden ({ index, applied, reason })
+                               when a judge act cluster left the act list, so the durable disposition ledger
                                carries what the judge consciously marked act/defer/reject.
                                Every disposed finding also carries a \`fingerprint\`; a
                                \`defer\` finding additionally carries \`followUpIssueNumber\`
@@ -1162,7 +1163,7 @@ export async function judgePassCli(
   for (const d of judgeVerdict.dispositions) {
     if (d.disposition !== "act") continue;
     const changed = result.enriched.find((f, i) => (Number.isInteger(f.clusterId) ? f.clusterId : i) === d.index && f.judgeDisposition !== "act");
-    if (changed) overridden.push({ index: d.index, applied: changed.judgeDisposition, reason: changed.judgeReason ?? null });
+    if (changed) overridden.push({ index: d.index, applied: changed.judgeDisposition, reason: changed.judgeReason === d.reason?.trim() ? null : changed.judgeReason ?? null });
   }
 
   const payload = {

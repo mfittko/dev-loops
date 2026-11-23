@@ -1188,6 +1188,7 @@ test("judgePassCli drops a finding_conflicts finding from the act list even if r
   const payload = await judgePassCli(...specAuthorityArgs(tmpDir, contentDigest));
   assert.equal(payload.ok, true);
   assert.equal(payload.actCount, 1, "the finding_conflicts finding is removed; only the valid_compliant one acts");
+  assert.deepEqual(payload.overridden, [{ index: 0, applied: "reject", reason: null }]);
   assert.equal(payload.act[0].summary, "legit defect");
   assert.deepEqual(payload.specAuthority.findingConflictIndices, [0]);
 });
