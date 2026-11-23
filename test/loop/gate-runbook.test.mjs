@@ -347,7 +347,7 @@ test("AC6: the USAGE, CLI description and changelog call the output a pinned pro
   const surfaces = [
     run(["--help"]).stdout,
     readFileSync(path.join(ROOT, "cli/index.mjs"), "utf8").match(/"runbook": "[^"]*"/)[0],
-    readFileSync(path.join(ROOT, "changes/3096-gate-runbook.md"), "utf8"),
+    readFileSync(path.join(ROOT, "CHANGELOG.md"), "utf8").split("\n").find((line) => line.includes("(#3096)")),
   ];
   for (const text of surfaces) {
     assert.match(text, /pinned projection/);
