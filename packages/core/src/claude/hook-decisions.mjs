@@ -249,7 +249,7 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
   return {
     decision: "deny",
     reason: withHookMarker("MAIN_AGENT_READONLY_BOUNDARY",
-      `Main-agent read-only boundary: refusing to mutate repository path "${filePath}". ` +
+      `Main-agent read-only boundary: refusing to mutate repository path ${JSON.stringify(filePath)}. ` +
       "All repository mutations must flow through the dev-loop subagent. " +
       "See skills/docs/main-agent-contract.md."),
   };
@@ -292,10 +292,10 @@ export function decideCoordinatorWriteGuard({ filePath, isRepoMutation, enforce 
     return ALLOW; // not the coordinator — a worker subagent, or the main agent (the other boundary)
   }
   const reason = normalizeAgentType(agentType) === GATE_COORDINATOR_AGENT_TYPE
-    ? `Coordinator write boundary: refusing to mutate repository path "${filePath}" as the gate ` +
+    ? `Coordinator write boundary: refusing to mutate repository path ${JSON.stringify(filePath)} as the gate ` +
       "coordinator. Tracked-file edits belong to the dev-loop coordinator; write only round artifacts " +
       "under tmp/ and return a typed observation (GATE-EXEC-GATE-COORDINATOR). See skills/docs/main-agent-contract.md."
-    : `Coordinator→worker delegation boundary: refusing to mutate repository path "${filePath}" as the ` +
+    : `Coordinator→worker delegation boundary: refusing to mutate repository path ${JSON.stringify(filePath)} as the ` +
       "dev-loop coordinator. Delegate this tracked-file edit to a fresh worker subagent (developer/fixer/" +
       "quality/docs) instead of writing it directly. See skills/docs/main-agent-contract.md.";
   return { decision: "deny", reason: withHookMarker("COORDINATOR_DELEGATION_BOUNDARY", reason) };
@@ -428,7 +428,7 @@ export function decideWorktreeCheckoutGuard({
     reason: withHookMarker("WORKTREE-WRONG-CHECKOUT-GUARD",
       `WORKTREE-WRONG-CHECKOUT-GUARD: wrong-checkout mutation blocked — a worktree cycle is active ` +
       `("${activeWorktreeRoot}") but this Write/Edit targets the MAIN checkout's non-gitignored file ` +
-      `"${filePath}".${fix} A file mutation that lands on the main checkout while a worktree is ` +
+      `${JSON.stringify(filePath)}.${fix} A file mutation that lands on the main checkout while a worktree is ` +
       "active is silently lost from the branch. Set DEVLOOPS_ALLOW_MAIN=1 only for a deliberate " +
       "main-checkout edit. See skills/docs/worktree-guidance.md."),
   };

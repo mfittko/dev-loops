@@ -195,10 +195,9 @@ export const TERMINAL_STOP_REASONS = Object.freeze({
  */
 export function withHookMarker(denyId, reason) {
   if (denyId == null) return reason;
-  const id = denyId;
-  if (Object.hasOwn(POLICY_HOOK_COMPLIANT_FORMS, id)) return `${reason}\npolicy-hook: ${id}; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS[id]}`;
-  if (Object.hasOwn(TERMINAL_STOP_REASONS, id)) return `${reason}\nstop: ${TERMINAL_STOP_REASONS[id].class}; ${id}; ${TERMINAL_STOP_REASONS[id].reason}`;
-  throw new Error(`withHookMarker: unregistered deny id ${id}`);
+  if (Object.hasOwn(POLICY_HOOK_COMPLIANT_FORMS, denyId)) return `${reason}\npolicy-hook: ${denyId}; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS[denyId]}`;
+  if (Object.hasOwn(TERMINAL_STOP_REASONS, denyId)) return `${reason}\nstop: ${TERMINAL_STOP_REASONS[denyId].class}; ${denyId}; ${TERMINAL_STOP_REASONS[denyId].reason}`;
+  throw new Error(`withHookMarker: unregistered deny id ${denyId}`);
 }
 
 /**

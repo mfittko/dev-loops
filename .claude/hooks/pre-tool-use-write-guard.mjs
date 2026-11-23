@@ -189,7 +189,7 @@ try {
       emitDeny(withHookMarker("WORKTREE-WRONG-CHECKOUT-GUARD",
         `WORKTREE-WRONG-CHECKOUT-GUARD: wrong-checkout mutation blocked — cwd is inside a worktree ` +
         `("${cwdReal}") but \`git worktree list\` could not resolve the active worktree, and this ` +
-        `Write/Edit targets "${filePath}", outside cwd's subtree. Failing safe on an unresolvable ` +
+        `Write/Edit targets ${JSON.stringify(filePath)}, outside cwd's subtree. Failing safe on an unresolvable ` +
         "active-worktree context. Set DEVLOOPS_ALLOW_MAIN=1 only for a deliberate main-checkout edit.",
       ));
     }

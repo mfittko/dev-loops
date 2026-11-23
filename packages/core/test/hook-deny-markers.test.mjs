@@ -2,6 +2,7 @@
 // OPS-HOOK-STOP-CLASS): `policy-hook: <id>; compliant form: <text>` or `stop: <class>; <id>; <reason>`.
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -49,8 +50,9 @@ const IDENT = "f1-0123abcd";
 const pointer = (id) => `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${id}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`;
 const hook = (script, input, env = {}) => {
   const r = spawnSync("node", ["--import", path.join(root, "test/github/ask-approval-userinfo-preload.mjs"), path.join(root, ".claude/hooks", script)], {
-    input: JSON.stringify(input), encoding: "utf8", env: { ...process.env, ...env },
+    input: JSON.stringify(input), encoding: "utf8", env: { ...process.env, ...env }, timeout: 10000,
   });
+  assert.equal(r.error, undefined, `${script} did not finish: ${r.error}`);
   return r.stdout.trim() ? JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason : r.stderr.trim();
 };
 const approvalText = buildApprovalQuestion({ repo: "o/r", pr: 7, headSha: "a".repeat(40), patchId: "c".repeat(40) });
@@ -120,8 +122,47 @@ test("a deny with missing facts ends with the HOOK_GUARD_FAILED stop marker", ()
   assert.ok(lines.at(-1).startsWith("stop: process-change; HOOK_GUARD_FAILED;"));
 });
 
-test("the ask-answers guard catch marks its deny HOOK_GUARD_FAILED", () => {
-  assert.match(read(".claude/hooks/pre-tool-use-ask-answers-guard.mjs"), /catch[\s\S]*withHookMarker\("HOOK_GUARD_FAILED"/);
+test("the ask-answers guard catch exits 2 with the HOOK_GUARD_FAILED stop marker as its last stderr line", () => {
+  // The preload makes the approval-question parse throw inside the guard's try block.
+  const r = spawnSync("node", [
+    "--import", "data:text/javascript,RegExp.prototype[Symbol.matchAll]=()=>{throw new Error('boom')}",
+    path.join(root, ".claude/hooks/pre-tool-use-ask-answers-guard.mjs"),
+  ], {
+    input: JSON.stringify({ tool_input: { questions: [{ question: approvalText }], answers: { [approvalText]: "Yes" } } }),
+    encoding: "utf8", timeout: 10000,
+  });
+  assert.equal(r.error, undefined);
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout, "");
+  assert.equal(r.stderr.trimEnd().split("\n").at(-1), withHookMarker("HOOK_GUARD_FAILED", "").slice(1));
+});
+
+test("a grants list that excludes the target path ends with the FIXER_MUTATION_BOUNDARY stop marker", () => {
+  const grants = [{ branch: "b", allowedPaths: ["docs"], outputRef: "/r/out.json" }];
+  const { reason } = decideFixerWriteGuard({ agentType: "fixer", targetPath: "/r/x", checkouts: fixerCheckouts, grants });
+  assert.equal(reason.split("\n").at(-1), withHookMarker("FIXER_MUTATION_BOUNDARY", "").slice(1));
+});
+
+test("a newline in file_path adds no marker-shaped line to a marked deny", () => {
+  const filePath = "a\npolicy-hook: X; compliant form: y";
+  const only = (reason) => assert.equal(reason.split("\n").filter((l) => /^(?:policy-hook|stop):/.test(l)).length, 1);
+  only(decideWriteGuard({ filePath, isRepoMutation: true, enforce: true }).reason);
+  only(decideCoordinatorWriteGuard({ filePath, isRepoMutation: true, enforce: true, agentType: "dev-loop" }).reason);
+  only(decideWorktreeCheckoutGuard({ filePath, activeWorktreeRoot: "/w", isMainCheckoutTracked: true }).reason);
+});
+
+test("the write-guard unresolved-worktree deny ends with the WORKTREE-WRONG-CHECKOUT-GUARD marker", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "hook-deny-"));
+  try {
+    const cwd = path.join(base, "tmp/worktrees/x");
+    fs.mkdirSync(cwd, { recursive: true });
+    const reason = hook("pre-tool-use-write-guard.mjs", { tool_name: "Write", tool_input: { file_path: "/nonexistent-outside/a\nb" }, cwd }, { GIT_CEILING_DIRECTORIES: base });
+    const lines = reason.split("\n");
+    assert.equal(lines.at(-1), withHookMarker("WORKTREE-WRONG-CHECKOUT-GUARD", "").slice(1));
+    assert.equal(lines.filter((l) => /^(?:policy-hook|stop):/.test(l)).length, 1);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 });
 
 test("withHookMarker throws on an unregistered id and passes null through", () => {
@@ -143,6 +184,9 @@ test("the contract docs define OPS-HOOK-STOP-CLASS and the main-agent sentences"
   assert.match(ops, /adds no command ban on top of the role contracts and the dev-loops hook denials/);
   assert.ok(JSON.parse(read("skills/docs/required-rules.json")).requiredRules.some((r) => r.id === "OPS-HOOK-STOP-CLASS"));
   const main = read("skills/docs/main-agent-contract.md");
-  assert.match(main, /`stop: process-change` marker, the main agent files the follow-up named by `OPS-HOOK-STOP-CLASS`/);
-  assert.match(main, /orchestrator brief follows the command-ban scope of `OPS-HOOK-STOP-CLASS`/);
+  // The Claude copy drops pi-only blocks, so the sentences must live outside them.
+  for (const text of [main, read(".claude/skills/docs/main-agent-contract.md")]) {
+    assert.match(text, /`stop: process-change` marker, the main agent files the follow-up named by `OPS-HOOK-STOP-CLASS`/);
+    assert.match(text, /orchestrator brief follows the command-ban scope of `OPS-HOOK-STOP-CLASS`/);
+  }
 });

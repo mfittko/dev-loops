@@ -466,12 +466,13 @@ for (const command of COMMENT_WRITES) {
   });
 }
 
-test("a subagent raw comment write replaced from the unmarked ad-hoc deny carries no policy-hook marker", async () => {
+test("a subagent raw comment write ends with the SUBAGENT_EXTERNAL_WRITE stop marker", async () => {
   await withManagedRepo(async (root) => {
     const { decision, reason } = bash(root, "gh issue comment 5 --body x", "developer");
     assert.equal(decision, "deny");
     assert.match(reason, /OPERATOR-OWNED-LINE[\s\S]*comment-issue\.mjs/);
-    assert.ok(!reason.includes("policy-hook:"), "the unmarked ad-hoc deny must stay unmarked");
+    assert.match(reason.split("\n").at(-1), /^stop: escalate; SUBAGENT_EXTERNAL_WRITE; /);
+    assert.equal(reason.split("\n").filter((l) => /^(?:policy-hook|stop):/.test(l)).length, 1);
   });
 });
 
