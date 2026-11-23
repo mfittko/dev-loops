@@ -7,7 +7,7 @@ snapshot_date: 2026-11-19
 
 ## Ideas and roadmap (not decided)
 
-This section maps what the backlog proposes, not what the code does. Every item here is not decided. Milestones are planning labels that the operator moves, and an open issue can change scope, move or close without shipping. The v2 epic states that it "defines requirements to qualify, not delivered capabilities", and a search of the repository code finds no v2 runtime (no Octokit and no SQLite store), so every v2 diagram is marked spec-only. The only code hits for "sqlite" are the `--experimental-sqlite` Node flag in `packages/core/src/loop/bash-command-classify.mjs` and its hook copy. All issue counts come from one snapshot on 2026-11-19 of `gh issue list --state open --limit 200 --json number,title,milestone`, run in the repository checkout, which returned 153 open issues. Local phase status comes from `docs/IMPLEMENTATION_STATE.md` and `docs/phases/phase-8.md`.
+This section maps what the backlog proposes, not what the code does. Every item here is not decided. Milestones are planning labels that the operator moves, and an open issue can change scope, move or close without shipping. The v2 epic states that it "defines requirements to qualify, not delivered capabilities", and a search of the repository code finds no v2 runtime (no Octokit and no SQLite store), so every v2 diagram is marked spec-only. The only code hits for "sqlite" are the `--experimental-sqlite` Node flag in `packages/core/src/loop/bash-command-classify.mjs` and its hook and test fixture copies. All issue counts come from one snapshot on 2026-11-23 of `gh issue list --state open --limit 500 --json number,title,milestone`, run in the repository checkout, which returned 237 open issues. Local phase status comes from `docs/IMPLEMENTATION_STATE.md` and `docs/phases/phase-8.md`.
 
 <a id="d182"></a>
 
@@ -15,14 +15,14 @@ This section maps what the backlog proposes, not what the code does. Every item 
 
 Type: `xychart-beta`
 
-Bar chart of the 153 open issues grouped by milestone label. The insight: the near patch milestone v1.0.12 holds 41 issues, more than any later milestone, so the backlog leans toward near fixes, and v2.0.0 holds only 5 planning issues. All counts are from `gh issue list --state open --limit 200 --json number,title,milestone`, grouped by `milestone.title`. Every milestone assignment is not decided. Source: that command output; milestone order follows the version numbers.
+Bar chart of the 237 open issues grouped by milestone label. The insight: the minor milestone v1.1.0 holds 102 issues and the patch milestone v1.0.13 holds 57, together two thirds of the backlog, while v1.0.12 holds only 3 and v2.0.0 holds only 5 planning issues. All counts are from `gh issue list --state open --limit 500 --json number,title,milestone`, grouped by `milestone.title`. Every milestone assignment is not decided. Source: that command output; milestone order follows the version numbers.
 
 ```mermaid
 xychart-beta
     title "Open issues per milestone (not decided)"
     x-axis ["v1.0.12", "v1.0.13", "v1.1.0", "v1.2.0", "v1.3.0", "v1.4.0", "v1.5.0", "v2.0.0", "Later", "none"]
-    y-axis "Open issues" 0 --> 45
-    bar [41, 4, 23, 16, 19, 17, 5, 5, 14, 9]
+    y-axis "Open issues" 0 --> 110
+    bar [3, 57, 102, 14, 15, 15, 5, 5, 15, 6]
 ```
 
 <a id="d183"></a>
@@ -31,18 +31,18 @@ xychart-beta
 
 Type: `pie`
 
-Share of the 153 open issues by the conventional prefix in the title (`fix`, `feat`, `gate` and so on). The insight: fixes (63) outnumber features (28) by more than two to one, so most open work repairs the existing v1 loop rather than adding surface. The numbers come from `gh issue list --state open --limit 200 --json number,title,milestone` followed by a title-prefix tally (`grep -oE '^[a-zA-Z-]+[(:]'`); "planning" groups epic, rfc, research and design; "other prefix" groups size, refactor, pre-pr, perf and contracts. Not decided.
+Share of the 237 open issues by the conventional prefix in the title (`fix`, `feat`, `gate` and so on). The insight: fixes (81) outnumber features (30) by more than two to one, so most open work repairs the existing v1 loop rather than adding surface. The numbers come from `gh issue list --state open --limit 500 --json number,title,milestone` followed by a title-prefix tally (`grep -oE '^[a-zA-Z-]+[(:]'`); "planning" groups epic, rfc, research and design; "other prefix" groups efficiency, refactor, chore, test, fixer, perf, size, recovery, pre-pr, measure, loop, developer and contracts. Not decided.
 
 ```mermaid
 pie showData
     title Open issues by title prefix
-    "fix" : 63
-    "feat" : 28
-    "gate" : 13
-    "docs and audit" : 7
-    "planning" : 6
-    "other prefix" : 5
-    "no prefix" : 31
+    "fix" : 81
+    "feat" : 30
+    "gate" : 11
+    "docs and audit" : 10
+    "planning" : 7
+    "other prefix" : 48
+    "no prefix" : 50
 ```
 
 <a id="d184"></a>
@@ -51,38 +51,38 @@ pie showData
 
 Type: `mindmap`
 
-Mind map of the scope tags in open issue titles, such as `fix(gate)` or `feat(loop)`. The insight: the review gate dominates the backlog (24 titles tagged `gate`, plus 5 tagged `cost` that all target gate token cost), and hooks and dispatch form the next cluster. Counts come from `gh issue list --state open --limit 200 --json number,title,milestone` and a tally of the parenthesized scope tag in each title. The map shows a selection: untagged titles and smaller tags (for example `github` 2 and about 20 single-use tags) are left out. Not decided.
+Mind map of the scope tags in open issue titles, such as `fix(gate)` or `feat(loop)`. The insight: the review gate dominates the backlog (41 titles tagged `gate`, plus 4 tagged `cost` that all target gate token cost), and hooks and loop form the next cluster. Counts come from `gh issue list --state open --limit 500 --json number,title,milestone` and a tally of the parenthesized scope tag in each title. The map shows a selection: untagged titles and other tags (for example `check` 8, `github` 4 and about 20 single-use tags) are left out. Not decided.
 
 ```mermaid
 mindmap
   root((Open backlog))
     Gate
-      "gate 24"
-      "cost 5"
+      "gate 41"
+      "cost 4"
       "judge 1"
-      "review 3"
-      "validation 3"
+      "review 2"
+      "validation 4"
     Loop runtime
-      "loop 11"
+      "loop 12"
       "dispatch 7"
       "coordinator 1"
-      "startup 1"
+      "startup 2"
       "work-orders 1"
     Guards
-      "hooks 10"
+      "hooks 15"
       "guard 1"
       "commit-msg-guard 1"
     PR follow-up
       "copilot 3"
-      "fixer 3"
-      "merge 2"
+      "fixer 8"
+      "merge 5"
     Onboarding
       "bootstrap 3"
       "grill 2"
       "intake 1"
     Harness
       "pi 2"
-      "ci 2"
+      "ci 1"
       "ui 1"
 ```
 
@@ -92,7 +92,7 @@ mindmap
 
 Type: `quadrantChart`
 
-Quadrant chart of twelve selected open issues and epics. The x value is derived from the milestone label (v1.0.12 = 0.1 up to v2.0.0 = 0.95, Later = 0.85). The y value is the analyst's estimate of scope breadth (a single fix is low, an epic or runtime rewrite is high); it is not a measured value. The insight: the broad items (v2 epic 2995, review-expectations epic 2840, bootstrap 2723) all sit on the far horizon, and the near milestone holds narrow fixes plus one broad gate change (soft round caps 3105). Positions are not decided. Source: `gh issue list --state open --limit 200 --json number,title,milestone`.
+Quadrant chart of twelve selected open issues and epics. The x value is derived from the milestone label (v1.0.12 = 0.1 up to v2.0.0 = 0.95, Later = 0.85). The y value is the analyst's estimate of scope breadth (a single fix is low, an epic or runtime rewrite is high); it is not a measured value. The insight: the broad items (v2 epic 2995, review-expectations epic 2840, bootstrap 2723) all sit on the far horizon, and the near milestone holds narrow fixes plus one broad gate change (merge without operator lines 2937). Positions are not decided. Source: `gh issue list --state open --limit 500 --json number,title,milestone`.
 
 ```mermaid
 quadrantChart
@@ -103,11 +103,11 @@ quadrantChart
     quadrant-2 Near and broad
     quadrant-3 Near and narrow
     quadrant-4 Far and narrow
-    Soft round caps 3105: [0.1, 0.62]
-    Merge boundary 2500: [0.12, 0.4]
-    CI smoke timeout 3251: [0.08, 0.15]
-    Usability study 3131: [0.3, 0.55]
-    Gate runbook 3096: [0.32, 0.35]
+    Soft round caps 3105: [0.32, 0.62]
+    Merge without operator lines 2937: [0.22, 0.55]
+    Startup follow-up refusal 3493: [0.08, 0.15]
+    Usability study 3131: [0.3, 0.5]
+    Gate runbook 3096: [0.2, 0.35]
     Loop board pane 2890: [0.45, 0.3]
     Gate token epic 2268: [0.55, 0.7]
     Work-order brief 2482: [0.65, 0.45]
@@ -123,14 +123,14 @@ quadrantChart
 
 Type: `timeline`
 
-Timeline of the milestone labels in version order, with two or three representative open titles per milestone. The insight: v1.0.12 through v1.5.0 continue the v1 patch and minor lane (gate cost, judge authority, hook hardening), and v2.0.0 is a separate planning track. Milestone membership comes from `gh issue list --state open --limit 200 --json number,title,milestone`. Dates are not assigned to any milestone in the issue data, so the axis shows order only. Not decided.
+Timeline of the milestone labels in version order, with two or three representative open titles per milestone. The insight: v1.0.12 through v1.5.0 continue the v1 patch and minor lane (gate cost, judge authority, hook hardening), and v2.0.0 is a separate planning track. Milestone membership comes from `gh issue list --state open --limit 500 --json number,title,milestone`. Dates are not assigned to any milestone in the issue data, so the axis shows order only. Not decided.
 
 ```mermaid
 timeline
     title Milestone order (not decided)
-    v1.0.12 : Soft round caps 3105 : Merge boundary 2500 : Release 3154
-    v1.0.13 : Post-release audits 3071 3072 : Simplicity audit 3213
-    v1.1.0 : Usability study 3131 : Gate runbook 3096 : Next-step driver 3097
+    v1.0.12 : Verdict poster summary 3347 : Startup follow-up refusal 3493 : Release 3154
+    v1.0.13 : Audit cleanup bundles 3468 3474 : Simplicity audit 3213
+    v1.1.0 : Usability study 3131 : Soft round caps 3105 : Next-step driver 3097
     v1.2.0 : Loop board pane 2890 : Coordinator-only roles 3143
     v1.3.0 : Gate token epic 2268 : Judge picks gate track 2070
     v1.4.0 : Pulled developer brief 2482 : Hook deny gaps 2968
@@ -144,16 +144,16 @@ timeline
 
 Type: `kanban`
 
-Board view of a sample of open issues, one column per milestone group. The insight: only the first column is the active release lane; the other columns are parked proposals that the operator can reorder at any time. Membership comes from `gh issue list --state open --limit 200 --json number,title,milestone`. The card selection is the analyst's sample, not a priority order. Not decided.
+Board view of a sample of open issues, one column per milestone group. The insight: only the first column is the active release lane; the other columns are parked proposals that the operator can reorder at any time. Membership comes from `gh issue list --state open --limit 500 --json number,title,milestone`. The card selection is the analyst's sample, not a priority order. Not decided.
 
 ```mermaid
 kanban
   near[v1.0.12 and v1.0.13]
-    k3105[Soft round caps 3105]
-    k3048[Approval pinned to patch-id 3048]
+    k2937[Merge without operator lines 2937]
+    k3170[Merge through admin bypass 3170]
     k3213[Simplicity-first audit 3213]
   minor[v1.1.0 to v1.2.0]
-    k2937[Merge without operator lines 2937]
+    k3105[Soft round caps 3105]
     k3200[Human-style review submit 3200]
     k2890[Loop board pane 2890]
   later[v1.3.0 to v1.5.0]
