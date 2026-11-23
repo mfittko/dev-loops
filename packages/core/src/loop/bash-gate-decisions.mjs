@@ -309,7 +309,8 @@ function decideBashGateDenyUnmarked(facts) {
   // gone: "nothing to gate" no longer means "run no rule", it means a missing fact.
   const { command, role, repoSlug, managedRepoSlug, inManagedContext, humanMergeOnly, enforceCoordinator, readyGate = null } = injected;
   const gatePassed = readyGate?.passed === true;
-  const gateError = readyGate?.error ?? null;
+  // Collapse newlines so probe stderr cannot inject a marker-looking last line into a deny reason.
+  const gateError = readyGate?.error?.replace(/\s+/g, " ") ?? null;
 
   // Unresolve ownership (issue 2577) is the FIRST rule, so this shared set reproduces the Claude
   // seam's evaluation order exactly (there the owner allowlist is checked before the judge and fixer

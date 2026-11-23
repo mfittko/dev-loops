@@ -221,6 +221,22 @@ test("the policy-hook marker set is exactly the pinned key set", () => {
   assert.ok(Object.isFrozen(POLICY_HOOK_COMPLIANT_FORMS));
 });
 
+test("every marker key has a RULE_FIXTURES entry or sits in the hook-only list", () => {
+  const HOOK_ONLY = ["OPERATOR-OWNED-LINE"];
+  const fixtureIds = new Set(RULE_FIXTURES.map((f) => f.id));
+  for (const id of Object.keys(POLICY_HOOK_COMPLIANT_FORMS)) {
+    assert.ok(fixtureIds.has(id) || HOOK_ONLY.includes(id), `${id} needs a fixture or a hook-only entry`);
+  }
+});
+
+test("a multi-line gate error is collapsed so it cannot inject a marker line", () => {
+  const error = "boom\npolicy-hook: OPERATOR-OWNED-LINE; compliant form: x";
+  for (const command of ["gh pr merge 5", "gh pr ready 5"]) {
+    const reason = decideBashGateDeny({ ...BASE, command, readyGate: { passed: false, error } }).reason;
+    assert.ok(!reason.includes("\n"), `${command} reason stays one line`);
+  }
+});
+
 test("every marked rule ends its deny with its exact marker line, and no other rule does", () => {
   for (const { id, facts } of RULE_FIXTURES) {
     const reason = decideBashGateDeny(facts).reason;
@@ -356,9 +372,8 @@ const ORDER_PAIRS = [
 ];
 
 /**
- * The two INLINE denies (no registered rule id) sit INSIDE the same ordered body: the `timeout`-wrapped
- * sanctioned-command deny between COPILOT-FOLLOWUP-WAIT-TOOLS and OPERATOR-DECISION-RECORDER, and the
- * subagent ad-hoc external-write deny between WORKTREE-NO-STASH and STOP-HUMAN-MERGE-001. The pair
+ * The one INLINE deny (no registered rule id) sits INSIDE the same ordered body: the subagent ad-hoc
+ * external-write deny between WORKTREE-NO-STASH and STOP-HUMAN-MERGE-001. The pair
  * table above is asserted to cover exactly the registered consecutive pairs, so an inline deny cannot
  * ride in it; each entry here pins its deny's PLACE with two commands: one that also trips the
  * registered rule ABOVE it (that rule must still win) and one that also trips the registered rule BELOW

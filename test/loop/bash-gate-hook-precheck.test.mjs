@@ -466,6 +466,15 @@ for (const command of COMMENT_WRITES) {
   });
 }
 
+test("a subagent raw comment write replaced from the unmarked ad-hoc deny carries no policy-hook marker", async () => {
+  await withManagedRepo(async (root) => {
+    const { decision, reason } = bash(root, "gh issue comment 5 --body x", "developer");
+    assert.equal(decision, "deny");
+    assert.match(reason, /OPERATOR-OWNED-LINE[\s\S]*comment-issue\.mjs/);
+    assert.ok(!reason.includes("policy-hook:"), "the unmarked ad-hoc deny must stay unmarked");
+  });
+});
+
 test("PR body edits, graphql updatePullRequest and PR review comment writes keep the body reason", async () => {
   await withManagedRepo(async (root) => {
     for (const command of [
@@ -484,7 +493,7 @@ test("PR body edits, graphql updatePullRequest and PR review comment writes keep
 test("the hook's own comment and body-write denies end with the policy-hook marker line (OPS-POLICY-HOOK-DENIAL-FAIL-OPEN)", async () => {
   await withManagedRepo(async (root) => {
     const lastLine = (command) => bash(root, command, undefined).reason.split("\n").at(-1);
-    // A local tmp-file heredoc whose text holds "PR", "comment" and "body" tokens: the observed false match.
+    // A raw `gh pr comment ... <<EOF` whose heredoc text holds "PR", "comment" and "body" tokens: the observed false match.
     assert.equal(
       lastLine("gh pr comment 5 --body-file tmp/x.md <<'EOF'\nPR comment body\nEOF"),
       `policy-hook: OPERATOR-OWNED-LINE; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS["OPERATOR-OWNED-LINE"]}`,
