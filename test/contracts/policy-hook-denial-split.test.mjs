@@ -23,6 +23,7 @@ test("the owner doc states the fail-open split, both stops and the recovery", as
     "runs the compliant form the marker names, once",
     "Any denial of the compliant-form attempt stops the actor",
     "A denial without the `policy-hook:` marker line stops the actor immediately",
+    "runs the compliant form only when its own role contract permits that action; otherwise it stops and hands back the denial text verbatim",
     "the actor quotes the denial text verbatim, and the orchestrator decides with the operator",
   ]) {
     assert.ok(rule.includes(phrase), `${RULE} text is missing: ${phrase}`);

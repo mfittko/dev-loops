@@ -493,7 +493,7 @@ test("PR body edits, graphql updatePullRequest and PR review comment writes keep
 test("the hook's own comment and body-write denies end with the policy-hook marker line (OPS-POLICY-HOOK-DENIAL-RECOVERABLE)", async () => {
   await withManagedRepo(async (root) => {
     const lastLine = (command) => bash(root, command, undefined).reason.split("\n").at(-1);
-    // A raw `gh pr comment ... <<EOF` whose heredoc text holds "PR", "comment" and "body" tokens: the observed false match.
+    // A raw `gh pr comment ... <<EOF` whose heredoc text holds "PR", "comment" and "body" tokens: a genuine raw comment write.
     assert.equal(
       lastLine("gh pr comment 5 --body-file tmp/x.md <<'EOF'\nPR comment body\nEOF"),
       `policy-hook: OPERATOR-OWNED-LINE; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS["OPERATOR-OWNED-LINE"]}`,
