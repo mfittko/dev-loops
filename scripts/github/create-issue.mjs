@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue, runChild } from "../_cli-primitives.mjs";
-import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { buildCreateArgs as coreBuildCreateArgs, createIssue as coreCreateIssue } from "@dev-loops/core/github/issue-ops";
 import { enqueueBoardItem } from "./create-pr.mjs";
 import { parseArgs } from "node:util";
@@ -171,7 +171,7 @@ export async function createIssue(options, { env = process.env, ghCommand = "gh"
 
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh", run = runChild, cwd = process.cwd() } = {},
+  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh", run = runChild, cwd = process.cwd(), detectOriginSlug = detectRepoSlug } = {},
 ) {
   let options;
   try {
@@ -203,14 +203,19 @@ export async function runCli(
   // Fail-open by design (non-goal): a board outage must never block issue
   // creation, so an enqueue failure is reported, not fatal.
   const issueNumber = Number.isInteger(result.issueNumber) ? result.issueNumber : null;
-  const board = await enqueueBoardItem({
-    repo: options.repo,
-    itemNumber: issueNumber,
-    column: "Backlog",
-    cwd,
-    env,
-    runChild: run,
-  });
+  // The board belongs to the current checkout's repository: an issue created in
+  // another repository must not land on it.
+  const originSlug = detectOriginSlug(cwd);
+  const board = originSlug !== null && !repoSlugEquals(originSlug, options.repo)
+    ? { enqueued: false, reason: "cross-repo" }
+    : await enqueueBoardItem({
+      repo: options.repo,
+      itemNumber: issueNumber,
+      column: "Backlog",
+      cwd,
+      env,
+      runChild: run,
+    });
   if (!board.enqueued) {
     stderr.write(`[create-issue] Board note: issue not enqueued (${board.reason}).\n`);
   }
