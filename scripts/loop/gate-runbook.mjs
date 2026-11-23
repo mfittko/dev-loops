@@ -166,7 +166,8 @@ export function buildGateRunbook({ docsDir = DEFAULT_DOCS_DIR } = {}) {
     return refuse("contract_missing", `The gate contract is missing: ${contract}`, `operator: reinstall the dev-loops package or restore ${contract} from the dev-loops source checkout, ${rerun}`);
   }
   const marked = markedRuleIds(docsDir);
-  const unresolved = runbookRuleIds(renderRunbook(docsDir)).filter((id) => !marked.has(id));
+  // Scan a placeholder-path render: an uppercase hyphenated directory name is not a rule ID.
+  const unresolved = runbookRuleIds(renderRunbook("docs")).filter((id) => !marked.has(id));
   if (unresolved.length > 0) {
     return refuse("rule_unresolved", `The runbook names rule IDs with no rule marker in ${docsDir}: ${unresolved.join(", ")}`, `operator: reinstall the dev-loops package, or fix the source: add the rule marker for ${unresolved[0]} under ${docsDir} or update scripts/loop/gate-runbook.mjs to the current rule ID, ${rerun}`);
   }

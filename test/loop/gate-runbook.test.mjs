@@ -296,6 +296,19 @@ test("AC5: a missing contract or an unresolved rule marker fails closed with an 
   }
 });
 
+test("AC5: an uppercase hyphenated docs directory name is not read as a rule ID and the real path is printed", () => {
+  const base = mkdtempSync(path.join(tmpdir(), "gate-runbook-"));
+  const dir = path.join(base, "MY-DOCS-DIR");
+  try {
+    cpSync(DOCS, dir, { recursive: true });
+    const result = run(["--docs-dir", dir]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.stdout.includes(path.join(dir, CONTRACT_FILE)), "the runbook prints the real contract path");
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("AC5: an unknown flag prints the message and usage as text, exits 1 and writes no stdout", () => {
   const result = run(["--bogus"]);
   assert.equal(result.status, 1);
