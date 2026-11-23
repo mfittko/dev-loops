@@ -784,7 +784,7 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
     const { owner, name } = parseRepoSlug(typeof repo === "string" ? repo.trim() : repo);
     repoSlug = `${owner}/${name}`;
   } catch {
-    throw fail(`Gate findings ledger "${ledgerPath}" "repo" must be an owner/name slug`);
+    throw fail(`Gate findings ledger "${ledgerPath}" "repo" must be an owner/name slug (the expected file is the durable findings log at tmp/gate-findings/<owner-name>/pr-<N>/<gate>-<headSha>.json, the path write-gate-findings-log.mjs writes and the round result returns)`);
   }
   if (!Number.isInteger(pr) || pr <= 0) {
     throw fail(`Gate findings ledger "${ledgerPath}" is missing a valid "pr" number`);

@@ -18,7 +18,7 @@ test("dev-loop SKILL inlines the sanctioned consolidate-fanin fan-out dispatch i
   );
   // Fan-in refuses a fan-out round without --emit-plan (ADR 0106), so the sanctioned calls pass it.
   assert.match(skill, /--ledger-out <ledger-path> \\\n  --emit-plan <emit-plan-path>/);
-  assert.match(await readRepo("skills/copilot-pr-followup/SKILL.md"), /SAME single sanctioned call: `node <dev-loops-package-root>\/cli\/index\.mjs gate consolidate-fanin [^`]*--emit-plan <emit-plan-path>/);
+  assert.match(await readRepo("skills/copilot-pr-followup/SKILL.md"), /SAME single sanctioned call\.[^:]*: `node <dev-loops-package-root>\/cli\/index\.mjs gate consolidate-fanin [^`]*--emit-plan <emit-plan-path>/);
   // The never-hand-roll rule is visible at the dispatch guardrail.
   assert.match(
     skill,
