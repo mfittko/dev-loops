@@ -140,9 +140,8 @@ export const BASH_GATE_RULES = Object.freeze([
 
 /**
  * The deny rules whose compliant form the denied actor may run itself (OPS-POLICY-HOOK-DENIAL-RECOVERABLE).
- * A deny for a key here ends with the marker line `policy-hook: <rule-id>; compliant form: <text>`;
- * a deny without the marker line is an authority-boundary deny and stops the actor. The hand-authored
- * `.claude/hooks/pre-tool-use-bash-gate.mjs` reads this map for its own two denies.
+ * A deny for a key here ends with the marker line `policy-hook: <rule-id>; compliant form: <text>`.
+ * The dev-loops denies that stop the actor live in `TERMINAL_STOP_REASONS`; `withHookMarker` builds both marker lines.
  */
 export const POLICY_HOOK_COMPLIANT_FORMS = Object.freeze({
   "OPS-NO-INLINE-INTERPRETER": "rerun the command without the inline interpreter; parse with --jq/--silent and write files with the editor tools",
@@ -183,7 +182,7 @@ export const TERMINAL_STOP_REASONS = Object.freeze({
   "STOP-HUMAN-MERGE-001": { class: "escalate", reason: "authority: a human merges this repo's pull requests." },
   "RAW-GH-PR-MERGE-BYPASS": { class: "escalate", reason: "authority: a merge runs only through the orchestrator's merge-pr wrapper." },
   "GATE-COMMENT-DRAFT-REQUIREMENTS": { class: "escalate", reason: "gate order: the draft_gate evidence must exist before the PR leaves draft." },
-  SUBAGENT_EXTERNAL_WRITE: { class: "escalate", reason: "authority: a subagent has no direct external write, so the orchestrator performs it." },
+  SUBAGENT_EXTERNAL_WRITE: { class: "escalate", reason: "authority: a subagent writes to GitHub only through the sanctioned wrappers, and anything else, such as issue creation, the orchestrator performs." },
   MAIN_AGENT_READONLY_BOUNDARY: { class: "escalate", reason: "authority: the main agent mutates no repository file, so the dev-loop subagent does." },
   FIXER_MUTATION_BOUNDARY: { class: "escalate", reason: "authority: a fixer mutates only inside its work order's grant." },
   "MERGE-ASK-APPROVAL": { class: "escalate", reason: "authority: only the operator answers the approval question." },
@@ -195,10 +194,11 @@ export const TERMINAL_STOP_REASONS = Object.freeze({
  * or `stop: <class>; <id>; <reason>`, from whichever map holds the id. The only code that builds either line.
  */
 export function withHookMarker(denyId, reason) {
-  const id = denyId ?? "";
+  if (denyId == null) return reason;
+  const id = denyId;
   if (Object.hasOwn(POLICY_HOOK_COMPLIANT_FORMS, id)) return `${reason}\npolicy-hook: ${id}; compliant form: ${POLICY_HOOK_COMPLIANT_FORMS[id]}`;
   if (Object.hasOwn(TERMINAL_STOP_REASONS, id)) return `${reason}\nstop: ${TERMINAL_STOP_REASONS[id].class}; ${id}; ${TERMINAL_STOP_REASONS[id].reason}`;
-  return reason;
+  throw new Error(`withHookMarker: unregistered deny id ${id}`);
 }
 
 /**

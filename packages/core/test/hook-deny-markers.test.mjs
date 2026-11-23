@@ -6,7 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
-import { POLICY_HOOK_COMPLIANT_FORMS, TERMINAL_STOP_REASONS, withHookMarker } from "../src/loop/bash-gate-decisions.mjs";
+import { POLICY_HOOK_COMPLIANT_FORMS, TERMINAL_STOP_REASONS, decideBashGateDeny, withHookMarker } from "../src/loop/bash-gate-decisions.mjs";
 import {
   decideAgentDispatch, decideBashGate, decideCoordinatorWriteGuard, decideFixerWriteGuard, decideJudgeWriteGuard,
   decideSubagentStopGuard, decideWorktreeCheckoutGuard, decideWriteGuard,
@@ -104,14 +104,30 @@ test("one fixture per key of both maps ends its deny with exactly the exact mark
 });
 
 test("the deny-site count is pinned, so a new deny site must join the fixture table", () => {
+  const hookFiles = fs.readdirSync(path.join(root, ".claude/hooks"))
+    .filter((f) => /^pre-tool-use-.*\.mjs$/.test(f)).map((f) => `.claude/hooks/${f}`);
   const sites = (files) => files.map((f) => (read(f).match(/decision: "(?:deny|block)"|emitDeny\(|process\.exit\(2\)/g) ?? []).length).reduce((a, b) => a + b, 0);
   assert.equal(sites([
     "packages/core/src/loop/bash-gate-decisions.mjs", "packages/core/src/claude/hook-decisions.mjs",
-    ".claude/hooks/pre-tool-use-agent-guard.mjs", ".claude/hooks/pre-tool-use-approval-guard.mjs", ".claude/hooks/pre-tool-use-ask-answers-guard.mjs",
-    ".claude/hooks/pre-tool-use-bash-gate.mjs", ".claude/hooks/pre-tool-use-write-guard.mjs", ".claude/hooks/subagent-stop-uncommitted-guard.mjs",
+    ...hookFiles, ".claude/hooks/subagent-stop-uncommitted-guard.mjs",
   ]), 29);
   // The shared deny set returns `{ ruleId, reason }`: every such site has a ruleId line.
   assert.equal((read("packages/core/src/loop/bash-gate-decisions.mjs").match(/^\s+ruleId: /gm) ?? []).length, 19);
+});
+
+test("a deny with missing facts ends with the HOOK_GUARD_FAILED stop marker", () => {
+  const lines = decideBashGateDeny({}).reason.split("\n");
+  assert.ok(lines.at(-1).startsWith("stop: process-change; HOOK_GUARD_FAILED;"));
+});
+
+test("the ask-answers guard catch marks its deny HOOK_GUARD_FAILED", () => {
+  assert.match(read(".claude/hooks/pre-tool-use-ask-answers-guard.mjs"), /catch[\s\S]*withHookMarker\("HOOK_GUARD_FAILED"/);
+});
+
+test("withHookMarker throws on an unregistered id and passes null through", () => {
+  assert.throws(() => withHookMarker("NOT-A-RULE", "x"), /unregistered deny id/);
+  assert.equal(withHookMarker(null, "x"), "x");
+  assert.equal(withHookMarker(undefined, "x"), "x");
 });
 
 test("the approval guard drops the old node-limit sentence", () => {
