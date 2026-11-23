@@ -543,9 +543,15 @@ async function verifyEmitPlanKey(planPath, { repo, pr, gate, headSha, carriedAng
 /** Issue 3460 AC6: add each cap-round act item (`capRoundActList`) to the per-angle artifacts as an ordinary finding keyed `cap:<fingerprint>`. */
 export function seedCapRoundActFindings(rawArtifacts, actList) {
   for (const item of actList) {
+    if (typeof item.angle !== "string" || item.angle.trim().length === 0) continue;
     const seeded = { severity: item.severity, summary: item.summary, defectKey: `cap:${item.fingerprint}`, ...(item.file ? { file: item.file } : {}), ...(Number.isInteger(item.line) ? { line: item.line } : {}) };
-    const artifact = rawArtifacts.find((a) => a.angle.trim() === item.angle);
-    if (artifact) { artifact.verdict = "findings_present"; artifact.findings = [...artifact.findings, seeded]; } else rawArtifacts.push({ angle: item.angle, verdict: "findings_present", findings: [seeded] });
+    const artifact = rawArtifacts.find((a) => a.angle.trim() === item.angle.trim());
+    // A blocked artifact keeps its verdict (fan-in returns blocked from it); the seeded item rides a separate synthetic artifact.
+    // The synthetic artifact has no head stamp, so no perAngle row exists; resolve-angle-carry-forward exempts `cap:` findings from attribution.
+    if (artifact && ["clean", "findings_present"].includes(artifact.verdict?.trim())) {
+      artifact.verdict = "findings_present";
+      artifact.findings = [...(Array.isArray(artifact.findings) ? artifact.findings : []), seeded];
+    } else if (!artifact) rawArtifacts.push({ angle: item.angle, verdict: "findings_present", findings: [seeded] });
   }
 }
 

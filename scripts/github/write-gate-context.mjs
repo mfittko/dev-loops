@@ -126,10 +126,14 @@ export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = re
   let failureDetail = null;
   // `gh pr view --json reviews` carries camelCase `author`/`authorAssociation`; the trust predicate reads the REST shape.
   const restShaped = (Array.isArray(context.prData?.reviews) ? context.prData.reviews : []).map((r) => ({ body: r?.body, user: { login: r?.author?.login, type: r?.author?.type }, author_association: r?.authorAssociation }));
-  const isTrusted = await resolveTrustedEvidencePredicate(restShaped, trustRuntime);
-  const postedHeads = draftGatePostedHeads(restShaped.filter(isTrusted).map((r) => r.body));
+  // The trust predicate costs a `gh api user` call: it runs only once a cap round exists.
+  let postedMemo;
+  const postedHeads = () => postedMemo ??= resolveTrustedEvidencePredicate(restShaped, trustRuntime).then((isTrusted) => draftGatePostedHeads(restShaped.filter(isTrusted).map((r) => r.body)));
   // Issue 3460 AC1: the cap exit decides before the chain proof; when it does not hold, the chain proof decides unchanged.
-  if (requirePostedCleanCap && await resolveCapExitRound({ repo: context.repo, pr: context.pr, headSha: context.currentHeadSha }, { repoRoot, postedHeads })) return { capRoundFixed: true, failure: null };
+  if (requirePostedCleanCap) {
+    const exitRound = await resolveCapRound({ repo: context.repo, pr: context.pr, headSha: context.currentHeadSha }, { repoRoot }).catch(() => null);
+    if (exitRound && capExitHolds(exitRound, await postedHeads())) return { capRoundFixed: true, failure: null };
+  }
   const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
   const capRound = await resolve(
     { repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName, anyHead: context.prData?.isDraft !== true },
@@ -138,7 +142,7 @@ export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = re
   ).catch(() => { failure = "cap_round_unresolved"; return null; });
   // A clean cap round has no fixer pass: only its posted review is visible to CI, so a ledger-only proof is no clean draft_gate evidence.
   // Absent reviews and untrusted authors prove nothing (fail closed), matching the detector and ready-for-review.
-  if (capRound && requirePostedCleanCap && cleanCapVerdictUnposted(capRound, postedHeads)) return { capRoundFixed: false, failure: "clean_cap_verdict_unposted" };
+  if (capRound && requirePostedCleanCap && isCleanCapRound(capRound) && cleanCapVerdictUnposted(capRound, await postedHeads())) return { capRoundFixed: false, failure: "clean_cap_verdict_unposted" };
   return { capRoundFixed: Boolean(capRound), failure, ...(failureDetail ? { failureDetail } : {}) };
 }
 

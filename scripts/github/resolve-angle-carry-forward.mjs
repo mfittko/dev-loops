@@ -336,6 +336,8 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
     // The synthetic Copilot body finding has no perAngle row by design; every other unattributable angle still fails closed.
     if (rawAngle === COPILOT_BODY_ANGLE && !prevAnglesByLowerBase.has(COPILOT_BODY_ANGLE)) continue;
     const matches = prevAnglesByLowerBase.get(baseAngleName(rawAngle).toLowerCase());
+    // A seeded cap-round act item (defect key `cap:`, issue 3460) can name an angle with no perAngle row this round.
+    if ((!matches || matches.length === 0) && String(finding.defectKey ?? "").startsWith("cap:")) continue;
     if (!matches || matches.length === 0) {
       throw new Error(`prior gate findings-log has a finding for angle ${JSON.stringify(rawAngle)}, which matches no provenance.perAngle entry — cannot prove that angle is clean (fail-closed)`);
     }

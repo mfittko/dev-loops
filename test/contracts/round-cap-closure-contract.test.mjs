@@ -35,7 +35,8 @@ test("GATE-EXEC-ROUND-CAP-EXIT states the exit, the blocked rule, the seeding an
   const rule = contract.split("<!-- rule: GATE-EXEC-ROUND-CAP-EXIT -->")[1].split("\n")[1];
   for (const text of ["`capExitHolds`", "a trusted posted `draft_gate` review exists at the cap-round head", "reads no delta record", "A blocked round never takes the exit", "`pastCapBlockers`", "seeds each open act item of the cap round as a finding", "`cap:<fingerprint>`", "names by fingerprint, with a `decision`", "choose a third outcome", "ADR 0320"]) assert.ok(rule.includes(text), text);
   assert.ok(contract.includes("for one of three outcomes") && contract.includes("The third outcome, at the cap round"), "the escalation rule names the fix in this PR");
-  for (const doc of [contract, await read("skills/copilot-pr-followup/SKILL.md")]) assert.match(doc, /at the cap a refusal ends in the cap exit \(`GATE-EXEC-ROUND-CAP-EXIT`\)/i);
+  for (const doc of [contract, await read("skills/copilot-pr-followup/SKILL.md")]) assert.match(doc, /any refusal keeps the full round, except at the cap: a `locally_clear` delta result that carries a new low finding ends in ready through the cap exit \(`GATE-EXEC-ROUND-CAP-EXIT`\)/i);
   assert.ok(!contract.includes("Any refusal keeps the full round."), "the unqualified sentence is gone");
+  assert.ok(!(await read("skills/copilot-pr-followup/SKILL.md")).includes("Below the cap a refusal keeps the full round"), "the duplicated sentence is gone");
   assert.ok((await read("docs/decisions/0320-cap-exit-from-the-posted-cap-review.md")).includes("Amends ADR 0208, ADR 0218, ADR 0250 and ADR 0317"));
 });

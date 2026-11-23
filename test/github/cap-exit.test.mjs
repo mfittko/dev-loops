@@ -106,3 +106,54 @@ test("AC6 fan-in seeds each open act item of the cap round as a finding (a capCl
   assert.equal(pastCapBlockers([judged(seeded[1], { severity: "high" })], { round: 4, cap: 4 }).length, 1, "a seeded high without a fix blocks clean");
   assert.equal(pastCapBlockers([judged(seeded[0], { severity: "medium", judgeDisposition: "defer", failOpen: true })], { round: 4, cap: 4 }).length, 1, "a fail-open medium blocks clean");
 });
+
+test("AC6 seeding keeps a blocked artifact blocked, skips an item with no angle, and tolerates an artifact without findings", async () => {
+  const { consolidateFanin } = await import("@dev-loops/core/loop/gate-fanin");
+  const { seedCapRoundActFindings } = await import("../../scripts/loop/consolidate-fanin.mjs");
+  const item = { fingerprint: "0123456789abcdef", severity: "medium", summary: "guard missing", angle: "correctness" };
+  const blocked = [{ angle: "correctness", verdict: "blocked", findings: [] }];
+  seedCapRoundActFindings(blocked, [item]);
+  assert.equal(blocked[0].verdict, "blocked");
+  assert.equal(consolidateFanin({ angleResults: blocked }).verdict, "blocked");
+  const bare = [{ angle: "correctness", verdict: "clean" }];
+  seedCapRoundActFindings(bare, [item, { ...item, angle: undefined }]);
+  assert.equal(bare.length, 1, "an item with no angle is skipped");
+  assert.equal(bare[0].findings.length, 1);
+});
+
+test("AC6 a seeded item whose angle has no artifact rides a synthetic artifact with no provenance row, and the next round's carry-forward accepts it", async () => {
+  const { seedCapRoundActFindings, deriveFaninProvenance } = await import("../../scripts/loop/consolidate-fanin.mjs");
+  const { buildCarryForwardPlan } = await import("../../scripts/github/resolve-angle-carry-forward.mjs");
+  const artifacts = [{ angle: "coverage", verdict: "clean", findings: [], headSha: CAP_HEAD }];
+  seedCapRoundActFindings(artifacts, [{ fingerprint: "0123456789abcdef", severity: "medium", summary: "guard missing", angle: "correctness" }]);
+  assert.equal(artifacts.length, 2);
+  const { perAngle } = deriveFaninProvenance(artifacts, { units: [{ angles: ["coverage"], executionIdentity: "e1", group: null }] }, CAP_HEAD, []);
+  assert.deepEqual(perAngle.map((p) => p.angle), ["coverage"]);
+  const log = { headSha: "aaaaaaa", verdict: "findings_present", provenance: { distinctReviewers: 1, perAngle: [{ angle: "coverage", reviewer: "r1" }] }, findings: [{ angle: "correctness", severity: "medium", summary: "guard missing", defectKey: "cap:0123456789abcdef" }] };
+  assert.deepEqual(buildCarryForwardPlan({ log, changedFiles: ["docs/guide.md"] }).carried.map((c) => c.angle), ["coverage"]);
+  assert.throws(() => buildCarryForwardPlan({ log: { ...log, findings: [{ ...log.findings[0], defectKey: "other" }] }, changedFiles: ["docs/guide.md"] }), /matches no provenance\.perAngle entry/);
+});
+
+test("AC1 a stale delta record of another act set on disk still gives capRoundFixed true", async () => {
+  const root = world([act(1)]);
+  mkdirSync(path.join(root, "tmp", "gate-delta", "owner-repo", `pr-${PR}`), { recursive: true });
+  writeFileSync(path.join(root, "tmp", "gate-delta", "owner-repo", `pr-${PR}`, "stale.json"), JSON.stringify({ baseline: "9".repeat(40), candidateHead: "8".repeat(40), refs: ["other-act-set"] }));
+  assert.deepEqual(await fact(root, [review(CAP_HEAD, 4, "findings_present")]), { capRoundFixed: true, failure: null });
+});
+
+test("AC4 a blocked cap round with a posted review and no delta record reports blocked; with a clearing chain it keeps today's result", async () => {
+  const { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } = await import("@dev-loops/core/loop/pr-gate-coordination");
+  const { DISPOSITION, STATE } = await import("@dev-loops/core/loop/copilot-loop-state");
+  const root = world([act(1, { severity: "high", judgeFix: undefined })]);
+  const blocked = await fact(root, [review(CAP_HEAD, 4, "findings_present")]);
+  assert.equal(blocked.capRoundFixed, false);
+  const marker = { visible: true, headSha: "bbbbbbb", verdict: "findings_present", contractComplete: true };
+  const result = evaluatePrGateCoordination({
+    pr: PR, currentHeadSha: "b".repeat(40), prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
+    draftGate: marker, draftGateMarker: marker, unresolvedGateThreadCount: 0, draftCapRoundFixed: blocked.capRoundFixed, draftCapRoundFailure: blocked.failure ?? "no_clearing_record", draftRoundRefused: true,
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  // A clearing chain (the resolver proves the cap round fixed) keeps today's result: the chain proof decides.
+  const chained = await fact(root, [review(CAP_HEAD, 4, "findings_present")], { resolve: async () => ({ log: { headSha: CAP_HEAD, findings: [] }, round: 4, residue: [] }) });
+  assert.equal(chained.capRoundFixed, true);
+});

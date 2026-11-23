@@ -3442,6 +3442,20 @@ test("issue 3105: a second cap-round fixer pass emits at the first pass's pushed
   });
 });
 
+// Issue 3460 AC7: the second pass at the pushed head needs the posted cap-round review, never a delta record.
+test("issue 3460 AC7: a second cap-round pass emits at the pushed head with every delta record deleted; a blocked or missing cap review refuses", async () => {
+  await withFixture(async (fx) => {
+    const { candidate, at } = await capRoundFirstPassPushed(fx);
+    await rm(path.join(fx.root, "tmp", "gate-delta"), { recursive: true, force: true });
+    const [open] = JSON.parse(await readFile(fx.files.actList));
+    const focusFile = path.join(fx.root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: open.fingerprint, decision: "Fix it in this PR" }] }));
+    const ok = await fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate) });
+    assert.equal(ok.workOrder.source, "act-list");
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate), fetchVerdictMarkers: async ({ headSha }) => summarizeGateReviewCommentMarkers([], { headSha }) }), (e) => e.refusal === "round_cap_reached" || e.refusal === "verdict_not_posted");
+  });
+});
+
 test("issue 3105: a later cap-round pass emits only the cap round's act refs; an extra act item refuses round_cap_reached", async () => {
   await withFixture(async (fx) => {
     const { candidate, at } = await capRoundFirstPassPushed(fx);
