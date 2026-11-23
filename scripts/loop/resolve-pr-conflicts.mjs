@@ -342,7 +342,7 @@ export async function resolvePrConflicts(options, { env = process.env, runVerifi
     throw new Error(`git fetch origin ${base} failed: ${fetch.stderr.trim() || `exit ${fetch.code}`}`);
   }
 
-  // A base merge inside an open fix sequence is a foreign commit that stalls the delta review (#3528); an up-to-date branch merges nothing, so it is exempt.
+  // A base merge inside an open fix sequence is a foreign commit that stalls the delta review (PRE-PUSH-DELTA-PUSH-AUTHORITY); an up-to-date branch merges nothing, so it is exempt.
   const upToDate = (await run("git", ["merge-base", "--is-ancestor", `origin/${base}`, "HEAD"], { cwd, env })).code === 0;
   if (!upToDate) {
     const branch = (await run("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd, env })).stdout.trim();
