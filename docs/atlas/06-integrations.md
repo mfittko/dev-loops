@@ -1,7 +1,8 @@
 ---
 title: External integrations and adapters
 status: snapshot
-snapshot_date: 2026-11-19
+snapshot_date: 2026-11-23
+source_commit: f6619004d3edc2caccc98edd96914a5706c5d59b
 ---
 <a id="06-integrations"></a>
 
@@ -15,7 +16,7 @@ dev-loops reaches the outside world through a small set of seams. GitHub is reac
 
 Type: `flowchart`
 
-The diagram shows each external system and the module family that reaches it. The insight is that GitHub and Copilot share one exit point, the `gh` binary, and most callers spawn it through `runChild` in `packages/core/src/cli/primitives.mjs`, so auth, rate limits and test doubles are handled at one seam. `grep -l runChild scripts/github/*.mjs | wc -l` gives 46 scripts and `grep -lE 'github/gh(\.mjs)?"' scripts/github/*.mjs | wc -l` gives 12 scripts that import the `gh.mjs` helpers. Derived from `packages/core/src/cli/primitives.mjs`, `packages/core/src/github/gh.mjs`, `packages/core/src/github/issue-ops.mjs`, `packages/core/src/tracker/github-adapter.mjs`, `scripts/github/request-copilot-review.mjs`, `scripts/claude/headless-dev-loop.mjs`, `extension/pi-extension-adapter.ts` and `packages/core/src/loop/codex-execution-evidence.mjs`.
+The diagram shows each external system and the module family that reaches it. The insight is that GitHub and Copilot share one exit point, the `gh` binary, and most callers spawn it through `runChild` in `packages/core/src/cli/primitives.mjs`, so auth, rate limits and test doubles are handled at one seam. `grep -l runChild scripts/github/*.mjs | wc -l` gives 48 scripts and `grep -lE 'github/gh(\.mjs)?"' scripts/github/*.mjs | wc -l` gives 15 scripts that import the `gh.mjs` helpers. Derived from `packages/core/src/cli/primitives.mjs`, `packages/core/src/github/gh.mjs`, `packages/core/src/github/issue-ops.mjs`, `packages/core/src/tracker/github-adapter.mjs`, `scripts/github/request-copilot-review.mjs`, `scripts/claude/headless-dev-loop.mjs`, `extension/pi-extension-adapter.ts` and `packages/core/src/loop/codex-execution-evidence.mjs`.
 
 ```mermaid
 flowchart LR
@@ -172,7 +173,7 @@ flowchart TD
 
 Type: `sequenceDiagram`
 
-The diagram shows the shared GraphQL path. `ghGraphql` spawns `gh api graphql` and maps failures to `GH_API_ERROR` (non-zero exit) or `GRAPHQL_ERROR` (an `errors` array). `withGraphqlRateLimitWait` acts only when the error message matches `isRateLimitError`; every other error is rethrown unchanged. It reads the GraphQL reset from `gh api rate_limit`, which spends no GraphQL points, sleeps once and retries once. It fails closed with `RATE_LIMITED` when budget remains (a REST or secondary limit) or when the reset is unknown, past, beyond `maxWaitMs` or more than 24 hours ahead. Derived from `packages/core/src/github/gh.mjs`.
+The diagram shows the shared GraphQL path. `ghGraphql` spawns `gh api graphql` and maps failures to `GH_API_ERROR` (non-zero exit) or `GRAPHQL_ERROR` (an `errors` array). A secondary rate limit makes `ghGraphql` back off 30 seconds and retry once, and a second one throws `RATE_LIMITED`. `withGraphqlRateLimitWait` acts only when the error message matches `isRateLimitError`; every other error is rethrown unchanged. It reads the GraphQL reset from `gh api rate_limit`, which spends no GraphQL points, sleeps once and retries once. It fails closed with `RATE_LIMITED` when budget remains (a REST or secondary limit) or when the reset is unknown, past, beyond `maxWaitMs` or more than 24 hours ahead. Derived from `packages/core/src/github/gh.mjs`.
 
 ```mermaid
 sequenceDiagram
@@ -184,7 +185,7 @@ sequenceDiagram
   W->>G: operation()
   G->>GH: gh api graphql --field query=...
   GH-->>G: non-zero exit
-  G-->>W: throw GH_API_ERROR
+  G-->>W: throw GH_API_ERROR or RATE_LIMITED
   alt message is not a rate limit
     W-->>C: rethrow unchanged
   else rate limit exceeded
@@ -283,14 +284,14 @@ mindmap
 
 Type: `pie`
 
-The chart shows how the GitHub wrapper scripts reach GraphQL. Most scripts use REST through `gh pr`, `gh issue` or `gh api`; GraphQL is reserved for review threads, project boards and cross-checks. Scripts can also reach GraphQL indirectly through imported core modules, which this count does not see. Counts come from `ls scripts/github/*.mjs | wc -l` (88), `grep -l '"graphql"' scripts/github/*.mjs | wc -l` (9) and `grep -lE '"graphql"|ghGraphql' scripts/github/*.mjs | wc -l` (11). Derived from `scripts/github/`.
+The chart shows how the GitHub wrapper scripts reach GraphQL. Most scripts use REST through `gh pr`, `gh issue` or `gh api`; GraphQL is reserved for review threads, project boards and cross-checks. Scripts can also reach GraphQL indirectly through imported core modules, which this count does not see. Counts come from `ls scripts/github/*.mjs | wc -l` (94), `grep -l '"graphql"' scripts/github/*.mjs | wc -l` (10) and `grep -lE '"graphql"|ghGraphql' scripts/github/*.mjs | wc -l` (12). Derived from `scripts/github/`.
 
 ```mermaid
 pie showData
   title "scripts/github/*.mjs by direct GraphQL use"
-  "literal graphql argument" : 9
+  "literal graphql argument" : 10
   "ghGraphql helper only" : 2
-  "neither" : 77
+  "neither" : 82
 ```
 
 <a id="d81"></a>
@@ -353,18 +354,23 @@ classDiagram
 
 Type: `sequenceDiagram`
 
-The diagram shows the five hook registrations the plugin installs and when Claude Code fires them. PreToolUse hooks can deny a tool call. The PostToolUse merge hook fast-forwards the main checkout with `--ff-only` and always exits 0. The SubagentStop guard refuses a stop with exit 2 when a worktree under `tmp/worktrees/` is dirty. The bash gate denies raw `gh pr create`, raw `gh pr merge`, raw PR-body writes and `git stash`. Counts come from `.claude/hooks/hooks.json` (5 registrations) and `ls .claude/hooks/*.mjs | wc -l` (15 files: 5 hooks and 10 helper modules). Derived from `.claude/hooks/hooks.json`, `.claude/hooks/pre-tool-use-bash-gate.mjs`, `.claude/hooks/pre-tool-use-write-guard.mjs`, `.claude/hooks/pre-tool-use-agent-guard.mjs`, `.claude/hooks/post-tool-use-merge.mjs` and `.claude/hooks/subagent-stop-uncommitted-guard.mjs`.
+The diagram shows the eight hook registrations the plugin installs and when Claude Code fires them. PreToolUse hooks can deny a tool call. The approval guard runs first on Bash, Read, Edit, Write, NotebookEdit, Grep, Glob and MCP calls and denies a call that names the merge approval record. The answers guard denies an AskUserQuestion approval question that carries a pre-filled `answers` map, and the AskUserQuestion PostToolUse hook records the operator's yes answer. The PostToolUse merge hook fast-forwards the main checkout with `--ff-only` and always exits 0. The SubagentStop guard refuses a stop with exit 2 when a worktree under `tmp/worktrees/` is dirty. The bash gate denies raw `gh pr create`, raw `gh pr merge`, raw PR-body writes, raw comment writes and `git stash`. Counts come from `.claude/hooks/hooks.json` (8 registrations) and `ls .claude/hooks/*.mjs | wc -l` (19 files: 8 hooks and 11 helper modules). Derived from `.claude/hooks/hooks.json`, `.claude/hooks/pre-tool-use-approval-guard.mjs`, `.claude/hooks/pre-tool-use-ask-answers-guard.mjs`, `.claude/hooks/pre-tool-use-bash-gate.mjs`, `.claude/hooks/pre-tool-use-write-guard.mjs`, `.claude/hooks/pre-tool-use-agent-guard.mjs`, `.claude/hooks/post-tool-use-merge.mjs` and `.claude/hooks/subagent-stop-uncommitted-guard.mjs`.
 
 ```mermaid
 sequenceDiagram
   participant A as Claude agent
   participant CC as Claude Code
+  participant AP as approval-guard
   participant BG as bash-gate
   participant WG as write-guard
   participant AG as agent-guard
+  participant AQ as answers-guard
+  participant AR as ask-record
   participant PM as post-merge
   participant SS as stop-guard
-  A->>CC: Bash tool call
+  A->>CC: Bash, Read, Edit, Write, NotebookEdit, Grep, Glob or MCP call
+  CC->>AP: PreToolUse
+  AP-->>CC: deny when the call names the approval record
   CC->>BG: PreToolUse Bash
   BG-->>CC: allow or deny with reason
   CC->>PM: PostToolUse Bash
@@ -375,6 +381,11 @@ sequenceDiagram
   A->>CC: Agent or Task dispatch
   CC->>AG: PreToolUse Agent or Task
   AG-->>CC: allow or deny
+  A->>CC: AskUserQuestion
+  CC->>AQ: PreToolUse AskUserQuestion
+  AQ-->>CC: deny pre-filled answers on an approval question
+  CC->>AR: PostToolUse AskUserQuestion
+  AR-->>CC: record a yes approval answer
   A->>CC: subagent stops
   CC->>SS: SubagentStop
   SS-->>CC: exit 2 when worktree dirty
@@ -397,6 +408,7 @@ flowchart LR
     S4["claude/hook-decisions"]
     S5["loop/worktree-guard"]
     S6["loop/main-checkout-ff"]
+    S7["github/ask-merge-approval"]
   end
   subgraph vend[".claude/hooks vendored"]
     V1["_bash-command-classify"]
@@ -405,6 +417,7 @@ flowchart LR
     V4["_hook-decisions"]
     V5["_worktree-guard"]
     V6["_main-checkout-ff"]
+    V7["_ask-merge-approval"]
   end
   S1 --> V1
   S2 --> V2
@@ -412,6 +425,7 @@ flowchart LR
   S4 --> V4
   S5 --> V5
   S6 --> V6
+  S7 --> V7
   BG["bash-gate"] --> V1
   BG --> V4
   WG["write-guard"] --> V4
@@ -421,6 +435,9 @@ flowchart LR
   PM["post-merge"] --> V1
   PM --> V5
   PM --> V6
+  AP["approval-guard"] --> V7
+  AQ["answers-guard"] --> V7
+  AR["ask-record"] --> V7
 ```
 
 <a id="d84"></a>

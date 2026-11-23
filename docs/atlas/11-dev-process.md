@@ -1,7 +1,8 @@
 ---
 title: Development process
 status: snapshot
-snapshot_date: 2026-11-19
+snapshot_date: 2026-11-23
+source_commit: f6619004d3edc2caccc98edd96914a5706c5d59b
 ---
 <a id="11-dev-process"></a>
 
@@ -52,7 +53,7 @@ flowchart LR
   subgraph flight["In-flight states"]
     s3["pr_draft / implementation"]
     s4["waiting_for_copilot_review / waiting_for_ci"]
-    s5["blocked_needs_user_decision"]
+    s5["blocked_needs_user_decision / copilot_unavailable"]
     s6["unmapped state"]
   end
   subgraph final["Approval states"]
@@ -392,6 +393,7 @@ timeline
   section 1.0.12 pre
     2026-11-12 : 1.0.12-pre.1
     2026-11-17 : 1.0.12-pre.5
+    2026-11-22 : 1.0.12-pre.6
 ```
 
 <a id="d155"></a>

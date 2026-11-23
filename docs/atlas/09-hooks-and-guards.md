@@ -1,13 +1,14 @@
 ---
 title: Hooks, guards and permissions
 status: snapshot
-snapshot_date: 2026-11-19
+snapshot_date: 2026-11-23
+source_commit: f6619004d3edc2caccc98edd96914a5706c5d59b
 ---
 <a id="09-hooks-and-guards"></a>
 
 ## Hooks, guards and permissions
 
-dev-loops enforces its workflow contracts at the tool-call boundary, before a command or write runs. Under Claude Code, five hook scripts in `.claude/hooks` read the hook payload on stdin, gather facts (git state, repo identity, gate evidence), and call pure deciders. A deny is a `permissionDecision: "deny"` JSON object on stdout with exit 0 (`_hook-io.mjs`); the SubagentStop block uses exit 2 and a JSON reason on stderr. Most Bash rules live in one harness-neutral module, `packages/core/src/loop/bash-gate-decisions.mjs`, vendored into `.claude/hooks/_bash-gate-decisions.mjs` by `scripts/claude/generate-claude-assets.mjs`. Pi has a separate `tool_call` gate in `extension/readonly-role-gate.ts`. That gate restricts only the read-only roles. Per the cross-harness contract, the Claude seam is the only consumer of the shared deny set today. A code search finds no `decideBashGateDeny` caller outside the Claude seam, so Pi use of the shared set is spec-only. Permissions add one more layer. The project `.claude/settings.json` allows two Bash prefixes: `Bash(node scripts/github/edit-issue.mjs:*)` and `Bash(dev-loops-run:*)`. Any other repo script matches a project allow rule only when it runs through the `dev-loops-run` launcher.
+dev-loops enforces its workflow contracts at the tool-call boundary, before a command or write runs. Under Claude Code, eight hook scripts in `.claude/hooks` read the hook payload on stdin, gather facts (git state, repo identity, gate evidence), and call pure deciders. A deny is a `permissionDecision: "deny"` JSON object on stdout with exit 0 (`_hook-io.mjs`); the SubagentStop block uses exit 2 and a JSON reason on stderr. Most Bash rules live in one harness-neutral module, `packages/core/src/loop/bash-gate-decisions.mjs`, vendored into `.claude/hooks/_bash-gate-decisions.mjs` by `scripts/claude/generate-claude-assets.mjs`. Pi has a separate `tool_call` gate in `extension/readonly-role-gate.ts`. That gate restricts only the read-only roles. Per the cross-harness contract, the Claude seam is the only consumer of the shared deny set today. A code search finds no `decideBashGateDeny` caller outside the Claude seam, so Pi use of the shared set is spec-only. Permissions add one more layer. The project `.claude/settings.json` allows two Bash prefixes: `Bash(node scripts/github/edit-issue.mjs:*)` and `Bash(dev-loops-run:*)`. Any other repo script matches a project allow rule only when it runs through the `dev-loops-run` launcher.
 
 <a id="d113"></a>
 
@@ -15,25 +16,33 @@ dev-loops enforces its workflow contracts at the tool-call boundary, before a co
 
 Type: `flowchart`
 
-Shows which harness event and tool matcher fires each hook script, and which pure decider each script calls. Both registrations point at the same scripts: the project registration uses `${CLAUDE_PROJECT_DIR}` and the plugin registration uses `${CLAUDE_PLUGIN_ROOT}`. The insight: each PreToolUse and SubagentStop script only gathers facts at the edge, and every allow or deny comes from a decider in `_hook-decisions.mjs` or `_bash-gate-decisions.mjs`. The PostToolUse script never blocks; it calls the `syncMainCheckout` helper in `_main-checkout-ff.mjs`. Derived from `.claude/settings.json`, `.claude/hooks/hooks.json`, `.claude/hooks/pre-tool-use-bash-gate.mjs`, `.claude/hooks/pre-tool-use-write-guard.mjs`, `.claude/hooks/pre-tool-use-agent-guard.mjs`, `.claude/hooks/post-tool-use-merge.mjs` and `.claude/hooks/subagent-stop-uncommitted-guard.mjs`.
+Shows which harness event and tool matcher fires each hook script, and which pure decider each script calls. Both registrations point at the same scripts: the project registration uses `${CLAUDE_PROJECT_DIR}` and the plugin registration uses `${CLAUDE_PLUGIN_ROOT}`. The insight: each PreToolUse and SubagentStop script only gathers facts at the edge, and every allow or deny comes from a decider in `_hook-decisions.mjs`, `_bash-gate-decisions.mjs` or `_ask-merge-approval.mjs`. The two PostToolUse scripts never block. The Bash one calls the `syncMainCheckout` helper in `_main-checkout-ff.mjs`. The AskUserQuestion one records a yes answer to the merge approval question. Derived from `.claude/settings.json`, `.claude/hooks/hooks.json`, `.claude/hooks/pre-tool-use-approval-guard.mjs`, `.claude/hooks/pre-tool-use-ask-answers-guard.mjs`, `.claude/hooks/post-tool-use-ask-approval.mjs`, `.claude/hooks/pre-tool-use-bash-gate.mjs`, `.claude/hooks/pre-tool-use-write-guard.mjs`, `.claude/hooks/pre-tool-use-agent-guard.mjs`, `.claude/hooks/post-tool-use-merge.mjs` and `.claude/hooks/subagent-stop-uncommitted-guard.mjs`.
 
 ```mermaid
 flowchart LR
   subgraph EV["Claude Code events"]
+    PR["PreToolUse: Bash, Read, Edit, Write, NotebookEdit, Grep, Glob, mcp"]
+    PQ["PreToolUse: AskUserQuestion"]
     PB["PreToolUse: Bash"]
     PW["PreToolUse: Edit or Write"]
     PA["PreToolUse: Agent or Task"]
+    PK["PostToolUse: AskUserQuestion"]
     PO["PostToolUse: Bash"]
     SS["SubagentStop: *"]
   end
   subgraph HK["hook scripts"]
+    RG["pre-tool-use-approval-guard"]
+    QG["pre-tool-use-ask-answers-guard"]
     BG["pre-tool-use-bash-gate"]
     WG["pre-tool-use-write-guard"]
     AG["pre-tool-use-agent-guard"]
+    PK2["post-tool-use-ask-approval"]
     PM["post-tool-use-merge"]
     SG["subagent-stop-uncommitted-guard"]
   end
   subgraph DC["pure deciders"]
+    D9["approvalNameHit / isApprovalPath"]
+    D10["hasApprovalQuestion"]
     D1["decideBashGate"]
     D2["decideBashGateDeny"]
     D3["decideFixerWriteGuard / decideJudgeWriteGuard"]
@@ -42,9 +51,13 @@ flowchart LR
     D6["decideAgentDispatch"]
     D7["decideSubagentStopGuard"]
   end
-  subgraph HP["non-blocking helper"]
+  subgraph HP["non-blocking helpers"]
+    D11["extractYesApproval, signed record and approve line"]
     D8["syncMainCheckout ff-only"]
   end
+  PR --> RG --> D9
+  PQ --> QG --> D10
+  PK --> PK2 --> D11
   PB --> BG --> D1 --> D2
   PW --> WG --> D3
   WG --> D4
@@ -60,7 +73,7 @@ flowchart LR
 
 Type: `flowchart`
 
-Shows the control flow of `pre-tool-use-bash-gate.mjs`. A cheap pre-check computes 17 flags (count from `grep -A3 '^if ($' .claude/hooks/pre-tool-use-bash-gate.mjs | grep -o '!is[A-Za-z]*' | wc -l`): 15 command-shape predicates plus the judge and fixer-pull role flags. The repo-identity lookup (`git rev-parse` and the origin slug) runs first for every command, because the gh-api predicates need the managed slug. The hook then allows at once when no flag is set. A nominated command gets the slow work: the gate evidence probe for `gh pr ready` or `gh pr merge`, then `decideBashGate`. That seam decider runs the unresolve owner check, the judge boundary and the fixer pull boundary before it delegates to `decideBashGateDeny`. The whole-command token rule (`segmentHoldsBodyWrite`) runs last. It denies a raw body write even behind a wrapper such as `timeout` or `sudo`. The insight: the managed-repo test is a `.devloops` config file at the repo root (bare, `.yaml`, `.yml` or `.json`), so the same guards apply in any consumer repo. Derived from `.claude/hooks/pre-tool-use-bash-gate.mjs` and `.claude/hooks/_bash-command-classify.mjs`.
+Shows the control flow of `pre-tool-use-bash-gate.mjs`. The hook has no pre-check list: every command reaches `decideBashGate`. The repo-identity lookup (`git rev-parse` and the origin slug) runs first for every command, because the gh-api predicates need the managed slug. In a managed checkout the whole-command token rule (`segmentWriteKind`) classifies the command once as a comment write, a body write or neither. A `gh pr ready` or `gh pr merge` with a PR number gets the gate evidence probe, then `decideBashGate`. That seam decider runs the unresolve owner check, the judge boundary and the fixer pull boundary before it delegates to `decideBashGateDeny`. A decider deny exits first. For a comment write, a generic raw-write deny gets the OPERATOR-OWNED-LINE comment reason instead. The token rule verdict applies last. It denies a raw comment or body write even behind a wrapper such as `timeout` or `sudo`. The insight: the managed-repo test is a `.devloops` config file at the repo root (bare, `.yaml`, `.yml` or `.json`), so the same guards apply in any consumer repo. Derived from `.claude/hooks/pre-tool-use-bash-gate.mjs` and `.claude/hooks/_bash-command-classify.mjs`.
 
 ```mermaid
 flowchart TD
@@ -69,24 +82,24 @@ flowchart TD
   FX -- no --> ID
   BIND --> ID["git toplevel + origin slug"]
   ID --> MG{".devloops config at root?"}
-  MG -- "yes: managed slug set" --> PRE{"any of 17 pre-check flags set?"}
-  MG -- "no: managed slug null" --> PRE
-  PRE -- no --> ALLOW(["exit 0: allow"])
-  PRE -- yes --> MERGE{"managed and gh pr merge?"}
+  MG -- "yes: managed slug set" --> WK["segmentWriteKind: comment, body or null"]
+  MG -- "no: managed slug null, no probe" --> DEC
+  WK --> MERGE{"gh pr merge?"}
   MERGE -- yes --> HMO["resolve-human-merge-only.mjs"]
   MERGE -- no --> PROBE
-  HMO --> PROBE{"PR number and slug known?"}
+  HMO --> PROBE{"ready or merge PR number and slug known?"}
   PROBE -- yes --> GATE["run gate script via dev-loops-run"]
   PROBE -- no --> DEC
   GATE --> DEC["decideBashGate(facts)"]
   DEC --> SEAM{"unresolve, judge or fixer-pull deny?"}
-  SEAM -- yes --> DENY(["emitDeny(reason)"])
+  SEAM -- yes --> DENY(["emitDeny(reason, or comment reason for a comment write)"])
   SEAM -- no --> SH{"decideBashGateDeny returns a deny?"}
   SH -- yes --> DENY
   SH -- no --> TOK
-  TOK{"segmentHoldsBodyWrite?"}
-  TOK -- yes --> DENY2(["deny: ADR-TRIPWIRE-STANDING-WAIVER"])
-  TOK -- no --> ALLOW
+  TOK{"write kind?"}
+  TOK -- comment --> DENYC(["deny: OPERATOR-OWNED-LINE"])
+  TOK -- body --> DENY2(["deny: ADR-TRIPWIRE-STANDING-WAIVER"])
+  TOK -- null --> ALLOW(["exit 0: allow"])
 ```
 
 <a id="d115"></a>
@@ -95,7 +108,7 @@ flowchart TD
 
 Type: `flowchart`
 
-Shows the fixed order in which `decideBashGate` and then `decideBashGateDeny` check their rules. The first match wins. The three seam checks (unresolve owner, judge boundary, fixer pull boundary) run in `_hook-decisions.mjs` before the shared set, which runs the unresolve check again as its own first rule. `BASH_GATE_RULES` holds 12 registered rule IDs (count from `sed -n '/BASH_GATE_RULES = Object.freeze/,/]);/p' .claude/hooks/_bash-gate-decisions.mjs | grep -c '^ "'`). Four denies carry `ruleId: null` (count from `grep -c "ruleId: null," .claude/hooks/_bash-gate-decisions.mjs`): the missing-facts refusal, the unresolve owner allowlist, the `timeout` wrapper deny and the subagent external-write deny. The insight: an omitted or mistyped fact is refused before any rule runs, so a default cannot switch a deny off. The wait-tool deny also runs before the lifecycle verbs, so `gh pr create ... && probe &` cannot reach an allow path first. Derived from `.claude/hooks/_bash-gate-decisions.mjs` (generated from `packages/core/src/loop/bash-gate-decisions.mjs`).
+Shows the fixed order in which `decideBashGate` and then `decideBashGateDeny` check their rules. The first match wins. The three seam checks (unresolve owner, judge boundary, fixer pull boundary) run in `_hook-decisions.mjs` before the shared set, which runs the unresolve check again as its own first rule. `BASH_GATE_RULES` holds 13 registered rule IDs (count from `sed -n '/BASH_GATE_RULES = Object.freeze/,/]);/p' .claude/hooks/_bash-gate-decisions.mjs | grep -c '^  "'`). Five denies carry `ruleId: null` (count from `grep -cE '^ +ruleId: null,$' .claude/hooks/_bash-gate-decisions.mjs`): the missing-facts refusal, the unresolve owner allowlist, the subagent merge-pr deny, the `timeout` wrapper deny and the subagent external-write deny. The insight: an omitted or mistyped fact is refused before any rule runs, so a default cannot switch a deny off. The wait-tool deny also runs before the lifecycle verbs, so `gh pr create ... && probe &` cannot reach an allow path first. Derived from `.claude/hooks/_bash-gate-decisions.mjs` (generated from `packages/core/src/loop/bash-gate-decisions.mjs`).
 
 ```mermaid
 flowchart TD
@@ -104,11 +117,13 @@ flowchart TD
   S2 --> F
   F["facts valid?"] -- no --> X0["deny: missing facts"]
   F -- yes --> R0["unresolve owner allowlist"]
-  R0 --> R1["COORDINATOR-VERIFY-BOUNDARY"]
+  R0 --> RM["subagent merge-pr deny"]
+  RM --> R1["COORDINATOR-VERIFY-BOUNDARY"]
   R1 --> R2["OPS-NO-INLINE-INTERPRETER"]
   R2 --> R3["COPILOT-FOLLOWUP-WAIT-TOOLS"]
   R3 --> R4["timeout-wrapped sanctioned tool"]
-  R4 --> R5["SUBISSUE-NO-ADHOC-BYPASS"]
+  R4 --> RD["OPERATOR-DECISION-RECORDER"]
+  RD --> R5["SUBISSUE-NO-ADHOC-BYPASS"]
   R5 --> R6["COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER"]
   R6 --> R7["COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY"]
   R7 --> R8["ADR-TRIPWIRE-STANDING-WAIVER"]
@@ -122,7 +137,7 @@ flowchart TD
   R13 --> R14["GATE-COMMENT-DRAFT-REQUIREMENTS"]
   R14 --> OK
   classDef inline stroke-dasharray: 5 5
-  class X0,R0,R4,R10,S0,S1,S2 inline
+  class X0,R0,RM,R4,R10,S0,S1,S2 inline
 ```
 
 <a id="d116"></a>
@@ -148,12 +163,13 @@ sequenceDiagram
   H->>G: rev-parse --show-toplevel
   G-->>H: repo root
   H->>H: .devloops exists, managed
-  H->>C: commandContainsInlineInterpreter
-  C-->>H: true
+  H->>H: segmentWriteKind null
   H->>S: facts with agentType and slugs
   S->>S: unresolve, judge, fixer checks pass
   S->>D: facts with role and readyGate
-  D->>D: facts valid, unresolve and verify pass
+  D->>D: facts valid, unresolve, merge-pr and verify pass
+  D->>C: commandContainsInlineInterpreter
+  C-->>D: true
   D-->>S: ruleId OPS-NO-INLINE-INTERPRETER
   S-->>H: decision deny with reason
   H-->>CC: permissionDecision deny, exit 0
@@ -167,16 +183,20 @@ sequenceDiagram
 
 Type: `flowchart`
 
-Shows the decision inside `segmentHoldsBodyWrite`, the whole-command rule behind the raw PR and issue body write guard (`ADR-TRIPWIRE-STANDING-WAIVER`). It runs only in a managed checkout and denies for every actor, the operator and the main agent included. The command is normalized into one token set: quotes and backslashes are removed, substitutions and backticks are decoded, comma brace groups are expanded (at most 64 words), and `${VAR:-x}` defaults count as tokens. Tokens are lower-cased. The insight: the rule reads tokens in any segment and any order, so a wrapper such as `timeout` or `sudo` cannot hide the write. The accepted false positive is a command that holds these tokens as data, such as a title that says gh. A brace expansion over the cap fails closed. Derived from `segmentHoldsBodyWrite` in `.claude/hooks/pre-tool-use-bash-gate.mjs`.
+Shows the decision inside `segmentWriteKind`, the whole-command rule behind the raw comment write guard (`OPERATOR-OWNED-LINE`) and the raw PR and issue body write guard (`ADR-TRIPWIRE-STANDING-WAIVER`). A comment clause wins over a body clause. An ANSI-C `$'...'` word in a comment-shaped command fails closed, because the decoded flag is not judged. It runs only in a managed checkout and denies for every actor, the operator and the main agent included. The command is normalized into one token set: quotes and backslashes are removed, substitutions and backticks are decoded, comma brace groups are expanded (at most 64 words), and `${VAR:-x}` defaults count as tokens. Tokens are lower-cased. The insight: the rule reads tokens in any segment and any order, so a wrapper such as `timeout` or `sudo` cannot hide the write. The accepted false positive is a command that holds these tokens as data, such as a title that says gh. A brace expansion over the cap, or nested shell strings past depth 3, fail closed. Derived from `segmentWriteKind` in `.claude/hooks/pre-tool-use-bash-gate.mjs`.
 
 ```mermaid
 flowchart TD
   C["command in managed checkout"] --> N["normalize, decode, expand braces"]
-  N --> CAP{"brace expansion over 64 words?"}
+  N --> CAP{"brace expansion over 64 words or nesting past depth 3?"}
   CAP -- yes --> D(["deny: ADR-TRIPWIRE-STANDING-WAIVER"])
   CAP -- no --> GH{"token gh, by basename?"}
-  GH -- no --> A(["not a body write"])
-  GH -- yes --> PR{"pr and edit or create and a body flag?"}
+  GH -- no --> A(["not a comment or body write"])
+  GH -- yes --> CM{"comment, review or close/reopen write, or graphql comment mutation?"}
+  CM -- yes --> DC(["deny: OPERATOR-OWNED-LINE"])
+  CM -- no --> AN{"ANSI-C word in a comment-shaped command, not a body write?"}
+  AN -- yes --> DC
+  AN -- no --> PR{"pr and edit or create and a body flag?"}
   PR -- yes --> D
   PR -- no --> API{"api token?"}
   API -- no --> A
@@ -366,16 +386,21 @@ flowchart TD
 
 Type: `mindmap`
 
-Groups every guard named in this section by harness and hook event. The insight: Claude Code has five hook entry points (four can deny or block; PostToolUse never blocks), but Pi has one `tool_call` gate covering two roles plus the agent-set preflight. Cross-harness parity covers the judge and review restrictions, and stops there. Derived from `.claude/settings.json`, `.claude/hooks/*.mjs`, `extension/index.ts` and `extension/readonly-role-gate.ts`.
+Groups every guard named in this section by harness and hook event. The insight: Claude Code has eight hook entry points (six can deny or block; the two PostToolUse hooks never block), but Pi has one `tool_call` gate covering two roles plus the agent-set preflight. Cross-harness parity covers the judge and review restrictions, and stops there. Derived from `.claude/settings.json`, `.claude/hooks/*.mjs`, `extension/index.ts` and `extension/readonly-role-gate.ts`.
 
 ```mermaid
 mindmap
   root((guards))
     Claude Code
+      PreToolUse Bash, file, search and mcp tools
+        approval record path guard
+      PreToolUse AskUserQuestion
+        pre-filled answers guard
       PreToolUse Bash
         shared deny set
         judge command boundary
         fixer pull-line boundary
+        comment-write token rule
         body-write token rule
       PreToolUse Write or Edit
         fixer grant
@@ -385,6 +410,8 @@ mindmap
         coordinator write boundary
       PreToolUse Agent or Task
         gate-coordinator dispatch
+      PostToolUse AskUserQuestion
+        merge approval record
       PostToolUse Bash
         main checkout ff-only
       SubagentStop
@@ -451,14 +478,14 @@ classDiagram
 
 Type: `xychart-beta`
 
-Shows the line count of each file in `.claude/hooks`, from `wc -l .claude/hooks/*.mjs` (5507 lines in total). The insight: the shell classifier is the largest file at 1870 lines. Hook policy is mostly shell parsing (tokenizing, heredocs, substitutions, brace expansion). The five entry scripts are thin by comparison. Derived from `.claude/hooks/*.mjs`.
+Shows the line count of each file in `.claude/hooks`, from `wc -l .claude/hooks/*.mjs` (6303 lines in total). The insight: the shell classifier is the largest file at 2013 lines. Hook policy is mostly shell parsing (tokenizing, heredocs, substitutions, brace expansion). The eight entry scripts are thin by comparison. Derived from `.claude/hooks/*.mjs`.
 
 ```mermaid
 xychart-beta
   title "Lines per hook file (wc -l)"
-  x-axis ["agent-guard", "hook-io", "round-retire", "wo-digest", "stop-guard", "post-merge", "fixer-grants", "write-guard", "main-ff", "bash-gate", "worktree", "run-context", "gate-decide", "hook-decide", "classify"]
-  y-axis "lines" 0 --> 1900
-  bar [25, 38, 41, 77, 93, 152, 238, 254, 284, 315, 358, 449, 596, 717, 1870]
+  x-axis ["answers-guard", "agent-guard", "hook-io", "round-retire", "post-ask", "approval-guard", "wo-digest", "stop-guard", "post-merge", "fixer-grants", "write-guard", "main-ff", "bash-gate", "ask-approval", "worktree", "run-context", "gate-decide", "hook-decide", "classify"]
+  y-axis "lines" 0 --> 2100
+  bar [23, 25, 38, 41, 41, 70, 77, 93, 152, 238, 254, 284, 324, 337, 358, 578, 640, 717, 2013]
 ```
 
 <a id="d127"></a>
@@ -467,13 +494,13 @@ xychart-beta
 
 Type: `pie`
 
-Shows where deny decisions are produced, counted per rule (a rule such as GATE-COMMENT-DRAFT-REQUIREMENTS has several return sites). There are 12 registered Bash rules (`BASH_GATE_RULES`) and 4 `ruleId: null` Bash denies (`grep -c "ruleId: null," .claude/hooks/_bash-gate-decisions.mjs`). `grep -c 'decision: "deny"' .claude/hooks/_hook-decisions.mjs` reports 13 deny returns in the Claude seam deciders. Two of them only relay a shared-set deny (the unresolve relay and the `decideBashGateDeny` wrapper in `decideBashGate`), so the seam owns 11: judge Bash, fixer pull, main-agent write, coordinator write, judge write, worktree checkout, fixer write and four dispatch denies. The SubagentStop `block` is not counted. The insight: the Bash gate owns the largest share of the policy, and most of it is shared and harness-neutral. Derived from `.claude/hooks/_bash-gate-decisions.mjs` and `.claude/hooks/_hook-decisions.mjs`.
+Shows where deny decisions are produced, counted per rule (a rule such as GATE-COMMENT-DRAFT-REQUIREMENTS has several return sites). There are 13 registered Bash rules (`BASH_GATE_RULES`) and 5 `ruleId: null` Bash denies (`grep -cE '^ +ruleId: null,$' .claude/hooks/_bash-gate-decisions.mjs`). `grep -c 'decision: "deny"' .claude/hooks/_hook-decisions.mjs` reports 13 deny returns in the Claude seam deciders. Two of them only relay a shared-set deny (the unresolve relay and the `decideBashGateDeny` wrapper in `decideBashGate`), so the seam owns 11: judge Bash, fixer pull, main-agent write, coordinator write, judge write, worktree checkout, fixer write and four dispatch denies. The SubagentStop `block` and the two ask-approval guard denies are not counted. The insight: the Bash gate owns the largest share of the policy, and most of it is shared and harness-neutral. Derived from `.claude/hooks/_bash-gate-decisions.mjs` and `.claude/hooks/_hook-decisions.mjs`.
 
 ```mermaid
 pie showData
   title Deny rules by source
-  "Registered Bash rules" : 12
-  "Inline Bash denies" : 4
+  "Registered Bash rules" : 13
+  "Inline Bash denies" : 5
   "Claude seam-owned denies" : 11
 ```
 
@@ -483,7 +510,7 @@ pie showData
 
 Type: `timeline`
 
-Shows the date each guard entry file was first added at its current path, from `git log --diff-filter=A --format=%ad --date=short -- <file>`. With `--follow`, the first three files trace back one day earlier, to 2026-06-23, under an earlier path. The insight: the Bash and write gates arrived together, and role-specific guards followed. The shared deny module was split out of the Claude seam last, in November. Derived from git history of `.claude/hooks/*.mjs` and `extension/readonly-role-gate.ts`.
+Shows the date each guard entry file was first added at its current path, from `git log --diff-filter=A --format=%ad --date=short -- <file>`. With `--follow`, the first three files trace back one day earlier, to 2026-06-23, under an earlier path. The insight: the Bash and write gates arrived together, and role-specific guards followed. The shared deny module was split out of the Claude seam in early November, and the three ask-approval hooks landed last. Derived from git history of `.claude/hooks/*.mjs` and `extension/readonly-role-gate.ts`.
 
 ```mermaid
 timeline
@@ -494,5 +521,6 @@ timeline
   2026-09-29 : agent dispatch guard
   2026-09-30 : Pi read-only role gate
   2026-11-03 : shared bash-gate deny module
+  2026-11-22 : approval record guard : ask answers guard : ask approval hook
 ```
 

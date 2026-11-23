@@ -1,7 +1,8 @@
 ---
 title: Agent roles and model calls
 status: snapshot
-snapshot_date: 2026-11-19
+snapshot_date: 2026-11-23
+source_commit: f6619004d3edc2caccc98edd96914a5706c5d59b
 ---
 <a id="07-model-calls"></a>
 
@@ -101,7 +102,7 @@ flowchart TD
 
 Type: `sankey-beta`
 
-Each role contributes a flow of 1. Flows run from the role through its tier alias to the Claude model that `dev-loops-run --repo-root <checkout> cli/index.mjs gate resolve-role --role <role> --harness claude` returned for each of the ten roles on 2026-11-19. The built-in tiers map both `low` and `high` to opus. This repo's `.devloops` remaps `low` to sonnet and moves `developer`, `fixer`, `dev-loop` and `gate-coordinator` onto it, so six roles run on sonnet and four run on opus. Derived from `.devloops` (`models.tiers`, `models.roleTiers`) and the `BUILTIN_ROLE_TIERS` table in `packages/core/src/config/config.mjs`.
+Each role contributes a flow of 1. Flows run from the role through its tier alias to the Claude model that `dev-loops-run --repo-root <checkout> cli/index.mjs gate resolve-role --role <role> --harness claude` returned for each of the ten roles on 2026-11-23. The built-in tiers map both `low` and `high` to opus. This repo's `.devloops` remaps `low` to sonnet and moves `developer`, `fixer`, `dev-loop` and `gate-coordinator` onto it, so six roles run on sonnet and four run on opus. Derived from `.devloops` (`models.tiers`, `models.roleTiers`) and the `BUILTIN_ROLE_TIERS` table in `packages/core/src/config/config.mjs`.
 
 ```mermaid
 sankey-beta

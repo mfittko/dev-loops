@@ -1,7 +1,8 @@
 ---
 title: State machines and lifecycles
 status: snapshot
-snapshot_date: 2026-11-19
+snapshot_date: 2026-11-23
+source_commit: f6619004d3edc2caccc98edd96914a5706c5d59b
 ---
 <a id="03-state-machines"></a>
 
@@ -156,7 +157,7 @@ stateDiagram-v2
     by_lifecycle --> wait: waiting states
     by_lifecycle --> feedback: unresolved feedback
     by_lifecycle --> reply_resolve: already fixed
-    by_lifecycle --> converge: rerequest, cap, low signal, internal_only
+    by_lifecycle --> converge: rerequest, cap, low signal, internal_only, copilot_unavailable
     converge --> run_pre_approval_gate: no clean evidence
     converge --> title_marker_blocked: clean, title marker
     converge --> reconcile_draft_gate: clean, no draft_gate evidence
@@ -171,7 +172,7 @@ stateDiagram-v2
 
 Type: `sankey-beta`
 
-Each band counts the result sites in the evaluator that pair a `gateBoundary` checkpoint with a literal `nextAction`. `report_blocked` has 15 sites: 10 literal `return buildResult(...)` sites plus 5 calls to `buildTitleMarkerBlockedResult`, which shows how many paths fail closed. The 5 calls to `buildDraftGateNeededForMergeResult` produce `draft_gate_needed` with `reconcile_draft_gate`. The `pre_approval_gate_needed` band is the single rewrite site in the script wrapper. It converts a pre-approval or final-approval boundary when no contract-complete `pre_approval_gate` marker exists. Ternary sites (draft gate versus mark ready, the two wait actions, the round-cap action list) are not literal and are left out. The literal counts come from an `awk` scan of `packages/core/src/loop/pr-gate-coordination.mjs` lines 1240 to 2645 piped to `sort | uniq -c`. The helper counts come from `grep -c "return buildTitleMarkerBlockedResult("` and `grep -c "return buildDraftGateNeededForMergeResult("` on the same file. The wrapper site is in `scripts/loop/detect-pr-gate-coordination-state.mjs`.
+Each band counts the result sites in the evaluator that pair a `gateBoundary` checkpoint with a literal `nextAction`. `report_blocked` has 15 sites: 10 literal `return buildResult(...)` sites plus 5 calls to `buildTitleMarkerBlockedResult`, which shows how many paths fail closed. The 5 calls to `buildDraftGateNeededForMergeResult` produce `draft_gate_needed` with `reconcile_draft_gate`. The `pre_approval_gate_needed` band is the single rewrite site in the script wrapper. It converts a pre-approval or final-approval boundary when no contract-complete `pre_approval_gate` marker exists. Ternary sites (draft gate versus mark ready, the two wait actions, the round-cap action list) are not literal and are left out. The literal counts come from an `awk` scan of `packages/core/src/loop/pr-gate-coordination.mjs` lines 1290 to 2718 piped to `sort | uniq -c`. The helper counts come from `grep -c "return buildTitleMarkerBlockedResult("` and `grep -c "return buildDraftGateNeededForMergeResult("` on the same file. The wrapper site is in `scripts/loop/detect-pr-gate-coordination-state.mjs`.
 
 ```mermaid
 sankey-beta
@@ -200,7 +201,7 @@ ui_e2e_scoping,run_ui_e2e_suite,1
 
 Type: `stateDiagram-v2`
 
-This is the inner PR loop that the gate evaluator consumes as `lifecycleState`. The table allows only one exit from draft and one from ready-no-feedback. Five states have no outgoing edge: `review_request_unavailable`, `blocked_needs_user_decision`, `low_signal_converged`, `round_cap_reached` and `round_cap_clean_fallback`. The gate evaluator, not this table, routes the last three onward to `pre_approval_gate`. `no_pr` also has no edge. Derived from `TRANSITIONS` in `packages/core/src/loop/copilot-loop-state.mjs`.
+This is the inner PR loop that the gate evaluator consumes as `lifecycleState`. The table allows only one exit from draft and one from ready-no-feedback. Six states have no outgoing edge: `review_request_unavailable`, `blocked_needs_user_decision`, `low_signal_converged`, `round_cap_reached`, `round_cap_clean_fallback` and `copilot_unavailable`. The gate evaluator routes the last four onward to `pre_approval_gate`; this table holds no edge for them. `no_pr` also has no edge. Derived from `TRANSITIONS` in `packages/core/src/loop/copilot-loop-state.mjs`.
 
 ```mermaid
 stateDiagram-v2
@@ -227,6 +228,7 @@ stateDiagram-v2
   low_signal_converged --> [*]
   round_cap_reached --> [*]
   round_cap_clean_fallback --> [*]
+  copilot_unavailable --> [*]
 ```
 
 <a id="d34"></a>
@@ -424,12 +426,12 @@ stateDiagram-v2
 
 Type: `pie`
 
-`DEFAULT_STATE_LOGICAL_MAP` assigns 28 loop-state names to columns. 18 of them land in In Progress, including blocked and round-cap states, and any unmapped state also falls back to In Progress. Counts come from `node count-columns.mjs` (a scratchpad script that tallies `DEFAULT_STATE_LOGICAL_MAP` values in `packages/core/src/loop/queue-board-sync.mjs`).
+`DEFAULT_STATE_LOGICAL_MAP` assigns 29 loop-state names to columns. 19 of them land in In Progress, including blocked and round-cap states, and any unmapped state also falls back to In Progress. Counts come from `node count-columns.mjs` (a scratchpad script that tallies `DEFAULT_STATE_LOGICAL_MAP` values in `packages/core/src/loop/queue-board-sync.mjs`).
 
 ```mermaid
 pie showData
   title Loop states mapped per column
-  "in_progress" : 18
+  "in_progress" : 19
   "next_up" : 4
   "done" : 4
   "ready_for_review" : 2
@@ -548,7 +550,7 @@ stateDiagram-v2
   [*] --> load_target
   load_target --> detect_gaps
   detect_gaps --> await_answers
-  detect_gaps --> grill_clean: zero gaps, provenance
+  detect_gaps --> grill_clean: zero gaps, provenance, issue simplicity review
   detect_gaps --> needs_human_handoff
   await_answers --> synthesize
   await_answers --> needs_human_handoff

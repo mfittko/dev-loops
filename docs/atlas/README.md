@@ -1,7 +1,8 @@
 ---
 title: dev-loops Atlas
 status: snapshot
-snapshot_date: 2026-11-19
+snapshot_date: 2026-11-23
+source_commit: f6619004d3edc2caccc98edd96914a5706c5d59b
 ---
 # dev-loops Atlas
 
@@ -9,7 +10,7 @@ Snapshot, not maintained. The code is authoritative.
 
 14 angles, 192 diagrams, 21 diagram types. Derived from the code and checked by a second agent.
 
-Every count and diagram reflects the repository on 2026-11-19.
+Every count and diagram reflects the repository on 2026-11-23.
 
 - [System context and architecture](01-system-context.md) (14)
 
