@@ -146,8 +146,9 @@ async function defaultFetchPr({ repo, pr }) {
 }
 
 // The posted verdict markers at `headSha`, keyed by gate: submitted reviews only (GATE-EXEC-POST-BEFORE-FIX); the head filter is summarizeGateReviewCommentMarkers's own.
-export async function defaultFetchVerdictMarkers({ repo, pr, headSha, runtime }) {
-  const reviews = normalizePrReviewsPayload(await runGhJson(prReviewsApiArgs(repo, pr), runtime));
+export async function defaultFetchVerdictMarkers({ repo, pr, headSha, runtime, readReviews }) {
+  // `readReviews` is the emitter's once-per-run reviews read (issue 3460 AC3); flattening an already flat list is a no-op.
+  const reviews = normalizePrReviewsPayload(readReviews ? await readReviews() : await runGhJson(prReviewsApiArgs(repo, pr), runtime));
   return summarizeGateReviewCommentMarkers(reviews, { headSha });
 }
 
@@ -622,6 +623,10 @@ async function emitPlan({
   const capture = await beginFixerEmission(dir);
   // The two baseRefName reads share one gh read; the mutation-authority read below stays live.
   const prViewMemo = new Map();
+  // One PR reviews read per run: the AC7 cap-exit check and the default verdict-marker read share it (issue 3460 AC3).
+  let reviewsMemo;
+  const readReviewsOnce = () => (reviewsMemo ??= fetchReview({ repo, pr, runtime: { env, ghCommand, runChild } }));
+  if (fetchVerdictMarkers === defaultFetchVerdictMarkers) { const base = fetchVerdictMarkers; fetchVerdictMarkers = (a) => base({ ...a, readReviews: readReviewsOnce }); }
   const memoFetchBase = () => readPrViewOnce({ repo, pr, fields: "headRefName,headRefOid,baseRefName" }, prViewMemo, () => fetchPr({ repo, pr }));
   try {
   const planPath = path.join(dir, PLAN_FILE);
@@ -760,7 +765,7 @@ async function emitPlan({
           if (decided && !currentHeadLedgerExists() && headSha !== fromHead) {
             // The one cap-exit predicate (capExitHolds) over the trusted posted draft_gate headers of the PR reviews, as coordination reads it.
             const runtime = { env, ghCommand, runChild };
-            const reviews = (await fetchReview({ repo, pr, runtime })).filter((r) => r?.state !== "PENDING");
+            const reviews = (await readReviewsOnce()).filter((r) => r?.state !== "PENDING");
             const isTrusted = await resolveTrustedEvidencePredicate(reviews, runtime);
             const postedHeads = draftGatePostedHeads(reviews.filter(isTrusted).map((r) => r.body));
             if (await resolveCapExitRound({ repo, pr, headSha }, { repoRoot: resolveRepoRoot(cwd), postedHeads })) { gitIn(cwd, "merge-base", "--is-ancestor", fromHead, headSha); baseOnly = true; laterPass = true; }

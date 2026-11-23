@@ -3464,6 +3464,13 @@ test("issue 3460 AC7: a second cap-round pass emits at the pushed head with ever
     await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: open.fingerprint, decision: "Fix it in this PR" }] }));
     const ok = await fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate) });
     assert.equal(ok.workOrder.source, "act-list");
+    // AC3: the AC7 cap-exit check and the default verdict-marker read share one PR reviews read.
+    let reviewReads = 0;
+    const [capReview1] = await capReviewsAt(fx.head)();
+    const oneRead = await fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate), fetchVerdictMarkers: undefined,
+      fetchReview: async () => { reviewReads += 1; return [...verdictReviews(fx.head, ["draft_gate", "pre_approval_gate"]), { ...capReview1, id: 9, submitted_at: "2026-10-19T00:00:00Z" }]; } });
+    assert.equal(oneRead.workOrder.source, "act-list");
+    assert.equal(reviewReads, 1);
     // The coordination read at the pushed head, with every delta record gone and the cap-round review posted, ends in ready.
     const capReview = { author: { login: "operator", type: "User" }, authorAssociation: "OWNER", body: `<!-- dev-loops:gate-findings-review draft_gate ${fx.head.slice(0, 7)} round=2 -->\n**Verdict:** findings_present` };
     const viewer = async (_cmd, args) => (args?.includes("user") ? { code: 0, stdout: JSON.stringify({ login: "agent" }), stderr: "" } : { code: 1, stdout: "", stderr: "stub" });

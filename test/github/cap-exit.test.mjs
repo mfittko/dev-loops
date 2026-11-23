@@ -147,10 +147,11 @@ test("AC4 a blocked cap round with a posted review and no delta record reports b
   const root = world([act(1, { severity: "high", judgeFix: undefined })]);
   const blocked = await fact(root, [review(CAP_HEAD, 4, "findings_present")]);
   assert.equal(blocked.capRoundFixed, false);
+  assert.equal(blocked.failure, "no_clearing_record");
   const marker = { visible: true, headSha: "bbbbbbb", verdict: "findings_present", contractComplete: true };
   const result = evaluatePrGateCoordination({
     repo: REPO, pr: PR, currentHeadSha: "b".repeat(40), prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
-    draftGate: marker, draftGateMarker: marker, unresolvedGateThreadCount: 0, draftCapRoundFixed: blocked.capRoundFixed, draftCapRoundFailure: blocked.failure ?? "no_clearing_record", draftRoundRefused: true,
+    draftGate: marker, draftGateMarker: marker, unresolvedGateThreadCount: 0, draftCapRoundFixed: blocked.capRoundFixed, draftCapRoundFailure: blocked.failure, draftRoundRefused: true,
   });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
   assert.match(result.agentRemedy.command, /gate extend-cap-round-chain --repo owner\/repo --pr /, "the no_clearing_record remedy of capRoundExit rides the result");

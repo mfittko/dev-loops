@@ -564,7 +564,7 @@
     {
       "id": "GATE-EXEC-ROUND-CAP-EXIT",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by capExitHolds and resolveCapExitRound in write-gate-context.mjs, called by ready-for-review.mjs, waive-adr-tripwire.mjs and detect-checkpoint-evidence.mjs (resolveDraftCapRoundFact calls capExitHolds directly); seeded by consolidate-fanin.mjs and blocked by upsert-checkpoint-verdict.mjs at pre_approval_gate; the escalated-item binding lives in emit-fixer-work-order.mjs (tests: test/github/cap-exit.test.mjs, test/contracts/round-cap-closure-contract.test.mjs); the rule body in gate-review-sub-loop-contract.md owns the clauses"
+      "enforcementNote": "Enforced by capExitHolds and resolveCapExitRound in write-gate-context.mjs, called by ready-for-review.mjs, waive-adr-tripwire.mjs, detect-checkpoint-evidence.mjs and emit-fixer-work-order.mjs (resolveDraftCapRoundFact calls capExitHolds directly); seeded by consolidate-fanin.mjs and blocked by upsert-checkpoint-verdict.mjs at pre_approval_gate; the escalated-item binding lives in emit-fixer-work-order.mjs (tests: test/github/cap-exit.test.mjs, test/contracts/round-cap-closure-contract.test.mjs); the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-NO-DEAD-END",
