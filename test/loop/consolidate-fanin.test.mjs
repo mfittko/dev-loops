@@ -5139,22 +5139,28 @@ test("consolidateGateFanin at pre_approval_gate fails closed on an unreadable ca
     return mkdir(path.dirname(file), { recursive: true }).then(() => writeFile(file, text, "utf8"));
   };
   // `blocked`: a blocked ledger does not count, so the round stays below the cap and the fan-in seeds nothing and never throws cap_round_unreadable.
-  for (const mode of ["readable", "unreadable", "blocked"]) {
+  const capFinding = { angle: "coverage", severity: "medium", summary: "cap act item", judgeDisposition: "act", file: "a.mjs", line: 1, clusterId: 0 };
+  for (const mode of ["readable", "unreadable", "blocked", "draft_gate"]) {
     const unreadable = mode === "unreadable";
     await withFindingsDir({ "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } }, (dir) => withTempDir(async (planDir) => {
-      const plan = { ...matchingEmitPlan(), gate: "pre_approval_gate", count: 0, units: [] };
+      const gate = mode === "draft_gate" ? "draft_gate" : "pre_approval_gate";
+      const plan = { ...matchingEmitPlan(), gate, count: 0, units: [] };
       const planPath = await writeEmitPlan(planDir, plan);
       const repoRoot = path.join(planDir, "repo");
       await mkdir(repoRoot, { recursive: true });
       await writeFile(path.join(repoRoot, ".devloops"), "version: 1\n", "utf8");
       for (const [i, c] of [..."1234"].entries()) {
         const head = c.repeat(40);
-        await draftLedger(repoRoot, head, unreadable && i === 3 ? "{not json" : JSON.stringify({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: head, verdict: mode === "blocked" && i === 3 ? "blocked" : "clean", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [] }));
+        await draftLedger(repoRoot, head, unreadable && i === 3 ? "{not json" : JSON.stringify({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: head, verdict: mode === "blocked" && i === 3 ? "blocked" : "clean", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: i === 3 && !unreadable ? [capFinding] : [] }));
       }
-      const run = () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "pre_approval_gate", headSha: EMIT_HEAD, tmpRoot: planDir, receiptTmpRoot: planDir, repoRoot });
+      const ledgerOut = path.join(planDir, "out-ledger.json");
+      const run = () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate, headSha: EMIT_HEAD, tmpRoot: planDir, receiptTmpRoot: planDir, repoRoot, ledgerOut });
       if (unreadable) await assert.rejects(run, /cap_round_unreadable/);
       else {
         assert.equal((await run()).ok, true);
+        const keys = JSON.parse(await readFile(ledgerOut, "utf8")).findings.map((f) => f.defectKey).filter((k) => typeof k === "string" && k.startsWith("cap:"));
+        // Only the readable pre_approval_gate round seeds the cap act item; a blocked cap ledger and a draft_gate round seed none.
+        assert.equal(keys.length, mode === "readable" ? 1 : 0, mode);
       }
     }));
   }
