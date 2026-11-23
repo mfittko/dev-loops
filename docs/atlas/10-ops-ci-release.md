@@ -1,7 +1,8 @@
 ---
 title: Ops, CI and release
 status: snapshot
-snapshot_date: 2026-11-19
+snapshot_date: 2026-11-23
+source_commit: f6619004d3edc2caccc98edd96914a5706c5d59b
 ---
 <a id="10-ops-ci-release"></a>
 
