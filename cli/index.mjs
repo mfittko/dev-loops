@@ -296,6 +296,7 @@ export const SUBCOMMAND_ROUTES = {
     "resolve-role":       "scripts/loop/resolve-reviewer-role.mjs",
     "resolve-validation": "scripts/loop/resolve-validation.mjs",
     "wait-for-units":     "scripts/loop/wait-for-gate-units.mjs",
+    "runbook":            "scripts/loop/gate-runbook.mjs",
   },
   loop: {
     startup:        "scripts/loop/resolve-dev-loop-startup.mjs",
@@ -425,6 +426,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "extend-cap-round-chain": "Extend the sealed cap-round clearing chain over later docs-only or tests-only commits (code commits need a locally_clear delta that covers them)",
     "resolve-role": "Resolve a review angle's role, Codex conductor/role native settings or a Claude role's Agent model",
     "resolve-validation": "Resolve gate validation at an exact head (ci-only CI evidence, declared full command, or the pinned-Bun verify script)",
+    "runbook": "Print the gate coordinator round runbook (a pinned projection of the gate contract; read it instead of the contract)",
     "wait-for-units": "Block until a gate round's dispatched reviewer or judge units are done, or (--artifact, requires --after <reference file>) a single child's hand-back file is final: it parses with its terminal field (outcome) or stays unchanged for 10 seconds (read-only)",
   },
   loop: {

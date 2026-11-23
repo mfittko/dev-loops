@@ -80,6 +80,10 @@ const REFINE_HELPERS_REFERENCE_RE = /_refine-helpers\.mjs/;
 // or vague reason defeats the point of an explicit allowlist.
 const EXCLUDED = new Map([
   [
+    "loop/gate-runbook.mjs",
+    "Prints the runbook text the gate coordinator reads, not a JSON result; only the refusal envelope is JSON, so a --jq filter has no success payload to apply to.",
+  ],
+  [
     "github/pull-work-order.mjs",
     "Reviewer-facing pull: success prints the raw work-order text the reviewer executes, not a JSON result; only the refusal envelope is JSON, so a --jq filter has no success payload to apply to.",
   ],
