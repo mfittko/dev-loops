@@ -50,6 +50,7 @@ pushes. `verified: false` means no base `validation.paths` command applies to th
 files (a clean merge always reports it). A failing command or an unreadable base config resets the
 branch to its pre-merge head and fails closed. `--no-verify` skips the commands. **Any other conflicted path, or a non-additive CHANGELOG edit, FAILS
 CLOSED** naming the conflicted paths; resolve those by hand.
+The tool also refuses with `base_merge_inside_sequence` (exit 1) while an ungranted fix sequence is open at HEAD and `origin/<base>` is not an ancestor of HEAD; finish the sequence, then rerun.
 
 ## Required before merge
 
