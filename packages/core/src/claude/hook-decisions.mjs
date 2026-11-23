@@ -427,7 +427,7 @@ export function decideWorktreeCheckoutGuard({
     decision: "deny",
     reason: withHookMarker("WORKTREE-WRONG-CHECKOUT-GUARD",
       `WORKTREE-WRONG-CHECKOUT-GUARD: wrong-checkout mutation blocked — a worktree cycle is active ` +
-      `("${activeWorktreeRoot}") but this Write/Edit targets the MAIN checkout's non-gitignored file ` +
+      `(${JSON.stringify(activeWorktreeRoot)}) but this Write/Edit targets the MAIN checkout's non-gitignored file ` +
       `${JSON.stringify(filePath)}.${fix} A file mutation that lands on the main checkout while a worktree is ` +
       "active is silently lost from the branch. Set DEVLOOPS_ALLOW_MAIN=1 only for a deliberate " +
       "main-checkout edit. See skills/docs/worktree-guidance.md."),
@@ -529,7 +529,7 @@ export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthoriza
       decision: "allow",
       advisory: true,
       reason:
-        `LOCAL-COMMIT-BEFORE-EXIT exempt for read-only role "${agentType}": the worktree has ` +
+        `LOCAL-COMMIT-BEFORE-EXIT exempt for read-only role "${String(agentType).replace(/\s+/g, " ")}": the worktree has ` +
         "uncommitted changes, but a verdict-only role must not author a commit of work it did not " +
         "create. This pending edit is foreign — the ORCHESTRATOR that dispatched this pass owns it " +
         "and is responsible for committing it before its own stop.",
@@ -681,8 +681,8 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
       return {
         decision: "deny",
         reason: withHookMarker("AGENT_OVERRIDE_NAMESPACED_DISPATCH",
-          `AGENT_OVERRIDE_NAMESPACED_DISPATCH: \`dev-loops-run cli/index.mjs loop claude-launch\` rendered \`${bare}\` with extraTools for this session. ` +
-          `Dispatch the bare agent type \`${bare}\` instead of ${JSON.stringify(targetAgentType)}.`),
+          `AGENT_OVERRIDE_NAMESPACED_DISPATCH: \`dev-loops-run cli/index.mjs loop claude-launch\` rendered \`${bare.replace(/\s+/g, " ")}\` with extraTools for this session. ` +
+          `Dispatch the bare agent type \`${bare.replace(/\s+/g, " ")}\` instead of ${JSON.stringify(targetAgentType)}.`),
       };
     }
   }

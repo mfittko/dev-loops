@@ -253,7 +253,7 @@ export function decideUnresolveOwnerDeny({ command, role }) {
     return {
       ruleId: null,
       reason: withHookMarker("UNRESOLVE_OWNER",
-        `The ${actor} agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs ` +
+        `The ${String(actor).replace(/\s+/g, " ")} agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs ` +
         "is owned by the orchestrator (main agent) and the dev-loop coordinator. Report the wrongly resolved thread in your hand-back and let the owner run it."),
     };
   }
@@ -276,7 +276,7 @@ export function decideMergePrOwnerDeny({ command, role }) {
   return {
     ruleId: null,
     reason: withHookMarker("MERGE_PR_OWNER",
-      `The ${normalizeAgentType(role)} agent may not run merge-pr: scripts/github/merge-pr.mjs, \`--check\` included, is owned by the orchestrator (main agent). ` +
+      `The ${normalizeAgentType(role).replace(/\s+/g, " ")} agent may not run merge-pr: scripts/github/merge-pr.mjs, \`--check\` included, is owned by the orchestrator (main agent). ` +
       "Hand back the merge-ready evidence instead; the orchestrator runs `merge-pr.mjs --check` and the merge."),
   };
 }
