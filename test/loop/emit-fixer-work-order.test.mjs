@@ -68,6 +68,11 @@ const verdictReviews = (postedHead, gates) => gates.map((gate, id) => ({
 }));
 // A fetchVerdictMarkers seam fed by the real marker parser.
 const verdictPostedAt = (postedHead, gates = ["draft_gate", "pre_approval_gate"]) => async ({ headSha }) => summarizeGateReviewCommentMarkers(verdictReviews(postedHead, gates), { headSha });
+// A fetchReview seam: one trusted REST review carrying the draft_gate header at `head` (the shape capExitHolds reads).
+const capReviewsAt = (head, { round = 2, verdict = "findings_present" } = {}) => async () => [{
+  id: 1, state: "COMMENTED", user: { login: "operator", type: "User" }, author_association: "OWNER",
+  body: `<!-- dev-loops:gate-findings-review draft_gate ${head.slice(0, 7)} round=${round} -->\n**Verdict:** ${verdict}`,
+}];
 // A gh stub for the spawned CLI: PR view, an empty comment stream and a review stream carrying the posted verdicts.
 const ghStubScript = (head) => `#!/bin/sh\ncase "$*" in\n*/reviews*) printf '%s\\n' '${JSON.stringify([verdictReviews(head, ["draft_gate", "pre_approval_gate"])])}';;\n*/comments*) echo '[[]]';;\n*) printf '%s\\n' '${JSON.stringify({ headRefName: "issue-1", headRefOid: head })}';;\nesac\n`;
 
@@ -3427,7 +3432,7 @@ async function capRoundFirstPassPushed(fx) {
   const first = await fx.prepareFull();
   assert.equal((await first.full()).workOrder.headSha, first.candidate);
   await writeFile(fx.files.actList, JSON.stringify([openItem]));
-  const at = (prHead) => ({ headSha: prHead, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: prHead, baseRefName: "main" }), fetchVerdictMarkers: verdictPostedAt(fx.head) });
+  const at = (prHead) => ({ headSha: prHead, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: prHead, baseRefName: "main" }), fetchVerdictMarkers: verdictPostedAt(fx.head), fetchReview: capReviewsAt(fx.head) });
   return { candidate: first.candidate, at };
 }
 
@@ -3465,9 +3470,14 @@ test("issue 3460 AC7: a second cap-round pass emits at the pushed head with ever
     const end = await coordinationAt(fx.wt, { repo: REPO, pr: PR, head: candidate, reviews: [capReview], trustRuntime: { runChild: viewer }, draftOpenActList: { headSha: fx.head, openActCount: 1, blockers: [] } });
     assert.equal(end.fixed, true);
     assert.equal(end.nextAction, "mark_ready_for_review");
-    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate), fetchVerdictMarkers: async ({ headSha }) => summarizeGateReviewCommentMarkers([], { headSha }) }), (e) => e.refusal === "round_cap_reached" || e.refusal === "verdict_not_posted");
-    const blockedAtCapHead = async ({ headSha }) => summarizeGateReviewCommentMarkers(verdictReviews(fx.head, ["draft_gate"]).map((r) => ({ ...r, body: r.body.replace("Verdict: clean", "Verdict: blocked") })), { headSha });
-    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate), fetchVerdictMarkers: blockedAtCapHead }), (e) => e.refusal === "round_cap_reached");
+    const refused = (over) => assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate), ...over }), (e) => e.refusal === "round_cap_reached");
+    await refused({ fetchReview: async () => [] });
+    await refused({ fetchReview: capReviewsAt(fx.head, { verdict: "blocked" }) });
+    // The one cap-exit predicate: a posted review at the cap-round head that carries another round number is no cap review.
+    await refused({ fetchReview: capReviewsAt(fx.head, { round: 1 }) });
+    // A malformed focus file refuses under GATE-EXEC-OPERATOR-FOCUS at the pushed head, never as round_cap_reached.
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: open.fingerprint, decision: "  " }] }));
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate) }), /GATE-EXEC-OPERATOR-FOCUS/);
   });
 });
 
@@ -5005,5 +5015,15 @@ test("AC8: an escalated cap-ledger act finding binds as operator focus and joins
   await withFixture(async (fx) => {
     const focusFile = await setup(fx, [sibling], [{ fingerprint: "0123456789abcdef", decision: "Fix it in this PR" }]);
     await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile }), /GATE-EXEC-OPERATOR-FOCUS: operator focus item 0123456789abcdef is not in the act list/);
+  });
+  // An empty act list binds nothing without a decided cap-ledger item: the emitter refuses instead of emitting a fixer order with no act items.
+  await withFixture(async (fx) => {
+    const focusFile = await setup(fx, [], [{ fingerprint: escalatedFp, decision: "Fix it in this PR" }]);
+    await writeFile(focusFile, JSON.stringify({ round: "note" }));
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile }), /empty and no operator focus item bound a cap-ledger act finding \(GATE-EXEC-ROUND-CAP-EXIT\)/);
+  });
+  await withFixture(async (fx) => {
+    const focusFile = await setup(fx, [], [{ fingerprint: "0123456789abcdef", decision: "Fix it in this PR" }]);
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile }), /empty and no operator focus item bound a cap-ledger act finding \(GATE-EXEC-ROUND-CAP-EXIT\)/);
   });
 });

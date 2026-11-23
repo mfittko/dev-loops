@@ -2249,7 +2249,7 @@ export const isCleanCapRound = (capRound) => capRound?.log?.verdict === "clean" 
  * The cap round of a draft_gate (ADR 0208): the last closed ledger when the completed rounds reached the cap (the count includes a finished live ledger at the current head; an unfinished or in-rewrite ledger never counts) and
  * that ledger is `findings_present` or `clean` (ADR 0250: a clean cap round has no act ref; its `residue` holds only `capClosed` items). Returns `{ log, residue }` or null. `residue` is the cap round's act items and `capClosed` items as
  * `{ fingerprint, file, line, title, disposition }`, the input `pre_approval_gate` receives.
- * `onFailClosed(cause)` receives `unreadable` (an unreadable or missing ledger) or `not_cap_round` (a readable last ledger that is not findings_present or clean and holds no open act item, such as a blocked ledger).
+ * `onFailClosed()` is called, with no argument, for an unreadable or missing ledger. The ledger reader returns only clean and findings_present ledgers, so a blocked ledger never reaches it: it does not count toward the cap.
  * The candidate set is the closed prior rounds plus the retained rounds of the current head. A finished live ledger at the current head counts and can be the cap round
  * (a PR-body-only edit leaves the head unchanged), the same count the coordination detector uses (`includeLiveCurrentHead`).
  */
@@ -2265,8 +2265,8 @@ export async function resolveCapRound(options, { repoRoot, onFailClosed = () => 
   const picked = (await readClosedPriorRoundLogs(ledger, { repoRoot, includeLiveCurrentHead: true, includeRetainedCurrentHead: true, withPaths: true, onUnreadable: () => { unreadable += 1; } })).at(-1);
   const log = picked?.log;
   // The persisted severity verdict can read `clean` for judge-act mediums whose posted review composes findings_present: an open act item makes the round a cap round too.
-  if (unreadable > 0 || !log) { onFailClosed("unreadable"); return null; }
-  if (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0) { onFailClosed("not_cap_round"); return null; }
+  if (unreadable > 0 || !log) { onFailClosed(); return null; }
+  if (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0) { onFailClosed(); return null; }
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
   let items = [];
   try { items = readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), log.headSha)?.items ?? []; } catch { /* unverifiable: keep every item */ }

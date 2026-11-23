@@ -5121,13 +5121,24 @@ test("reserveCapDefectKey drops a reviewer-authored cap: key and keeps a seeded 
   assert.equal(seeded[0].defectKey, "cap:f1", "cap:<fingerprint> minted by seedCapRoundActFindings");
 });
 
+// Issue 3460 AC6: a second pre_approval_gate round carries the seeded item in its angle artifact; seeding again adds no copy.
+test("seedCapRoundActFindings is idempotent over a carried artifact that already holds the cap: key", () => {
+  const item = { angle: "a", severity: "medium", summary: "s", fingerprint: "f1" };
+  const raw = [{ angle: "a", verdict: "findings_present", carriedFromHead: "abc", findings: [{ severity: "medium", summary: "s", defectKey: "cap:f1" }] }];
+  seedCapRoundActFindings(raw, [item]);
+  assert.equal(raw.flatMap((a) => a.findings).filter((f) => f.defectKey === "cap:f1").length, 1);
+  assert.equal(raw.length, 1);
+  seedCapRoundActFindings(raw, [item, { ...item, fingerprint: "f2" }]);
+  assert.deepEqual(raw[0].findings.map((f) => f.defectKey), ["cap:f1", "cap:f2"]);
+});
+
 // Issue 3460 AC6: a cap-round read failure at pre_approval_gate fails the fan-in; it never skips the seeding.
 test("consolidateGateFanin at pre_approval_gate fails closed on an unreadable cap-round ledger and proceeds when the ledgers are readable", async () => {
   const draftLedger = (root, head, text) => {
     const file = path.resolve(root, buildLogPath({ repo: "o/r", pr: "7", gate: "draft_gate", headSha: head, tmpRoot: path.join(root, "tmp") }));
     return mkdir(path.dirname(file), { recursive: true }).then(() => writeFile(file, text, "utf8"));
   };
-  // `blocked`: a readable last ledger that is no cap round seeds nothing and never throws cap_round_unreadable.
+  // `blocked`: a blocked ledger does not count, so the round stays below the cap and the fan-in seeds nothing and never throws cap_round_unreadable.
   for (const mode of ["readable", "unreadable", "blocked"]) {
     const unreadable = mode === "unreadable";
     await withFindingsDir({ "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } }, (dir) => withTempDir(async (planDir) => {

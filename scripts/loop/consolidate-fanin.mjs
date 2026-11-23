@@ -544,6 +544,8 @@ async function verifyEmitPlanKey(planPath, { repo, pr, gate, headSha, carriedAng
 export function seedCapRoundActFindings(rawArtifacts, actList) {
   for (const item of actList) {
     if (typeof item.angle !== "string" || item.angle.trim().length === 0) continue;
+    // A carried findings_present angle already holds the item seeded in an earlier round: seeding is idempotent.
+    if (rawArtifacts.some((a) => Array.isArray(a.findings) && a.findings.some((f) => f?.defectKey === `cap:${item.fingerprint}`))) continue;
     const seeded = { severity: item.severity, summary: item.summary, defectKey: `cap:${item.fingerprint}`, ...(item.file ? { file: item.file } : {}), ...(Number.isInteger(item.line) ? { line: item.line } : {}) };
     const artifact = rawArtifacts.find((a) => a.angle.trim() === item.angle.trim());
     // A blocked artifact keeps its verdict (fan-in returns blocked from it); the seeded item rides a separate synthetic artifact.
@@ -1509,7 +1511,7 @@ export async function consolidateGateFanin(options) {
   // The `cap:<fingerprint>` defect key marks a seeded finding; the verdict poster reads it to apply the past-cap blocker rule. A capClosed item stays context (the residue read).
   reserveCapDefectKey(rawArtifacts);
   if (options.gate === "pre_approval_gate" && emitPlan !== undefined && options.headSha !== undefined) {
-    const capRound = await resolveCapRound({ repo: emitPlan.repo, pr: emitPlan.pr, headSha: options.headSha }, { repoRoot: options.repoRoot ?? process.cwd(), onFailClosed: (cause) => { if (cause === "unreadable") throw new Error("cap_round_unreadable: the draft_gate cap-round ledger is unreadable or missing, so pre_approval_gate cannot seed the cap act items (issue 3460 AC6)"); } });
+    const capRound = await resolveCapRound({ repo: emitPlan.repo, pr: emitPlan.pr, headSha: options.headSha }, { repoRoot: options.repoRoot ?? process.cwd(), onFailClosed: () => { throw new Error("cap_round_unreadable: the draft_gate cap-round ledger is unreadable or missing, so pre_approval_gate cannot seed the cap act items (issue 3460 AC6)"); } });
     if (capRound) seedCapRoundActFindings(rawArtifacts, capRoundActList(capRound.log.findings, capRound.log.headSha));
   }
 

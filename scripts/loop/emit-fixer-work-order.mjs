@@ -28,7 +28,7 @@ import { OperatorFocusRefusal, bindOperatorFocusItems, operatorFocusDigestEntry,
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
-import { closureFromHeadOf, clearingChainWalk, readClosedPriorRoundLogs, renderRequiredReadLine, resolveCapRound, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
+import { closureFromHeadOf, clearingChainWalk, readClosedPriorRoundLogs, renderRequiredReadLine, resolveCapExitRound, resolveCapRound, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { fixerEmitCarryAccepts } from "../github/_carried-verdict.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
@@ -36,7 +36,7 @@ import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, listWorktreeE
 import { authenticateOriginalPlan, beginFixerEmission } from "../github/_fixer-emission-evidence.mjs";
 import { captureParsedReviewThreads } from "../github/_review-thread-mutations.mjs";
 import { resolveAuthenticatedLogin, runGhJson } from "../github/post-gate-findings.mjs";
-import { listRestPrReviews, normalizePrReviewsPayload, prReviewsApiArgs } from "../github/_gate-finding-surface.mjs";
+import { draftGatePostedHeads, listRestPrReviews, normalizePrReviewsPayload, prReviewsApiArgs, resolveTrustedEvidencePredicate } from "../github/_gate-finding-surface.mjs";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { isSanctionedCopilotReviewerLogin, isTrustedAssociation, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import { resolveLatestCopilotReview } from "../github/_copilot-body-disposition.mjs";
@@ -720,6 +720,8 @@ async function emitPlan({
       return currentHeadLedgerExists() ? null : originHead;
     } catch { return null; }
   })();
+  // One read of the operator focus file for the AC7 later-pass decision and the binding below: a shape error refuses here under GATE-EXEC-OPERATOR-FOCUS, never inside the swallowing cap-round catch.
+  const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
   let capLedgerActs = []; // the act findings of the cap-round ledger, read at the cap round (issue 3460 AC8)
   if (guardFile && (gate === "draft_gate" || lowNitOnly)) {
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
@@ -754,10 +756,14 @@ async function emitPlan({
           }
           // Issue 3460 AC7: for an operator-decided item (an operator focus file), the posted, non-blocked cap-round review makes a pushed descendant of the cap-round head a later pass without any delta record.
           // An operator-decided item: a focus item with a fingerprint and a decision (a text-only focus file or an item without either opens no later pass).
-          const decided = operatorFocusFile && !baseOnly && (await readOperatorFocusFile(abs(operatorFocusFile), { allowItems: true }))?.items?.some((item) => item.fingerprint !== undefined && item.decision !== undefined);
+          const decided = !baseOnly && operatorFocusRaw?.items?.some((item) => item.fingerprint !== undefined && item.decision !== undefined);
           if (decided && !currentHeadLedgerExists() && headSha !== fromHead) {
-            const posted = (await fetchVerdictMarkers({ repo, pr, headSha: fromHead, gate, runtime: { env, ghCommand, runChild } }))?.[gate];
-            if (posted?.visible && posted.contractComplete === true && posted.verdict !== "blocked") { gitIn(cwd, "merge-base", "--is-ancestor", fromHead, headSha); baseOnly = true; laterPass = true; }
+            // The one cap-exit predicate (capExitHolds) over the trusted posted draft_gate headers of the PR reviews, as coordination reads it.
+            const runtime = { env, ghCommand, runChild };
+            const reviews = (await fetchReview({ repo, pr, runtime })).filter((r) => r?.state !== "PENDING");
+            const isTrusted = await resolveTrustedEvidencePredicate(reviews, runtime);
+            const postedHeads = draftGatePostedHeads(reviews.filter(isTrusted).map((r) => r.body));
+            if (await resolveCapExitRound({ repo, pr, headSha }, { repoRoot: resolveRepoRoot(cwd), postedHeads })) { gitIn(cwd, "merge-base", "--is-ancestor", fromHead, headSha); baseOnly = true; laterPass = true; }
           }
           chainMiss = !baseOnly && !candidates.includes(headSha);
         }
@@ -819,7 +825,6 @@ async function emitPlan({
   if (badFingerprint) {
     throw new Refusal(`act list ${guardFile} has an act item (${JSON.stringify(badFingerprint.summary)}) whose fingerprint is ${badFingerprint.fingerprint === undefined ? "missing" : "not the canonical fingerprintFinding value"}; re-run judge-pass to regenerate it`);
   }
-  const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
   // Issue 3460 AC8: at the cap round, an operator focus item that names by fingerprint, with a decision, an act finding of the cap-round ledger that the recurrence escalation withheld from the act list binds,
   // and the emitter adds that finding to the fixer act list (the operator decided to fix it in this PR). A fingerprint that is no act finding of that ledger still refuses at the binding below.
   if (actListFile && operatorFocusRaw?.items) {
