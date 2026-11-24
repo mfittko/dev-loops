@@ -8,7 +8,10 @@ import { resolvePrConflicts } from "./resolve-pr-conflicts.mjs";
 import { parseCopilotBodyDispositionMarker, parseReviewBodyDispositionMarkers } from "../github/_copilot-body-disposition.mjs";
 import { isTrustedRestComment, UNTRUSTED_CONVERSATION_COMMENT_REMEDY } from "@dev-loops/core/github/comment-trust";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { resolveRunId } from "@dev-loops/core/loop/run-context";
+import { resolveRunId, resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
+import { fanoutUnavailableError } from "@dev-loops/core/loop/gate-fanin";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
 import { performCopilotReviewRequest } from "../github/request-copilot-review.mjs";
@@ -42,6 +45,12 @@ Required:
   --pr <number>         Pull request number
 Optional:
   --repo <owner/name>   Repository slug (e.g. owner/repo). Auto-detected from git remote when omitted.
+  --codex-reviewer-spawn-unavailable
+                        Internal signal: the running Codex coordinator observed
+                        no collaboration.spawn_agent in its actual tool surface.
+                        Resolve full lifecycle routing before claiming a runner;
+                        FANOUT_UNAVAILABLE stops without gate evidence. Omit on
+                        ordinary PR-entry retry in a verified child with spawn.
   --watch-status <status>   Refresh deterministic loop state after a prior
                            watcher result (changed|timeout|idle). This mode
                            never requests review; it only re-detects state,
@@ -54,6 +63,10 @@ Optional:
                         refinement.maxCopilotRounds: 0 still disables Copilot
                         rounds even with --lightweight.
 Output (stdout, JSON):
+  Missing-spawn full-gate refusal (exit 1):
+  { "ok": false, "action": "stop", "code": "FANOUT_UNAVAILABLE", "routeToConductor": true,
+    "error": "...", "repo": "...", "pr": N, "headSha": "...", "gate": "...",
+    "missingTool": "collaboration.spawn_agent", "recovery": "..." }
   { "ok": true, "action": "watch"|"fix"|"stop", "state": "...",
     "allowedTransitions": [...], "nextAction": "...", "snapshot": {...},
     "reviewRequestStatus"?: "...", "watchStatus"?: "...",
@@ -122,7 +135,7 @@ Error output (stderr, JSON):
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
-  1  Argument error or gh failure
+  1  Argument error, gh failure or FANOUT_UNAVAILABLE
   2  Invalid --jq filter
   3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const POST_CONVERGENCE_SUPPRESSED_NEXT_ACTION = "The converged Copilot review stands for this head, so no Copilot round was placed; continue to pre_approval_gate instead of re-requesting Copilot review";
@@ -211,6 +224,7 @@ export function parseHandoffCliArgs(argv, { cwd = process.cwd() } = {}) {
       pr: { type: "string" },
       "watch-status": { type: "string" },
       lightweight: { type: "boolean" },
+      "codex-reviewer-spawn-unavailable": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -249,6 +263,10 @@ export function parseHandoffCliArgs(argv, { cwd = process.cwd() } = {}) {
     }
     if (token.name === "lightweight") {
       options.lightweight = true;
+      continue;
+    }
+    if (token.name === "codex-reviewer-spawn-unavailable") {
+      options.codexReviewerSpawnUnavailable = true;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -506,14 +524,39 @@ export async function runBasePickupPreflight(
   }
 }
 
-export async function runHandoff(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot, integrateBase } = {}) {
+export async function runHandoff(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot, integrateBase, execPreflight = execFileSync, ensureRunnerOwnership = ensureAsyncRunnerOwnership } = {}) {
   // Single resolved repo root for config + runner-coordination reads/writes.
   // Defaults to the checkout's git toplevel (production); an injected repoRoot
   // keeps the whole cascade hermetic when driven in-process.
   const resolvedRepoRoot = repoRoot ?? resolveRepoRoot(process.cwd());
   // A config load error refuses before any ownership claim or gh read.
   const config = await loadDevLoopConfigStrict({ repoRoot: resolvedRepoRoot });
-  const runnerOwnership = await ensureAsyncRunnerOwnership({
+  if (options.codexReviewerSpawnUnavailable === true && resolveRuntimeHarness(env) === "codex") {
+    const read = (script, args) => JSON.parse(execPreflight(process.execPath,
+      [fileURLToPath(new URL(script, import.meta.url)), ...args],
+      { cwd: resolvedRepoRoot, env, encoding: "utf8", timeout: 60_000, maxBuffer: 10 * 1024 * 1024 }));
+    const target = ["--repo", options.repo, "--pr", String(options.pr)];
+    // Live routing wins over startup/retained state; coordination may release an existing terminal claim.
+    const route = read("./detect-pr-gate-coordination-state.mjs", [...target, ...(options.lightweight ? ["--lightweight"] : [])]);
+    const gate = { run_draft_gate: "draft_gate", run_pre_approval_gate: "pre_approval_gate" }[route.nextAction];
+    if (route.ok === true && gate) {
+      const { pr } = read("../github/view-pr.mjs", [...target, "--json", "headRefOid,baseRefName,labels"]);
+      // A moved head goes through ordinary handoff and final runbook rechecks, never a stale refusal.
+      if (pr.headRefOid === route.currentHeadSha) {
+        const dispatch = read("./resolve-gate-dispatch.mjs", ["--gate", gate === "draft_gate" ? "draft" : "preApproval",
+          "--base", `origin/${pr.baseRefName}`, "--head", pr.headRefOid,
+          ...(pr.labels.some((label) => label.name.toLowerCase() === "gate:full") ? ["--full-label"] : [])]);
+        if (dispatch.ok === true && dispatch.mode === "full_fanout") {
+          const missingTool = "collaboration.spawn_agent";
+          const recovery = `Retry the ordinary PR entry for ${options.repo} PR #${options.pr} in a verified Codex child exposing ${missingTool}; inspect its tools again and omit --codex-reviewer-spawn-unavailable when present.`;
+          const error = fanoutUnavailableError(`${options.repo} PR #${options.pr}, head ${pr.headRefOid}, ${gate}: missing ${missingTool}. ${recovery}`);
+          return { ok: false, action: "stop", code: error.code, routeToConductor: error.routeToConductor,
+            error: error.message, repo: options.repo, pr: options.pr, headSha: pr.headRefOid, gate, missingTool, recovery };
+        }
+      }
+    }
+  }
+  const runnerOwnership = await ensureRunnerOwnership({
     repo: options.repo,
     pr: options.pr,
     env,

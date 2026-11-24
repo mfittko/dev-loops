@@ -15,6 +15,16 @@ const DOCS = path.join(ROOT, "skills/docs");
 const contract = readFileSync(path.join(DOCS, CONTRACT_FILE), "utf8");
 const built = buildGateRunbook();
 const runbook = built.runbook;
+test("Codex retains a final tool recheck after the pre-claim capability check", () => {
+  assert.match(runbook, /Recheck tools after preflight:.*collaboration\.spawn_agent/);
+  assert.match(runbook, /Head or route may have changed/);
+  for (const skill of ["dev-loop", "copilot-pr-followup"]) {
+    const text = readFileSync(path.join(ROOT, "skills", skill, "SKILL.md"), "utf8");
+    assert.match(text, /actual tools for `collaboration\.spawn_agent`/);
+    assert.match(text, /--codex-reviewer-spawn-unavailable/);
+    assert.match(text, /coordinator work-order pull/);
+  }
+});
 const RULE_ID = /\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+){2,}\b/g;
 const LAUNCHER = 'dev-loops-run --repo-root "$W" ';
 // judge-pass prints its usage on --help but exits 1 (it reports the missing required arguments first).
