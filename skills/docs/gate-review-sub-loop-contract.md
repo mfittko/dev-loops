@@ -1846,8 +1846,13 @@ constant `FANOUT_UNAVAILABLE_MESSAGE` (`@dev-loops/core/loop/gate-fanin`):
 `err.routeToConductor === true`) to hand the gate review up to the conductor. The
 `requireFanoutProvenance` pre-merge failure message references this same contract string.
 
+<!-- rule: GATE-EXEC-CODEX-PRECLAIM-CAPABILITY -->
+`GATE-EXEC-CODEX-PRECLAIM-CAPABILITY`: Before the first claim-capable `loop handoff`, the running Codex PR coordinator MUST inspect its actual tool surface for `collaboration.spawn_agent`, on direct entry and after a coordinator work-order pull. Only observed absence adds the internal handoff signal `--codex-reviewer-spawn-unavailable`; depth, metadata, configuration and run identity never infer capability. `runHandoff` resolves fresh gate coordination, then the existing `resolve-gate-dispatch.mjs` with the current head, actual PR base and `gate:full` label. Only Codex routed to `run_draft_gate` or `run_pre_approval_gate` with `mode: full_fanout` refuses as `FANOUT_UNAVAILABLE` before `ensureAsyncRunnerOwnership`. The result names repo, PR, head, gate, missing tool and recovery. It emits no reviewer work orders, inline verdict or gate evidence. Gate coordination retains its coordination snapshot and terminal claim-release behavior; it is not universally read-only. The GitHub assignee check is distinct from the runner claim and stays unchanged.
+
+Recovery retries the ordinary PR entry in a verified native Codex child exposing `collaboration.spawn_agent`; inspect tools again and omit the signal when present. The refusal creates no runner claim or gate round to clear, so the same head needs no takeover, artifact deletion or round repair. Tool-present, inline and non-gate entries retain ordinary handoff. Pi and Claude Code keep their routing. Native child identity, ownership, head, CI, role, work-order and evidence checks remain required. A head change during preflight falls through to ordinary rechecks; retain the final runbook capability check when head or route changes afterward. See ADR 0321.
+
 The step 0 handback carries `FANOUT_UNAVAILABLE_MESSAGE` and a detail that names the missing
-dispatch tool (`Agent` or `subagent`), in the shape `fanoutUnavailableError(detail)` produces:
+dispatch tool (`Agent`, `subagent` or `collaboration.spawn_agent`), in the shape `fanoutUnavailableError(detail)` produces:
 `fan-out unavailable — route to conductor (<detail>)`. The detail names the spawn depth only when
 the harness exposes the depth to the agent. Claude Code does not expose it today.
 

@@ -70,7 +70,7 @@ A="$W/tmp/gate-judge/$SLUG/pr-$N/$GATE-$H"; mkdir -p "$F" "$A"
 Operator focus (GATE-EXEC-OPERATOR-FOCUS). When the round arguments carry operator context write \`{ "round": "<text>" }\` to \`$F/focus.json\` and pass \`--operator-focus-file "$F/focus.json"\` to steps 7 and 11.
 ## Steps
 
-0. Dispatch tool. Check tools for \`Agent\` (Claude Code) or \`subagent\` (Pi). When absent, return the \`FANOUT_UNAVAILABLE_MESSAGE\` result (\`FANOUT_UNAVAILABLE\`) at once, with a detail that names the missing tool. Run no other step.
+0. Recheck tools after preflight: \`Agent\` (Claude), \`subagent\` (Pi), \`collaboration.spawn_agent\` (Codex). Absent: return \`FANOUT_UNAVAILABLE_MESSAGE\` (\`FANOUT_UNAVAILABLE\`) naming the tool; stop. Head or route may have changed.
 1. Head check. \`git -C "$W" rev-parse HEAD\` must equal $H. Otherwise stop with \`head_changed\`.
 2. Validation (GATE-EXEC-VALIDATION-RESOLUTION). An \`incomplete\` status is valid evidence; continue. Pass each targeted \`gateSuites\` entry of \`resolveTargetedValidation(changedPaths)\` as a repeated \`--suite\`. When targeting is unsafe or yields no suite, use \`--profile full-repository\` with no \`--suite\`.
    \`dev-loops-run --repo-root "$W" cli/index.mjs gate resolve-validation --profile targeted --suite <gateSuite> --repo "$R" --pr "$N" --gate "$GATE" --head-sha "$H"\`
