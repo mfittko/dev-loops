@@ -14,6 +14,7 @@
 // (Claude exposes `agent_type` only inside a subagent, so its absence IS the main agent) and for
 // every worker role.
 import assert from "node:assert/strict";
+import { classifyDecisionRecorderCommand } from "../../packages/core/src/loop/bash-command-classify.mjs";
 import { POLICY_HOOK_COMPLIANT_FORMS } from "../../packages/core/src/loop/bash-gate-decisions.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -253,6 +254,18 @@ test("OPERATOR-DECISION-RECORDER: only the plain canonical spelling from the mai
       const { decision, reason } = bash(root, plain, agentType);
       assert.equal(decision, "deny", `${plain} as ${agentType}`);
       assert.match(reason, /OPERATOR-DECISION-RECORDER/);
+    }
+  });
+});
+
+test("quoted validation script and Vitest stay allowed for a fixer together and separately", async () => {
+  const script = "node '/workspace/tmp/targeted-validation.mjs' 'app/pipeline.tsx' 'app/facts.tsx' test/offer.test.ts test/cards.test.ts";
+  const vitest = "pnpm exec vitest run test/offer.test.ts test/cards.test.ts";
+  await withManagedRepo(async (root) => {
+    for (const command of [`${script}\n${vitest}`, script, vitest]) {
+      assert.equal(classifyDecisionRecorderCommand(command), null, command);
+      const { decision, reason } = bash(root, command, "fixer");
+      assert.equal(decision, "allow", `${command}: ${reason}`);
     }
   });
 });
