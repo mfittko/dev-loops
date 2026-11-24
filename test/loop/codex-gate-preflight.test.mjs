@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseHandoffCliArgs, runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
+import { makeGhMock } from "../_helpers.mjs";
 
 const repoRoot = process.cwd();
 const head = "a".repeat(40);
@@ -48,8 +49,27 @@ for (const [action, gate, token] of [["run_draft_gate", "draft_gate", "draft"], 
     assert.equal(f.calls.includes("claim"), false);
     assert.equal(f.calls.length, 3); // routing + PR facts + dispatch; no emitter or evidence writer
     assert.ok(f.calls[2].includes(token));
-    await assert.rejects(runHandoff({ ...options, codexReviewerSpawnUnavailable: false }, f.runtime), f.claimed);
+    f.runtime.ensureRunnerOwnership = async () => { f.calls.push("claim"); return { ok: true }; };
+    const gh = makeGhMock([
+      { assertArgs: ["pr", "view", "42"], stdout: JSON.stringify({
+        headRefOid: head, isDraft: gate === "draft_gate", state: "OPEN", number: 42,
+        reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+      }) },
+      { assertArgs: ["api", "repos/owner/repo/pulls/42/requested_reviewers"], stdout: '{"users":[],"teams":[]}' },
+      { assertArgs: ["api", "graphql"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}' },
+    ]);
+    f.runtime.runChild = gh.runChild;
+    const restored = await runHandoff({ ...options, codexReviewerSpawnUnavailable: false }, f.runtime);
     assert.equal(f.calls.at(-1), "claim");
+    assert.equal(restored.ok, true);
+    assert.equal(restored.runnerOwnership.ok, true);
+    assert.equal(restored.snapshot.prDraft, gate === "draft_gate");
+    assert.equal(restored.snapshot.ciStatus, "success");
+    assert.equal(restored.state, gate === "draft_gate" ? "pr_draft" : "internal_tooling_direct_gate");
+    assert.equal(restored.action, gate === "draft_gate" ? "stop" : "fix");
+    assert.equal(restored.requestWatchContract.routingState,
+      gate === "draft_gate" ? "draft_reset_requires_ready_state_reentry" : "internal_tooling_skip_copilot");
+    assert.equal(gh.calls.length, 3);
   });
 }
 
