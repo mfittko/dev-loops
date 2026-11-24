@@ -43,6 +43,10 @@ Output (stdout, JSON):
     "settled": bool, "ciStatus": "success"|"failure"|"pending"|"none",
     "failedChecks": [{ "name": "...", "conclusion"?: "..." }], "headSha": "...", "attempts": N,
     "excludedFailureDetails": ["gate-evidence", ...] }
+  Optional PR field: "checkStateMismatches": [{ "name": "...", "status": "in_progress",
+    "conclusion": "success", "completed_at": "...", "reason": "..." }].
+  Present only for visible, non-loop-derived mixed check states. Diagnostic only:
+  GitHub still reports in_progress, so the check remains pending.
   Commit-scoped (--commit): the COMBINED GitHub Actions workflow-run state for
   that commit (e.g. the post-merge "main jobs green" check) — any run failure
   is "failure", any run still queued/in_progress is "pending", otherwise "success".
@@ -232,7 +236,7 @@ async function fetchPrHeadSha({ repo, pr }, { env, ghCommand, runChild }) {
  * fabricate green. On fetchError, ciStatus is forced to "pending" so the watch
  * keeps polling (and a persistent error settles as "timeout", never success).
  *
- * @returns {{ ciStatus: "success"|"failure"|"pending"|"none", noChecks: boolean, fetchError: boolean, failedChecks: Array<{ name: string, conclusion?: string }>, excludedFailureDetails: Array<string> }}
+ * @returns {{ ciStatus: "success"|"failure"|"pending"|"none", noChecks: boolean, fetchError: boolean, failedChecks: Array<{ name: string, conclusion?: string }>, excludedFailureDetails: Array<string>, checkStateMismatches: Array<object> }}
  */
 async function fetchHeadCiState(
   { repo, headSha, prVisibleCheckNames },
@@ -322,7 +326,10 @@ async function fetchHeadCiState(
     checkRunsCount > 0 &&
     checkRunsSignal?.allQueued === true &&
     commitStatus !== "pending";
-  return { ciStatus, noChecks, fetchError, failedChecks, excludedFailureDetails, allCheckRunsQueued };
+  return {
+    ciStatus, noChecks, fetchError, failedChecks, excludedFailureDetails, allCheckRunsQueued,
+    checkStateMismatches: checkRuns.checkStateMismatches,
+  };
 }
 
 function buildAttemptBudget(timeoutMs, pollIntervalMs) {
@@ -352,6 +359,7 @@ function settledResult(state, { settled, status }) {
     ciStatus: state.ciStatus,
     failedChecks: state.failedChecks,
     excludedFailureDetails: state.excludedFailureDetails ?? [],
+    ...(state.checkStateMismatches?.length > 0 ? { checkStateMismatches: state.checkStateMismatches } : {}),
     headSha: state.headSha,
     attempts: state.attempts,
   };
