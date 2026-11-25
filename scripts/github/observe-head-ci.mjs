@@ -37,6 +37,7 @@ function invalidCheckRuns() {
     rawCount: null,
     nonLoopDerivedCount: null,
     loopDerivedFailureDetails: [],
+    checkStateMismatches: [],
     visibleSignal: null,
     fullSignal: null,
     excludedSignal: null,
@@ -89,6 +90,18 @@ function parseHeadCheckRuns(result, prVisibleCheckNames) {
     rawCount: checkRuns.length,
     nonLoopDerivedCount: nonLoopDerivedRuns.length,
     loopDerivedFailureDetails,
+    checkStateMismatches: visibleRuns
+      .filter((run) => run?.status === "in_progress" && run.conclusion === "success"
+        && typeof run.completed_at === "string"
+        && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(run.completed_at)
+        && Number.isFinite(Date.parse(run.completed_at)))
+      .map((run) => ({
+        name: typeof run.name === "string" && run.name.length > 0 ? run.name : "unknown",
+        status: run.status,
+        conclusion: run.conclusion,
+        completed_at: run.completed_at,
+        reason: "Check remains pending because GitHub reports it as in_progress despite success and a completion time.",
+      })),
     visibleSignal: summarizeHeadScopedCheckRunsSignal({ check_runs: visibleRuns }),
     fullSignal: summarizeHeadScopedCheckRunsSignal({ check_runs: nonLoopDerivedRuns }),
     excludedSignal: summarizeHeadScopedCheckRunsSignal({ check_runs: excludedRuns }),
@@ -130,15 +143,16 @@ function parseHeadCommitStatuses(result) {
  * covers GitHub Actions, CircleCI, and any external commit-status / check-run.
  *
  * Returns only lossless raw signals — validity, counts (raw and
- * loop-derived-excluded), visible/full/hidden signals, commit status, and
- * exclusions. It does NOT decide pending/success/failure; each caller projects
- * its own terminal classification (fetch-error policy, no-check grace,
+ * loop-derived-excluded), visible/full/hidden signals, commit status,
+ * exclusions, and visible check-state mismatches. It does NOT decide
+ * pending/success/failure; each caller projects its own terminal classification (fetch-error policy, no-check grace,
  * queued-stall, one-surviving-provider tolerance) from these.
  *
  * @returns {{
  *   checkRuns: { ok: boolean, rawCount: number|null, nonLoopDerivedCount: number|null,
  *     loopDerivedFailureDetails: Array<string>, visibleSignal: object|null,
- *     fullSignal: object|null, excludedSignal: object|null },
+ *     fullSignal: object|null, excludedSignal: object|null,
+ *     checkStateMismatches: Array<{ name: string, status: string, conclusion: string, completed_at: string, reason: string }> },
  *   statuses: { ok: boolean, rawCount: number|null, nonLoopDerivedCount: number|null,
  *     commitStatus: ("success"|"failure"|"pending"|"none")|null,
  *     excludedFailureDetails: Array<string>, statusFailures: Array<{ name: string, conclusion: string }> }

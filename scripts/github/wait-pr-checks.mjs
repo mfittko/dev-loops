@@ -56,6 +56,11 @@ Output (stdout, JSON, the final per-check summary):
     "settled": bool, "ciStatus": "success"|"failure"|"pending"|"none",
     "failedChecks": [{ "name": "...", "conclusion"?: "..." }], "headSha": "...", "attempts": N,
     "excludedFailureDetails": ["gate-evidence", ...] }
+Optional "checkStateMismatches": [{ "name": "...", "status": "in_progress",
+  "conclusion": "success", "completed_at": "...", "reason": "..." }].
+Only visible, non-loop-derived current-head checks with a valid completion time
+are reported. This diagnostic grants no settlement or approval authority: the
+check remains pending because GitHub still reports in_progress. Omitted when empty.
 "changed" means the head SHA advanced during the wait; re-baseline and re-run.
 "stuck" means a zero-allocation stall bail (#1631): every check-run stayed
 QUEUED with zero jobs allocated for ~5 min; bailed early instead of the full

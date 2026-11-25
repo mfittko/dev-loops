@@ -72,6 +72,107 @@ async function withPollingGh(routes, fn) {
 
 const fastDeps = (env) => ({ env, ghCommand: "gh", delayImpl: async () => {}, now: () => 1_000 });
 
+test("wait-pr-checks reports mixed check state on the current head without settling a green aggregate", async () => {
+  const completed_at = "2026-11-20T12:00:00Z";
+  const mixed = { name: "build", status: "in_progress", conclusion: "success", completed_at };
+  await withGhStub(
+    [
+      { match: ["pr", "view"], stdout: prView("sha-a", ["build"]) },
+      { match: ["commits/sha-a/check-runs"], stdout: checkRuns([mixed]) },
+      { match: ["commits/sha-a/status"], stdout: JSON.stringify({ state: "success", statuses: [] }) },
+    ],
+    async (env) => {
+      const { code, stdout } = await runNode(["--repo", "owner/repo", "--pr", "7", "--timeout", "0"], { env });
+      assert.equal(code, 2);
+      const result = JSON.parse(stdout);
+      assert.equal(result.headSha, "sha-a");
+      assert.equal(result.status, "pending");
+      assert.equal(result.ciStatus, "pending");
+      assert.equal(result.settled, false);
+      assert.deepEqual(result.failedChecks, []);
+      assert.deepEqual(result.checkStateMismatches, [{
+        ...mixed,
+        reason: "Check remains pending because GitHub reports it as in_progress despite success and a completion time.",
+      }]);
+      const help = await runNode(["--help"]);
+      assert.match(help.stdout, /checkStateMismatches/);
+    },
+  );
+});
+
+test("wait-pr-checks omits mixed-state diagnostics for active, completed, invalid-time and excluded checks", async () => {
+  const mixed = { status: "in_progress", conclusion: "success", completed_at: "2026-11-20T12:00:00Z" };
+  for (const [run, expectedCode, expectedStatus] of [
+    [{ name: "build", status: "in_progress", conclusion: null }, 2, "pending"],
+    [{ name: "build", status: "completed", conclusion: "success", completed_at: mixed.completed_at }, 0, "success"],
+    [{ name: "build", ...mixed, completed_at: "invalid" }, 2, "pending"],
+    [{ name: "build", ...mixed, completed_at: "0" }, 2, "pending"],
+    [{ name: "build", ...mixed, completed_at: "2026-99-20T12:00:00Z" }, 2, "pending"],
+    [{ name: "build", ...mixed, completed_at: null }, 2, "pending"],
+    [{ name: "build", ...mixed, completed_at: 123 }, 2, "pending"],
+    [{ name: "build", ...mixed, conclusion: null }, 2, "pending"],
+    [{ name: "build", ...mixed, status: "queued" }, 2, "pending"],
+    [{ name: "hidden", ...mixed }, 0, "success"],
+    [{ name: "gate-evidence", ...mixed }, 0, "success"],
+    [{ name: "gate-evidence-runner", ...mixed }, 0, "success"],
+    [{ name: "gate-evidence-reporter", ...mixed }, 0, "success"],
+    [{ name: "head-declared-keys", ...mixed }, 0, "success"],
+    [null, 2, "pending"],
+  ]) {
+    const runs = run === null || run.name === "build" ? [run] : [{ name: "build", status: "completed", conclusion: "success" }, run];
+    await withPollingGh([
+      { stdout: prView("sha-a", run === null ? [] : ["build"]) },
+      { stdout: checkRuns(runs) },
+      { stdout: statuses([]) },
+    ], async (runChild) => {
+      const stdout = makeStream();
+      const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--timeout", "0"], { stdout, stderr: makeStream(), runChild });
+      const result = JSON.parse(stdout.text());
+      assert.equal(code, expectedCode, JSON.stringify(run));
+      assert.equal(result.status, expectedStatus);
+      assert.equal(result.settled, expectedCode === 0);
+      assert.ok(!Object.hasOwn(result, "checkStateMismatches"), JSON.stringify(run));
+      assert.deepEqual(result.failedChecks, []);
+    });
+  }
+});
+
+test("wait-pr-checks gives an unnamed mixed check an unknown name", async () => {
+  const stdout = makeStream();
+  await withPollingGh([
+    { stdout: prView("sha-a", []) },
+    { stdout: checkRuns([{ status: "in_progress", conclusion: "success", completed_at: "2026-11-20T12:00:00Z" }]) },
+    { stdout: statuses([]) },
+  ], async (runChild) => {
+    const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--timeout", "0"], { stdout, stderr: makeStream(), runChild });
+    assert.equal(code, 2);
+    assert.equal(JSON.parse(stdout.text()).checkStateMismatches[0].name, "unknown");
+  });
+});
+
+test("wait-pr-checks scopes mixed-state diagnostics to the refreshed head after a push", async () => {
+  let views = 0;
+  const stdout = makeStream();
+  const runChild = async (_command, args) => {
+    const argv = args.join(" ");
+    if (argv.startsWith("pr view")) {
+      views += 1;
+      return { code: 0, stdout: prView(views === 1 ? "sha-a" : "sha-b", ["new-build"]), stderr: "" };
+    }
+    assert.ok(argv.includes("commits/sha-b/"), argv);
+    return { code: 0, stderr: "", stdout: argv.includes("check-runs")
+      ? checkRuns([{ name: "new-build", status: "in_progress", conclusion: "success", completed_at: "2026-11-20T12:00:00Z" }])
+      : statuses([]) };
+  };
+  const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--timeout", "0"], { stdout, stderr: makeStream(), runChild });
+  const result = JSON.parse(stdout.text());
+  assert.equal(code, 2);
+  assert.equal(result.status, "changed");
+  assert.equal(result.headSha, "sha-b");
+  assert.equal(result.settled, false);
+  assert.equal(result.checkStateMismatches[0].name, "new-build");
+});
+
 test("wait-pr-checks exits 0 with status success when all checks pass", async () => {
   await withGhStub(
     [

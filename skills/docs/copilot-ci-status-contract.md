@@ -24,6 +24,26 @@ These are derived from loop progress, not independent build/test signals. Missin
 
 With independent checks green, exclusion yields ordinary `"success"`, never `"crediblyGreen"`. A genuinely failing neighboring check still yields `"failure"` and remains in `failedChecks`; excluded failures remain visible in `excludedFailureDetails`. Shared-fixture tests pin detector/prober agreement on this exclusion rule.
 
+### PR wait check-state mismatch diagnostic
+
+The PR-scoped `watchCiStatus` result, including `probe-ci-status.mjs --pr` and
+`wait-pr-checks.mjs`, optionally includes `checkStateMismatches`. Each entry is
+`{ name, status, conclusion, completed_at, reason }`, preserving the provider's
+fields for a visible, non-loop-derived current-head check run whose status is
+`in_progress`, conclusion is `success`, and `completed_at` is a parseable ISO
+UTC timestamp (`YYYY-MM-DDTHH:mm:ss[.fraction]Z`). A missing or invalid name is
+reported as `unknown`. The reason explains that the check remains
+pending because GitHub still reports it as in progress. The list is omitted
+when empty; ordinary running checks and completed successes do not produce it.
+
+The diagnostic uses the same head and visible checks as the existing PR wait.
+It carries no settlement or approval authority: a mixed check remains pending
+even with a green commit-status aggregate, and a single mixed check with no
+failures still yields `settled: false`, `ciStatus: "pending"`, no failed checks,
+and exit 2 from `wait-pr-checks.mjs --timeout 0`. It does not authenticate an
+Actions workflow run or attempt, change normalization, or affect commit-scoped
+probing, polling budgets, exit codes, or gate evidence.
+
 ### Zero-suite local-validation exception
 
 `"crediblyGreen"` is reserved for the bounded zero-suite local-validation exception, never produced by gate-evidence exclusion. Its prerequisites remain: zero current-head suites/statuses, previous-head green, and a sanctioned local full-validation result for that same head from `node <dev-loops-package-root>/cli/index.mjs gate resolve-validation`. These facts do not authorize self-certifying CI or overriding `none`; refresh the detector and proceed under this exception only on authoritative current-head `crediblyGreen` evidence.
