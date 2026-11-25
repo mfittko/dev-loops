@@ -3510,13 +3510,12 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       : composeReviewVerdict(preloadedFindingsLedger.overallVerdict, [...roundFindings.filter((f) => !isOpenActItem(f)), ...guardedRoundActs]);
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
-    // GATE-EXEC-CAP-BRAKES: both gates share the cap. The round after the cap round is the scoped final round, whose every act item goes to the operator; a later draft_gate round is refused unless the operator cleared it.
+    // GATE-EXEC-CAP-BRAKES: both gates share the cap. The round after the cap round is the scoped final round, whose every act item goes to the operator (the choke point above refuses a later draft_gate round).
     const cap = convergedInput ? 0 : options.gate === "pre_approval_gate" ? preApprovalCap : options.gate === "draft_gate" ? (draftGateConfig?.maxReviewRounds ?? 0) : 0;
     const capOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) };
     const capBase = coordinationContext?.prData?.baseRefName;
     // A cap-round catch-up post publishes the already-completed cap round, never a new one.
     const capRound = cap > 0 ? (capRoundHead ? cap : await countCapRounds(capOptions, { repoRoot, prBase: capBase })) : 0;
-    if (options.gate === "draft_gate" && await refusesPastScopedRound(capOptions, { repoRoot, prBase: capBase, cap, round: capRound })) throw roundCapReachedError(capRound, cap);
     const gateBlockers = [
       ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),
       ...(isPastRoundCap(capRound, cap) ? pastCapBlockers(roundFindings, { round: capRound, cap, scoped: capRound > cap }) : []),
