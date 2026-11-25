@@ -1438,7 +1438,7 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnly
   if (open.every(isDeltaBodyItem)) return cap > 0 && round === cap ? { headSha: ledgerHead, ...(ledgerHead !== head ? { carriedToHead: head } : {}), openActCount: open.length, blockers: [...pastCapBlockers(log.findings, { round, cap }), ...open.filter(isBlockedActItem).map((f) => ({ kind: "round_cap_reached", reason: f.resurfaces ? "resurfaced" : "new_act", item: `[${normalizeSeverity(f.severity)}] ${String(f.summary ?? "").trim()} (blocked_item)` }))], bodyOnly: true } : null;
   // A carried list (a base-only merge of the cap head) is body-only or nothing.
   if (ledgerHead !== head) return null;
-  // Past the cap the emitter refuses every act list (round_cap_reached), so that round keeps the earlier routing.
+  // Past the cap the act list belongs to the operator (GATE-EXEC-CAP-BRAKES), so this route does not offer the fixer.
   if (cap > 0 && round > cap) return null;
   // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so that list keeps the earlier routing.
   const severities = open.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity]));

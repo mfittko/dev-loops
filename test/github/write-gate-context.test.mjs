@@ -31,6 +31,7 @@ import {
   buildValidationResultsPath,
   captureDiffFromBase,
   capFixBudgetFacts,
+  refusesPastScopedRound,
   refuseNonConvergence,
   collapsePureSubstitutionRuns,
   prematureGateOrderingRefusal,
@@ -11904,6 +11905,25 @@ test("an operator decision naming every act item by fingerprint runs the round p
     const second = await runPreApprovalContext(repoRoot, 65, third, baseSha);
     assert.equal(second.exitCode, 1);
     assert.match(second.out, /round_cap_reached/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("refusesPastScopedRound, the draft poster and detector refusal, refuses round cap+2 until an operator decision names every act item, and never refuses cap+1", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const act = { severity: "medium", summary: "guard missing", files: ["src/changed.mjs"], line: 2, judgeDisposition: "act", judgeTitle: "Guard is missing", judgeFix: "add the guard" };
+    await seedClosedRounds(repoRoot, 66, ["1".repeat(40), baseSha, headSha], "draft_gate");
+    const options = { repo: "owner/repo", pr: 66, gate: "draft_gate", headSha: "9".repeat(40) };
+    const refuses = (round) => refusesPastScopedRound(options, { repoRoot, prBase: baseSha, cap: 2, round });
+    assert.equal(await refuses(3), false, "round cap+1 is the scoped final round");
+    assert.equal(await refuses(4), true, "round cap+2 without an operator decision");
+    const planDir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", "pr-66");
+    await mkdir(planDir, { recursive: true });
+    const workOrder = { gate: "draft_gate", headSha, operatorFocus: { items: [{ fingerprint: fingerprintFinding(act), decision: "fix it" }] } };
+    await writeFile(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder) }), "utf8");
+    assert.equal(await refuses(4), false, "an operator decision on the act item clears round cap+2");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

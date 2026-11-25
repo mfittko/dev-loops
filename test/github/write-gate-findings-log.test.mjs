@@ -21,7 +21,7 @@ import { buildGateArtifactPath } from "../../scripts/github/_gate-artifact-paths
 import { existsSync } from "node:fs";
 import { isFindingsLogName, readGateFindingsLedger } from "../../scripts/github/_gate-finding-surface.mjs";
 import { toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
-import { runNode as runNodeHelper } from "../_helpers.mjs";
+import { initGitFixture, runGitFixture, runNode as runNodeHelper } from "../_helpers.mjs";
 
 const writeGateFindingsLogScript = path.resolve("scripts/github/write-gate-findings-log.mjs");
 const emitFanoutDispatchScript = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
@@ -2907,8 +2907,8 @@ test("writeGateFindingsLog records capClosed on a past-cap defer or reject, neve
 test("resolveDraftRoundCap keeps the raw count for prBase null and reads the recorded context base for an omitted prBase", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-capbase-null-"));
   try {
-    const git = (...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: tmpDir, encoding: "utf8" }).trim();
-    git("init", "-q", "-b", "main");
+    const git = (...args) => runGitFixture(tmpDir, args);
+    initGitFixture(tmpDir, { branch: "main", commit: null });
     await writeFile(path.join(tmpDir, "a.txt"), "a", "utf8");
     git("add", "a.txt"); git("commit", "-q", "-m", "m0");
     git("checkout", "-q", "-b", "feature");
@@ -2932,6 +2932,13 @@ test("resolveDraftRoundCap keeps the raw count for prBase null and reads the rec
     await writeFile(ctx, JSON.stringify({ baseFreshness: { base: "main" } }), "utf8");
     assert.equal((await resolveDraftRoundCap(input, { repoRoot: tmpDir, prBase: null })).round, 2, "prBase null skips the context base: the base-merge round counts");
     assert.equal((await resolveDraftRoundCap(input, { repoRoot: tmpDir })).round, 1, "an omitted prBase reads the recorded base: the base-merge round is forced and never counts");
+    // The artifact under the ledger tmp root (not the checkout's own tmp) gives the same count, so the round never depends on the caller's checkout.
+    await rm(path.join(tmpDir, "tmp"), { recursive: true, force: true });
+    assert.equal((await resolveDraftRoundCap(input, { repoRoot: tmpDir })).round, 2, "no context artifact anywhere: the raw count stands");
+    const ledgerRootCtx = path.resolve(tmpDir, buildGateContextPath(input));
+    await mkdir(path.dirname(ledgerRootCtx), { recursive: true });
+    await writeFile(ledgerRootCtx, JSON.stringify({ baseFreshness: { base: "main" } }), "utf8");
+    assert.equal((await resolveDraftRoundCap(input, { repoRoot: tmpDir })).round, 1, "the context under the ledger tmp root is read without --context-tmp-root");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

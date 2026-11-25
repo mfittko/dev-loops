@@ -35,8 +35,8 @@ import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord, re
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../github/_fixer-emission-evidence.mjs";
 import { captureParsedReviewThreads } from "../github/_review-thread-mutations.mjs";
-import { resolveAuthenticatedLogin, runGhJson } from "../github/post-gate-findings.mjs";
-import { listRestPrReviews, normalizePrReviewsPayload, prReviewsApiArgs } from "../github/_gate-finding-surface.mjs";
+import { flattenPaginatedSlurp, resolveAuthenticatedLogin, runGhJson } from "../github/post-gate-findings.mjs";
+import { listRestPrReviews, normalizePrReviewsPayload, prReviewsApiArgs, resolveTrustedEvidencePredicate } from "../github/_gate-finding-surface.mjs";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { isSanctionedCopilotReviewerLogin, isTrustedAssociation, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import { resolveLatestCopilotReview } from "../github/_copilot-body-disposition.mjs";
@@ -148,8 +148,10 @@ async function defaultFetchPr({ repo, pr }) {
 // The posted verdict markers at `headSha`, keyed by gate: submitted reviews only (GATE-EXEC-POST-BEFORE-FIX); the head filter is summarizeGateReviewCommentMarkers's own.
 export async function defaultFetchVerdictMarkers({ repo, pr, headSha, runtime, readReviews }) {
   // `readReviews` is the emitter's once-per-run reviews read (issue 3460 AC3); flattening an already flat list is a no-op.
-  const reviews = normalizePrReviewsPayload(readReviews ? await readReviews() : await runGhJson(prReviewsApiArgs(repo, pr), runtime));
-  return summarizeGateReviewCommentMarkers(reviews, { headSha });
+  const raw = flattenPaginatedSlurp(readReviews ? await readReviews() : await runGhJson(prReviewsApiArgs(repo, pr), runtime));
+  // A forged marker from an untrusted account must not block the fixer (GATE-REVIEW-COMMENT-TRUST); the trust inputs live on the raw review, not the normalized one.
+  const isTrusted = await resolveTrustedEvidencePredicate(raw, runtime);
+  return summarizeGateReviewCommentMarkers(normalizePrReviewsPayload(raw.filter(isTrusted)), { headSha });
 }
 
 /** The PR's REST reviews (with node_id, user, author_association, commit_id). Injectable as `fetchReview`. */

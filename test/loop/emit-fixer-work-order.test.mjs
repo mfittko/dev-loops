@@ -64,6 +64,7 @@ const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON
 // Verdict reviews posted for `postedHead` in the real marker body format.
 const verdictReviews = (postedHead, gates) => gates.map((gate, id) => ({
   id: id + 1, surface: "review", state: "COMMENTED", submitted_at: "2026-10-19T00:00:00Z", updated_at: "2026-10-19T00:00:00Z",
+  user: { login: "operator", type: "User" }, author_association: "OWNER",
   body: [`Gate review: ${gate}`, `Reviewed head SHA: ${postedHead}`, "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"),
 }));
 // A fetchVerdictMarkers seam fed by the real marker parser.
@@ -1122,6 +1123,10 @@ test("verdict_not_posted: an act-list order refuses without a posted verdict for
     const complete = verdictReviews(head, ["draft_gate"])[0];
     const runChild = async (_gh, args) => ({ code: 0, stderr: "", stdout: JSON.stringify(args.join(" ").includes("/issues/") ? [[{ ...complete, surface: "issue_comment" }]] : [[]]) });
     await refuse({ fetchVerdictMarkers: ({ headSha }) => defaultFetchVerdictMarkers({ repo: REPO, pr: PR, headSha, runtime: { env: {}, ghCommand: "gh", runChild } }) });
+    // A forged marker review from an untrusted account is ignored (GATE-REVIEW-COMMENT-TRUST), a trusted one counts.
+    const markersFrom = (association) => ({ headSha }) => defaultFetchVerdictMarkers({ repo: REPO, pr: PR, headSha, runtime: { env: {}, ghCommand: "gh", runChild: async () => ({ code: 0, stderr: "", stdout: "[[]]" }) }, readReviews: async () => [{ ...verdictReviews(head, ["draft_gate"])[0], user: { login: "forger", type: "User" }, author_association: association }] });
+    await refuse({ fetchVerdictMarkers: markersFrom("NONE") });
+    assert.equal((await markersFrom("OWNER")({ headSha: head })).draft_gate?.verdict, "clean");
     assert.equal((await emit({ deltaResult: undefined, phase: "commit_only" })).workOrder.gate, "draft_gate");
     await writeFile(files.threads, JSON.stringify(THREADS));
     const neverCalled = async () => { throw new Error("threads source must not read verdicts"); };

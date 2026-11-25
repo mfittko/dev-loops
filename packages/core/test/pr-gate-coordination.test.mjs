@@ -5183,6 +5183,11 @@ test("cap brakes: a draft_gate round past the scoped final round stops with roun
   assert.match(stop.reason, /round_cap_reached.*round 4 is past the round cap of 2.*draft_gate/);
   const scoped = evaluatePrGateCoordination({ ...base, capBrakes: { gate: "draft_gate", round: 3, cap: 2, actCounts: [3, 2], items } });
   assert.doesNotMatch(scoped.reason, /round_cap_reached/);
+  assert.equal(scoped.nextAction, "address_review_feedback", scoped.reason);
+  // DoD row 2: a clean scoped final round is the draft exit.
+  const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
+  const cleanScoped = evaluatePrGateCoordination({ ...base, draftGate: clean, draftGateMarker: clean, draftOpenActList: undefined, capBrakes: { gate: "draft_gate", round: 3, cap: 2, actCounts: [3, 0], items: [] } });
+  assert.equal(cleanScoped.nextAction, "mark_ready_for_review", cleanScoped.reason);
 });
 
 test("cap brakes: growth stops both gates above twice the forecast, with both numbers; at the threshold and with the largest of several forecasts it runs; a cleared stop recurs (AC5, AC7)", () => {

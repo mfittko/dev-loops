@@ -11486,6 +11486,17 @@ test("#2389: collectPreApprovalGateBlockers yields no blockers outside pre_appro
   assert.equal(collectPreApprovalGateBlockers("pre_approval_gate", artifact).length, 3);
 });
 
+test("AC8: a posted blocked verdict names size_budget when --size-budget-json escalates without a waiver", async () => {
+  await withTempDir(async (tempDir) => {
+    const sizeBudgetPath = path.join(tempDir, "size-budget.json");
+    await writeFile(sizeBudgetPath, JSON.stringify({ ok: false, outcome: "escalate", wholeLogicLoc: 620, t1SliceLoc: 0, waiver: { requested: false, t1Valid: false, defaultValid: false } }), "utf8");
+    await withCompositionRound({ overallVerdict: "clean", prBody: COMPOSITION_UNCHECKED_DOD_PR_BODY }, async ({ post, postedBody }) => {
+      await post({ sizeBudgetJson: sizeBudgetPath });
+      assert.match(postedBody(), /\*\*Blocked by:\*\* unticked_checkboxes, size_budget\n/);
+    });
+  }, { prefix: "dev-loops-upsert-size-budget-blocked-by-" });
+});
+
 test("#2389 regression: a clean ledger plus an unchecked PR-body DoD item posts blocked at the current head with no --verdict, before any fix", async () => {
   await withCompositionRound({ overallVerdict: "clean", prBody: COMPOSITION_UNCHECKED_DOD_PR_BODY }, async ({ post, postedBody, calls }) => {
     const result = await post();

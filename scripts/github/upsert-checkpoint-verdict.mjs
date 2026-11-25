@@ -3548,7 +3548,9 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     }
     // else: a matching explicit --verdict is accepted unchanged.
     if (composedVerdict !== ledgerVerdict) {
-      checkpointComposition = { reviewVerdict: ledgerVerdict, blockers: gateBlockers, blockedBy: composeBlockedBy({ verdict: composedVerdict, blockers: gateBlockers, hasActItems: guardedRoundActs.length > 0, sizeOutcome: options.sizeOutcome, sizeWaiverGranted: options.sizeWaiverGranted, ciStatus: coordinationContext?.snapshot?.ciStatus }) };
+      // The size fields resolve later in this call, so `recomposeBlockedBy` runs the same composition again once they are set (AC8).
+      const recomposeBlockedBy = () => composeBlockedBy({ verdict: composedVerdict, blockers: gateBlockers, hasActItems: guardedRoundActs.length > 0, sizeOutcome: options.sizeOutcome, sizeWaiverGranted: options.sizeWaiverGranted, ciStatus: coordinationContext?.snapshot?.ciStatus });
+      checkpointComposition = { reviewVerdict: ledgerVerdict, blockers: gateBlockers, blockedBy: recomposeBlockedBy(), recomposeBlockedBy };
     }
   } else if (options.verdict === undefined) {
     // --findings-ledger absent OR present without overallVerdict (a legacy/
@@ -3656,12 +3658,15 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   const ledgerActItems = listOpenActItems(preloadedFindingsLedger?.findings ?? []);
   const ledgerActFingerprints = new Set(ledgerActItems.map((f) => fingerprintFinding(f ?? {})));
   const nextActionItems = [...ledgerActItems, ...enrichedActItems.filter((f) => !ledgerActFingerprints.has(fingerprintFinding(f ?? {})))];
-  const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate, nextActionItems, (preloadedFindingsLedger?.findings?.length ?? 0) > 0 && !judgedRound, checkpointComposition?.blockedBy);
-  if (derivedNextAction !== null) {
-    options.nextAction = derivedNextAction;
-  } else if (options.gate === "pre_approval_gate" && options.verdict === "clean" && options.nextAction === undefined) {
-    options.nextAction = "await final human approval";
-  }
+  const applyDerivedNextAction = () => {
+    const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate, nextActionItems, (preloadedFindingsLedger?.findings?.length ?? 0) > 0 && !judgedRound, checkpointComposition?.blockedBy);
+    if (derivedNextAction !== null) {
+      options.nextAction = derivedNextAction;
+    } else if (options.gate === "pre_approval_gate" && options.verdict === "clean" && options.nextAction === undefined) {
+      options.nextAction = "await final human approval";
+    }
+  };
+  applyDerivedNextAction();
   // The clean-verdict guard above trusts --findings-severity-counts alone, so a
   // caller could hand-type an all-zero counts object even when --findings-json's
   // own per-angle findings carry a blocking severity. Cross-check directly
@@ -3825,6 +3830,10 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       );
     }
     applySizeBudgetFields(options, sizeBudget, `auto-derived size budget (evaluatePrSizeBudget, base ${baseRef})`);
+  }
+  if (checkpointComposition) {
+    checkpointComposition.blockedBy = checkpointComposition.recomposeBlockedBy();
+    applyDerivedNextAction();
   }
   // The findings-summary the comment is compared/round-tripped against. With a
   // structured render this is the single-line digest (what the marker parser
