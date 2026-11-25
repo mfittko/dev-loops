@@ -68,7 +68,7 @@ const verdictReviews = (postedHead, gates) => gates.map((gate, id) => ({
 }));
 // A fetchVerdictMarkers seam fed by the real marker parser.
 const verdictPostedAt = (postedHead, gates = ["draft_gate", "pre_approval_gate"]) => async ({ headSha }) => summarizeGateReviewCommentMarkers(verdictReviews(postedHead, gates), { headSha });
-// A fetchReview seam: one trusted REST review carrying the draft_gate header at `head` (the shape capExitHolds reads).
+// A fetchReview seam: one trusted REST review carrying the draft_gate header at `head`.
 const capReviewsAt = (head, { round = 2, verdict = "findings_present" } = {}) => async () => [{
   id: 1, state: "COMMENTED", user: { login: "operator", type: "User" }, author_association: "OWNER",
   body: `<!-- dev-loops:gate-findings-review draft_gate ${head.slice(0, 7)} round=${round} -->\n**Verdict:** ${verdict}`,
