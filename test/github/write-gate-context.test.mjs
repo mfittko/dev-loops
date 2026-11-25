@@ -74,6 +74,7 @@ import { DISPOSITION, STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { writePrGateCoordinationSnapshot } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { workOrderDigest } from "../../packages/core/src/loop/work-order-digest.mjs";
 import { gateCoverRecordPath, readSealedGateDeltaRecord, writeCoverRecord, writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { dispatchUnitScope, expandDispatchUnits, packedUnitName } from "../../scripts/github/_dispatch-units.mjs";
@@ -11624,6 +11625,7 @@ test("CLI refuses a scoped final pre_approval_gate context with the policy reaso
     const past = await runPreApprovalContext(repoRoot, 63, newHead, baseSha);
     assert.equal(past.exitCode, 1);
     assert.match(past.out, /round_cap_reached/);
+    assert.match(past.out, /"recovery":"stop: report_blocked with blockedOn operator_decision \(round_cap_reached\)/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -11672,7 +11674,16 @@ test("an operator decision naming every act item by fingerprint runs the round p
     assert.match(undecided.out, /round_cap_reached/);
     const planDir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", "pr-65");
     await mkdir(planDir, { recursive: true });
-    await writeFile(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder: { operatorFocus: { items: [{ fingerprint: fingerprintFinding(act), decision: "fix it" }] } } }), "utf8");
+    const writePlan = async (workOrder) => writeFile(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder) }), "utf8");
+    const focus = { items: [{ fingerprint: fingerprintFinding(act), decision: "fix it" }] };
+    // A plan bound to another head, another gate or with a stale digest never clears.
+    await writePlan({ gate: "pre_approval_gate", headSha: "9".repeat(40), operatorFocus: focus });
+    assert.equal((await runPreApprovalContext(repoRoot, 65, newHead, baseSha)).exitCode, 1, "plan bound to another head");
+    await writePlan({ gate: "draft_gate", headSha, operatorFocus: focus });
+    assert.equal((await runPreApprovalContext(repoRoot, 65, newHead, baseSha)).exitCode, 1, "plan of another gate");
+    await writeFile(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder: { gate: "pre_approval_gate", headSha, operatorFocus: focus }, workOrderDigest: "0".repeat(64) }), "utf8");
+    assert.equal((await runPreApprovalContext(repoRoot, 65, newHead, baseSha)).exitCode, 1, "plan with a stale digest");
+    await writePlan({ gate: "pre_approval_gate", headSha, operatorFocus: focus });
     const cleared = await runPreApprovalContext(repoRoot, 65, newHead, baseSha);
     assert.notEqual(cleared.exitCode, 1, cleared.out);
     const artifact = JSON.parse(await readFile(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-65", `pre_approval_gate-${newHead}.json`), "utf8"));
@@ -11683,9 +11694,22 @@ test("an operator decision naming every act item by fingerprint runs the round p
     git(repoRoot, ["add", "-A"]);
     git(repoRoot, ["commit", "-q", "-m", "fix again"]);
     const third = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    await writePlan({ gate: "pre_approval_gate", headSha: newHead, operatorFocus: focus });
     const second = await runPreApprovalContext(repoRoot, 65, third, baseSha);
     assert.equal(second.exitCode, 1);
     assert.match(second.out, /round_cap_reached/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a scoped final pre_approval_gate round whose PR-own delta is unproven is refused, never measured as a zero fix budget", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await seedClosedRounds(repoRoot, 66, ["1".repeat(40), baseSha], "pre_approval_gate");
+    const { out, exitCode } = await runPreApprovalContext(repoRoot, 66, headSha, baseSha);
+    assert.equal(exitCode, 1);
+    assert.match(out, /closure_delta_no_pr_own_change.*unproven/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

@@ -5138,6 +5138,7 @@ test("draft PR with red CI and no repo names the operator and no recovery (issue
 });
 
 // GATE-EXEC-CAP-BRAKES: a cap brake stop is a report_blocked with blockedOn operator_decision, the numbers and the named items.
+const NEXT_WHEN_CONVERGING = { draft_gate: "address_review_feedback", pre_approval_gate: "run_pre_approval_gate" };
 test("cap brakes: non-convergence stops the lane before another fixer pass on both gates (3 then 3 and 3 then 4 stop, 3 then 2 continues)", () => {
   const head = "ab".repeat(20);
   const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
@@ -5152,6 +5153,7 @@ test("cap brakes: non-convergence stops the lane before another fixer pass on bo
       const result = evaluatePrGateCoordination({ ...base, capBrakes: { gate, round: 3, cap, actCounts, items } });
       if (!stops) {
         assert.doesNotMatch(result.reason, /non_convergence/, `${gate} ${actCounts}`);
+        assert.equal(result.nextAction, NEXT_WHEN_CONVERGING[gate], `${gate} ${result.reason}`);
         continue;
       }
       assert.deepEqual({ next: result.nextAction, on: result.blockedOn, remedy: result.agentRemedy }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION, remedy: undefined }, `${gate} ${actCounts}`);
@@ -5165,7 +5167,8 @@ test("cap brakes: non-convergence stops the lane before another fixer pass on bo
 test("cap brakes: findings in the pre_approval_gate scoped final round go to the operator with the items named", () => {
   const head = "ab".repeat(20);
   const verdict = { visible: true, headSha: head, verdict: "blocked", contractComplete: true };
-  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", maxCopilotRounds: 0, preApprovalGate: verdict, preApprovalGateMarker: verdict };
+  const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", maxCopilotRounds: 0, draftGate: clean, draftGateMarker: clean, preApprovalGate: verdict, preApprovalGateMarker: verdict };
   const stop = evaluatePrGateCoordination({ ...base, capBrakes: { gate: "pre_approval_gate", round: 4, cap: 2, actCounts: [3, 2, 1], items: ["[medium] guard is missing (new_act)"] } });
   assert.deepEqual({ next: stop.nextAction, on: stop.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION });
   assert.match(stop.reason, /round_cap_reached.*round 4 is past the round cap of 2/);
@@ -5173,4 +5176,17 @@ test("cap brakes: findings in the pre_approval_gate scoped final round go to the
   // The scoped final round itself (round cap+1) is not stopped by the cap.
   const scoped = evaluatePrGateCoordination({ ...base, capBrakes: { gate: "pre_approval_gate", round: 3, cap: 2, actCounts: [3, 2], items: [] } });
   assert.doesNotMatch(scoped.reason, /round_cap_reached/);
+  assert.equal(scoped.nextAction, "run_pre_approval_gate", scoped.reason);
+});
+
+test("cap brakes: at the draft cap round a non-shrinking act count stops the lane instead of the soft-cap fixer route", () => {
+  const head = "ab".repeat(20);
+  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict, draftOpenActList: { headSha: head, openActCount: 3, blockers: [] } };
+  const brakes = (actCounts) => ({ gate: "draft_gate", round: 4, cap: 4, actCounts, items: ["[medium] guard is missing (new_act)"] });
+  const shrinking = evaluatePrGateCoordination({ ...base, capBrakes: brakes([4, 3]) });
+  assert.equal(shrinking.nextAction, "address_review_feedback", "a shrinking count keeps the fixer route");
+  const stalled = evaluatePrGateCoordination({ ...base, capBrakes: brakes([3, 3]) });
+  assert.deepEqual({ next: stalled.nextAction, on: stalled.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION });
+  assert.match(stalled.reason, /non_convergence/);
 });

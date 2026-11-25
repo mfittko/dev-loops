@@ -31,7 +31,7 @@ export function capRoundShape({ round, cap, clean, hasFindings }) {
   };
 }
 
-/** A head whose wholeLogicLoc is above this multiple of the forecast wloc stops the lane (issue 3464). */
+/** A head whose wholeLogicLoc is above this multiple of the forecast wloc stops the lane (GATE-EXEC-CAP-BRAKES). */
 export const GROWTH_FACTOR = 2;
 
 /**

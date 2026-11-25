@@ -5435,3 +5435,32 @@ test("resolveCapBrakes returns the act counts of the closed rounds and the named
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("resolveCapBrakes does not count a pre_approval_gate round forced by a base merge", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-forced-"));
+  try {
+    const git = (...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd: dir, encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
+    const commit = async (file, msg) => { await writeFile(path.join(dir, file), msg, "utf8"); git("add", "-A"); git("commit", "-q", "-m", msg); return git("rev-parse", "HEAD"); };
+    git("init", "-q", "-b", "main");
+    await commit("a.txt", "a");
+    git("checkout", "-q", "-b", "pr");
+    const prHead = await commit("b.txt", "b");
+    git("checkout", "-q", "main");
+    const main = await commit("c.txt", "c");
+    git("checkout", "-q", "pr");
+    git("merge", "-q", "--no-ff", "-m", "merge main", "main");
+    const merged = git("rev-parse", "HEAD");
+    git("update-ref", "refs/remotes/origin/main", main);
+    const acts = [{ severity: "medium", angle: "correctness", summary: "defect", files: ["src/f.mjs"], line: 1, judgeDisposition: "act", judgeTitle: "defect", judgeFix: "fix it" }];
+    for (const [head, day] of [[prHead, 1], [merged, 2]]) {
+      const file = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-10", `pre_approval_gate-${head}.json`);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 10, gate: "pre_approval_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${day}T00:00:00.000Z`, findings: acts }), "utf8");
+    }
+    const ctx = (baseRefName) => ({ repo: "owner/repo", pr: 10, currentHeadSha: merged, prData: { isDraft: false, baseRefName } });
+    assert.equal((await resolveCapBrakes(ctx("main"), { repoRoot: dir, config: { version: 1 } })).round, 2, "the merge-forced round does not count");
+    assert.equal((await resolveCapBrakes(ctx(undefined), { repoRoot: dir, config: { version: 1 } })).round, 3, "without the PR base the raw count stands");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

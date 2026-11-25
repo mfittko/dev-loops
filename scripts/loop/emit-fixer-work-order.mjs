@@ -28,7 +28,7 @@ import { OperatorFocusRefusal, bindOperatorFocusItems, operatorFocusDigestEntry,
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
-import { closureFromHeadOf, clearingChainWalk, countCompletedRounds, readClosedPriorRoundLogs, renderRequiredReadLine, resolveCapExitRound, resolveCapRound, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
+import { closureFromHeadOf, clearingChainWalk, countCapRounds, readClosedPriorRoundLogs, renderRequiredReadLine, resolveCapExitRound, resolveCapRound, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { BLOCKED_BY_OPERATOR_STEPS } from "@dev-loops/core/loop/policy-constants";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { fixerEmitCarryAccepts } from "../github/_carried-verdict.mjs";
@@ -731,13 +731,15 @@ async function emitPlan({
   if (gate === "pre_approval_gate" && guardFile) {
     const runtime = { env, ghCommand, runChild };
     // GATE-COMMENT-BLOCKED-BY: a posted blocked verdict whose causes hold no findings entry has no fix round; its next step is the operator's.
-    const blockedBy = (await fetchVerdictMarkers({ repo, pr, headSha, gate, runtime }))?.[gate]?.blockedBy;
+    // A ledger-less head carries the origin head's round and verdict (the carry seam), so both reads follow the origin head.
+    const guardHead = (!existsSync(ledgerPath(headSha)) && await carryOriginHead()) || headSha;
+    const blockedBy = (await fetchVerdictMarkers({ repo, pr, headSha: guardHead, gate, runtime }))?.[gate]?.blockedBy;
     if (blockedBy?.length > 0 && !blockedBy.includes("findings")) {
       throw new WorkOrderRefusal("blocked_without_findings", `blocked_without_findings (GATE-COMMENT-BLOCKED-BY): the posted pre_approval_gate verdict is blocked by ${blockedBy.join(", ")} with no findings; no fixer order follows it. Operator step: ${blockedBy.map((cause) => BLOCKED_BY_OPERATOR_STEPS[cause]).join("; ")}`);
     }
     // GATE-EXEC-CAP-BRAKES: the act list of a round past the cap (the scoped final round's findings) reaches the fixer only when an operator focus decision names each item by fingerprint.
     const preCap = resolveGateConfig(config, "preApproval").maxReviewRounds;
-    if (preCap > 0 && await countCompletedRounds({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd) }) > preCap) {
+    if (preCap > 0 && await countCapRounds({ repo, pr, gate, headSha: guardHead, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: (await memoFetchBase())?.baseRefName }) > preCap) {
       const decided = new Set((operatorFocusRaw?.items ?? []).filter((item) => item.decision !== undefined).map((item) => item.fingerprint));
       const undecided = guardParsed.filter((f) => !decided.has(f.fingerprint)).map((f) => `${f.fingerprint} ${JSON.stringify(f.summary)}`);
       if (undecided.length > 0) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-CAP-BRAKES): act list ${guardFile} belongs to a pre_approval_gate round past the cap (${preCap}); every act item goes to the operator. Pass --operator-focus-file with an item holding a decision for each fingerprint: ${undecided.join("; ")}`);

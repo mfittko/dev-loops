@@ -5073,3 +5073,48 @@ test("a pre_approval_gate fix round after a blocked verdict with no findings cau
     assert.equal((await emit({ ...gated, fetchVerdictMarkers: blockedAt("findings, unticked_checkboxes") })).workOrder.source, "act-list");
   });
 });
+
+// GATE-EXEC-CAP-BRAKES: the pre_approval_gate round count follows the carried origin head and never counts a round forced by a base merge.
+// Round 1 is ledger "d" and round 2 is the origin head O (the cap round); origin/main then moves and the branch merges it into M.
+async function mergedPreApprovalScenario({ root, wt, files }, { ownChangeAfterMerge = false } = {}) {
+  await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { preApproval: { maxReviewRounds: 2 } } }));
+  await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
+  await writeFile(path.join(wt, "pr.md"), "pr content\n");
+  git(wt, "add", "pr.md");
+  git(wt, "commit", "-q", "-m", "pr change");
+  const origin = git(wt, "rev-parse", "HEAD");
+  const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
+  await mkdir(dir, { recursive: true });
+  for (const [i, sha] of ["d".repeat(40), origin].entries()) {
+    await writeFile(path.join(dir, `pre_approval_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [] }));
+  }
+  await writeFile(path.join(root, "main-only.md"), "main content\n");
+  git(root, "add", "-A");
+  git(root, "commit", "-q", "-m", "main moves");
+  git(root, "update-ref", "refs/remotes/origin/main", "main");
+  git(wt, "merge", "-q", "--no-ff", "-m", "merge origin/main", "origin/main");
+  if (ownChangeAfterMerge) {
+    await writeFile(path.join(wt, "pr.md"), "changed pr blob\n");
+    git(wt, "commit", "-q", "-am", "own change");
+  }
+  const merged = git(wt, "rev-parse", "HEAD");
+  return { origin, merged, over: (postedAt) => ({ gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined, headSha: merged, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: merged, baseRefName: "main" }), fetchVerdictMarkers: verdictPostedAt(postedAt) }) };
+}
+
+test("a pre_approval_gate act list at a base-merged head is counted at the carried origin head (round 2, not round 3)", async () => {
+  await withFixture(async (fx) => {
+    const { origin, over } = await mergedPreApprovalScenario(fx);
+    assert.equal((await fx.emit(over(origin))).workOrder.source, "act-list");
+  });
+});
+
+test("a pre_approval_gate act list at a base-merge-forced head without a carry does not count the forced round, and a PR-own change after the merge does", async () => {
+  await withFixture(async (fx) => {
+    const { merged, over } = await mergedPreApprovalScenario(fx);
+    assert.equal((await fx.emit(over(merged))).workOrder.source, "act-list");
+  });
+  await withFixture(async (fx) => {
+    const { merged, over } = await mergedPreApprovalScenario(fx, { ownChangeAfterMerge: true });
+    await assert.rejects(fx.emit(over(merged)), (e) => e.refusal === "round_cap_reached");
+  });
+});

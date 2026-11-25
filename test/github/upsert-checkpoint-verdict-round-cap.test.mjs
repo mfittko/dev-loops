@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -40,10 +41,10 @@ const finding = (severity, judgeDisposition, extra = {}) => ({
   severity, angle: "correctness", summary: `${severity} finding judged ${judgeDisposition}`, judgeDisposition, judgeRationale: "test rationale", ...extra,
 });
 
-async function writeLedger(tempDir, { overallVerdict = "findings_present", findings, name = "ledger.json", gate = "draft_gate" }) {
+async function writeLedger(tempDir, { overallVerdict = "findings_present", findings, name = "ledger.json", gate = "draft_gate", head = HEAD }) {
   const ledgerPath = path.join(tempDir, name);
   const ledger = {
-    repo: "owner/repo", pr: 17, gate, headSha: HEAD,
+    repo: "owner/repo", pr: 17, gate, headSha: head,
     verdict: "findings_present", overallVerdict, loggedAt: "2026-10-25T00:00:00.000Z", findings,
   };
   if (overallVerdict === null) delete ledger.overallVerdict;
@@ -65,9 +66,9 @@ async function seedPrior(root, heads, { extraNames = [], unreadable = [] } = {})
   for (const name of extraNames) await writeFile(path.join(dir, name), "[]", "utf8");
 }
 
-function makeRunChild(posted, { isDraft = true, state = "OPEN", calls = [], body = DEFAULT_TEST_PR_BODY, conclusion = "SUCCESS", status = "COMPLETED", issueComments = [] } = {}) {
+function makeRunChild(posted, { isDraft = true, state = "OPEN", calls = [], body = DEFAULT_TEST_PR_BODY, conclusion = "SUCCESS", status = "COMPLETED", issueComments = [], head = HEAD } = {}) {
   const prJson = JSON.stringify({
-    number: 17, state, isDraft, headRefOid: HEAD, baseRefName: "main", body,
+    number: 17, state, isDraft, headRefOid: head, baseRefName: "main", body,
     closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status, conclusion, name: "ci" }],
   }) + "\n";
   return async (cmd, args = [], _env, stdin = "") => {
@@ -85,7 +86,7 @@ function makeRunChild(posted, { isDraft = true, state = "OPEN", calls = [], body
     if (a.includes("issues/17/comments")) return { code: 0, stdout: JSON.stringify(issueComments.length ? [issueComments] : []) + "\n", stderr: "" };
     if (a.includes("pulls/17/reviews")) return { code: 0, stdout: "[]\n", stderr: "" };
     if (a.includes("pulls/17/files")) return { code: 0, stdout: "[]\n", stderr: "" };
-    if (a.includes("--json") && a.includes("headRefOid") && !a.includes("state") && !a.includes("statusCheckRollup")) return { code: 0, stdout: JSON.stringify({ headRefOid: HEAD }) + "\n", stderr: "" };
+    if (a.includes("--json") && a.includes("headRefOid") && !a.includes("state") && !a.includes("statusCheckRollup")) return { code: 0, stdout: JSON.stringify({ headRefOid: head }) + "\n", stderr: "" };
     if (a.includes("--json") && a.includes("files") && !a.includes("statusCheckRollup")) return { code: 0, stdout: "src/db.mjs\n", stderr: "" };
     if (a.includes("--json")) return { code: 0, stdout: prJson, stderr: "" };
     return { code: 0, stdout: "{}\n", stderr: "" };
@@ -716,30 +717,64 @@ for (const [name, findings, overallVerdict, expected] of [
 
 // GATE-EXEC-CAP-BRAKES: pre_approval_gate has its own cap (default 2). At the cap round a high without a judgeFix or a question blocks;
 // a high with a judgeFix goes to the fixer. A scoped final round (count cap+1) sends every act item to the operator.
-async function postPreApprovalRound(tempDir, findings, priorHeadCount) {
+async function postPreApprovalRound(tempDir, findings, priorHeadCount, { setup } = {}) {
   const sizePath = path.join(tempDir, "size.json");
   await writeFile(sizePath, JSON.stringify({ ok: true, outcome: "pass", wholeLogicLoc: 10, t1SliceLoc: 0, waiver: { requested: false, t1Valid: false, defaultValid: false } }), "utf8");
   const root = path.join(tempDir, "pre-cap-root");
   await mkdir(path.join(root, "tmp", "gate-findings", "owner-repo", "pr-17"), { recursive: true });
   await writeFile(path.join(root, ".devloops"), "version: 1\nrefinement:\n  maxCopilotRounds: 0\ngates:\n  requireFanoutEvidence: false\n", "utf8");
-  for (const head of priorHeads.slice(0, priorHeadCount)) {
-    await writeFile(path.join(root, "tmp", "gate-findings", "owner-repo", "pr-17", `pre_approval_gate-${head}.json`), JSON.stringify({
-      repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${head[0]}T00:00:00.000Z`, findings: [],
+  // `setup` builds a real git history under the root and returns the posted head and the closed prior heads.
+  const { head, priors } = setup ? await setup(root) : { head: HEAD, priors: priorHeads.slice(0, priorHeadCount) };
+  for (const [i, prior] of priors.entries()) {
+    await writeFile(path.join(root, "tmp", "gate-findings", "owner-repo", "pr-17", `pre_approval_gate-${prior}.json`), JSON.stringify({
+      repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: prior, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [],
     }), "utf8");
   }
-  const ledger = await writeLedger(tempDir, { findings, overallVerdict: findings.some((f) => f.judgeDisposition === "act") ? "findings_present" : "clean", gate: "pre_approval_gate" });
+  const ledger = await writeLedger(tempDir, { findings, overallVerdict: findings.some((f) => f.judgeDisposition === "act") ? "findings_present" : "clean", gate: "pre_approval_gate", head });
   const args = [
-    "--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-ledger", ledger,
+    "--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", head, "--findings-ledger", ledger,
     "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 0, question: 0, nit: 0 }), "--findings-summary", "pre cap", "--next-action", "follow the verdict", "--inline-reason", "pre cap", "--size-budget-json", sizePath,
   ];
   const posted = [];
   try {
-    const result = await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild(posted, { isDraft: false, issueComments: [visibleCleanDraft] }) });
+    const result = await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild(posted, { isDraft: false, head, issueComments: [{ ...visibleCleanDraft, body: visibleCleanDraft.body.replace(HEAD, head) }] }) });
     return { result, body: posted.join("\n") };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
 }
+
+// GATE-EXEC-CAP-BRAKES: the poster passes the PR base to the round count, so a round forced by a base merge is the cap round, not the scoped final round.
+test("pre_approval_gate cap: a round forced by a base merge is the cap round, so a medium act still goes to the fixer", async () => {
+  const setup = async (root) => {
+    const git = (...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd: root, encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
+    const commit = async (file) => { await writeFile(path.join(root, file), file, "utf8"); git("add", file); git("commit", "-q", "-m", file); return git("rev-parse", "HEAD"); };
+    git("init", "-q", "-b", "main");
+    await commit("a.txt");
+    git("checkout", "-q", "-b", "pr");
+    const prHead = await commit("b.txt");
+    git("checkout", "-q", "main");
+    const main = await commit("c.txt");
+    git("checkout", "-q", "pr");
+    git("merge", "-q", "--no-ff", "-m", "merge main", "main");
+    git("update-ref", "refs/remotes/origin/main", main);
+    const merged = git("rev-parse", "HEAD");
+    return { head: merged, priors: [priorHeads[0], prHead] };
+  };
+  // The file's PATH stub answers every git call with success and no output; this test needs the real git for the merge-forced check.
+  const stubbedPath = process.env.PATH;
+  process.env.PATH = originalPath;
+  try {
+    await withTempDir(async (tempDir) => {
+      const out = await postPreApprovalRound(tempDir, [finding("medium", "act", { judgeFix: "add the guard" })], 0, { setup });
+      assert.equal(out.error, undefined);
+      // Without the PR base the merged head would be round 3 (the scoped final round) and the medium would block.
+      assert.equal(verdictOf(out), "findings_present");
+    }, { prefix: "dev-loops-pre-cap-forced-" });
+  } finally {
+    process.env.PATH = stubbedPath;
+  }
+});
 
 for (const [name, findings, priorCount, expected] of [
   ["round 1 ignores the cap: a high without a judgeFix stays findings_present", [finding("high", "act")], 0, "findings_present"],

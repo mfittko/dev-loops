@@ -32,7 +32,7 @@ import {
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { convergedCarryAccepts } from "../github/_carried-verdict.mjs";
-import { capRoundActList, countCompletedRounds, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { capRoundActList, countCapRounds, countCompletedRounds, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
 import { fingerprintFinding } from "../github/_gate-finding-surface.mjs";
 import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
@@ -146,6 +146,7 @@ Output (stdout, JSON):
     "nextAction": "resolve_merge_conflicts",
     "reason": "...",
     "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] },
+    "capBrakesWarning"?: "GATE-EXEC-CAP-BRAKES (advisory): ...",
     "blockedOn"?: "operator_decision",
     "agentRemedy"?: { "command": "...", "summary": "..." },
     "recovery"?: "..."
@@ -1455,7 +1456,8 @@ export async function resolveCapBrakes(context, { repoRoot, config }) {
   if (open.length === 0) return null;
   return {
     gate,
-    round: logs.length + 1,
+    // A base-merge-forced round never counts (countCapRounds), as in the poster and the emitter.
+    round: await countCapRounds({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, prBase: context.prData?.baseRefName, includeLiveCurrentHead: true }),
     cap: gate === "pre_approval_gate" ? resolveGateConfig(config, "preApproval").maxReviewRounds : 0,
     actCounts: logs.map((log) => capRoundActList(log.findings, log.headSha).length),
     items: open.map((f) => `${fingerprintFinding(f)} [${normalizeSeverity(f.severity)}] ${String(f.summary ?? "").trim()}`),
@@ -1636,7 +1638,8 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const draftOpenActList = context.prData?.isDraft === true
     ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0 }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
     : null;
-  const capBrakes = await resolveCapBrakes(context, { repoRoot, config }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; });
+  let capBrakesError = null;
+  const capBrakes = await resolveCapBrakes(context, { repoRoot, config }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; capBrakesError = error; return null; });
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,
@@ -1760,6 +1763,8 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;
   // ADR 0238: all-untrusted open threads are non-blocking but visible, with authors and the remedy.
   if (context.skippedUntrusted?.length > 0) result.skippedUntrusted = context.skippedUntrusted;
+  // GATE-EXEC-CAP-BRAKES: an unreadable ledger leaves the brakes unevaluated; the warning keeps that visible (the context writer still refuses the round).
+  if (capBrakesError) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the cap brakes could not be evaluated (${capBrakesError.message}); the next gate round is still refused by write-gate-context.mjs when a brake applies.`;
   // ADR 0155: an incomplete fixer disposition is a visible warning, never a block.
   if (context.fixerDisposition?.warning) {
     result.fixerDispositionWarning = { warning: context.fixerDisposition.warning, incomplete: context.fixerDisposition.incomplete };
