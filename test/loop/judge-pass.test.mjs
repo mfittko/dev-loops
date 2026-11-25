@@ -2090,6 +2090,10 @@ test("judgePassCli counts the round from --tmp-root, like the ledger writer and 
   const priorDir = path.join(custom, "gate-findings", "mfittko-dev-loops", "pr-2243");
   await mkdir(priorDir, { recursive: true });
   await writeFile(path.join(priorDir, `draft_gate-${"d".repeat(40)}.json`), JSON.stringify({ repo: "mfittko/dev-loops", pr: 2243, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+  // The prior head is not a commit of the fixture repository, so the round count reads the PR base from a recorded gate-context artifact.
+  const ctx = path.join(custom, "gate-context", "mfittko-dev-loops", "pr-2243", `draft_gate-${HEAD}.json`);
+  await mkdir(path.dirname(ctx), { recursive: true });
+  await writeFile(ctx, JSON.stringify({ baseFreshness: { base: "main" } }));
   const run = async (extra) => {
     const out = `./act-${extra.tmpRoot ? "custom" : "default"}.json`;
     const payload = await judgePassCli(
