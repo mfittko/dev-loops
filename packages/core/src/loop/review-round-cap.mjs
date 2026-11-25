@@ -52,3 +52,13 @@ export function decideCapRound({ round, cap, actCounts = [], fixBudget, wholeLog
   if (logicLoc > maxLines || addedFiles > 0) return operator("cap_fix_over_budget", { logicLoc, maxLines, addedFiles });
   return { action: "scoped_final_round" };
 }
+
+const CAP_STOP_TEXT = {
+  round_cap_reached: ({ round, cap }) => `round ${round} is past the round cap of ${cap} and the scoped final round has run`,
+  cap_fix_over_budget: ({ logicLoc, maxLines, addedFiles }) => `the fix since the cap-round head is ${logicLoc} logic LOC (budget ${maxLines}) and adds ${addedFiles} file(s)`,
+  non_convergence: ({ previous, current }) => `the judged act count did not shrink (${previous} then ${current})`,
+  growth_past_forecast: ({ wholeLogicLoc, forecastWloc }) => `wholeLogicLoc ${wholeLogicLoc} is above ${GROWTH_FACTOR} times the forecast wloc ${forecastWloc}`,
+};
+
+/** One sentence naming the numbers of an `operator` decision, for the refusal and the `report_blocked` reason. */
+export const describeCapStop = ({ reason, numbers }) => `${reason}: ${CAP_STOP_TEXT[reason](numbers)}; the operator clears it with an operator focus item whose decision names the act items by fingerprint (GATE-EXEC-CAP-BRAKES)`;

@@ -29,7 +29,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveFanoutSizeTier, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveGateDispatchMode, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveCapFixMaxLines, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveFanoutSizeTier, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveGateDispatchMode, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, pastCapBlockers, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
@@ -62,7 +62,7 @@ import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, bui
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { draftGatePostedHeads, fingerprintFinding, resolveTrustedEvidencePredicate } from "./_gate-finding-surface.mjs";
 import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
-import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
+import { decideCapRound, describeCapStop, isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, isClearingCoverRecord, listGateDeltaRecords, readGateDeltaRecord, readSealedCoverRecord, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince, runGitCommand } from "../lib/git-delta.mjs";
@@ -1546,6 +1546,17 @@ function pushExcludedFilesLines(lines, excludedFiles) {
  * @param {object[]|null} residue
  * @returns {string[]}
  */
+/** The scoped final round (GATE-EXEC-CAP-BRAKES): the prior act items to verify and the question every reviewer answers; a yes is a finding. */
+export const SCOPED_ROUND_QUESTION = "Does this diff add behavior beyond the finding?";
+function renderScopedFinalRoundLines(closureRound) {
+  if (!closureRound || typeof closureRound !== "object") return [];
+  const oneLine = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const lines = ["## Scoped final round", "", `The diff below is the PR-own change since ${closureRound.fromHead}. Verify the prior act items and answer: ${SCOPED_ROUND_QUESTION} A yes is a finding.`];
+  for (const item of closureRound.priorActItems ?? []) lines.push(`- ${oneLine(item.fingerprint)} | ${oneLine(item.file ?? "(no file)")}${Number.isInteger(item.line) ? `:${item.line}` : ""} | ${oneLine(item.title)}`);
+  lines.push("");
+  return lines;
+}
+
 function renderCapRoundResidueLines(residue) {
   if (!Array.isArray(residue) || residue.length === 0) return [];
   const oneLine = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -1606,6 +1617,7 @@ export function renderBriefingEvidence({
   diffOutput = null, diffPaths = [], changedFiles = [], excludedFiles = [], adjacentCode = null,
   validationResultsPath = null,
   capRoundResidue = null,
+  closureRound = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
   const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
@@ -1660,6 +1672,7 @@ export function renderBriefingEvidence({
     lines.push("");
   }
   lines.push(...renderCapRoundResidueLines(capRoundResidue));
+  lines.push(...renderScopedFinalRoundLines(closureRound));
   lines.push(`## Diff at reviewed head (${headSha})`);
   lines.push("");
   const filteredBytes = hasDiffText ? persistedDiffBytes(diffOutput) : 0;
@@ -1741,6 +1754,7 @@ export function renderScopedBriefingVariant(scope, {
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
   rules = null,
   capRoundResidue = null,
+  closureRound = null,
 }) {
   if (!GATE_ANGLE_SCOPES.includes(scope) || scope === "full") {
     throw new Error(`renderScopedBriefingVariant: scope must be a non-"full" GATE_ANGLE_SCOPES value, got ${JSON.stringify(scope)}`);
@@ -1803,6 +1817,7 @@ export function renderScopedBriefingVariant(scope, {
   }
 
   lines.push(...renderCapRoundResidueLines(capRoundResidue));
+  lines.push(...renderScopedFinalRoundLines(closureRound));
   // The filtered diff is the unit's required `diff` read, so every variant
   // points at it like the full evidence file does.
   const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
@@ -2184,14 +2199,60 @@ export function closureFromHeadOf(closed) {
 }
 
 /**
- * The one past-cap closure round (GATE-EXEC-ROUND-CAP): a draft_gate round whose completed-round count is cap+1.
+ * The one past-cap closure round (GATE-EXEC-ROUND-CAP, GATE-EXEC-CAP-BRAKES): a round of `options.gate` whose cap-round count is cap+1.
  * Returns null for any other round; otherwise the head of the latest closed prior round (the fix delta starts there) and the prior act items to verify.
  */
-export async function resolveClosureRound(options, { repoRoot, cap }) {
-  if (options.gate !== "draft_gate" || !(cap > 0)) return null;
-  if (await countCompletedRounds(options, { repoRoot }) !== cap + 1) return null;
+export async function resolveClosureRound(options, { repoRoot, cap, prBase, includeLiveCurrentHead = false }) {
+  if (!(cap > 0)) return null;
+  if (await countCapRounds(options, { repoRoot, prBase, includeLiveCurrentHead }) !== cap + 1) return null;
   const closed = await readClosedPriorRoundLogs(options, { repoRoot });
   return { fromHead: closureFromHeadOf(closed), priorActItems: await listPriorActItems(options, { repoRoot }) };
+}
+
+/** `head` is reached from `fromHead` by merges only: no PR commit that `mainRef` lacks (a base merge, possibly with a resolution). */
+async function isBaseMergeRound({ fromHead, head, mainRef, repoRoot }) {
+  if (!fromHead || !head || fromHead === head) return false;
+  if ((await runGitCommand(["merge-base", "--is-ancestor", fromHead, head], { repoRoot })).code !== 0) return false;
+  const own = await runGitCommand(["rev-list", "--no-merges", "--count", `${fromHead}..${head}`, `^${mainRef}`], { repoRoot });
+  return own.code === 0 && own.stdout.trim() === "0";
+}
+
+/**
+ * Round count for the cap (GATE-EXEC-CAP-BRAKES): {@link countCompletedRounds}, except that on pre_approval_gate a round forced by a base merge
+ * (its head follows the previous round head by merges only) never counts. Needs `prBase`; without it the raw count stands.
+ */
+export async function countCapRounds(options, { repoRoot, prBase, includeLiveCurrentHead = false }) {
+  const raw = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead });
+  if (options.gate !== "pre_approval_gate" || !prBase) return raw;
+  const heads = [...(await readClosedPriorRoundLogs(options, { repoRoot })).map((l) => String(l.headSha).trim().toLowerCase()), String(options.headSha).trim().toLowerCase()];
+  let forced = 0;
+  for (let i = 1; i < heads.length; i += 1) if (await isBaseMergeRound({ fromHead: heads[i - 1], head: heads[i], mainRef: `origin/${prBase}`, repoRoot })) forced += 1;
+  return raw - forced;
+}
+
+/** The fix-budget facts of the PR-own diff since `fromHead`: its logic LOC and its added files. */
+async function capFixBudgetFacts({ fromHead, prBase, repoRoot }) {
+  const own = await captureMainRelativeChangedFilesSince({ base: fromHead, mainRef: `origin/${prBase}`, repoRoot });
+  // An empty or unproven PR-own delta is refused later with its own reason (closure_delta_no_pr_own_change).
+  if (!own.reduced || own.changedFiles.length === 0) return { logicLoc: 0, addedFiles: 0 };
+  const { wholeLogicLoc } = await evaluatePrSizeBudget({ base: fromHead, head: "HEAD", repoRoot, paths: own.changedFiles });
+  const added = await runGitCommand(["diff", "--name-status", "--diff-filter=A", `${fromHead}..HEAD`, "--", ...own.changedFiles], { repoRoot });
+  return { logicLoc: wholeLogicLoc, addedFiles: added.stdout.split("\n").filter(Boolean).length };
+}
+
+/**
+ * The scoped final round of a pre_approval_gate (GATE-EXEC-CAP-BRAKES): the one cap decision of the context writer.
+ * Returns `{ fromHead, priorActItems }` for the scoped round, null for a full round, and throws the policy reason when the round goes to the operator.
+ */
+export async function resolveScopedFinalRound(options, { repoRoot, prBase, config }) {
+  const cap = resolveGateConfig(config, "preApproval").maxReviewRounds;
+  if (!(cap > 0)) return null;
+  const round = await countCapRounds(options, { repoRoot, prBase, includeLiveCurrentHead: true });
+  const closure = round === cap + 1 ? await resolveClosureRound(options, { repoRoot, cap, prBase, includeLiveCurrentHead: true }) : null;
+  const facts = closure ? await capFixBudgetFacts({ fromHead: closure.fromHead, prBase, repoRoot }) : { logicLoc: 0, addedFiles: 0 };
+  const decision = decideCapRound({ round, cap, fixBudget: { ...facts, maxLines: resolveCapFixMaxLines(config) } });
+  if (decision.action === "operator") throw new Error(`${describeCapStop(decision)}. Report blocked with blockedOn operator_decision.`);
+  return decision.action === "scoped_final_round" ? closure : null;
 }
 
 /**
@@ -3454,6 +3515,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
       adjacentCode: options.adjacentCode ?? null,
       validationResultsPath: options.validationResultsPath ?? null,
       capRoundResidue,
+      closureRound: options.closureRound,
     });
     prefixMode = evidence.prefixMode;
     pendingEvidence = { path: evidencePath, text: evidence.text };
@@ -3531,6 +3593,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
           adjacentCode: options.adjacentCode ?? null,
           rules: resolveClassifyRules(options.config),
           capRoundResidue,
+          closureRound: options.closureRound,
         });
         pendingVariants.set(scope, { path: scopePath, text: variant.text });
         briefingVariants[scope] = scopePath;
@@ -4674,6 +4737,10 @@ export async function main(
       const shown = freshness.newerCommits.slice(0, 5).join("; ");
       const more = freshness.newerCommits.length > 5 ? ` (+${freshness.newerCommits.length - 5} more)` : "";
       throw new Error(`${freshness.error}: origin/${freshness.base} has ${freshness.newerCommits.length} commit(s) the PR head lacks (${shown}${more}); files differing only because of the stale base: ${freshness.foreignFiles.join(", ") || "none"}. ${freshness.remedy}`);
+    }
+    // GATE-EXEC-CAP-BRAKES: a pre_approval_gate round past the cap is the scoped final round, or refuses with the policy reason. The findings ledger is main-anchored.
+    if (options.gate === "pre_approval_gate") {
+      options.closureRound = await resolveScopedFinalRound({ ...options, tmpRoot: undefined }, { repoRoot, prBase, config }) ?? undefined;
     }
     let diff = null;
     if (options.base) {
