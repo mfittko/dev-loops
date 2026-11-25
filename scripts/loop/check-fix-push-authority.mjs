@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
  * check-fix-push-authority: harness-neutral push gate for PRE-PUSH-DELTA-PUSH-AUTHORITY
- * (skills/docs/pre-pr-review-contract.md). The generated git pre-push hook runs it with git's
+ * (skills/docs/pre-pr-review-contract.md). resolve-pr-conflicts.mjs runs it before a base merge (no git hook calls it, ADR 0323), with
  * `<local ref> <local sha> <remote ref> <remote sha>` lines on stdin. Exit 1 refuses the push while
  * a gate fix sequence is active for any pushed sha (the sha is the baseline or descends from it, and the PR
  * branch's remote ref has not advanced past the baseline) and the full work order has not granted the push;
  * exit 0 allows it. A marker that names a branch covers a push only when the known push target is
  * refs/heads/<branch>; a branchless marker, or an unknown push target, keeps the ancestry rule (fail closed).
- * A marker is skipped only when its execution work order ref names a valid other owner/name than the repo the push targets (the GitHub push URL git passes as the hook's second argument, else the checkout's origin) and its baseline commit is absent from this checkout, whatever the pushed branch is; a same-repo marker, a marker that names no valid repo, a marker whose baseline is present (a fork or renamed repo), or a push with no detectable repo keeps these rules.
+ * A marker is skipped only when its execution work order ref names a valid other owner/name than the repo the push targets (the push target repo, else the checkout's origin) and its baseline commit is absent from this checkout, whatever the pushed branch is; a same-repo marker, a marker that names no valid repo, a marker whose baseline is present (a fork or renamed repo), or a push with no detectable repo keeps these rules.
  * A parse error or git failure refuses (fail closed). A failed baseline probe refuses under that marker unless it is fullGranted (then it is skipped), and the refusal names the marker file. With no ref lines the HEAD of
  * the checkout is tested. Agent identity is unknown to git, so this check binds every pusher.
  */

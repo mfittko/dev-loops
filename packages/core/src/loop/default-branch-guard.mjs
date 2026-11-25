@@ -71,17 +71,13 @@ function normalizeBranchList(branches) {
  * @param {string|string[]|null} explicitBranches an operator-scoped set
  *   (e.g. an explicit `--base`) that REPLACES rather than unions across
  *   installs — see installDefaultBranchGuard's explicitBaseBranches.
- * @param {string|null} authorityCli absolute path of `scripts/loop/check-fix-push-authority.mjs`, resolved by
- *   its owner (the dev-loops side that ships `scripts/`). When it is absent or missing at run time the pre-push
- *   hook falls back to the pushing checkout's scripts/loop copy and refuses a push only when neither file exists and a
- *   sequence marker that is not fullGranted and whose branch ref has not advanced (or that names no branch) exists under the main worktree's tmp/gate-delta (fail closed); otherwise it allows. While such a marker is open it refuses every push from the repository.
  * @throws {Error} when hookName is not a guarded hook, or any branch is
  *   non-empty and not shell-safe. `hookName` and every branch name are
  *   interpolated straight into the generated script, so THIS function — not
  *   just its installDefaultBranchGuard caller — is the trust boundary and
  *   must refuse on its own rather than rely on every caller re-checking first.
  */
-export function renderGuardHook(hookName, defaultBranches = null, explicitBranches = null, authorityCli = null) {
+export function renderGuardHook(hookName, defaultBranches = null, explicitBranches = null) {
   if (!GUARDED_HOOKS.includes(hookName)) {
     throw new Error(`renderGuardHook: unknown hook ${JSON.stringify(hookName)}; expected one of ${GUARDED_HOOKS.join(", ")}`);
   }
@@ -113,49 +109,12 @@ if [ -f "$scan_cli" ]; then
 fi
 `
     : "";
-  // pre-push ONLY: the harness-neutral push gate of PRE-PUSH-DELTA-PUSH-AUTHORITY. It runs before
-  // the override-env check, so DEVLOOPS_ALLOW_MAIN never bypasses it. The script path comes from its
-  // owner (the dev-loops side that ships scripts/), never from a layout guess inside this package.
-  // A baked path that no longer exists (pruned worktree or cache dir) falls back to the pushing
-  // checkout's own scripts/ copy; with neither present the push is refused only under a marker that is not fullGranted and whose branch ref has not advanced (or that names no branch) (fail closed). The pushed refs git
-  // sends on stdin are captured once, handed to the check, and replayed to the default-branch loop.
-  if (authorityCli !== null && (typeof authorityCli !== "string" || !path.isAbsolute(authorityCli) || /["$`\\\n\r]/u.test(authorityCli))) {
-    throw new Error(`authority script path ${JSON.stringify(authorityCli)} must be an absolute path without characters the generated hook's shell would expand`);
-  }
-  const pushAuthorityBlock = hookName === "pre-push"
-    ? `push_lines=$(cat)
-authority_cli="${authorityCli ?? ""}"
-if [ -z "$authority_cli" ] || [ ! -f "$authority_cli" ]; then
-  authority_cli="$(git rev-parse --show-toplevel 2>/dev/null)/"scripts/loop/check-fix-push-authority.mjs
-fi
-if [ -f "$authority_cli" ]; then
-  printf '%s\\n' "$push_lines" | node "$authority_cli" "$@" || exit 1
-else
-  common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
-  sequence_marker=""
-  for marker_file in "$(dirname "$common_dir")"/tmp/gate-delta/*.sequence; do
-    [ -f "$marker_file" ] || continue
-    grep -q '"fullGranted":true' "$marker_file" && continue
-    baseline=$(basename "$marker_file" .sequence)
-    branch=$(sed -nE 's/.*"branch":"([^"]*)".*/\\1/p' "$marker_file")
-    if [ -z "$branch" ]; then sequence_marker="$marker_file"; continue; fi
-    pattern="refs/remotes/*/$branch"
-    advanced=$(git for-each-ref --contains "$baseline" --format='%(objectname)' "$pattern" 2>/dev/null | grep -v "$baseline")
-    [ -z "$advanced" ] && sequence_marker="$marker_file"
-  done
-  if [ -n "$sequence_marker" ]; then
-    echo "dev-loops: PRE-PUSH-DELTA-PUSH-AUTHORITY a gate fix sequence marker exists ($sequence_marker) and the push-authority check script is missing; refusing the push (fail closed). Re-run ensure-worktree to reinstall the hooks. A commit_only fixer that made no commit closes the sequence with check-pre-push-delta.mjs (outcome no_commit). An abandoned sequence closes with dev-loops-run cli/index.mjs gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>." >&2
-    exit 1
-  fi
-fi
-`
-    : "";
   const header = `#!/bin/sh
 # ${GUARD_MARKER}
 # Refuses a ${hookName} that would land on a guarded default branch. Installed
 # in the common hook directory, so linked worktrees run it too — their branch
 # is not one of the guarded ones, which is what lets their work through.
-${secretScanBlock}${pushAuthorityBlock}if [ "\${${GUARD_OVERRIDE_ENV}}" = "1" ]; then
+${secretScanBlock}if [ "\${${GUARD_OVERRIDE_ENV}}" = "1" ]; then
   exit 0
 fi
 defaults="${defaults}"
@@ -201,9 +160,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
       blocked_default="$default"
     fi
   done
-done <<PUSH_LINES_EOF
-$push_lines
-PUSH_LINES_EOF
+done
 if [ "$blocked" = "1" ]; then
 ${REFUSAL_BODY("push to the default branch", "blocked_default")}
   exit 1
@@ -267,9 +224,7 @@ function readHookState(hookPath) {
  *   too would permanently guard every branch anyone ever stacked a worktree
  *   off, refusing that branch's OWN commits with no way to undo it.
  *
- * @param {{ gitDir: string, defaultBranches?: string|string[]|null, explicitBaseBranches?: string|string[]|null, hooksPathOverride?: string|null, authorityCliPath?: string|null }} target
- *   `authorityCliPath` is the absolute path of `scripts/loop/check-fix-push-authority.mjs`, passed by the
- *   dev-loops side that ships it; without it the rendered pre-push hook falls back to the pushing checkout's scripts/loop copy and refuses a push only when neither file exists and a marker that is not fullGranted and whose branch ref has not advanced (or that names no branch) exists (fail closed).
+ * @param {{ gitDir: string, defaultBranches?: string|string[]|null, explicitBaseBranches?: string|string[]|null, hooksPathOverride?: string|null }} target
  *   `hooksPathOverride` is the repo's `core.hooksPath` when set. Installing into
  *   `$GIT_DIR/hooks` while git reads elsewhere would report success for a guard
  *   that can never fire, so that case refuses instead.
@@ -279,7 +234,6 @@ export function installDefaultBranchGuard({
   defaultBranches = null,
   explicitBaseBranches = null,
   hooksPathOverride = null,
-  authorityCliPath = null,
 }) {
   const refuse = (reason, skipReason) => ({
     ok: false,
@@ -288,13 +242,6 @@ export function installDefaultBranchGuard({
     skipped: GUARDED_HOOKS.map((hook) => ({ hook, reason: skipReason })),
     reason,
   });
-
-  if (authorityCliPath !== null && (typeof authorityCliPath !== "string" || !path.isAbsolute(authorityCliPath) || /["$`\\\n\r]/u.test(authorityCliPath))) {
-    return refuse(
-      `authorityCliPath must be an absolute path without shell-expandable characters; got ${JSON.stringify(authorityCliPath)}`,
-      "authorityCliPath is not a shell-safe absolute path",
-    );
-  }
 
   // Any STRING means core.hooksPath is set (`git config --get` exits 0), even
   // to "" — which git treats as "run no hooks at all", not "unset". A caller
@@ -416,7 +363,7 @@ export function installDefaultBranchGuard({
     // rename is atomic, so any reader sees either the old hook or the new one,
     // never a partial one.
     const tmpPath = path.join(hooksDir, `.${hook}.tmp-${process.pid}-${Date.now()}`);
-    fs.writeFileSync(tmpPath, renderGuardHook(hook, finalStickyBranches, finalExplicitBranches, authorityCliPath), { mode: 0o755 });
+    fs.writeFileSync(tmpPath, renderGuardHook(hook, finalStickyBranches, finalExplicitBranches), { mode: 0o755 });
     fs.chmodSync(tmpPath, 0o755); // mode above is umask-limited; force it
     fs.renameSync(tmpPath, hookPath);
     anyWritten = true;
