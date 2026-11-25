@@ -727,7 +727,7 @@ async function postPreApprovalRound(tempDir, findings, priorHeadCount) {
       repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${head[0]}T00:00:00.000Z`, findings: [],
     }), "utf8");
   }
-  const ledger = await writeLedger(tempDir, { findings, overallVerdict: "findings_present", gate: "pre_approval_gate" });
+  const ledger = await writeLedger(tempDir, { findings, overallVerdict: findings.some((f) => f.judgeDisposition === "act") ? "findings_present" : "clean", gate: "pre_approval_gate" });
   const args = [
     "--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-ledger", ledger,
     "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 0, question: 0, nit: 0 }), "--findings-summary", "pre cap", "--next-action", "follow the verdict", "--inline-reason", "pre cap", "--size-budget-json", sizePath,
@@ -749,6 +749,7 @@ for (const [name, findings, priorCount, expected] of [
   ["the cap round sends a medium act to the fixer", [finding("medium", "act", { judgeFix: "add the guard" })], 1, "findings_present"],
   ["the scoped final round sends a medium act with a judgeFix to the operator", [finding("medium", "act", { judgeFix: "add the guard" })], 2, "blocked"],
   ["the scoped final round sends a high act with a judgeFix to the operator", [finding("high", "act", { judgeFix: "add the guard" })], 2, "blocked"],
+  ["a clean scoped final round is the exit: it posts clean", [finding("low", "reject")], 2, "clean"],
 ]) {
   test(`pre_approval_gate cap: ${name}`, async () => {
     await withTempDir(async (tempDir) => {
