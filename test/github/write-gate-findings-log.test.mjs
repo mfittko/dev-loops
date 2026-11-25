@@ -2904,6 +2904,39 @@ test("writeGateFindingsLog records capClosed on a past-cap defer or reject, neve
   }
 });
 
+test("resolveDraftRoundCap keeps the raw count for prBase null and reads the recorded context base for an omitted prBase", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-capbase-null-"));
+  try {
+    const git = (...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: tmpDir, encoding: "utf8" }).trim();
+    git("init", "-q", "-b", "main");
+    await writeFile(path.join(tmpDir, "a.txt"), "a", "utf8");
+    git("add", "a.txt"); git("commit", "-q", "-m", "m0");
+    git("checkout", "-q", "-b", "feature");
+    await writeFile(path.join(tmpDir, "own.txt"), "own", "utf8");
+    git("add", "own.txt"); git("commit", "-q", "-m", "own");
+    const ownHead = git("rev-parse", "HEAD");
+    git("checkout", "-q", "main");
+    await writeFile(path.join(tmpDir, "b.txt"), "b", "utf8");
+    git("add", "b.txt"); git("commit", "-q", "-m", "m1");
+    git("update-ref", "refs/remotes/origin/main", "main");
+    git("checkout", "-q", "feature");
+    git("merge", "-q", "--no-ff", "-m", "merge main", "main");
+    const mergeHead = git("rev-parse", "HEAD");
+    await writeCapPrior(tmpDir, { head: ownHead, findings: [] });
+    await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 4\n", "utf8");
+    const { resolveDraftRoundCap } = await import("../../scripts/github/write-gate-context.mjs");
+    const { buildGateContextPath } = await import("../../scripts/github/_gate-artifact-paths.mjs");
+    const input = { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: mergeHead, tmpRoot: tmpDir };
+    const ctx = path.resolve(tmpDir, buildGateContextPath({ ...input, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(ctx), { recursive: true });
+    await writeFile(ctx, JSON.stringify({ baseFreshness: { base: "main" } }), "utf8");
+    assert.equal((await resolveDraftRoundCap(input, { repoRoot: tmpDir, prBase: null })).round, 2, "prBase null skips the context base: the base-merge round counts");
+    assert.equal((await resolveDraftRoundCap(input, { repoRoot: tmpDir })).round, 1, "an omitted prBase reads the recorded base: the base-merge round is forced and never counts");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("writeGateFindingsLog counts the live same-head ledger it retains, so its round equals the post-write count", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-capclosed-rewrite-"));
   try {

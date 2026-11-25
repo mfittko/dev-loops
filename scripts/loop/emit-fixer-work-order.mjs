@@ -771,7 +771,7 @@ async function emitPlan({
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
     // A ledger-less head keeps the raw count: the ADR 0197 block below reads a base-only merge of the cap round as round cap+1.
     const roundBase = existsSync(ledgerPath(headSha)) ? (await memoFetchBase())?.baseRefName : undefined;
-    let { lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: roundBase });
+    let { lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: roundBase ?? null });
     // Slice 4: when the seam accepts, the act list belongs to the origin head's round, so the round and cap are counted there, not one round late at the ledger-less head.
     let seamCounted = false; // the round is already counted at the origin head, so the ADR 0197 rewrite below must not reinterpret it
     let laterPass = false; // the head is a sealed chain candidate (a later cap-round pass)

@@ -2155,7 +2155,7 @@ export async function resolveDraftRoundCap(options, { repoRoot, includeLiveCurre
   if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0, lowFixCapped: options.gate === "pre_approval_gate" };
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
   const cap = resolveGateConfig(config, "draft").maxReviewRounds;
-  const base = prBase ?? (await readGateContext({ ...options, tmpRoot: contextTmpRoot }, { repoRoot }).catch(() => null))?.baseFreshness?.base;
+  const base = prBase !== undefined ? prBase : (await readGateContext({ ...options, tmpRoot: contextTmpRoot }, { repoRoot }).catch(() => null))?.baseFreshness?.base;
   const round = await countCapRounds(options, { repoRoot, prBase: base, includeLiveCurrentHead });
   const pastCap = isPastRoundCap(round, cap);
   // The draft gate fixes a low at the cap round; only pre_approval_gate defers it.
