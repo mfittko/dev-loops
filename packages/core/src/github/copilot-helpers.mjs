@@ -426,7 +426,6 @@ function parseGateReviewCommentFields(body) {
     sizeTouchesT1: null,
     sizeWaiverGranted: null,
     sizeWaiverApprovedBy: null,
-    blockedBy: null,
   };
 
   for (const rawLine of body.split(/\r?\n/u)) {
@@ -512,7 +511,7 @@ function parseGateReviewCommentFields(body) {
     // GATE-COMMENT-BLOCKED-BY: the causes of a `blocked` verdict; an unknown cause is dropped.
     match = line.match(/^(?:[-*]\s*)?blocked\s+by\s*:\s*(.+)$/iu);
     if (match) {
-      if (fields.blockedBy === null) {
+      if (fields.blockedBy === undefined) {
         const causes = match[1].split(",").map((cause) => stripOptionalCodeTicks(cause).toLowerCase()).filter((cause) => BLOCKED_BY_VALUES.includes(cause));
         if (causes.length > 0) fields.blockedBy = causes;
       }
