@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.13-pre.0
+
+### Added
+
+- `gates.preApproval.maxReviewRounds` caps `pre_approval_gate` rounds and a scoped final round follows the cap, within `gates.capFixMaxLines` (#3357)
+- A `blocked` gate verdict names its causes in a `Blocked by` line, and a block without findings asks for an operator step instead of a fix round (#3357)
+- PR CI waits explain checks that remain in progress despite a success conclusion and completion time (#3561)
+
+### Fixed
+
+- Codex PR coordinators report missing reviewer dispatch before claiming the runner for a full lifecycle gate (#3549)
+- The pre-push hook no longer enforces gate fix push authority, so a fix sequence whose delta review cannot clear no longer deadlocks the push (#3579)
+
 ## 1.0.12
 
 ### Added
