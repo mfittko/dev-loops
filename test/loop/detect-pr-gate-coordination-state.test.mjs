@@ -12,7 +12,7 @@ const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir,
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 
-import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveCapBrakes, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
@@ -4858,7 +4858,7 @@ async function detectCapFixture({ cap, priorRounds, finding }) {
     const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
     await mkdir(findings, { recursive: true });
     const ledger = (head, loggedAt, list) => writeFile(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt, findings: list }), "utf8");
-    for (let i = 1; i <= priorRounds; i += 1) await ledger(String(i).repeat(40), `2026-11-15T00:0${i}:00.000Z`, [{ severity: "medium", summary: `round ${i}`, file: "src/a.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix a" }]);
+    for (let i = 1; i <= priorRounds; i += 1) await ledger(String(i).repeat(40), `2026-11-15T00:0${i}:00.000Z`, [{ severity: "medium", summary: `round ${i}`, file: "src/a.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix a" }, { severity: "medium", summary: `round ${i} other`, file: "src/b.mjs", line: 2, judgeDisposition: "act", judgeFix: "fix b" }]);
     await ledger(headSha, "2026-11-16T00:00:00.000Z", [{ file: "src/x.mjs", line: 3, judgeDisposition: "act", ...finding }]);
     const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
     const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
@@ -5405,4 +5405,127 @@ describe("pull-request coordination snapshot", () => {
       assert.equal(typeof snap.fetchedAtMs, "number");
     });
   });
+});
+
+// GATE-EXEC-CAP-BRAKES: the detector hands the evaluator the round facts of the gate posted at the current head.
+test("resolveCapBrakes returns the act counts of the closed rounds and the named items of the head's round, per gate", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-"));
+  try {
+    const acts = (n) => Array.from({ length: n }, (_, i) => ({ severity: "medium", angle: "correctness", summary: `defect ${i}`, files: [`src/f${i}.mjs`], line: i + 1, judgeDisposition: "act", judgeTitle: `defect ${i}`, judgeFix: "fix it" }));
+    const write = async (gate, head, n, day) => {
+      const file = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10", `${gate}-${head}.json`);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 10, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${day}T00:00:00.000Z`, findings: acts(n) }), "utf8");
+    };
+    const heads = ["1", "2", "3"].map((c) => c.repeat(40));
+    await write("pre_approval_gate", heads[0], 3, 1);
+    await write("pre_approval_gate", heads[1], 3, 2);
+    await write("pre_approval_gate", heads[2], 2, 3);
+    await write("draft_gate", heads[0], 4, 1);
+    await write("draft_gate", heads[1], 4, 2);
+    const ctx = (head, isDraft) => ({ repo: "owner/repo", pr: 10, currentHeadSha: head, prData: { isDraft } });
+    const pre = await resolveCapBrakes(ctx(heads[2], false), { repoRoot: tempDir, config: { version: 1 } });
+    assert.deepEqual({ gate: pre.gate, round: pre.round, cap: pre.cap, actCounts: pre.actCounts, items: pre.items.length }, { gate: "pre_approval_gate", round: 4, cap: 2, actCounts: [3, 3, 2], items: 2 });
+    assert.match(pre.items[0], /^[0-9a-f]{16} \[medium\] defect \d$/);
+    const draft = await resolveCapBrakes(ctx(heads[1], true), { repoRoot: tempDir, config: { version: 1 } });
+    assert.deepEqual({ gate: draft.gate, round: draft.round, cap: draft.cap, actCounts: draft.actCounts }, { gate: "draft_gate", round: 3, cap: 0, actCounts: [4, 4] });
+    // A head with no judged round of its own carries no facts.
+    assert.equal(await resolveCapBrakes(ctx("9".repeat(40), false), { repoRoot: tempDir, config: { version: 1 } }), null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveCapBrakes names one item per acted cluster: a two-member cluster yields the one fingerprint the emitter accepts", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-cluster-"));
+  try {
+    const head = "1".repeat(40);
+    const act = (k) => ({ severity: "medium", angle: "correctness", summary: `defect ${k}`, files: [`src/f${k}.mjs`], line: 1, judgeDisposition: "act", judgeTitle: `defect ${k}`, judgeFix: "fix it", clusterId: 0 });
+    const file = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-11", `pre_approval_gate-${head}.json`);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 11, gate: "pre_approval_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-11-01T00:00:00.000Z", findings: [act("a"), act("b")] }), "utf8");
+    const facts = await resolveCapBrakes({ repo: "owner/repo", pr: 11, currentHeadSha: head, prData: { isDraft: false } }, { repoRoot: tempDir, config: { version: 1 } });
+    assert.deepEqual(facts.actCounts, [1]);
+    assert.equal(facts.items.length, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveCapBrakes does not count a pre_approval_gate round forced by a base merge", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-forced-"));
+  try {
+    const git = (...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd: dir, encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
+    const commit = async (file, msg) => { await writeFile(path.join(dir, file), msg, "utf8"); git("add", "-A"); git("commit", "-q", "-m", msg); return git("rev-parse", "HEAD"); };
+    git("init", "-q", "-b", "main");
+    await commit("a.txt", "a");
+    git("checkout", "-q", "-b", "pr");
+    const prHead = await commit("b.txt", "b");
+    git("checkout", "-q", "main");
+    const main = await commit("c.txt", "c");
+    git("checkout", "-q", "pr");
+    git("merge", "-q", "--no-ff", "-m", "merge main", "main");
+    const merged = git("rev-parse", "HEAD");
+    git("update-ref", "refs/remotes/origin/main", main);
+    const acts = [{ severity: "medium", angle: "correctness", summary: "defect", files: ["src/f.mjs"], line: 1, judgeDisposition: "act", judgeTitle: "defect", judgeFix: "fix it" }];
+    for (const [head, day] of [[prHead, 1], [merged, 2]]) {
+      const file = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-10", `pre_approval_gate-${head}.json`);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 10, gate: "pre_approval_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${day}T00:00:00.000Z`, findings: acts }), "utf8");
+    }
+    const ctx = (baseRefName) => ({ repo: "owner/repo", pr: 10, currentHeadSha: merged, prData: { isDraft: false, baseRefName } });
+    const forced = await resolveCapBrakes(ctx("main"), { repoRoot: dir, config: { version: 1 } });
+    assert.equal(forced.round, 2, "the merge-forced round does not count");
+    assert.deepEqual(forced.actCounts, [1], "the merge-forced round repeating the same act items adds no non-convergence act count");
+    assert.deepEqual((await resolveCapBrakes(ctx(undefined), { repoRoot: dir, config: { version: 1 } })).actCounts, [1, 1]);
+    assert.equal((await resolveCapBrakes(ctx(undefined), { repoRoot: dir, config: { version: 1 } })).round, 3, "without the PR base the raw count stands");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// GATE-EXEC-CAP-BRAKES (AC7): an unreadable cap-brakes ledger read is advisory; a sealed-ledger tamper still propagates.
+async function detectWithPriorLedger(headSummary, { tamper = false, corrupt = false } = {}) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-cap-brakes-warning-"));
+  try {
+    initGitFixture(tempDir, { branch: "main" });
+    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1 }));
+    const headSha = "abc1234567".repeat(4);
+    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findings, { recursive: true });
+    const ledger = (head, loggedAt, list) => writeSealed(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt, findings: list }));
+    const act = { severity: "medium", summary: headSummary, file: "src/x.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix x" };
+    if (corrupt) await writeFile(path.join(findings, `draft_gate-${"1".repeat(40)}.json`), "{ not json");
+    else await ledger("1".repeat(40), "2026-11-15T00:01:00.000Z", []);
+    await ledger(headSha, "2026-11-16T00:00:00.000Z", [act]);
+    if (tamper) {
+      const file = path.join(findings, `draft_gate-${"1".repeat(40)}.json`);
+      await writeFile(file, (await readFile(file, "utf8")).replace("2026-11-15", "2026-11-14"));
+    }
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    return await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("a cap-brakes read that throws a non-tamper error sets capBrakesWarning and keeps the route", async () => {
+  const healthy = await detectWithPriorLedger("x");
+  assert.equal(healthy.capBrakesWarning, undefined);
+  // A summary object whose own `toString` is not callable makes the brakes read throw while formatting the item text.
+  const broken = await detectWithPriorLedger({ toString: 1 });
+  assert.match(broken.capBrakesWarning, /^GATE-EXEC-CAP-BRAKES \(advisory\): the cap brakes could not be evaluated \(/);
+  assert.equal(broken.nextAction, healthy.nextAction, "the route is unchanged");
+});
+
+test("a cap-brakes read over an unreadable prior ledger leaves the brakes unevaluated and sets capBrakesWarning (AC7)", async () => {
+  const healthy = await detectWithPriorLedger("x");
+  const corrupt = await detectWithPriorLedger("x", { corrupt: true });
+  assert.match(corrupt.capBrakesWarning, /^GATE-EXEC-CAP-BRAKES \(advisory\): .*prior round ledger draft_gate-1+\.json is unreadable/);
+  assert.equal(corrupt.nextAction, healthy.nextAction, "the route is unchanged");
+});
+
+test("a cap-brakes read that meets a tampered sealed ledger propagates OUT_OF_BAND_WRITE", async () => {
+  await assert.rejects(detectWithPriorLedger("x", { tamper: true }), (error) => error.code === OUT_OF_BAND_WRITE);
 });

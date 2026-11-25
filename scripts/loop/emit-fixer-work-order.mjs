@@ -13,8 +13,8 @@ import { readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
-import { loadDevLoopConfig, resolveRoleModel } from "@dev-loops/core/config";
-import { VALID_SEVERITIES, normalizeSeverity, hasSeverityText, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
+import { loadDevLoopConfig, resolveGateConfig, resolveRoleModel } from "@dev-loops/core/config";
+import { BLOCKED_BY_OPERATOR_STEPS, VALID_SEVERITIES, normalizeSeverity, hasSeverityText, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { EvidenceSealError, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
@@ -28,7 +28,7 @@ import { OperatorFocusRefusal, bindOperatorFocusItems, operatorFocusDigestEntry,
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
-import { closureFromHeadOf, clearingChainWalk, readClosedPriorRoundLogs, renderRequiredReadLine, resolveCapExitRound, resolveCapRound, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
+import { closureFromHeadOf, clearingChainWalk, countCapRounds, readClosedPriorRoundLogs, renderRequiredReadLine, resolveCapExitRound, resolveCapRound, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { fixerEmitCarryAccepts } from "../github/_carried-verdict.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
@@ -82,7 +82,7 @@ dispatchPayload (the --harness adapter call carrying dispatchPrompt, plus the co
 unsupported harness refuses. The only operator input is --operator-focus-file, a JSON file { round?: string, items?: [{ fingerprint or threadId, decision?, replyDisposition?, replyNote? }] }
 that renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
 A zero-thread --threads-file commit_only emission requires an --operator-focus-file with a round, and the --phase full emission must pass the same file.
-An item decision picks among remedies its act item offers and never changes the disposition; items need an
+An item decision picks among remedies its act item offers and never changes the disposition. A pre_approval_gate act list past the cap needs a decision per act-item fingerprint or it refuses round_cap_reached (GATE-EXEC-CAP-BRAKES), and a posted blocked verdict whose causes hold no findings entry refuses blocked_without_findings (GATE-COMMENT-BLOCKED-BY); items need an
 --act-list-file source (bound by fingerprint) or --threads-file source (bound by threadId, no decision); an unknown fingerprint or thread id refuses and writes nothing. replyDisposition (tackled, partially_fixed, deferred or rejected) with a replyNote sets the verifier reply for that thread.
 It accepts no other brief, payload or summary input.
 Exit codes: 0 emitted, 1 refused (missing or conflicting source or authority), 2 usage/IO error, 3 comment trust config refused (stderr JSON with a state field).`;
@@ -727,6 +727,41 @@ async function emitPlan({
   })();
   // One read of the operator focus file for the AC7 later-pass decision and the binding below: a shape error refuses here under GATE-EXEC-OPERATOR-FOCUS, never inside the swallowing cap-round catch.
   const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
+  if (gate === "pre_approval_gate" && guardFile) {
+    const runtime = { env, ghCommand, runChild };
+    // GATE-COMMENT-BLOCKED-BY: a posted blocked verdict whose causes hold no findings entry has no fix round; its next step is the operator's.
+    // A ledger-less head carries the origin head's round and verdict (the carry seam), so both reads follow the origin head.
+    const guardHead = (!existsSync(ledgerPath(headSha)) && await carryOriginHead()) || headSha;
+    const blockedBy = (await fetchVerdictMarkers({ repo, pr, headSha: guardHead, gate, runtime }))?.[gate]?.blockedBy;
+    if (blockedBy?.length > 0 && !blockedBy.includes("findings")) {
+      throw new WorkOrderRefusal("blocked_without_findings", `blocked_without_findings (GATE-COMMENT-BLOCKED-BY): the posted pre_approval_gate verdict is blocked by ${blockedBy.join(", ")} with no findings; no fixer order follows it. Operator step: ${blockedBy.map((cause) => BLOCKED_BY_OPERATOR_STEPS[cause]).join("; ")}`);
+    }
+    // GATE-EXEC-CAP-BRAKES: the act list of a round past the cap (the scoped final round's findings) reaches the fixer only when an operator focus decision names each item by fingerprint.
+    const preCap = resolveGateConfig(config, "preApproval").maxReviewRounds;
+    const preRounds = preCap > 0 ? await countCapRounds({ repo, pr, gate, headSha: guardHead, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: (await memoFetchBase())?.baseRefName }) : 0;
+    // One ledger read at guardHead for both branches: ledger-only blockers (a judge-deferred or judge-rejected high, a failOpen closed finding) never ride the act list, yet the poster composes blocked from them.
+    // A missing ledger skips only the round being posted (as on draft_gate); an unreadable one fails closed.
+    let ledgerFindings = [];
+    if (preCap > 0 && preRounds >= preCap) {
+      const ledgerFile = ledgerPath(guardHead);
+      const refusal = existsSync(ledgerFile) ? undefined : await missingCapLedgerRefusal({ repo, pr, gate, headSha, tmpRoot, repoRoot: resolveRepoRoot(cwd), probeVerdict: () => fetchVerdictMarkers({ repo, pr, headSha: guardHead, gate, runtime }) });
+      if (refusal !== undefined) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the pre_approval_gate findings log ${ledgerFile} does not exist${refusal}; failing closed at the cap round`);
+      if (existsSync(ledgerFile)) ({ findings: ledgerFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) }));
+    }
+    // At the cap round the cap-round blocker set (GATE-EXEC-SOFT-CAP) stops the fixer, as on draft_gate.
+    if (preCap > 0 && preRounds === preCap) {
+      const blockers = pastCapBlockers([...ledgerFindings, ...guardParsed], { round: preRounds, cap: preCap });
+      if (blockers.length > 0) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-SOFT-CAP): the pre_approval_gate cap round (cap ${preCap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
+    }
+    if (preCap > 0 && preRounds > preCap) {
+      // The scoped ledger's findings that are no act item (a judge-rejected high) have no focus decision to clear them: the poster composes blocked from them.
+      const blockers = pastCapBlockers(ledgerFindings.filter((f) => f.judgeDisposition !== "act"), { round: preCap, cap: preCap });
+      if (blockers.length > 0) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-SOFT-CAP): the pre_approval_gate scoped ledger past the cap (cap ${preCap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
+      const decided = new Set((operatorFocusRaw?.items ?? []).filter((item) => item.decision !== undefined).map((item) => item.fingerprint));
+      const undecided = guardParsed.filter((f) => !decided.has(f.fingerprint)).map((f) => `${f.fingerprint} ${JSON.stringify(f.summary)}`);
+      if (undecided.length > 0) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-CAP-BRAKES): act list ${guardFile} belongs to a pre_approval_gate round past the cap (${preCap}); every act item goes to the operator. Pass --operator-focus-file with an item holding a decision for each fingerprint: ${undecided.join("; ")}`);
+    }
+  }
   let capLedgerActs = []; // the act findings of the cap-round ledger, read at the cap round (issue 3460 AC8)
   if (guardFile && (gate === "draft_gate" || lowNitOnly)) {
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.

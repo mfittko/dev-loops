@@ -2113,6 +2113,15 @@ describe("pastCapBlockers evidence_only act items", () => {
     assert.equal(fanin.pastCapBlockers([item({})], { round: 4, cap: 4 }).length, 1);
   });
 
+  test("pre_approval_gate cap 2: at the cap round a high with a fix goes to the fixer, a high without one blocks, and the scoped round blocks every act item", () => {
+    const fixed = item({ judgeFix: "add the guard" });
+    const medium = item({ severity: "medium", judgeFix: "add the guard" });
+    assert.deepEqual(fanin.pastCapBlockers([fixed, medium], { round: 2, cap: 2 }), []);
+    assert.equal(fanin.pastCapBlockers([item({})], { round: 2, cap: 2 }).length, 1);
+    assert.equal(fanin.pastCapBlockers([item({ severity: "question" })], { round: 2, cap: 2 }).length, 1);
+    assert.equal(fanin.pastCapBlockers([fixed, medium], { round: 3, cap: 2, scoped: true }).length, 2);
+  });
+
   test("hasSeverityText accepts only a non-blank severity string", () => {
     assert.equal(fanin.hasSeverityText({ severity: "low" }), true);
     for (const severity of ["", "  ", undefined, null, 3]) assert.equal(fanin.hasSeverityText({ severity }), false);

@@ -3,7 +3,7 @@
  * Pure functions with no filesystem or network dependencies.
  */
 
-import { GATE_REVIEW_VERDICT_SET } from "../loop/policy-constants.mjs";
+import { BLOCKED_BY_VALUES, GATE_REVIEW_VERDICT_SET } from "../loop/policy-constants.mjs";
 import { trimmedOrNull } from "../loop/normalize.mjs";
 import { isSanctionedCopilotReviewerLogin } from "./comment-trust.mjs";
 
@@ -508,6 +508,16 @@ function parseGateReviewCommentFields(body) {
       continue;
     }
 
+    // GATE-COMMENT-BLOCKED-BY: the causes of a `blocked` verdict; an unknown cause is dropped.
+    match = line.match(/^(?:[-*]\s*)?blocked\s+by\s*:\s*(.+)$/iu);
+    if (match) {
+      if (fields.blockedBy === undefined) {
+        const causes = match[1].split(",").map((cause) => stripOptionalCodeTicks(cause).toLowerCase()).filter((cause) => BLOCKED_BY_VALUES.includes(cause));
+        if (causes.length > 0) fields.blockedBy = causes;
+      }
+      continue;
+    }
+
     match = line.match(/^(?:[-*]\s*)?converged\s*:\s*(.*)$/iu);
     if (match) {
       fields.converged ??= normalizeGateConverged(match[1]);
@@ -582,6 +592,7 @@ export function parseGateReviewCommentMarkerBody(body) {
     sizeWaiverGranted: fields.sizeWaiverGranted,
     sizeWaiverApprovedBy: fields.sizeWaiverApprovedBy,
     ...(fields.converged ? { converged: fields.converged } : {}),
+    ...(fields.blockedBy ? { blockedBy: fields.blockedBy } : {}),
     contractComplete: Boolean(fields.verdict && fields.findingsSummary && fields.nextAction),
   };
 }
@@ -684,6 +695,7 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
       headSha: convergedFor ? normalizedHeadSha : parsed.headSha,
       ...(convergedFor ? { convergedFromHeadSha: parsed.headSha } : {}),
       ...(parsed.converged ? { converged: parsed.converged } : {}),
+      ...(parsed.blockedBy ? { blockedBy: parsed.blockedBy } : {}),
       verdict: parsed.verdict,
       findingsSummary: parsed.findingsSummary,
       nextAction: parsed.nextAction,

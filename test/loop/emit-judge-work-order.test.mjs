@@ -607,6 +607,20 @@ test("a closure round's gate context (scope.closureRound) adds closureRound: tru
   });
 });
 
+test("a pre_approval_gate scoped final round carries closureRound: true and the prior act items from its gate context (GATE-EXEC-CAP-BRAKES)", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root, { gate: "pre_approval_gate" });
+    assert.equal("closureRound" in (await emitJudgeWorkOrder(sources)).workOrder, false);
+    const contextPath = path.join(root, buildGateContextPath({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha: HEAD }));
+    const context = JSON.parse(await readFile(contextPath, "utf8"));
+    const items = [{ fingerprint: "abcd", file: "a.mjs", line: 3, title: "t" }];
+    await writeFile(contextPath, JSON.stringify({ ...context, scope: { closureRound: { fromHead: "c".repeat(40), priorActItems: items } } }));
+    const scoped = (await emitJudgeWorkOrder(sources)).workOrder;
+    assert.equal(scoped.closureRound, true);
+    assert.deepEqual(scoped.priorActItems, items);
+  });
+});
+
 test("operator focus: the round renders before the required reads and is pinned; absent focus leaves the order unchanged (GATE-EXEC-OPERATOR-FOCUS)", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);

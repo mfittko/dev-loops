@@ -12,6 +12,7 @@ import {
   buildCoordinationEvaluatorInput,
   buildInlineExecutionWarning,
   collectPreApprovalGateBlockers,
+  composeBlockedBy,
   composeCheckpointVerdict,
   parseUpsertCheckpointVerdictCliArgs,
   normalizeStructuredFindings,
@@ -11498,7 +11499,9 @@ test("#2389 regression: a clean ledger plus an unchecked PR-body DoD item posts 
     assert.match(body, /\*\*Gate blockers:\*\* 1 unchecked PR-body Definition of done\n/);
     assert.match(body, /\*\*Remaining gate blocker items \(1\)\*\*\n\n- unchecked PR-body Definition of done: `post-merge smoke run recorded`/);
     assert.doesNotMatch(body, /<details>/);
-    assert.match(body, /\*\*Next action:\*\* rerun gate/);
+    // GATE-COMMENT-BLOCKED-BY: only unticked boxes block, so the next action is the operator step, not a fix round.
+    assert.match(body, /\*\*Blocked by:\*\* unticked_checkboxes\n/);
+    assert.match(body, /\*\*Next action:\*\* operator step: tick the verified PR-body checkboxes/);
     assert.equal(result.reviewVerdict, "clean");
     assert.deepEqual(result.gateBlockers, [{ kind: "unchecked PR-body Definition of done", item: "post-merge smoke run recorded" }]);
     // Posted before any fixer mutation: no PR-body edit ran in this call.
@@ -13534,4 +13537,38 @@ test("upsert-checkpoint-verdict: a ledger-only review post whose ledger records 
     await assert.rejects(run, /--inline-reason is required for executionMode inline_single_agent/);
     assert.equal(posted().length, 0);
   }, { prefix: "dev-loops-upsert-ledger-only-review-inline-" });
+});
+
+// GATE-COMMENT-BLOCKED-BY: a blocked verdict names its causes; without a findings cause the next action is the operator step.
+test("renderGateReviewCommentBody renders the Blocked by line only on a blocked verdict with causes, and the parser ignores it", () => {
+  const base = {
+    gate: "pre_approval_gate", headSha: "a".repeat(40), repo: "owner/repo", pr: 1, verdict: "blocked",
+    findingsSummary: "none", nextAction: "rerun gate", executionMode: "inline_single_agent", inlineReason: "blocked-by test",
+  };
+  const withCauses = renderGateReviewCommentBody({ ...base, blockedBy: ["unticked_checkboxes", "size_budget"] });
+  assert.match(withCauses, /^\*\*Blocked by:\*\* unticked_checkboxes, size_budget$/m);
+  assert.doesNotMatch(renderGateReviewCommentBody({ ...base, blockedBy: [] }), /Blocked by/);
+  assert.doesNotMatch(renderGateReviewCommentBody({ ...base, verdict: "clean", blockedBy: ["ci"] }), /Blocked by/);
+  assert.equal(parseGateReviewCommentBody(withCauses).verdict, "blocked");
+});
+
+test("deriveEffectiveNextAction names the operator step when no blockedBy cause is findings", () => {
+  assert.equal(deriveEffectiveNextAction("blocked", "pre_approval_gate", [], false, ["unticked_checkboxes"]), "operator step: tick the verified PR-body checkboxes");
+  assert.equal(deriveEffectiveNextAction("blocked", "pre_approval_gate", [], false, ["size_budget", "ci"]), "operator step: grant a size waiver or split the PR; wait for CI");
+  assert.equal(deriveEffectiveNextAction("blocked", "pre_approval_gate", [], false, ["findings", "ci"]), "rerun gate");
+  assert.equal(deriveEffectiveNextAction("blocked", "draft_gate", [], false, []), "stay draft and fix");
+});
+
+// AC9/AC10: composeBlockedBy keeps `findings` in a mixed block, or the emitter refuses a legitimate fix round with blocked_without_findings.
+test("composeBlockedBy derives the blocked-by causes for each branch", () => {
+  const unticked = { kind: "unticked spec-of-record Acceptance criteria", item: "AC1" };
+  const cases = [
+    { name: "unticked only", input: { verdict: "blocked", blockers: [unticked] }, expected: ["unticked_checkboxes"] },
+    { name: "act items plus unticked", input: { verdict: "blocked", blockers: [unticked], hasActItems: true }, expected: ["findings", "unticked_checkboxes"] },
+    { name: "a non-checkbox blocker plus unticked", input: { verdict: "blocked", blockers: [unticked, { kind: "round_cap_reached", item: "x" }] }, expected: ["findings", "unticked_checkboxes"] },
+    { name: "a non-checkbox blocker only", input: { verdict: "blocked", blockers: [{ kind: "round_cap_reached", item: "x" }] }, expected: ["findings"] },
+    { name: "no blockers at all falls back to findings", input: { verdict: "blocked" }, expected: ["findings"] },
+    { name: "a non-blocked verdict", input: { verdict: "findings_present", blockers: [unticked], hasActItems: true }, expected: [] },
+  ];
+  for (const { name, input, expected } of cases) assert.deepEqual(composeBlockedBy(input), expected, name);
 });
