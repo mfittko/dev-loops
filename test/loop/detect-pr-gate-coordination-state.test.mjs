@@ -4858,7 +4858,7 @@ async function detectCapFixture({ cap, priorRounds, finding }) {
     const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
     await mkdir(findings, { recursive: true });
     const ledger = (head, loggedAt, list) => writeFile(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt, findings: list }), "utf8");
-    for (let i = 1; i <= priorRounds; i += 1) await ledger(String(i).repeat(40), `2026-11-15T00:0${i}:00.000Z`, [{ severity: "medium", summary: `round ${i}`, file: "src/a.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix a" }]);
+    for (let i = 1; i <= priorRounds; i += 1) await ledger(String(i).repeat(40), `2026-11-15T00:0${i}:00.000Z`, [{ severity: "medium", summary: `round ${i}`, file: "src/a.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix a" }, { severity: "medium", summary: `round ${i} other`, file: "src/b.mjs", line: 2, judgeDisposition: "act", judgeFix: "fix b" }]);
     await ledger(headSha, "2026-11-16T00:00:00.000Z", [{ file: "src/x.mjs", line: 3, judgeDisposition: "act", ...finding }]);
     const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
     const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });

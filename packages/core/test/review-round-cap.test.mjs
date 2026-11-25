@@ -37,6 +37,7 @@ describe("decideCapRound (GATE-EXEC-CAP-BRAKES)", () => {
       ["3 then 4 acts is non-convergence", { round: 2, actCounts: [3, 4] }, { action: "operator", reason: "non_convergence", numbers: { previous: 3, current: 4 } }],
       ["3 then 2 acts continues", { round: 2, actCounts: [3, 2] }, { action: "full_round" }],
       ["one closed round never trips non-convergence", { round: 2, actCounts: [3] }, { action: "full_round" }],
+      ["a round after a clean round never trips non-convergence", { round: 2, actCounts: [0, 2] }, { action: "full_round" }],
       ["wholeLogicLoc above twice the forecast stops", { round: 1, wholeLogicLoc: 721 }, { action: "operator", reason: "growth_past_forecast", numbers: { wholeLogicLoc: 721, forecastWloc: 360 } }],
       ["wholeLogicLoc at twice the forecast continues", { round: 1, wholeLogicLoc: 720 }, { action: "full_round" }],
       ["no forecast never trips growth", { round: 1, wholeLogicLoc: 9999, forecastWloc: null }, { action: "full_round" }],

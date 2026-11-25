@@ -45,7 +45,8 @@ export function decideCapRound({ round, cap, actCounts = [], fixBudget, wholeLog
   const operator = (reason, numbers) => ({ action: "operator", reason, numbers });
   if (forecastWloc > 0 && wholeLogicLoc > GROWTH_FACTOR * forecastWloc) return operator("growth_past_forecast", { wholeLogicLoc, forecastWloc });
   const [previous, current] = actCounts.slice(-2);
-  if (actCounts.length >= 2 && current > 0 && current >= previous) return operator("non_convergence", { previous, current });
+  // A round after a clean round (previous 0) restarts the count: only a round that follows open act items can fail to shrink them.
+  if (previous > 0 && current >= previous) return operator("non_convergence", { previous, current });
   if (!(cap > 0) || round <= cap) return { action: "full_round" };
   if (round > cap + 1) return operator("round_cap_reached", { round, cap });
   const { logicLoc, addedFiles, maxLines } = fixBudget;
