@@ -221,6 +221,9 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
 // trails last: it is never deferred (the judge disposes it act or reject).
 export const SEVERITY_ORDER = Object.freeze(["high", "question", "medium", "low", "nit"]);
 
+/** The operator step each blocked-by cause without findings names in the derived next action and in the fixer refusal (GATE-COMMENT-BLOCKED-BY). */
+export const BLOCKED_BY_OPERATOR_STEPS = Object.freeze({ unticked_checkboxes: "tick the verified PR-body checkboxes", size_budget: "grant a size waiver or split the PR", ci: "wait for CI" });
+
 // A reviewer's optional `defectKey`: the rule ID or AC row label the finding
 // violates. Fan-in drops a non-matching value; the ledger writer rejects one.
 export const DEFECT_KEY_RE = /^[A-Za-z0-9._:-]{1,64}$/;
