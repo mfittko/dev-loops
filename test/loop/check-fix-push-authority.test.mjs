@@ -354,6 +354,7 @@ test("DEADLOCK 3579: an open sequence with a non-clearing sealed delta no longer
     writeFileSync(path.join(root, "fix.txt"), "fix\n");
     git("add", "fix.txt");
     git("commit", "-q", "-m", "fix");
+    assert.equal(checkFixPushAuthority(root).ok, false);
     const guard = installDefaultBranchGuard({ gitDir: path.join(root, ".git"), defaultBranches: "main" });
     assert.equal(guard.ok, true);
     const push = spawnSync("git", ["push", "origin", "feat"], { cwd: root, env, encoding: "utf8" });
