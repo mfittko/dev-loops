@@ -11711,6 +11711,99 @@ test("the context writer refuses the next round on non-convergence on both gates
   }
 });
 
+test("an operator decision on each act-list fingerprint clears a non_convergence stop when an acted cluster holds two members", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-70");
+    await mkdir(dir, { recursive: true });
+    const act = (k) => ({ severity: "medium", summary: `finding ${k}`, files: [`src/${k}.mjs`], line: 1, judgeDisposition: "act", judgeTitle: `Finding ${k}`, judgeFix: "fix" });
+    // Three acted clusters; cluster 0 holds two members, so the ledger has 4 fingerprints and the act list 3.
+    const findings = [act("a"), act("a2"), act("b"), act("c")].map((f, i) => ({ ...f, clusterId: Math.max(0, i - 1) }));
+    const latest = "2".repeat(40);
+    for (const [i, head] of ["1".repeat(40), latest].entries()) {
+      await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings }), "utf8");
+    }
+    const actList = capRoundActList(findings, latest);
+    assert.equal(actList.length, 3);
+    const planDir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", "pr-70");
+    await mkdir(planDir, { recursive: true });
+    const run = () => main(["--repo", "owner/repo", "--pr", "70", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], { repoRoot, run: stubGhRun });
+    const writePlan = async (items) => {
+      const workOrder = { gate: "draft_gate", headSha: latest, operatorFocus: { items } };
+      await writeFile(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder) }), "utf8");
+    };
+    const exitOf = async () => {
+      const prior = process.exitCode, write = process.stderr.write.bind(process.stderr), out = process.stdout.write.bind(process.stdout);
+      process.exitCode = undefined; process.stderr.write = () => true; process.stdout.write = () => true;
+      try { await run(); return process.exitCode; } finally { process.stderr.write = write; process.stdout.write = out; process.exitCode = prior; }
+    };
+    await writePlan(actList.slice(1).map((a) => ({ fingerprint: a.fingerprint, decision: "fix it" })));
+    assert.equal(await exitOf(), 1, "a missing act-list decision keeps the stop");
+    await writePlan(actList.map((a) => ({ fingerprint: a.fingerprint, decision: "fix it" })));
+    assert.notEqual(await exitOf(), 1, "a decision on each act-list fingerprint clears it");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("an operator decision on the act-list fingerprint clears the round past the scoped round when the acted cluster holds two members", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+    await writeFile(path.join(repoRoot, "src/changed.mjs"), 'import { helper } from "./dep.mjs";\nexport function changed() { return helper() + 3; }\n', "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "fix the named item"]);
+    const newHead = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    await seedClosedRounds(repoRoot, 71, ["1".repeat(40), baseSha, headSha], "pre_approval_gate");
+    const act = (k) => ({ severity: "medium", summary: `guard missing ${k}`, files: ["src/changed.mjs"], line: 2, judgeDisposition: "act", judgeTitle: "Guard is missing", judgeFix: "add the guard", clusterId: 0 });
+    const findings = [act("a"), act("b")];
+    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-71", `pre_approval_gate-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 71, gate: "pre_approval_gate", headSha, verdict: "findings_present", loggedAt: "2026-11-09T00:00:00.000Z", findings }), "utf8");
+    const actList = capRoundActList(findings, headSha);
+    assert.equal(actList.length, 1);
+    const planDir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", "pr-71");
+    await mkdir(planDir, { recursive: true });
+    const workOrder = { gate: "pre_approval_gate", headSha, operatorFocus: { items: [{ fingerprint: actList[0].fingerprint, decision: "fix it" }] } };
+    await writeFile(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder) }), "utf8");
+    const cleared = await runPreApprovalContext(repoRoot, 71, newHead, baseSha);
+    assert.notEqual(cleared.exitCode, 1, cleared.out);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a clean scoped round followed by a base-only merge builds a scoped round at the merged head over the PR's own files", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["checkout", "-q", "-b", "mainline", baseSha]);
+    // A pure base merge: main advances on a file the PR does not touch.
+    await writeFile(path.join(repoRoot, "src/other.mjs"), "export const other = 1;\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "main advances"]);
+    const mainSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    git(repoRoot, ["checkout", "-q", "--detach", headSha]);
+    git(repoRoot, ["merge", "--no-ff", "--no-commit", mainSha]);
+    git(repoRoot, ["commit", "-q", "-m", "merge main"]);
+    const mergedHead = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", mainSha]);
+    await seedClosedRounds(repoRoot, 72, ["1".repeat(40), baseSha, headSha], "pre_approval_gate");
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-72", `pre_approval_gate-${headSha}.json`);
+    const clean = { repo: "owner/repo", pr: 72, gate: "pre_approval_gate", headSha, verdict: "clean", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] };
+    await writeFile(ledger, JSON.stringify(clean), "utf8");
+    const built = await runPreApprovalContext(repoRoot, 72, mergedHead, "origin/main");
+    assert.notEqual(built.exitCode, 1, built.out);
+    const artifact = JSON.parse(await readFile(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-72", `pre_approval_gate-${mergedHead}.json`), "utf8"));
+    assert.equal(artifact.scope.closureRound.fromHead, headSha);
+    // A prior round that is not clean keeps the refusal.
+    await writeFile(ledger, JSON.stringify({ ...clean, verdict: "findings_present", findings: [{ severity: "medium", summary: "guard missing", files: ["src/changed.mjs"], line: 2, judgeDisposition: "act", judgeTitle: "Guard is missing", judgeFix: "add the guard" }] }), "utf8");
+    const refused = await runPreApprovalContext(repoRoot, 72, mergedHead, "origin/main");
+    assert.equal(refused.exitCode, 1);
+    assert.match(refused.out, /closure_delta_no_pr_own_change/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("a pre_approval_gate round forced by a pure base merge does not count toward the cap and is refused scoped as an empty PR-own delta", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {

@@ -2242,8 +2242,22 @@ export async function capFixBudgetFacts({ fromHead, headSha, prBase, repoRoot, r
   return { logicLoc: wholeLogicLoc, addedFiles: added.stdout.split("\n").filter(Boolean).length };
 }
 
-/** Sorted fingerprints of the open act items of one round ledger. */
-const actFingerprintSet = (log) => listOpenActItems(log.findings).map((f) => fingerprintFinding(f)).sort();
+/** Sorted fingerprints of the acted clusters of one round ledger: the act list's unit (capRoundActList), the only fingerprints the emitter binds a focus item to. */
+const actFingerprintSet = (log) => capRoundActList(log.findings, log.headSha).map((a) => a.fingerprint).sort();
+
+/**
+ * The paths of a scoped round at a head that follows a clean closed round by a base-only merge: the PR's own files (those differing from `origin/<prBase>`),
+ * so a clean verdict can post at the merged head. Null for any other case (the empty PR-own delta stays refused).
+ */
+async function resolveCleanBaseMergePaths(options, { repoRoot, prBase, fromHead }) {
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot });
+  const latest = closed.at(-1);
+  if (!latest || String(latest.headSha).trim().toLowerCase() !== fromHead || !isCleanCapRound({ log: latest })) return null;
+  const mainRef = `origin/${prBase}`;
+  if (!(await isBaseMergeRound({ fromHead, head: options.headSha, mainRef, repoRoot }))) return null;
+  const own = await captureMainRelativeChangedFilesSince({ base: mainRef, mainRef, repoRoot });
+  return own.reduced && own.changedFiles.length > 0 ? own.changedFiles : null;
+}
 
 /** The closed round logs that count as rounds: a round forced by a base merge (see {@link countCapRounds}) is dropped. Without `prBase` every log stays. */
 export async function effectiveRounds(closed, { prBase, repoRoot }) {
@@ -2267,7 +2281,7 @@ async function operatorDecidedLatestRound(options, { repoRoot, latest, last }) {
 /**
  * The operator clear of a pre_approval_gate round past the scoped round (GATE-EXEC-CAP-BRAKES). The latest closed round's act items count as cleared when the issued
  * fixer plan (bound to that round's head, to pre_approval_gate and to its digest) holds an operator focus decision for each fingerprint. A set already held by an
- * earlier round from the effective cap round on was re-opened once: it stays with the operator.
+ * earlier round from the round after the effective cap round on was re-opened once: it stays with the operator.
  * Returns the scoped round input `{ fromHead, priorActItems }`, or null.
  */
 async function resolveOperatorClearedRound(options, { repoRoot, cap, prBase }) {
@@ -4826,16 +4840,22 @@ export async function main(
       const baseFetched = ["base_current", "base_stale_integrate_first"].includes(options.baseFreshness.status);
       options.base = baseFetched && normalizeBaseBranch(options.base) === options.baseFreshness.base ? `origin/${options.baseFreshness.base}` : anchorBaseRef(options.base, { repoRoot });
       // ADR 0197: the closure bundle holds the PR-own changes since fromHead; the content of a merged-in base is excluded. No PR-own change refuses (never clean).
-      let closurePaths;
+      let closurePaths, diffFrom = options.closureRound?.fromHead ?? options.base;
       if (options.closureRound) {
         const own = await captureMainRelativeChangedFilesSince({ base: options.closureRound.fromHead, mainRef: `origin/${prBase}`, repoRoot });
-        if (!own.reduced || own.changedFiles.length === 0) {
+        // A clean closed round followed only by a base merge has no PR-own delta to review: scope the round to the PR's own files at the merged head (AC6, AC12).
+        const baseMergePaths = own.reduced && own.changedFiles.length === 0 ? await resolveCleanBaseMergePaths({ ...options, tmpRoot: undefined }, { repoRoot, prBase, fromHead: options.closureRound.fromHead }) : null;
+        if (baseMergePaths) {
+          closurePaths = baseMergePaths;
+          diffFrom = options.base; // the base merge changed no PR file since fromHead: review the PR-own diff at the merged head
+        } else if (!own.reduced || own.changedFiles.length === 0) {
           throw new Error(`closure_delta_no_pr_own_change: the closure round's PR-own delta since ${options.closureRound.fromHead} is ${own.reduced ? "empty (the commits since then only merged the base)" : `unproven (origin/${prBase} does not resolve)`}; refusing a bundle without the PR's own changes (GATE-EXEC-ROUND-CAP).`);
+        } else {
+          closurePaths = own.changedFiles;
         }
-        closurePaths = own.changedFiles;
       }
       // The scoped round diffs from the previous round head (AC3), restricted to the PR-own paths; other rounds diff from the PR base.
-      diff = captureDiffFromBase(options.closureRound?.fromHead ?? options.base, { repoRoot, paths: closurePaths });
+      diff = captureDiffFromBase(diffFrom, { repoRoot, paths: closurePaths });
       const scope = await resolveDiffScope(
         { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", expansion: options.config?.gates?.contextExpansion },
         { repoRoot },

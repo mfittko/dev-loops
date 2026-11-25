@@ -5436,6 +5436,22 @@ test("resolveCapBrakes returns the act counts of the closed rounds and the named
   }
 });
 
+test("resolveCapBrakes names one item per acted cluster: a two-member cluster yields the one fingerprint the emitter accepts", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-cluster-"));
+  try {
+    const head = "1".repeat(40);
+    const act = (k) => ({ severity: "medium", angle: "correctness", summary: `defect ${k}`, files: [`src/f${k}.mjs`], line: 1, judgeDisposition: "act", judgeTitle: `defect ${k}`, judgeFix: "fix it", clusterId: 0 });
+    const file = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-11", `pre_approval_gate-${head}.json`);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 11, gate: "pre_approval_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-11-01T00:00:00.000Z", findings: [act("a"), act("b")] }), "utf8");
+    const facts = await resolveCapBrakes({ repo: "owner/repo", pr: 11, currentHeadSha: head, prData: { isDraft: false } }, { repoRoot: tempDir, config: { version: 1 } });
+    assert.deepEqual(facts.actCounts, [1]);
+    assert.equal(facts.items.length, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapBrakes does not count a pre_approval_gate round forced by a base merge", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-forced-"));
   try {
