@@ -24,6 +24,9 @@ export const GRAPHQL_RATE_LIMIT_MAX_WAIT_MS = 540_000;
 /** Gate review verdict vocabulary shared by tracker/public-routing normalizers. */
 export const GATE_REVIEW_VERDICT_SET = new Set(["clean", "findings_present", "blocked"]);
 
+/** Causes a `blocked` gate verdict names in its `**Blocked by:**` line (GATE-COMMENT-BLOCKED-BY). */
+export const BLOCKED_BY_VALUES = Object.freeze(["findings", "unticked_checkboxes", "size_budget", "ci"]);
+
 /** Normalize a raw gate review verdict to a member of GATE_REVIEW_VERDICT_SET, or null. */
 export function normalizeGateReviewVerdict(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";

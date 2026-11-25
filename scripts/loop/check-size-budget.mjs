@@ -479,10 +479,12 @@ export function computeSizeBudget({
  * scripts/github/write-gate-context.mjs) so the byte-for-byte diff/LOC counts
  * a run produces don't depend on the operator's local git config.
  */
-function captureSizeBudgetDiff({ base, head = "HEAD", workingTree = false, repoRoot = process.cwd(), maxBuffer = 64 * 1024 * 1024 }) {
+function captureSizeBudgetDiff({ base, head = "HEAD", workingTree = false, repoRoot = process.cwd(), maxBuffer = 64 * 1024 * 1024, paths = [] }) {
   base = anchorBaseRef(base, { repoRoot });
   // workingTree diffs `base` against the working tree (committed plus uncommitted).
   const range = workingTree ? base : `${base}...${head}`;
+  // `paths` narrows the diff to those files (the PR-own files of a cap fix budget).
+  const pathspec = paths.length > 0 ? ["--", ...paths] : [];
   // Shared byte-identical flag set (see captureDiffFromBase in
   // scripts/github/write-gate-context.mjs); this path keeps its own runGit stdio
   // and three captured views below.
@@ -503,9 +505,9 @@ function captureSizeBudgetDiff({ base, head = "HEAD", workingTree = false, repoR
   });
   try {
     return {
-      nameStatusOutput: runGit(["diff", "--no-ext-diff", "--name-status", range]),
-      diffOutput: runGit(["diff", "--no-ext-diff", range]),
-      numstatOutput: runGit(["diff", "--no-ext-diff", "--numstat", "-z", range]),
+      nameStatusOutput: runGit(["diff", "--no-ext-diff", "--name-status", range, ...pathspec]),
+      diffOutput: runGit(["diff", "--no-ext-diff", range, ...pathspec]),
+      numstatOutput: runGit(["diff", "--no-ext-diff", "--numstat", "-z", range, ...pathspec]),
     };
   } catch (err) {
     throw new Error(`git diff against --base ${JSON.stringify(base)} failed: ${err?.message ?? err}`);
@@ -526,10 +528,11 @@ export async function evaluatePrSizeBudget({
   repoRoot = process.cwd(),
   waived = false,
   approvedBy = null,
+  paths = [],
 } = {}) {
   const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
   const sizeConfig = config?.gates?.size ?? {};
-  const { nameStatusOutput, diffOutput, numstatOutput } = captureSizeBudgetDiff({ base, head, repoRoot });
+  const { nameStatusOutput, diffOutput, numstatOutput } = captureSizeBudgetDiff({ base, head, repoRoot, paths });
   return computeSizeBudget({ nameStatusOutput, diffOutput, numstatOutput, sizeConfig, configErrors, waived, approvedBy, rules: resolveClassifyRules(config) });
 }
 

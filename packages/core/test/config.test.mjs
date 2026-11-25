@@ -3312,7 +3312,27 @@ describe("role resolution", () => {
       assert.equal(resolveGateConfig({ version: 1 }, "draft").maxReviewRounds, 4);
       assert.equal(resolveGateConfig({ version: 1, gates: { draft: { maxReviewRounds: 6 } } }, "draft").maxReviewRounds, 6);
       assert.equal(resolveGateConfig({ version: 1, gates: { draft: { maxReviewRounds: 0 } } }, "draft").maxReviewRounds, 0);
-      assert.equal(resolveGateConfig({ version: 1, gates: { draft: { maxReviewRounds: 0 } } }, "preApproval").maxReviewRounds, 4);
+      assert.equal(resolveGateConfig({ version: 1, gates: { draft: { maxReviewRounds: 0 } } }, "preApproval").maxReviewRounds, 2);
+    });
+
+    test("resolveGateConfig resolves gates.preApproval.maxReviewRounds: default 2, override, 0 kill switch", () => {
+      assert.equal(resolveGateConfig({ version: 1 }, "preApproval").maxReviewRounds, 2);
+      assert.equal(resolveGateConfig({ version: 1, gates: { preApproval: { maxReviewRounds: 3 } } }, "preApproval").maxReviewRounds, 3);
+      assert.equal(resolveGateConfig({ version: 1, gates: { preApproval: { maxReviewRounds: 0 } } }, "preApproval").maxReviewRounds, 0);
+    });
+
+    test("resolveCapFixMaxLines resolves gates.capFixMaxLines: default 60, override, and the loader accepts both keys", async () => {
+      const { resolveCapFixMaxLines, loadDevLoopConfig } = await import("../src/config/config.mjs");
+      assert.equal(resolveCapFixMaxLines({ version: 1 }), 60);
+      assert.equal(resolveCapFixMaxLines({ version: 1, gates: { capFixMaxLines: 30 } }), 30);
+      const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-capfix-"));
+      try {
+        await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  capFixMaxLines: 30\n  preApproval:\n    maxReviewRounds: 3\n");
+        const { errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+        assert.deepEqual(errors, []);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
     });
 
     for (const bad of [-1, 1.5, "4"]) {
@@ -3324,7 +3344,7 @@ describe("role resolution", () => {
       });
     }
 
-    for (const gate of ["preApproval", "spike"]) {
+    for (const gate of ["spike"]) {
       test(`loadDevLoopConfig rejects maxReviewRounds on gates.${gate}`, async () => {
         const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-maxrounds-nondraft-"));
         try {

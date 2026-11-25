@@ -321,6 +321,11 @@
       "id": "GATE-COMMENT-VALIDATION-REPORTING"
     },
     {
+      "id": "GATE-COMMENT-BLOCKED-BY",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by upsert-checkpoint-verdict.mjs (composeBlockedBy, the Blocked by line, deriveEffectiveNextAction), summarizeGateReviewCommentMarkers in packages/core/src/github/copilot-helpers.mjs (parse) and emit-fixer-work-order.mjs (blocked_without_findings); the rule body in gate-review-comment-contract.md owns the clauses"
+    },
+    {
       "id": "GATE-COMMENT-VERDICT-VALUES",
       "enforcement": "runtime"
     },
@@ -555,6 +560,11 @@
     },
     {
       "id": "GATE-EXEC-REVIEWER-BUDGET-PREFLIGHT"
+    },
+    {
+      "id": "GATE-EXEC-CAP-BRAKES",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by decideCapRound in packages/core/src/loop/review-round-cap.mjs, called by resolveScopedFinalRound in write-gate-context.mjs (refuses the scoped final round context) and by evaluatePrGateCoordination (the non_convergence stop, facts from resolveCapBrakes in detect-pr-gate-coordination-state.mjs); upsert-checkpoint-verdict.mjs composes the scoped round blockers via pastCapBlockers and emit-fixer-work-order.mjs refuses an act list past the cap without an operator focus decision; the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-ROUND-CAP",

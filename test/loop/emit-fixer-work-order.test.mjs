@@ -5034,3 +5034,134 @@ test("AC8: an escalated cap-ledger act finding binds as operator focus and joins
     await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile }), /empty and no operator focus item bound a cap-ledger act finding \(GATE-EXEC-ROUND-CAP-EXIT\)/);
   });
 });
+
+// GATE-EXEC-CAP-BRAKES: a pre_approval_gate act list of a round past the cap (cap 2) reaches the fixer only with an operator focus decision per act item.
+test("a pre_approval_gate act list of round cap+1 is refused unless an operator focus decision names each act item by fingerprint", async () => {
+  await withFixture(async ({ root, files, emit }) => {
+    const act = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
+    await writeFile(files.actList, JSON.stringify([act]));
+    const prior = async (sha) => {
+      const file = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `pre_approval_gate-${sha.repeat(40)}.json`);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: sha.repeat(40), verdict: "findings_present", findings: [] }));
+    };
+    const gated = { gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined };
+    await prior("d");
+    assert.equal((await emit(gated)).workOrder.source, "act-list", "the cap round reaches the fixer");
+    await prior("e");
+    await assert.rejects(emit(gated), (e) => e.refusal === "round_cap_reached" && /operator-focus-file/.test(e.message) && e.message.includes(act.fingerprint));
+    const focusFile = path.join(root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "0".repeat(16), decision: "Fix it in this PR" }] }));
+    await assert.rejects(emit({ ...gated, operatorFocusFile: focusFile }), (e) => e.refusal === "round_cap_reached");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: act.fingerprint, replyDisposition: "deferred", replyNote: "later" }] }));
+    await assert.rejects(emit({ ...gated, operatorFocusFile: focusFile }), (e) => e.refusal === "round_cap_reached", "an item without a decision does not clear the stop");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: act.fingerprint, decision: "Fix it in this PR" }] }));
+    assert.equal((await emit({ ...gated, operatorFocusFile: focusFile })).workOrder.source, "act-list");
+  });
+});
+
+// GATE-EXEC-SOFT-CAP: at the pre_approval_gate cap round (round 2 of 2) a question act item is a cap-round blocker and never reaches the fixer.
+test("a pre_approval_gate act list holding a question at the cap round is refused with round_cap_reached", async () => {
+  await withFixture(async ({ root, files, emit }) => {
+    const file = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `pre_approval_gate-${"d".repeat(40)}.json`);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+    const gated = { gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined };
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "question", judgeFix: "guard the deref" })]));
+    await assert.rejects(emit(gated), (e) => e.refusal === "round_cap_reached" && /cap round/.test(e.message));
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
+    assert.equal((await emit(gated)).workOrder.source, "act-list", "a medium act item at the cap round still reaches the fixer");
+  });
+});
+
+// GATE-EXEC-SOFT-CAP: a high the judge deferred or rejected lives only in the ledger; the poster composes blocked from it, so no fixer order follows (both pre_approval_gate branches).
+test("a pre_approval_gate cap round or past-cap round whose ledger holds a judge-closed high is refused with round_cap_reached", async () => {
+  const ledgerHigh = (judgeDisposition) => ({ ...ACT[0], severity: "high", summary: "ledger-only high", judgeDisposition, judgeRationale: "decided" });
+  const writeLedger = async (root, sha, findings) => {
+    const file = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `pre_approval_gate-${sha}.json`);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: sha, verdict: "findings_present", findings }));
+  };
+  const act = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
+  const gated = { gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined };
+  await withFixture(async ({ root, head, files, emit }) => {
+    await writeFile(files.actList, JSON.stringify([act]));
+    await writeLedger(root, "d".repeat(40), []);
+    await writeLedger(root, head, [{ ...act, judgeDisposition: "act" }, ledgerHigh("defer")]);
+    await assert.rejects(emit(gated), (e) => e.refusal === "round_cap_reached" && /ledger-only high/.test(e.message));
+    await writeLedger(root, head, [{ ...act, judgeDisposition: "act" }]);
+    assert.equal((await emit(gated)).workOrder.source, "act-list", "the same cap round without the ledger-only high reaches the fixer");
+    await writeFile(path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `pre_approval_gate-${head}.json`), "{ not json");
+    await assert.rejects(emit(gated), (e) => e.refusal === "round_cap_reached", "an unreadable cap-round ledger fails closed");
+  });
+  await withFixture(async ({ root, head, files, emit }) => {
+    await writeFile(files.actList, JSON.stringify([act]));
+    await writeLedger(root, "d".repeat(40), []);
+    await writeLedger(root, "e".repeat(40), []);
+    await writeLedger(root, head, [{ ...act, judgeDisposition: "act" }, ledgerHigh("reject")]);
+    const focusFile = path.join(root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: act.fingerprint, decision: "Fix it in this PR" }] }));
+    await assert.rejects(emit({ ...gated, operatorFocusFile: focusFile }), (e) => e.refusal === "round_cap_reached" && /ledger-only high/.test(e.message));
+    await writeLedger(root, head, [{ ...act, judgeDisposition: "act" }]);
+    assert.equal((await emit({ ...gated, operatorFocusFile: focusFile })).workOrder.source, "act-list");
+  });
+});
+
+// GATE-COMMENT-BLOCKED-BY: a blocked verdict whose causes hold no findings entry has no fix round.
+test("a pre_approval_gate fix round after a blocked verdict with no findings cause is refused with blocked_without_findings naming the operator step", async () => {
+  await withFixture(async ({ head, files, emit }) => {
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
+    const blockedAt = (blockedBy) => async ({ headSha }) => summarizeGateReviewCommentMarkers([{
+      id: 1, surface: "review", state: "COMMENTED", submitted_at: "2026-10-19T00:00:00Z", updated_at: "2026-10-19T00:00:00Z",
+      body: ["Gate review: pre_approval_gate", `Reviewed head SHA: ${head}`, "Verdict: blocked", `Blocked by: ${blockedBy}`, "Findings summary: boxes", "Next action: rerun gate"].join("\n"),
+    }], { headSha });
+    const gated = { gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined };
+    await assert.rejects(emit({ ...gated, fetchVerdictMarkers: blockedAt("unticked_checkboxes, ci") }), (e) => e.refusal === "blocked_without_findings" && /tick the verified PR-body checkboxes; wait for CI/.test(e.message));
+    assert.equal((await emit({ ...gated, fetchVerdictMarkers: blockedAt("findings, unticked_checkboxes") })).workOrder.source, "act-list");
+  });
+});
+
+// GATE-EXEC-CAP-BRAKES: the pre_approval_gate round count follows the carried origin head and never counts a round forced by a base merge.
+// Round 1 is ledger "d" and round 2 is the origin head O (the cap round); origin/main then moves and the branch merges it into M.
+async function mergedPreApprovalScenario({ root, wt, files }, { ownChangeAfterMerge = false } = {}) {
+  await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { preApproval: { maxReviewRounds: 2 } } }));
+  await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
+  await writeFile(path.join(wt, "pr.md"), "pr content\n");
+  git(wt, "add", "pr.md");
+  git(wt, "commit", "-q", "-m", "pr change");
+  const origin = git(wt, "rev-parse", "HEAD");
+  const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
+  await mkdir(dir, { recursive: true });
+  for (const [i, sha] of ["d".repeat(40), origin].entries()) {
+    await writeFile(path.join(dir, `pre_approval_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [] }));
+  }
+  await writeFile(path.join(root, "main-only.md"), "main content\n");
+  git(root, "add", "-A");
+  git(root, "commit", "-q", "-m", "main moves");
+  git(root, "update-ref", "refs/remotes/origin/main", "main");
+  git(wt, "merge", "-q", "--no-ff", "-m", "merge origin/main", "origin/main");
+  if (ownChangeAfterMerge) {
+    await writeFile(path.join(wt, "pr.md"), "changed pr blob\n");
+    git(wt, "commit", "-q", "-am", "own change");
+  }
+  const merged = git(wt, "rev-parse", "HEAD");
+  return { origin, merged, over: (postedAt) => ({ gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined, headSha: merged, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: merged, baseRefName: "main" }), fetchVerdictMarkers: verdictPostedAt(postedAt) }) };
+}
+
+test("a pre_approval_gate act list at a base-merged head is counted at the carried origin head (round 2, not round 3)", async () => {
+  await withFixture(async (fx) => {
+    const { origin, over } = await mergedPreApprovalScenario(fx);
+    assert.equal((await fx.emit(over(origin))).workOrder.source, "act-list");
+  });
+});
+
+test("a pre_approval_gate act list at a base-merge-forced head without a carry does not count the forced round, and a PR-own change after the merge does", async () => {
+  await withFixture(async (fx) => {
+    const { merged, over } = await mergedPreApprovalScenario(fx);
+    assert.equal((await fx.emit(over(merged))).workOrder.source, "act-list");
+  });
+  await withFixture(async (fx) => {
+    const { merged, over } = await mergedPreApprovalScenario(fx, { ownChangeAfterMerge: true });
+    await assert.rejects(fx.emit(over(merged)), (e) => e.refusal === "round_cap_reached");
+  });
+});

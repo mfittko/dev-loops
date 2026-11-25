@@ -221,6 +221,9 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
 // trails last: it is never deferred (the judge disposes it act or reject).
 export const SEVERITY_ORDER = Object.freeze(["high", "question", "medium", "low", "nit"]);
 
+/** The operator step each blocked-by cause without findings names in the derived next action and in the fixer refusal (GATE-COMMENT-BLOCKED-BY). */
+export const BLOCKED_BY_OPERATOR_STEPS = Object.freeze({ unticked_checkboxes: "tick the verified PR-body checkboxes", size_budget: "grant a size waiver or split the PR", ci: "wait for CI" });
+
 // A reviewer's optional `defectKey`: the rule ID or AC row label the finding
 // violates. Fan-in drops a non-matching value; the ledger writer rejects one.
 export const DEFECT_KEY_RE = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -1388,9 +1391,10 @@ export const isSeededCapFinding = (finding) => String(finding?.defectKey ?? "").
  * a `high` act item without a non-blank `judgeFix` (at the cap round a high with a `judgeFix` goes to the fixer; after it a high always blocks),
  * a `question`-severity act item, a `failOpen: true` or `high` finding the judge defers or rejects, and a finding with no valid disposition or severity
  * and an act item with a missing or blank severity (evidence integrity, `severity_disagreement`). Medium, low, nit and unknown-severity act items and a medium defer or reject without `failOpen` never block: they reach the fixer and the pre-push delta.
+ * `scoped: true` (the scoped final round of a gate past its cap, GATE-EXEC-CAP-BRAKES) makes every open act item a blocker: each finding of that round goes to the operator.
  * @returns {Array<{ kind: "round_cap_reached", reason: "new_act"|"resurfaced"|"severity_disagreement", item: string }>}
  */
-export function pastCapBlockers(findings, { round, cap } = {}) {
+export function pastCapBlockers(findings, { round, cap, scoped = false } = {}) {
   const atCap = cap > 0 && round === cap;
   const list = Array.isArray(findings) ? findings : [];
   const label = (f, reason) => `[${normalizeSeverity(f?.severity)}] ${String(f?.summary ?? "").trim()} (${reason})`;
@@ -1402,7 +1406,7 @@ export function pastCapBlockers(findings, { round, cap } = {}) {
       if (!hasSeverityText(f)) {
         // The fixer act-list matcher refuses a missing or blank severity, so the item is an evidence-integrity blocker.
         blockers.push({ kind: "round_cap_reached", reason: "severity_disagreement", item: label(f, "severity_disagreement") });
-      } else if (severity === "question" || (severity === "high" && !(atCap && hasFix))) {
+      } else if (scoped || severity === "question" || (severity === "high" && !(atCap && hasFix))) {
         const reason = f.resurfaces ? "resurfaced" : "new_act";
         blockers.push({ kind: "round_cap_reached", reason, item: label(f, reason) });
       }
