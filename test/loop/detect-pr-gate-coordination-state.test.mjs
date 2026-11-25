@@ -5458,7 +5458,10 @@ test("resolveCapBrakes does not count a pre_approval_gate round forced by a base
       await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 10, gate: "pre_approval_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${day}T00:00:00.000Z`, findings: acts }), "utf8");
     }
     const ctx = (baseRefName) => ({ repo: "owner/repo", pr: 10, currentHeadSha: merged, prData: { isDraft: false, baseRefName } });
-    assert.equal((await resolveCapBrakes(ctx("main"), { repoRoot: dir, config: { version: 1 } })).round, 2, "the merge-forced round does not count");
+    const forced = await resolveCapBrakes(ctx("main"), { repoRoot: dir, config: { version: 1 } });
+    assert.equal(forced.round, 2, "the merge-forced round does not count");
+    assert.deepEqual(forced.actCounts, [1], "the merge-forced round repeating the same act items adds no non-convergence act count");
+    assert.deepEqual((await resolveCapBrakes(ctx(undefined), { repoRoot: dir, config: { version: 1 } })).actCounts, [1, 1]);
     assert.equal((await resolveCapBrakes(ctx(undefined), { repoRoot: dir, config: { version: 1 } })).round, 3, "without the PR base the raw count stands");
   } finally {
     await rm(dir, { recursive: true, force: true });

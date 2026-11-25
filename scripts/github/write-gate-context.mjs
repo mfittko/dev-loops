@@ -2246,7 +2246,7 @@ async function capFixBudgetFacts({ fromHead, headSha, prBase, repoRoot }) {
 const actFingerprintSet = (log) => listOpenActItems(log.findings).map((f) => fingerprintFinding(f)).sort();
 
 /** The closed round logs that count as rounds: a round forced by a base merge (see {@link countCapRounds}) is dropped. Without `prBase` every log stays. */
-async function effectiveRounds(closed, { prBase, repoRoot }) {
+export async function effectiveRounds(closed, { prBase, repoRoot }) {
   if (!prBase) return closed;
   const heads = closed.map((l) => String(l.headSha).trim().toLowerCase());
   const keep = await Promise.all(closed.map(async (_, i) => i === 0 || !(await isBaseMergeRound({ fromHead: heads[i - 1], head: heads[i], mainRef: `origin/${prBase}`, repoRoot }))));

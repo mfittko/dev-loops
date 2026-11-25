@@ -32,7 +32,7 @@ import {
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { convergedCarryAccepts } from "../github/_carried-verdict.mjs";
-import { capRoundActList, countCapRounds, countCompletedRounds, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { capRoundActList, countCapRounds, countCompletedRounds, effectiveRounds, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
 import { fingerprintFinding } from "../github/_gate-finding-surface.mjs";
 import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
@@ -1459,7 +1459,7 @@ export async function resolveCapBrakes(context, { repoRoot, config }) {
     // A base-merge-forced round never counts (countCapRounds), as in the poster and the emitter.
     round: await countCapRounds({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, prBase: context.prData?.baseRefName, includeLiveCurrentHead: true }),
     cap: gate === "pre_approval_gate" ? resolveGateConfig(config, "preApproval").maxReviewRounds : 0,
-    actCounts: logs.map((log) => capRoundActList(log.findings, log.headSha).length),
+    actCounts: (await effectiveRounds(logs, { prBase: gate === "pre_approval_gate" ? context.prData?.baseRefName : undefined, repoRoot })).map((log) => capRoundActList(log.findings, log.headSha).length),
     items: open.map((f) => `${fingerprintFinding(f)} [${normalizeSeverity(f.severity)}] ${String(f.summary ?? "").trim()}`),
   };
 }
