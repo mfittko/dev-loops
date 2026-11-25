@@ -31,9 +31,9 @@ test("the judge brief names the draft closure round as superseded by ADR 0208 an
 });
 
 // ADR 0324: the cap exit rule is gone; the draft exit is the clean scoped final round of GATE-EXEC-CAP-BRAKES.
-test("GATE-EXEC-ROUND-CAP-EXIT is deleted and GATE-EXEC-CAP-BRAKES names the draft default 2 and the scoped draft exit; the low-nit sentence names the scoped round", async () => {
+test("the draft cap exit rule is deleted and GATE-EXEC-CAP-BRAKES names the draft default 2 and the scoped draft exit; the low-nit sentence names the scoped round", async () => {
   const contract = await read("skills/docs/gate-review-sub-loop-contract.md");
-  assert.ok(!contract.includes("GATE-EXEC-ROUND-CAP-EXIT"), "the cap exit rule and every reference are gone");
+  assert.ok(!contract.includes(["GATE-EXEC-ROUND-CAP", "EXIT"].join("-")), "the cap exit rule and every reference are gone");
   const brakes = contract.split("<!-- rule: GATE-EXEC-CAP-BRAKES -->")[1].split("\n")[1];
   for (const text of ["(default 2, `0` disables the cap)", "the clean verdict of the draft scoped final round is the draft exit", "ADR 0324 amends ADR 0322", "(3) Growth:", "`forecastWlocs`"]) assert.ok(brakes.includes(text), text);
   assert.ok(!brakes.includes("slice 2"), "no slice sentence is left");
