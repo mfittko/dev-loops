@@ -480,6 +480,12 @@ test("parseChangedFiles returns empty for empty/non-string input", () => {
 // CLI arg parsing
 // ---------------------------------------------------------------------------
 
+test("parseWriteGateContextCliArgs accepts --operator-focus-file for the draft and pre_approval gates and rejects it for review", () => {
+  const base = ["--repo", "owner/repo", "--pr", "42", "--head-sha", "abc1234567890abcdef", "--operator-focus-file", "focus.json"];
+  for (const gate of ["draft_gate", "pre_approval_gate"]) assert.equal(parseWriteGateContextCliArgs([...base, "--gate", gate]).operatorFocusFile, "focus.json");
+  assert.throws(() => parseWriteGateContextCliArgs([...base, "--gate", "review"]), /--operator-focus-file/);
+});
+
 test("parseWriteGateContextCliArgs parses required args", () => {
   const result = parseWriteGateContextCliArgs([
     "--repo", "owner/repo",
@@ -11807,7 +11813,9 @@ test("--operator-focus-file clears a non_convergence stop with no fixer plan and
     const artifact = JSON.parse(await readFile(t.contextPath, "utf8"));
     assert.deepEqual(artifact.operatorClear, { reason: "non_convergence", fingerprints: [one, two].sort() });
     await rm(t.contextPath);
-    assert.equal((await t.run([])).exitCode, 1, "a same-head rerun without the file stops again");
+    const rerun = await t.run([]);
+    assert.equal(rerun.exitCode, 1, "a same-head rerun without the file stops again");
+    assert.match(rerun.out, /non_convergence/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
