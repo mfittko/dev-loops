@@ -371,6 +371,9 @@ with the fixed meaning below:
 | `findings_present` | A fully judged round has a non-empty judge act list; a round with an unjudged finding has an issue at a blocking severity or a non-empty act list; fixes are required before the gate boundary can be crossed |
 | `blocked` | The gate could not complete or a hard blocker prevented a verdict |
 
+<!-- rule: GATE-COMMENT-BLOCKED-BY -->
+`GATE-COMMENT-BLOCKED-BY`: A `blocked` verdict composed over a completed ledger names its causes in one `**Blocked by:**` line, a comma-separated list of `findings`, `unticked_checkboxes`, `size_budget` and `ci`. `upsert-checkpoint-verdict.mjs` renders the line only on a `blocked` verdict with at least one cause, and `summarizeGateReviewCommentMarkers` parses it into `blockedBy` and drops an unknown cause. The line is additive: a parser that does not know it ignores it. When `blockedBy` holds no `findings` entry, the derived next action is the operator step (tick the verified PR-body checkboxes, grant a size waiver or split the PR, or wait for CI), and `emit-fixer-work-order.mjs` refuses a fix round with `blocked_without_findings` that names that step. ADR 0322 records this rule.
+
 Enforcement at write time and post time:
 
 - The consolidator (`consolidate-fanin.mjs`) computes the severity `overallVerdict`. It threads
