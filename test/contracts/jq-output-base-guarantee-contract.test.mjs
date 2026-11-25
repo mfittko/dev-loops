@@ -121,7 +121,7 @@ const EXCLUDED = new Map([
   ],
   [
     "loop/check-fix-push-authority.mjs",
-    "Git pre-push hook helper: its contract is the exit code (1 refuses the push) with a one-line stderr reason; stdout carries nothing, and JSON.stringify appears only inside a thrown error message, so --jq/--silent have no payload to apply to.",
+    "Push-authority checker: its contract is the exit code (1 refuses the push) with a one-line stderr reason; stdout carries nothing, and JSON.stringify appears only inside a thrown error message, so --jq/--silent have no payload to apply to.",
   ],
   [
     "loop/check-refusal-recovery.mjs",

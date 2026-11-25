@@ -456,6 +456,7 @@ test("the generated pre-push hook has no push-authority block (ADR 0323)", () =>
   const prePush = renderGuardHook("pre-push", "main");
   assert.ok(!prePush.includes("check-fix-push-authority"));
   assert.ok(!prePush.includes("gate-delta"));
+  assert.ok(!prePush.includes("PRE-PUSH-DELTA-PUSH-AUTHORITY"));
 });
 
 test("renderGuardHook emits a runnable script that names what it refused", () => {

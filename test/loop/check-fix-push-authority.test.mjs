@@ -9,7 +9,7 @@ import { test } from "bun:test";
 import { clearSequenceMarker, findActiveSequence, recoveryHint, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { installDefaultBranchGuard } from "@dev-loops/core/loop/default-branch-guard";
 import { checkFixPushAuthority, parsePushedShas } from "../../scripts/loop/check-fix-push-authority.mjs";
-import { writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
+import { DELTA_CLEARING_NEXT_STEPS, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { closeGateSequence, fixerGraceMs } from "../../scripts/loop/close-gate-sequence.mjs";
 import { withTempDir } from "../_helpers.mjs";
 
@@ -359,5 +359,6 @@ test("DEADLOCK 3579: an open sequence with a non-clearing sealed delta no longer
     assert.equal(push.status, 0, push.stderr);
     assert.deepEqual(checkFixPushAuthority(root), { ok: true });
     assert.match(git("diff", "--name-only", "origin/main...HEAD"), /fix\.txt/);
+    assert.ok(!DELTA_CLEARING_NEXT_STEPS.includes("fix_and_rereview"));
   });
 });

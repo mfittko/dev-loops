@@ -42,7 +42,7 @@ export function parsePushes(text) {
   return pushes;
 }
 
-/** @param {string} cwd @param {Array<string|{ sha: string, remoteRef?: string }>|null} pushedShas the pushes (a bare sha, or a sha with the remote ref it updates), or null to test the checkout HEAD @param {string} [pushUrl] the push URL git passes the pre-push hook as its second argument */
+/** @param {string} cwd @param {Array<string|{ sha: string, remoteRef?: string }>|null} pushedShas the pushes (a bare sha, or a sha with the remote ref it updates), or null to test the checkout HEAD @param {string} [pushUrl] the push target URL, when known */
 export function checkFixPushAuthority(cwd = process.cwd(), pushedShas = null, pushUrl = undefined) {
   const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnvNoDirOverrides(), stdio: ["ignore", "pipe", "ignore"] });
   const tmpRoot = resolveGateArtifactTmpRoot(cwd);
@@ -59,7 +59,7 @@ export function checkFixPushAuthority(cwd = process.cwd(), pushedShas = null, pu
   const remoteAdvanced = (baseline, branch) => git("for-each-ref", "--contains", baseline, "--format=%(objectname)", `refs/remotes/*/${branch}`).split("\n").some((sha) => sha && sha !== baseline);
   // Exit 1 means the object is missing; any other failure rethrows and refuses the push (fail closed). No `^{commit}` peel: with it a missing object and a broken store both exit 128.
   const baselinePresent = (baseline) => { try { git("cat-file", "-e", baseline); return true; } catch (error) { if (error?.status === 1) return false; throw error; } };
-  // The repo the push targets: the GitHub push URL git passes the hook, else origin.
+  // The repo the push targets: the push target repo, else the checkout's origin.
   const repo = (pushUrl ? parseGitHubRemoteSlug(pushUrl) : null) ?? detectRepoSlug(cwd) ?? undefined;
   const heads = (pushedShas ?? [git("rev-parse", "HEAD").trim()]).map((p) => typeof p === "string" ? { sha: p } : p);
   let refusedBy = null;
