@@ -13557,6 +13557,8 @@ test("deriveEffectiveNextAction names the operator step when no blockedBy cause 
   assert.equal(deriveEffectiveNextAction("blocked", "pre_approval_gate", [], false, ["size_budget", "ci"]), "operator step: grant a size waiver or split the PR; wait for CI");
   assert.equal(deriveEffectiveNextAction("blocked", "pre_approval_gate", [], false, ["findings", "ci"]), "rerun gate");
   assert.equal(deriveEffectiveNextAction("blocked", "draft_gate", [], false, []), "stay draft and fix");
+  assert.equal(deriveEffectiveNextAction("blocked", "draft_gate", [], false, ["size_budget"]), "operator step: grant a size waiver or split the PR");
+  assert.equal(deriveEffectiveNextAction("blocked", "draft_gate", [], false, ["ci"]), "operator step: wait for CI");
 });
 
 // AC9/AC10: composeBlockedBy keeps `findings` in a mixed block, or the emitter refuses a legitimate fix round with blocked_without_findings.
@@ -13569,6 +13571,15 @@ test("composeBlockedBy derives the blocked-by causes for each branch", () => {
     { name: "a non-checkbox blocker only", input: { verdict: "blocked", blockers: [{ kind: "round_cap_reached", item: "x" }] }, expected: ["findings"] },
     { name: "no blockers at all falls back to findings", input: { verdict: "blocked" }, expected: ["findings"] },
     { name: "a non-blocked verdict", input: { verdict: "findings_present", blockers: [unticked], hasActItems: true }, expected: [] },
+    { name: "an escalated size outcome without a waiver", input: { verdict: "blocked", sizeOutcome: "escalate" }, expected: ["size_budget"] },
+    { name: "a block size outcome without a waiver", input: { verdict: "blocked", sizeOutcome: "block" }, expected: ["size_budget"] },
+    { name: "an escalated size outcome with a valid waiver", input: { verdict: "blocked", sizeOutcome: "escalate", sizeWaiverGranted: true }, expected: ["findings"] },
+    { name: "a passing size outcome", input: { verdict: "blocked", sizeOutcome: "pass" }, expected: ["findings"] },
+    { name: "failing CI", input: { verdict: "blocked", ciStatus: "failure" }, expected: ["ci"] },
+    { name: "pending CI", input: { verdict: "blocked", ciStatus: "pending" }, expected: ["ci"] },
+    { name: "green CI", input: { verdict: "blocked", ciStatus: "success" }, expected: ["findings"] },
+    { name: "act items, unticked boxes, size and CI together", input: { verdict: "blocked", blockers: [unticked], hasActItems: true, sizeOutcome: "block", ciStatus: "failure" }, expected: ["findings", "unticked_checkboxes", "size_budget", "ci"] },
+    { name: "size and CI causes on a non-blocked verdict", input: { verdict: "clean", sizeOutcome: "block", ciStatus: "failure" }, expected: [] },
   ];
   for (const { name, input, expected } of cases) assert.deepEqual(composeBlockedBy(input), expected, name);
 });

@@ -5,8 +5,7 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitiz
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { wrapOperatorOwnedPhrases } from "@dev-loops/core/github/operator-owned-lines";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
-import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
-import { BLOCKED_BY_OPERATOR_STEPS, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, isPastRoundCap, isSeededCapFinding, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, pastCapBlockers, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
+import { BLOCKED_BY_OPERATOR_STEPS, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, isPastRoundCap, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, pastCapBlockers, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { composeBodyOnlyConvergedDraftGate, composeConvergedDraftGate, convergedActItemKey, isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
@@ -70,7 +69,7 @@ import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import { countPrOwnCommits as realCountPrOwnCommits } from "../loop/check-pre-push-delta.mjs";
 import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
-import { buildValidationResultsPath, countCapRounds, countCompletedRounds, isCleanCapRound, ledgerTmpRoot, prBodySha256, readGateContext, readReviewedBodySha256, resolveCapRound, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
+import { buildValidationResultsPath, countCapRounds, countCompletedRounds, isCleanCapRound, ledgerTmpRoot, prBodySha256, readGateContext, readReviewedBodySha256, refusesPastScopedRound, resolveCapRound, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
@@ -162,7 +161,7 @@ async function roundStartedAtCurrentBase(options, headSha, repoRoot, base) {
   return false;
 }
 
-const roundCapReachedError =(round, cap) => new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs and no fixer follows. After the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`; pre_approval_gate judges what remains. When every open act item is a PR-body item, edit the PR body and run \`--converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`);
+const roundCapReachedError = (round, cap) => new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap}; the scoped final round (round ${cap + 1}) has run (GATE-EXEC-CAP-BRAKES). Report blocked with blockedOn operator_decision; the operator clears it with an operator focus item whose decision names the act items by fingerprint. When every open act item is a PR-body item, edit the PR body and run \`--converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`);
 
 const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>; on every gate, --findings-ledger alone suffices; a draft_gate post requires --findings-ledger carrying overallVerdict while gates.draft.maxReviewRounds > 0) [--next-action <text> (required except on --gate review or with --findings-ledger)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
    or: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --gate draft_gate --post-sealed-cap-round (head, verdict and findings derive from the sealed clean cap-round ledger)
@@ -2612,13 +2611,15 @@ export function composeCheckpointVerdict({ reviewVerdict, blockers = [] }) {
   return reviewVerdict;
 }
 
-// GATE-COMMENT-BLOCKED-BY: the causes of a composed `blocked` verdict. Unticked boxes are the only cause the blockers prove,
-// so a blocked round with any other blocker or an open act item names `findings`. size_budget and ci are named by their own posters.
-export function composeBlockedBy({ verdict, blockers = [], hasActItems = false }) {
+// GATE-COMMENT-BLOCKED-BY: the causes of a composed `blocked` verdict. The blockers prove unticked boxes, `sizeOutcome` and `ciStatus` prove the size-budget and
+// CI causes, and a blocked round with any other blocker or an open act item names `findings`. A blocked round with no other cause names `findings` as well.
+export function composeBlockedBy({ verdict, blockers = [], hasActItems = false, sizeOutcome = null, sizeWaiverGranted = false, ciStatus = null }) {
   if (verdict !== "blocked") return [];
   const unticked = blockers.some((b) => PRE_APPROVAL_BLOCKER_SOURCES.some(([, kind]) => kind === b.kind));
-  const findings = hasActItems || blockers.some((b) => !PRE_APPROVAL_BLOCKER_SOURCES.some(([, kind]) => kind === b.kind)) || !unticked;
-  return [...(findings ? ["findings"] : []), ...(unticked ? ["unticked_checkboxes"] : [])];
+  const size = ["escalate", "block"].includes(sizeOutcome) && sizeWaiverGranted !== true;
+  const ci = ["failure", "pending"].includes(ciStatus);
+  const findings = hasActItems || blockers.some((b) => !PRE_APPROVAL_BLOCKER_SOURCES.some(([, kind]) => kind === b.kind)) || !(unticked || size || ci);
+  return [...(findings ? ["findings"] : []), ...(unticked ? ["unticked_checkboxes"] : []), ...(size ? ["size_budget"] : []), ...(ci ? ["ci"] : [])];
 }
 
 // The `**Gate blockers:**` line and the verdict-contradiction error state only
@@ -3230,10 +3231,12 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     // refuses every other shape before any cap logic runs. The one exception is an inline clean without findings content (--findings-summary text only, as reconcile-draft-gate posts):
     // it holds no finding, so the cap has nothing to count or block.
     if (options.gate === "draft_gate" && draftGateConfig.maxReviewRounds > 0) {
-      // ADR 0208: round N+1 never runs, whatever the post shape (the inline exception below included); a converged post is the one carve-out.
+      // GATE-EXEC-CAP-BRAKES: a round after the scoped final round never runs, whatever the post shape (the inline exception below included), unless the operator cleared it; a converged post is the one carve-out.
       // A cap-round catch-up post publishes the already-completed cap round, never a new one.
-      const roundNo = options.convergedJson ? 0 : capRoundHead ? draftGateConfig.maxReviewRounds : await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.findingsLedger ? ledgerTmpRoot(options.findingsLedger) : undefined }, { repoRoot });
-      if (isRoundRefused(roundNo, draftGateConfig.maxReviewRounds)) throw roundCapReachedError(roundNo, draftGateConfig.maxReviewRounds);
+      const roundOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.findingsLedger ? ledgerTmpRoot(options.findingsLedger) : undefined };
+      const roundBase = coordinationContext?.prData?.baseRefName;
+      const roundNo = options.convergedJson ? 0 : capRoundHead ? draftGateConfig.maxReviewRounds : await countCapRounds(roundOptions, { repoRoot, prBase: roundBase });
+      if (await refusesPastScopedRound(roundOptions, { repoRoot, prBase: roundBase, cap: draftGateConfig.maxReviewRounds, round: roundNo })) throw roundCapReachedError(roundNo, draftGateConfig.maxReviewRounds);
       const inlineVerdictOnlyClean = !options.findingsJson && !options.findingsLedger && !options.findingsFile && options.verdict === "clean"
         && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent";
       const refused = inlineVerdictOnlyClean ? null : options.findingsJson ? "--findings-json"
@@ -3507,24 +3510,16 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       : composeReviewVerdict(preloadedFindingsLedger.overallVerdict, [...roundFindings.filter((f) => !isOpenActItem(f)), ...guardedRoundActs]);
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
-    // ADR 0208: round N+1 (count cap+1) never runs; every post but --converged-json is refused with round_cap_reached, and the cap round's fixer pass leads to ready.
-    const cap = draftGateConfig?.maxReviewRounds ?? 0;
-    const completedRound = options.gate === "draft_gate" && !convergedInput && cap > 0
-      ? (capRoundHead ? cap : await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot }))
-      : 0;
-    // ADR 0208: round N+1 never runs; the cap round's fixer pass is the last draft step and the PR goes ready.
-    if (isRoundRefused(completedRound, cap)) {
-      throw roundCapReachedError(completedRound, cap);
-    }
-    // GATE-EXEC-CAP-BRAKES: pre_approval_gate has its own cap; the round after the cap round is the scoped final round, whose every act item goes to the operator.
-    const preCap = options.gate === "pre_approval_gate" && !convergedInput ? preApprovalCap : 0;
-    const preRound = preCap > 0 ? await countCapRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot, prBase: coordinationContext?.prData?.baseRefName }) : 0;
+    // GATE-EXEC-CAP-BRAKES: both gates share the cap. The round after the cap round is the scoped final round, whose every act item goes to the operator; a later draft_gate round is refused unless the operator cleared it.
+    const cap = convergedInput ? 0 : options.gate === "pre_approval_gate" ? preApprovalCap : options.gate === "draft_gate" ? (draftGateConfig?.maxReviewRounds ?? 0) : 0;
+    const capOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) };
+    const capBase = coordinationContext?.prData?.baseRefName;
+    // A cap-round catch-up post publishes the already-completed cap round, never a new one.
+    const capRound = cap > 0 ? (capRoundHead ? cap : await countCapRounds(capOptions, { repoRoot, prBase: capBase })) : 0;
+    if (options.gate === "draft_gate" && await refusesPastScopedRound(capOptions, { repoRoot, prBase: capBase, cap, round: capRound })) throw roundCapReachedError(capRound, cap);
     const gateBlockers = [
       ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),
-      ...(isPastRoundCap(completedRound, cap) ? pastCapBlockers(roundFindings, { round: completedRound, cap }) : []),
-      ...(isPastRoundCap(preRound, preCap) ? pastCapBlockers(roundFindings, { round: preRound, cap: preCap, scoped: preRound > preCap }) : []),
-      // Issue 3460 AC6: a cap-round item the fan-in seeded (defect key `cap:<fingerprint>`) follows the same past-cap blocker rule at pre_approval_gate; a judge reject closes it.
-      ...(options.gate === "pre_approval_gate" && cap > 0 ? pastCapBlockers(roundFindings.filter((f) => isSeededCapFinding(f) && f?.judgeDisposition !== "reject"), { round: cap, cap }) : []),
+      ...(isPastRoundCap(capRound, cap) ? pastCapBlockers(roundFindings, { round: capRound, cap, scoped: capRound > cap }) : []),
     ];
     const composedVerdict = composeCheckpointVerdict({ reviewVerdict: ledgerVerdict, blockers: gateBlockers });
     if (options.verdict === undefined) {
@@ -3554,7 +3549,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     }
     // else: a matching explicit --verdict is accepted unchanged.
     if (composedVerdict !== ledgerVerdict) {
-      checkpointComposition = { reviewVerdict: ledgerVerdict, blockers: gateBlockers, blockedBy: composeBlockedBy({ verdict: composedVerdict, blockers: gateBlockers, hasActItems: guardedRoundActs.length > 0 }) };
+      checkpointComposition = { reviewVerdict: ledgerVerdict, blockers: gateBlockers, blockedBy: composeBlockedBy({ verdict: composedVerdict, blockers: gateBlockers, hasActItems: guardedRoundActs.length > 0, sizeOutcome: options.sizeOutcome, sizeWaiverGranted: options.sizeWaiverGranted, ciStatus: coordinationContext?.snapshot?.ciStatus }) };
     }
   } else if (options.verdict === undefined) {
     // --findings-ledger absent OR present without overallVerdict (a legacy/

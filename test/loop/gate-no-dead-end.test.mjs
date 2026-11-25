@@ -183,7 +183,7 @@ test("a repo that is not a plain slug or a non-positive pr names the operator", 
 // and every remedy text the cap-round tools print names a command in the CLI registry.
 const COMMAND_PATTERN = /(?:dev-loops|cli\/index\.mjs|\$\{CLI\}) (gate|loop|pr) ([a-z][a-z-]*)/g;
 
-test("every cap-round block is typed: a command that parses on the extension route, or the operator", () => {
+test("every draft cap-round block is typed: the operator decision, never a chain-extension command (ADR 0324)", () => {
   const failures = [undefined, ...Object.keys(CAP_ROUND_REFUSAL)];
   let commands = 0;
   for (const draftCapRoundFailure of failures) {
@@ -198,7 +198,7 @@ test("every cap-round block is typed: a command that parses on the extension rou
     assert.ok(SUBCOMMAND_ROUTES[group]?.[sub], `${command} is not a CLI command`);
     assert.doesNotThrow(() => (sub === "upsert-verdict" ? parseUpsertCheckpointVerdictCliArgs : parseExtendCapRoundChainCliArgs)(args), command);
   }
-  assert.ok(commands >= 4);
+  assert.equal(commands, 0, "a draft cap block names the operator decision, never a chain-extension command (ADR 0324)");
 });
 
 test("the remedy texts of the cap-round tools name only CLI commands that exist", () => {

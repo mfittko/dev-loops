@@ -1381,11 +1381,6 @@ export function capClosedFor(finding, { round, cap }) {
   return { judgeDisposition, severity, round, cap };
 }
 
-/** Issue 3460 AC6: the defect-key prefix of a cap-round act item the fan-in seeds as a finding; every reader uses this one definition. */
-export const SEEDED_CAP_KEY_PREFIX = "cap:";
-export const seededCapDefectKey = (fingerprint) => `${SEEDED_CAP_KEY_PREFIX}${fingerprint}`;
-export const isSeededCapFinding = (finding) => String(finding?.defectKey ?? "").startsWith(SEEDED_CAP_KEY_PREFIX);
-
 /**
  * Blockers a past-cap draft_gate round composes into `blocked` (GATE-EXEC-SOFT-CAP, ADR 0251). A blocker exists only for a named human decision:
  * a `high` act item without a non-blank `judgeFix` (at the cap round a high with a `judgeFix` goes to the fixer; after it a high always blocks),

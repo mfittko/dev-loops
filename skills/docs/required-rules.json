@@ -572,16 +572,6 @@
       "enforcementNote": "Enforced by upsert-checkpoint-verdict.mjs (choke point, count, past-cap composition via pastCapBlockers in packages/core/src/loop/gate-fanin.mjs) and countCompletedRounds and resolveCapRoundFixed in write-gate-context.mjs (the cap-round-fixed ready transition, also read by ready-for-review.mjs and detect-pr-gate-coordination-state.mjs), and capClosedFor at write-gate-findings-log.mjs, and emit-fixer-work-order.mjs (refuses round_cap_reached after the cap round and at a blocked cap round); the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
-      "id": "GATE-EXEC-ROUND-CAP-WAIVER-PROOF",
-      "enforcement": "runtime",
-      "enforcementNote": "Enforced by waive-adr-tripwire.mjs, which calls resolveCapRoundFixed from write-gate-context.mjs as ready-for-review.mjs does; the rule body in gate-review-sub-loop-contract.md owns the clauses"
-    },
-    {
-      "id": "GATE-EXEC-ROUND-CAP-EXIT",
-      "enforcement": "runtime",
-      "enforcementNote": "Enforced by capExitHolds and resolveCapExitRound in write-gate-context.mjs, called by ready-for-review.mjs, waive-adr-tripwire.mjs, detect-checkpoint-evidence.mjs and emit-fixer-work-order.mjs (resolveDraftCapRoundFact calls capExitHolds directly); seeded by consolidate-fanin.mjs and blocked by upsert-checkpoint-verdict.mjs at pre_approval_gate; the escalated-item binding lives in emit-fixer-work-order.mjs (tests: test/github/cap-exit.test.mjs, test/contracts/round-cap-closure-contract.test.mjs); the rule body in gate-review-sub-loop-contract.md owns the clauses"
-    },
-    {
       "id": "GATE-EXEC-NO-DEAD-END",
       "enforcement": "runtime",
       "enforcementNote": "Invariant: every report_blocked result carries a typed blockedOn or an agentRemedy; enforced by isTypedOrKnownGap in packages/core/src/loop/gate-no-dead-end.mjs (tests: test/loop/gate-no-dead-end.test.mjs) and the blocked-names-decision-or-remedy safetyRules predicate in scripts/docs/validate-state-machine-conformance.mjs. Enforced for the PR-body cap round by composeBodyOnlyConvergedDraftGate in packages/core/src/loop/pre-push-delta-review.mjs, which upsert-checkpoint-verdict.mjs calls for --converged-json with bodyOnly; the rule body in gate-review-sub-loop-contract.md owns the clauses"

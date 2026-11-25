@@ -28,7 +28,7 @@ before(async () => {
   originalPath = process.env.PATH;
   process.env.PATH = [gitStubDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter);
   repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-round-cap-repo-"));
-  await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+  await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n  draft:\n    maxReviewRounds: 4\n", "utf8");
   capOffRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-round-cap-off-"));
   await writeFile(path.join(capOffRoot, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n  draft:\n    maxReviewRounds: 0\n", "utf8");
 });
@@ -53,13 +53,13 @@ async function writeLedger(tempDir, { overallVerdict = "findings_present", findi
 }
 
 // Closed prior rounds of the PR under the root's tmp (the main-anchored ledger dir).
-async function seedPrior(root, heads, { extraNames = [], unreadable = [] } = {}) {
+async function seedPrior(root, heads, { extraNames = [], unreadable = [], withAct = false } = {}) {
   const dir = path.join(root, "tmp", "gate-findings", "owner-repo", "pr-17");
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
   for (const head of heads) {
     await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
-      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${head[0]}T00:00:00.000Z`, findings: [],
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${head[0]}T00:00:00.000Z`, findings: withAct ? [{ severity: "medium", summary: "open act", judgeDisposition: "act", judgeFix: "fix it", file: "a.mjs", line: 1 }] : [],
     }), "utf8");
   }
   for (const head of unreadable) await writeFile(path.join(dir, `draft_gate-${head}.json`), "{not json", "utf8");
@@ -355,23 +355,23 @@ test("at the cap round judge-acted findings with a remedy compose findings_prese
   }, { prefix: "dev-loops-round-cap-closure-cap-" });
 });
 
-// ADR 0208: round N+1 never runs; any post counted above the cap is refused with round_cap_reached.
-test("a round N+1 post is refused with round_cap_reached, whatever its ledger (ADR 0208)", async () => {
+test("round cap+1 posts as the draft scoped final round, and a round after it is refused with round_cap_reached (GATE-EXEC-CAP-BRAKES, ADR 0324)", async () => {
   await withTempDir(async (tempDir) => {
-    for (const heads of [[...priorHeads, extraPriors[0]], [...priorHeads, ...extraPriors]]) {
-      await seedPrior(repoRoot, heads);
-      const out = await post(["--findings-ledger", await writeLedger(tempDir, { findings: pr2944Shape() })]);
-      assert.match(out.error ?? "", /round_cap_reached.*round [56] .*cap is 4/);
-      assert.equal(out.body, undefined, "nothing is posted");
-    }
+    await seedPrior(repoRoot, [...priorHeads, extraPriors[0]]);
+    const scoped = await post(["--findings-ledger", await writeLedger(tempDir, { findings: pr2944Shape() })]);
+    assert.equal(scoped.error, undefined, "the scoped round is not refused");
+    assert.equal(verdictOf(scoped), "blocked", "every finding of the scoped round goes to the operator");
+    await seedPrior(repoRoot, [...priorHeads, ...extraPriors], { withAct: true });
+    const out = await post(["--findings-ledger", await writeLedger(tempDir, { findings: pr2944Shape() })]);
+    assert.match(out.error ?? "", /round_cap_reached.*round 6 .*cap is 4/);
+    assert.equal(out.body, undefined, "nothing is posted");
   }, { prefix: "dev-loops-round-cap-closure-next-" });
 });
 
-
-test("an inline clean draft_gate post with only --findings-summary is refused at round N+1 and accepted at the cap round (ADR 0208)", async () => {
-  await seedPrior(repoRoot, [...priorHeads, extraPriors[0]]);
+test("an inline clean draft_gate post with only --findings-summary is refused after the scoped round and accepted at the cap round (ADR 0208)", async () => {
+  await seedPrior(repoRoot, [...priorHeads, ...extraPriors], { withAct: true });
   const refused = await post(["--verdict", "clean", "--execution-mode", "inline_single_agent"]);
-  assert.match(refused.error ?? "", /round_cap_reached.*round 5 .*cap is 4/);
+  assert.match(refused.error ?? "", /round_cap_reached.*round 6 .*cap is 4/);
   assert.equal(refused.body, undefined, "nothing is posted");
   await seedPrior(repoRoot, priorHeads);
   assert.equal(verdictOf(await post(["--verdict", "clean", "--execution-mode", "inline_single_agent"])), "clean");
@@ -677,43 +677,7 @@ test("--post-sealed-cap-round refuses a sealed findings_present cap round and po
   }, { prefix: "dev-loops-round-cap-post-sealed-act-" });
 });
 
-// Issue 3460 AC6: a cap-round item the fan-in seeded (defect key `cap:<fingerprint>`) follows the past-cap blocker rule at pre_approval_gate; a judge reject closes it.
-const seeded = (severity, judgeDisposition, extra = {}) => finding(severity, judgeDisposition, { defectKey: "cap:0123456789abcdef", ...extra });
 const visibleCleanDraft = { id: 98, user: { login: "gate-bot" }, author_association: "OWNER", body: `### Gate review: \`draft_gate\`\n\n**Reviewed head SHA:** \`${HEAD}\`\n**Verdict:** clean\n\n**Findings summary:** clean\n\n**Next action:** follow the verdict`, html_url: "https://github.com/owner/repo/pull/17#issuecomment-98", updated_at: "2026-05-30T17:00:00Z" };
-async function postPreApproval(tempDir, findings, overallVerdict) {
-  const sizePath = path.join(tempDir, "size.json");
-  await writeFile(sizePath, JSON.stringify({ ok: true, outcome: "pass", wholeLogicLoc: 10, t1SliceLoc: 0, waiver: { requested: false, t1Valid: false, defaultValid: false } }), "utf8");
-  const root = path.join(tempDir, "no-copilot-root");
-  await mkdir(root, { recursive: true });
-  await writeFile(path.join(root, ".devloops"), "version: 1\nrefinement:\n  maxCopilotRounds: 0\ngates:\n  requireFanoutEvidence: false\n", "utf8");
-  const ledger = await writeLedger(tempDir, { findings, overallVerdict, gate: "pre_approval_gate" });
-  const args = [
-    "--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-ledger", ledger,
-    "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 0, question: 0, nit: 0 }), "--findings-summary", "seeded cap items", "--next-action", "follow the verdict", "--inline-reason", "seeded cap items", "--size-budget-json", sizePath,
-  ];
-  const posted = [];
-  try {
-    const result = await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild(posted, { isDraft: false, issueComments: [visibleCleanDraft] }) });
-    return { result, body: posted.join("\n") };
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-for (const [name, findings, overallVerdict, expected] of [
-  ["a seeded high act without a judgeFix composes blocked", [seeded("high", "act")], "findings_present", "blocked"],
-  ["a seeded fail-open medium composes blocked", [seeded("medium", "defer", { failOpen: true })], "findings_present", "blocked"],
-  ["an act-disposed seeded medium composes findings_present", [seeded("medium", "act", { judgeFix: "fix it" })], "findings_present", "findings_present"],
-  ["a rejected seeded high composes clean", [seeded("high", "reject")], "clean", "clean"],
-]) {
-  test(`pre_approval_gate: ${name}`, async () => {
-    await withTempDir(async (tempDir) => {
-      const out = await postPreApproval(tempDir, findings, overallVerdict);
-      assert.equal(out.error, undefined);
-      assert.equal(verdictOf(out), expected);
-    }, { prefix: "dev-loops-round-cap-seeded-" });
-  });
-}
 
 // GATE-EXEC-CAP-BRAKES: pre_approval_gate has its own cap (default 2). At the cap round a high without a judgeFix or a question blocks;
 // a high with a judgeFix goes to the fixer. A scoped final round (count cap+1) sends every act item to the operator.

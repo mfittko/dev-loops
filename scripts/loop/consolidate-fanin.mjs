@@ -48,7 +48,7 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { GATE_NAMES, gateScopePrefix } from "../github/_gate-names.mjs";
-import { buildGateEmitPlanPath, buildGateFaninLedgerPath, capRoundActList, resolveCapRound } from "../github/write-gate-context.mjs";
+import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../github/write-gate-context.mjs";
 import { writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { lintFillerPhrases } from "../github/_gate-finding-text.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, requireAbsolutePlanFilePath, validateCarryForwardPlanEntries, validateCarryForwardPlanShape, validateZeroUnitCarryProof, verifyCarryForwardPlanIdentity } from "../github/_carried-angles.mjs";
@@ -60,7 +60,7 @@ import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-pro
 import { resolveGateArtifactTmpRoot, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, countDistinctReviewers, isSeededCapFinding, normalizeSeverity, seededCapDefectKey, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, countDistinctReviewers, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { clusterFindings } from "@dev-loops/core/loop/finding-cluster";
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
@@ -540,31 +540,6 @@ async function verifyEmitPlanKey(planPath, { repo, pr, gate, headSha, carriedAng
 // artifacts, plan units and the carry-forward plan; never caller-built. A fresh
 // angle without a stamped artifact gets no entry; a singleton unit (group null)
 // records no `group` key.
-/** Issue 3460 AC6: add each cap-round act item (`capRoundActList`) to the per-angle artifacts as an ordinary finding keyed `cap:<fingerprint>`. */
-export function seedCapRoundActFindings(rawArtifacts, actList) {
-  for (const item of actList) {
-    if (typeof item.angle !== "string" || item.angle.trim().length === 0) continue;
-    // A carried findings_present angle already holds the item seeded in an earlier round: seeding is idempotent.
-    if (rawArtifacts.some((a) => Array.isArray(a.findings) && a.findings.some((f) => f?.defectKey === seededCapDefectKey(item.fingerprint)))) continue;
-    const seeded = { severity: item.severity, summary: item.summary, defectKey: seededCapDefectKey(item.fingerprint), ...(item.file ? { file: item.file } : {}), ...(Number.isInteger(item.line) ? { line: item.line } : {}) };
-    const artifact = rawArtifacts.find((a) => a.angle.trim() === item.angle.trim());
-    // A blocked artifact keeps its verdict (fan-in returns blocked from it); the seeded item rides a separate synthetic artifact.
-    // The synthetic artifact has no head stamp, so no perAngle row exists; resolve-angle-carry-forward exempts `cap:` findings from attribution.
-    if (artifact && ["clean", "findings_present"].includes(artifact.verdict?.trim())) {
-      artifact.verdict = "findings_present";
-      artifact.findings = [...(Array.isArray(artifact.findings) ? artifact.findings : []), seeded];
-    } else if (!artifact) rawArtifacts.push({ angle: item.angle, verdict: "findings_present", findings: [seeded] });
-  }
-}
-
-/** Issue 3460 AC6: only the fan-in mints the `cap:` defect key. A freshly reviewed finding that carries it loses the key and keeps its attribution check; a carried finding keeps its earlier seeded key. */
-export function reserveCapDefectKey(rawArtifacts) {
-  for (const a of rawArtifacts) {
-    if (typeof a.carriedFromHead === "string" || !Array.isArray(a.findings)) continue;
-    a.findings = a.findings.map((f) => (isSeededCapFinding(f) ? Object.fromEntries(Object.entries(f).filter(([k]) => k !== "defectKey")) : f));
-  }
-}
-
 export function deriveFaninProvenance(rawArtifacts, emitPlan, headSha, carryForwardPlan) {
   const isCarried = (a) => typeof a.carriedFromHead === "string";
   const fresh = new Set(rawArtifacts
@@ -1506,15 +1481,6 @@ export async function consolidateGateFanin(options) {
       rawArtifacts.push({ angle: trimmedAngle, verdict: carriedVerdict, findings: carriedFindings, carriedFromHead: planEntry.carriedFromHead });
     }
   }
-
-  // Issue 3460 AC6: pre_approval_gate seeds each open act item of the draft cap round as an ordinary finding, whatever a delta record says, so the judge disposes it.
-  // The `cap:<fingerprint>` defect key marks a seeded finding; the verdict poster reads it to apply the past-cap blocker rule. A capClosed item stays context (the residue read).
-  reserveCapDefectKey(rawArtifacts);
-  if (options.gate === "pre_approval_gate" && emitPlan !== undefined && options.headSha !== undefined) {
-    const capRound = await resolveCapRound({ repo: emitPlan.repo, pr: emitPlan.pr, headSha: options.headSha }, { repoRoot: options.repoRoot ?? process.cwd(), onFailClosed: () => { throw new Error("cap_round_unreadable: the draft_gate cap-round ledger is unreadable or missing, so pre_approval_gate cannot seed the cap act items (issue 3460 AC6)"); } });
-    if (capRound) seedCapRoundActFindings(rawArtifacts, capRoundActList(capRound.log.findings, capRound.log.headSha));
-  }
-
   const angles = rawArtifacts.map((a) => ({
     angle: a.angle.trim(),
     verdict: a.verdict.trim(),

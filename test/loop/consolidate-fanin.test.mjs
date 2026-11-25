@@ -14,8 +14,6 @@ import {
   detectMisplacedFindingsDiagnostic,
   fitsRenderBudget,
   parseConsolidateFaninCliArgs,
-  reserveCapDefectKey,
-  seedCapRoundActFindings,
 } from "../../scripts/loop/consolidate-fanin.mjs";
 import { execFileSync } from "node:child_process";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
@@ -5106,62 +5104,3 @@ test("#2526: a withheld over-budget round with --out at the keyed ledger is refu
   });
 });
 
-// Issue 3460 AC6: only the fan-in mints the `cap:` defect key. A fresh reviewer finding keyed `cap:x` loses it; a carried finding and the seeded `cap:<fingerprint>` item keep theirs.
-test("reserveCapDefectKey drops a reviewer-authored cap: key and keeps a seeded or carried one", () => {
-  const raw = [
-    { angle: "a", verdict: "findings_present", findings: [{ severity: "low", summary: "s", defectKey: "cap:x" }, { severity: "low", summary: "t", defectKey: "KEEP" }] },
-    { angle: "b", verdict: "findings_present", carriedFromHead: "abc", findings: [{ severity: "low", summary: "u", defectKey: "cap:carried" }] },
-  ];
-  reserveCapDefectKey(raw);
-  assert.equal("defectKey" in raw[0].findings[0], false, "cap:x authored by a reviewer finding");
-  assert.equal(raw[0].findings[1].defectKey, "KEEP");
-  assert.equal(raw[1].findings[0].defectKey, "cap:carried");
-  seedCapRoundActFindings(raw, [{ angle: "c", severity: "medium", summary: "s", fingerprint: "f1" }]);
-  const seeded = raw.at(-1).findings;
-  assert.equal(seeded[0].defectKey, "cap:f1", "cap:<fingerprint> minted by seedCapRoundActFindings");
-});
-
-// Issue 3460 AC6: a second pre_approval_gate round carries the seeded item in its angle artifact; seeding again adds no copy.
-test("seedCapRoundActFindings is idempotent over a carried artifact that already holds the cap: key", () => {
-  const item = { angle: "a", severity: "medium", summary: "s", fingerprint: "f1" };
-  const raw = [{ angle: "a", verdict: "findings_present", carriedFromHead: "abc", findings: [{ severity: "medium", summary: "s", defectKey: "cap:f1" }] }];
-  seedCapRoundActFindings(raw, [item]);
-  assert.equal(raw.flatMap((a) => a.findings).filter((f) => f.defectKey === "cap:f1").length, 1);
-  assert.equal(raw.length, 1);
-  seedCapRoundActFindings(raw, [item, { ...item, fingerprint: "f2" }]);
-  assert.deepEqual(raw[0].findings.map((f) => f.defectKey), ["cap:f1", "cap:f2"]);
-});
-
-// Issue 3460 AC6: a cap-round read failure at pre_approval_gate fails the fan-in; it never skips the seeding.
-test("consolidateGateFanin at pre_approval_gate fails closed on an unreadable cap-round ledger and proceeds when the ledgers are readable", async () => {
-  const draftLedger = (root, head, text) => {
-    const file = path.resolve(root, buildLogPath({ repo: "o/r", pr: "7", gate: "draft_gate", headSha: head, tmpRoot: path.join(root, "tmp") }));
-    return mkdir(path.dirname(file), { recursive: true }).then(() => writeFile(file, text, "utf8"));
-  };
-  // `blocked`: a blocked ledger does not count, so the round stays below the cap and the fan-in seeds nothing and never throws cap_round_unreadable.
-  const capFinding = { angle: "coverage", severity: "medium", summary: "cap act item", judgeDisposition: "act", file: "a.mjs", line: 1, clusterId: 0 };
-  for (const mode of ["readable", "unreadable", "blocked", "draft_gate"]) {
-    const unreadable = mode === "unreadable";
-    await withFindingsDir({ "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } }, (dir) => withTempDir(async (planDir) => {
-      const gate = mode === "draft_gate" ? "draft_gate" : "pre_approval_gate";
-      const plan = { ...matchingEmitPlan(), gate, count: 0, units: [] };
-      const planPath = await writeEmitPlan(planDir, plan);
-      const repoRoot = path.join(planDir, "repo");
-      await mkdir(repoRoot, { recursive: true });
-      await writeFile(path.join(repoRoot, ".devloops"), "version: 1\n", "utf8");
-      for (const [i, c] of [..."1234"].entries()) {
-        const head = c.repeat(40);
-        await draftLedger(repoRoot, head, unreadable && i === 3 ? "{not json" : JSON.stringify({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: head, verdict: mode === "blocked" && i === 3 ? "blocked" : "clean", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: i === 3 && !unreadable ? [capFinding] : [] }));
-      }
-      const ledgerOut = path.join(planDir, "out-ledger.json");
-      const run = () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate, headSha: EMIT_HEAD, tmpRoot: planDir, receiptTmpRoot: planDir, repoRoot, ledgerOut });
-      if (unreadable) await assert.rejects(run, /cap_round_unreadable/);
-      else {
-        assert.equal((await run()).ok, true);
-        const keys = JSON.parse(await readFile(ledgerOut, "utf8")).findings.map((f) => f.defectKey).filter((k) => typeof k === "string" && k.startsWith("cap:"));
-        // Only the readable pre_approval_gate round seeds the cap act item; a blocked cap ledger and a draft_gate round seed none.
-        assert.equal(keys.length, mode === "readable" ? 1 : 0, mode);
-      }
-    }));
-  }
-});
