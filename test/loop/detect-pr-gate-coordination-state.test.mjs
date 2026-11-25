@@ -12,7 +12,7 @@ const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir,
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 
-import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveCapBrakes, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
@@ -5405,4 +5405,33 @@ describe("pull-request coordination snapshot", () => {
       assert.equal(typeof snap.fetchedAtMs, "number");
     });
   });
+});
+
+// GATE-EXEC-CAP-BRAKES: the detector hands the evaluator the round facts of the gate posted at the current head.
+test("resolveCapBrakes returns the act counts of the closed rounds and the named items of the head's round, per gate", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-"));
+  try {
+    const acts = (n) => Array.from({ length: n }, (_, i) => ({ severity: "medium", angle: "correctness", summary: `defect ${i}`, files: [`src/f${i}.mjs`], line: i + 1, judgeDisposition: "act", judgeTitle: `defect ${i}`, judgeFix: "fix it" }));
+    const write = async (gate, head, n, day) => {
+      const file = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10", `${gate}-${head}.json`);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 10, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${day}T00:00:00.000Z`, findings: acts(n) }), "utf8");
+    };
+    const heads = ["1", "2", "3"].map((c) => c.repeat(40));
+    await write("pre_approval_gate", heads[0], 3, 1);
+    await write("pre_approval_gate", heads[1], 3, 2);
+    await write("pre_approval_gate", heads[2], 2, 3);
+    await write("draft_gate", heads[0], 4, 1);
+    await write("draft_gate", heads[1], 4, 2);
+    const ctx = (head, isDraft) => ({ repo: "owner/repo", pr: 10, currentHeadSha: head, prData: { isDraft } });
+    const pre = await resolveCapBrakes(ctx(heads[2], false), { repoRoot: tempDir, config: { version: 1 } });
+    assert.deepEqual({ gate: pre.gate, round: pre.round, cap: pre.cap, actCounts: pre.actCounts, items: pre.items.length }, { gate: "pre_approval_gate", round: 4, cap: 2, actCounts: [3, 3, 2], items: 2 });
+    assert.match(pre.items[0], /^[0-9a-f]{16} \[medium\] defect \d$/);
+    const draft = await resolveCapBrakes(ctx(heads[1], true), { repoRoot: tempDir, config: { version: 1 } });
+    assert.deepEqual({ gate: draft.gate, round: draft.round, cap: draft.cap, actCounts: draft.actCounts }, { gate: "draft_gate", round: 3, cap: 0, actCounts: [4, 4] });
+    // A head with no judged round of its own carries no facts.
+    assert.equal(await resolveCapBrakes(ctx("9".repeat(40), false), { repoRoot: tempDir, config: { version: 1 } }), null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });

@@ -25,7 +25,7 @@ const HEAD = "abc123456789";
 const CLEAN = gate("abc1234", "clean");
 
 function* walk() {
-  const draftCapFacts = [{}, { draftRoundRefused: true }, { draftCapRoundFixed: true }, { draftRoundRefused: true, draftCapRoundFixed: true }];
+  const draftCapFacts = [{}, { draftRoundRefused: true }, { draftCapRoundFixed: true }, { draftRoundRefused: true, draftCapRoundFixed: true }, { capBrakes: { gate: "pre_approval_gate", round: 3, cap: 0, actCounts: [3, 3], items: ["fp [medium] x"] } }];
   for (const lifecycleState of Object.values(STATE)) {
     for (const prDraft of [true, false]) {
       for (const ciStatus of ["success", "failure", "pending", "none", "crediblyGreen"]) {

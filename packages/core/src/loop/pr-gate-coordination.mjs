@@ -1,5 +1,5 @@
 import { DISPOSITION, isCopilotRoundCapReached, STATE } from "./copilot-loop-state.mjs";
-import { CAP_ROUND_FIXED_NEXT_ACTION } from "./review-round-cap.mjs";
+import { CAP_ROUND_FIXED_NEXT_ACTION, decideCapRound, describeCapStop } from "./review-round-cap.mjs";
 import { findBlockingTitleMarkers, stripBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { evaluateUiE2eScoping } from "./ui-e2e-scoping.mjs";
 import { evaluateUiDesignerReviewScoping } from "./ui-designer-review-scoping.mjs";
@@ -1321,6 +1321,41 @@ function evaluatePrGateCoordinationCore(input = {}) {
       conflictFiles,
         refinementArtifact,
     copilotReviewRoundCount,
+    });
+  }
+
+  // GATE-EXEC-CAP-BRAKES: `capBrakes` is `{ gate, round, cap, actCounts, items }` for the gate whose round is posted at this head. The one policy
+  // (decideCapRound) stops the lane before another fixer pass; only an operator focus decision that names the items clears the stop.
+  const capStop = input.capBrakes ? decideCapRound({ ...input.capBrakes, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 } }) : null;
+  if (capStop?.action === "operator") {
+    pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
+    pushUnique(forbiddenActions, [
+      PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+      PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+      PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+      PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+      PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+    ]);
+    const named = (input.capBrakes.items ?? []).length > 0 ? ` Items: ${input.capBrakes.items.join("; ")}.` : "";
+    return buildResult({
+      repo: input.repo ?? null,
+      pr: Number.isInteger(input.pr) ? input.pr : null,
+      currentHeadSha,
+      lifecycleState: STATE.BLOCKED_NEEDS_USER_DECISION,
+      loopDisposition: DISPOSITION.BLOCKED,
+      gateBoundary: PR_CHECKPOINT.BLOCKED,
+      draftGateAlreadySatisfied,
+      draftGate,
+      preApprovalGate,
+      allowedNextActions,
+      forbiddenActions,
+      nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+      blockedOn: BLOCKED_ON.OPERATOR_DECISION,
+      reason: `${describeCapStop(capStop)} (${input.capBrakes.gate}).${named}`,
+      mergeStateStatus,
+      conflictFiles,
+      refinementArtifact,
+      copilotReviewRoundCount,
     });
   }
 
