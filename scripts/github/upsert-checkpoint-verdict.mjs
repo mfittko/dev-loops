@@ -2900,6 +2900,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   let capRoundHead = null;
   let capRoundLedgerPath = null;
   let draftGateConfig = null;
+  let preApprovalCap = 0;
   let preApprovalGateConfig = null;
   // The post-time fan-out enforcement descriptor (buildFanoutEnforcement's
   // result) captured from enforcePostTimeFanoutMode, so the durable-ledger
@@ -3048,6 +3049,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       canonicalHeadSha = options.headSha;
     }
     draftGateConfig = resolveGateConfig(config, "draft");
+    preApprovalCap = resolveGateConfig(config, "preApproval").maxReviewRounds;
     if (!convergedInput) {
       try {
         canonicalHeadSha = resolveRequestedHeadSha(options.headSha, evidence.currentHeadSha);
@@ -3515,9 +3517,13 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     if (isRoundRefused(completedRound, cap)) {
       throw roundCapReachedError(completedRound, cap);
     }
+    // GATE-EXEC-CAP-BRAKES: pre_approval_gate has its own cap; the round after the cap round is the scoped final round, whose every act item goes to the operator.
+    const preCap = options.gate === "pre_approval_gate" && !convergedInput ? preApprovalCap : 0;
+    const preRound = preCap > 0 ? await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot }) : 0;
     const gateBlockers = [
       ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),
       ...(isPastRoundCap(completedRound, cap) ? pastCapBlockers(roundFindings, { round: completedRound, cap }) : []),
+      ...(isPastRoundCap(preRound, preCap) ? pastCapBlockers(roundFindings, { round: preRound, cap: preCap, scoped: preRound > preCap }) : []),
       // Issue 3460 AC6: a cap-round item the fan-in seeded (defect key `cap:<fingerprint>`) follows the same past-cap blocker rule at pre_approval_gate; a judge reject closes it.
       ...(options.gate === "pre_approval_gate" && cap > 0 ? pastCapBlockers(roundFindings.filter((f) => isSeededCapFinding(f) && f?.judgeDisposition !== "reject"), { round: cap, cap }) : []),
     ];

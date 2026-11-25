@@ -713,3 +713,49 @@ for (const [name, findings, overallVerdict, expected] of [
     }, { prefix: "dev-loops-round-cap-seeded-" });
   });
 }
+
+// GATE-EXEC-CAP-BRAKES: pre_approval_gate has its own cap (default 2). At the cap round a high without a judgeFix or a question blocks;
+// a high with a judgeFix goes to the fixer. A scoped final round (count cap+1) sends every act item to the operator.
+async function postPreApprovalRound(tempDir, findings, priorHeadCount) {
+  const sizePath = path.join(tempDir, "size.json");
+  await writeFile(sizePath, JSON.stringify({ ok: true, outcome: "pass", wholeLogicLoc: 10, t1SliceLoc: 0, waiver: { requested: false, t1Valid: false, defaultValid: false } }), "utf8");
+  const root = path.join(tempDir, "pre-cap-root");
+  await mkdir(path.join(root, "tmp", "gate-findings", "owner-repo", "pr-17"), { recursive: true });
+  await writeFile(path.join(root, ".devloops"), "version: 1\nrefinement:\n  maxCopilotRounds: 0\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+  for (const head of priorHeads.slice(0, priorHeadCount)) {
+    await writeFile(path.join(root, "tmp", "gate-findings", "owner-repo", "pr-17", `pre_approval_gate-${head}.json`), JSON.stringify({
+      repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${head[0]}T00:00:00.000Z`, findings: [],
+    }), "utf8");
+  }
+  const ledger = await writeLedger(tempDir, { findings, overallVerdict: "findings_present", gate: "pre_approval_gate" });
+  const args = [
+    "--repo", "owner/repo", "--pr", "17", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-ledger", ledger,
+    "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 0, question: 0, nit: 0 }), "--findings-summary", "pre cap", "--next-action", "follow the verdict", "--inline-reason", "pre cap", "--size-budget-json", sizePath,
+  ];
+  const posted = [];
+  try {
+    const result = await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild(posted, { isDraft: false, issueComments: [visibleCleanDraft] }) });
+    return { result, body: posted.join("\n") };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+for (const [name, findings, priorCount, expected] of [
+  ["round 1 ignores the cap: a high without a judgeFix stays findings_present", [finding("high", "act")], 0, "findings_present"],
+  ["the cap round blocks a high act without a judgeFix", [finding("high", "act")], 1, "blocked"],
+  ["the cap round blocks a question act", [finding("question", "act")], 1, "blocked"],
+  ["the cap round sends a high act with a judgeFix to the fixer", [finding("high", "act", { judgeFix: "add the guard" })], 1, "findings_present"],
+  ["the cap round sends a medium act to the fixer", [finding("medium", "act", { judgeFix: "add the guard" })], 1, "findings_present"],
+  ["the scoped final round sends a medium act with a judgeFix to the operator", [finding("medium", "act", { judgeFix: "add the guard" })], 2, "blocked"],
+  ["the scoped final round sends a high act with a judgeFix to the operator", [finding("high", "act", { judgeFix: "add the guard" })], 2, "blocked"],
+]) {
+  test(`pre_approval_gate cap: ${name}`, async () => {
+    await withTempDir(async (tempDir) => {
+      const out = await postPreApprovalRound(tempDir, findings, priorCount);
+      assert.equal(out.error, undefined);
+      assert.equal(verdictOf(out), expected);
+      if (expected === "blocked") assert.match(out.body, /round_cap_reached/);
+    }, { prefix: "dev-loops-pre-cap-" });
+  });
+}
