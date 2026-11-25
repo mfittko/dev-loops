@@ -83,6 +83,7 @@ test("the guarded sha is refused when pushed from a checkout whose HEAD is elsew
     const run = spawnSync("node", [path.resolve("scripts/loop/check-fix-push-authority.mjs")], { cwd: root, env, encoding: "utf8", input: lines });
     assert.equal(run.status, 1);
     assert.match(run.stderr, /PRE-PUSH-DELTA-PUSH-AUTHORITY/);
+    assert.match(run.stderr, /ensure-worktree/);
     const malformed = spawnSync("node", [path.resolve("scripts/loop/check-fix-push-authority.mjs")], { cwd: root, env, encoding: "utf8", input: "garbage\n" });
     assert.equal(malformed.status, 1);
     assert.match(malformed.stderr, /fail closed/);

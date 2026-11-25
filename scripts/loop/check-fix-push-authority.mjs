@@ -82,7 +82,7 @@ if (isDirectCliRun(import.meta.url)) {
     // No ref lines: test the checkout HEAD. Only deletions: nothing is pushed that a sequence could cover.
     const result = checkFixPushAuthority(process.cwd(), stdin.trim() === "" ? null : pushes, process.argv[3]);
     if (!result.ok) {
-      process.stderr.write(`${result.reason}\n`);
+      process.stderr.write(`${result.reason}\nNo current hook calls this check (ADR 0323). Rerun ensure-worktree to reinstall the pre-push hook without it, then push again.\n`);
       process.exitCode = 1;
     }
   } catch (error) {
