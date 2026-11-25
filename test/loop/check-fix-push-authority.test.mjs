@@ -1,4 +1,4 @@
-// PRE-PUSH-DELTA-PUSH-AUTHORITY in harness-neutral tooling: the git pre-push hook runs this check, so
+// PRE-PUSH-DELTA-PUSH-AUTHORITY in harness-neutral tooling: resolve-pr-conflicts.mjs runs this check before a base merge, so
 // Pi and Claude Code share it; agent type plays no part.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -7,8 +7,9 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "bun:test";
 import { clearSequenceMarker, findActiveSequence, recoveryHint, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
-import { renderGuardHook } from "@dev-loops/core/loop/default-branch-guard";
+import { installDefaultBranchGuard } from "@dev-loops/core/loop/default-branch-guard";
 import { checkFixPushAuthority, parsePushedShas } from "../../scripts/loop/check-fix-push-authority.mjs";
+import { DELTA_CLEARING_NEXT_STEPS, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { closeGateSequence, fixerGraceMs } from "../../scripts/loop/close-gate-sequence.mjs";
 import { withTempDir } from "../_helpers.mjs";
 
@@ -62,27 +63,6 @@ test("the CLI exits 1 while a sequence is ungranted", async () => {
   });
 });
 
-test("only the generated pre-push hook runs the check, ahead of the override env", () => {
-  const prePush = renderGuardHook("pre-push", ["main"], null, "/x/check-fix-push-authority.mjs");
-  assert.ok(prePush.indexOf("check-fix-push-authority.mjs") !== -1);
-  assert.ok(prePush.indexOf("check-fix-push-authority.mjs") < prePush.indexOf("DEVLOOPS_ALLOW_MAIN"));
-  assert.ok(!renderGuardHook("pre-commit", ["main"], null, "/x/check-fix-push-authority.mjs").includes("check-fix-push-authority"));
-});
-
-test("the generated pre-push hook bakes the path its owner supplies, even from outside core", () => {
-  const owner = "/opt/consumer/node_modules/dev-loops/scripts/loop/check-fix-push-authority.mjs";
-  const baked = /authority_cli="([^"]*)"\n/.exec(renderGuardHook("pre-push", ["main"], null, owner))?.[1];
-  assert.equal(baked, owner);
-});
-
-test("the generated pre-push hook falls back to the checkout script and, with neither file, refuses only under an ungranted sequence marker whose branch ref has not advanced", () => {
-  const prePush = renderGuardHook("pre-push", ["main"]);
-  assert.match(prePush, /authority_cli=""\nif \[ -z "\$authority_cli" \] \|\| \[ ! -f "\$authority_cli" \]; then\n[^\n]*show-toplevel[^\n]*\nfi\nif \[ -f "\$authority_cli" \]; then\n[^\n]*node "\$authority_cli" "\$@" \|\| exit 1\nelse\n[\s\S]*gate-delta\/\*\.sequence[\s\S]*PRE-PUSH-DELTA-PUSH-AUTHORITY[^\n]*\n    exit 1\n  fi\nfi/);
-  assert.ok(!prePush.includes("/../"), "no package-layout-relative path");
-  assert.throws(() => renderGuardHook("pre-push", ["main"], null, "relative/check.mjs"), /absolute path/);
-  assert.throws(() => renderGuardHook("pre-push", ["main"], null, "/x/$(evil)/check.mjs"), /absolute path/);
-});
-
 test("pushed shas come from git's stdin lines; deletions are skipped and a malformed line throws", () => {
   const a = "a".repeat(40);
   assert.deepEqual(parsePushedShas(`refs/heads/b ${a} refs/heads/b ${"0".repeat(40)}\nrefs/heads/c ${"0".repeat(40)} refs/heads/c ${a}\n`), [a]);
@@ -103,6 +83,7 @@ test("the guarded sha is refused when pushed from a checkout whose HEAD is elsew
     const run = spawnSync("node", [path.resolve("scripts/loop/check-fix-push-authority.mjs")], { cwd: root, env, encoding: "utf8", input: lines });
     assert.equal(run.status, 1);
     assert.match(run.stderr, /PRE-PUSH-DELTA-PUSH-AUTHORITY/);
+    assert.match(run.stderr, /ensure-worktree/);
     const malformed = spawnSync("node", [path.resolve("scripts/loop/check-fix-push-authority.mjs")], { cwd: root, env, encoding: "utf8", input: "garbage\n" });
     assert.equal(malformed.status, 1);
     assert.match(malformed.stderr, /fail closed/);
@@ -282,7 +263,7 @@ for (const bad of ["garbage1", "own er/name", "a/b/c"]) {
   });
 }
 
-// Hook-style pushes: remoteRef is set and the push URL is the pre-push hook's second argument.
+// Hook-style pushes: remoteRef is set and the push URL is the CLI's second argument (git's pre-push argument order).
 test("hook-style push to the marker's branch name: another repo's marker with an absent baseline does not block it; the marker's own repo does", async () => {
   await withRepo(async (root, head, git) => {
     git("remote", "add", "origin", "https://github.com/o/a.git");
@@ -353,5 +334,33 @@ test("the real probe failing (64-hex baseline in a SHA-1 checkout) refuses under
     assert.ok(refused.reason.includes(`${sha256Baseline}.sequence`));
     writeSequenceMarker({ tmpRoot, baselineHead: sha256Baseline, branch: "issue-b", fullGranted: true, execution: executionFor("o/b", sha256Baseline) });
     assert.deepEqual(checkFixPushAuthority(root), { ok: true });
+  });
+});
+
+// ADR 0323: the deadlock state of issue 3579 has an exit. The pre-push hook refuses no push, the push ends the sequence, and the next full gate round reviews the fix commit.
+test("DEADLOCK 3579: an open sequence with a non-clearing sealed delta no longer blocks the push; the push ends the sequence", async () => {
+  await withRepo(async (root, baseline, git) => {
+    const remote = path.join(path.dirname(root), "origin.git");
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote], { env });
+    git("remote", "add", "origin", remote);
+    git("push", "-q", "origin", "main");
+    git("checkout", "-q", "-b", "feat");
+    const tmpRoot = path.join(root, "tmp");
+    writeSequenceMarker({ tmpRoot, baselineHead: baseline, branch: "feat" });
+    writeSealedGateDeltaRecord(tmpRoot, baseline, {
+      reviewBaselineHead: baseline, candidateHead: baseline, actSetId: "a", invocation: 1, outcome: "needs_fix", nextStep: "fix_and_rereview",
+      items: [{ id: "deferred-1", status: "not_resolved" }],
+    });
+    writeFileSync(path.join(root, "fix.txt"), "fix\n");
+    git("add", "fix.txt");
+    git("commit", "-q", "-m", "fix");
+    assert.equal(checkFixPushAuthority(root).ok, false);
+    const guard = installDefaultBranchGuard({ gitDir: path.join(root, ".git"), defaultBranches: "main" });
+    assert.equal(guard.ok, true);
+    const push = spawnSync("git", ["push", "origin", "feat"], { cwd: root, env, encoding: "utf8" });
+    assert.equal(push.status, 0, push.stderr);
+    assert.deepEqual(checkFixPushAuthority(root), { ok: true });
+    assert.match(git("diff", "--name-only", "origin/main...HEAD"), /fix\.txt/);
+    assert.ok(!DELTA_CLEARING_NEXT_STEPS.includes("fix_and_rereview"));
   });
 });
