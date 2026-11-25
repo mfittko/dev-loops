@@ -2934,7 +2934,8 @@ test("resolveDraftRoundCap keeps the raw count for prBase null and reads the rec
     assert.equal((await resolveDraftRoundCap(input, { repoRoot: tmpDir })).round, 1, "an omitted prBase reads the recorded base: the base-merge round is forced and never counts");
     // The artifact under the ledger tmp root (not the checkout's own tmp) gives the same count, so the round never depends on the caller's checkout.
     await rm(path.join(tmpDir, "tmp"), { recursive: true, force: true });
-    assert.equal((await resolveDraftRoundCap(input, { repoRoot: tmpDir })).round, 2, "no context artifact anywhere: the raw count stands");
+    await assert.rejects(resolveDraftRoundCap(input, { repoRoot: tmpDir }), /round_cap_base_unresolved/, "no context artifact anywhere and a prior round at another head: refuse instead of a silent raw count");
+    assert.equal((await resolveDraftRoundCap(input, { repoRoot: tmpDir, prBase: null })).round, 2, "an explicit prBase null keeps the raw count");
     const ledgerRootCtx = path.resolve(tmpDir, buildGateContextPath(input));
     await mkdir(path.dirname(ledgerRootCtx), { recursive: true });
     await writeFile(ledgerRootCtx, JSON.stringify({ baseFreshness: { base: "main" } }), "utf8");
