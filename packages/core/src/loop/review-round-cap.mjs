@@ -1,35 +1,16 @@
 /**
- * The single statement of the review-round cap shape (GATE-EXEC-ROUND-CAP, ADR 0208) and, in `decideCapRound`, of the cap brakes (GATE-EXEC-CAP-BRAKES).
- * Pure and dependency-free. `draft_gate` uses it today; Copilot rounds import it later.
+ * The single statement of the review-round cap (GATE-EXEC-ROUND-CAP, ADR 0208) and, in `decideCapRound`, of the cap brakes (GATE-EXEC-CAP-BRAKES).
+ * Pure and dependency-free. `draft_gate` and `pre_approval_gate` use it; Copilot rounds use the two predicates.
  *
  * Rounds 1..cap run, including the cap round (count equal to the cap). A clean round stops early.
- * The fixer runs on cap-round findings. Round cap+1 is refused. After the cap-round fix the next
- * action is the pre_approval path (`mark_ready_for_review`, then `pre_approval_gate`).
- * A cap of 0 (or less) disables the cap.
+ * A cap of 0 (or less) disables the cap. The round after the cap round is decided by `decideCapRound`.
  */
-
-/** The next action after the cap round's fixer pass landed: ready for review, then `pre_approval_gate`. */
-export const CAP_ROUND_FIXED_NEXT_ACTION = "mark_ready_for_review";
 
 /** Round `round` is the cap round. */
 export const isCapRound = (round, cap) => cap > 0 && round === cap;
 
-/** Round `round` is beyond the cap (round N+1) and never runs. */
+/** Round `round` is beyond the cap (round N+1). */
 export const isRoundRefused = (round, cap) => cap > 0 && round > cap;
-
-/**
- * Shape of one round's outcome.
- * @returns {{allowed: boolean, stopsEarly: boolean, fixerRuns: boolean, nextAfterFix: string|null}}
- */
-export function capRoundShape({ round, cap, clean, hasFindings }) {
-  if (isRoundRefused(round, cap)) return { allowed: false, stopsEarly: false, fixerRuns: false, nextAfterFix: null };
-  return {
-    allowed: true,
-    stopsEarly: clean === true,
-    fixerRuns: clean !== true && hasFindings === true,
-    nextAfterFix: isCapRound(round, cap) ? CAP_ROUND_FIXED_NEXT_ACTION : null,
-  };
-}
 
 /** A head whose wholeLogicLoc is above this multiple of the forecast wloc stops the lane (GATE-EXEC-CAP-BRAKES). */
 export const GROWTH_FACTOR = 2;

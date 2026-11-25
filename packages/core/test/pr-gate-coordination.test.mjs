@@ -4788,51 +4788,21 @@ test("draft round-cap refusal without a failure condition names the operator (AD
   assert.equal(result.agentRemedy, undefined);
 });
 
-test("draft round-cap refusal for a chain-extendable condition carries the extend-cap-round-chain agentRemedy (ADR 0254)", () => {
-  const base = { pr: 9, repo: "o/r", currentHeadSha: "abc123456789", prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftRoundRefused: true };
-  for (const condition of ["no_clearing_record", "items_do_not_cover", "chain_does_not_reach_head"]) {
-    const result = evaluatePrGateCoordination({ ...base, draftCapRoundFailure: condition });
-    assert.equal(result.agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 9", condition);
-    assert.match(result.reason, /delta_covered/, condition);
-  }
-  for (const condition of ["baseline_orphaned", "cap_round_unresolved"]) {
-    const result = evaluatePrGateCoordination({ ...base, draftCapRoundFailure: condition });
-    assert.deepEqual({ remedy: result.agentRemedy, on: result.blockedOn }, { remedy: undefined, on: BLOCKED_ON.OPERATOR_DECISION }, condition);
-  }
-  assert.equal(evaluatePrGateCoordination({ ...base, draftCapRoundFailure: "unsealed_record" }).agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 9");
-  // Without a plain repo slug the extendable condition names the operator instead of an unrunnable command.
-  assert.equal(evaluatePrGateCoordination({ ...base, repo: undefined, draftCapRoundFailure: "no_clearing_record" }).blockedOn, BLOCKED_ON.OPERATOR_DECISION);
-});
-
 test("3105 AC15: a posted findings_present draft_gate verdict with an open act list and no blocker routes to the fixer", () => {
   const head = "ab".repeat(20);
   const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
   const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict };
   const fixer = `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo o/r --pr 9 --head-sha ${head} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`;
   // PR 3221 (round 2, 5 act items) and PR 3239 (cap round, no high, no fixer pass); the PR 3234 stale-base shape is the detector case.
-  for (const shape of [{ draftOpenActList: { headSha: head, openActCount: 5, blockers: [] } }, { draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record", draftOpenActList: { headSha: head, openActCount: 2, blockers: [] } }]) {
-    const result = evaluatePrGateCoordination({ ...base, ...shape });
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
-    assert.equal(result.agentRemedy.command, fixer);
-    assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
-  }
-  const capped = { ...base, draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record" };
-  const high = evaluatePrGateCoordination({ ...capped, draftOpenActList: { headSha: head, openActCount: 1, blockers: [{ kind: "round_cap_reached", reason: "new_act", item: "[high] x (new_act)" }] } });
-  assert.deepEqual({ next: high.nextAction, on: high.blockedOn, remedy: high.agentRemedy }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION, remedy: undefined });
-  assert.match(high.reason, /\[high\] x/);
-  const moved = evaluatePrGateCoordination({ ...capped, draftOpenActList: { headSha: "cd".repeat(20), openActCount: 2, blockers: [] } });
-  assert.equal(moved.agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 9");
+  // A round up to the cap (PR 3221) routes to the fixer; a round past the scoped final round never does (GATE-EXEC-CAP-BRAKES, ADR 0324).
+  const result = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 5, blockers: [] } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
+  assert.equal(result.agentRemedy.command, fixer);
+  assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
   const open = { headSha: head, openActCount: 2, blockers: [] };
-  // AC15 replaces only the no_clearing_record refusal: every other cap-round failure keeps its routing.
-  for (const failure of ["unsealed_record", "items_do_not_cover", "cap_round_unresolved", "baseline_orphaned", "chain_does_not_reach_head"]) {
-    const input = { ...capped, draftCapRoundFailure: failure };
-    const kept = evaluatePrGateCoordination({ ...input, draftOpenActList: open });
-    assert.deepEqual({ next: kept.nextAction, remedy: kept.agentRemedy, reason: kept.reason }, (({ nextAction, agentRemedy, reason }) => ({ next: nextAction, remedy: agentRemedy, reason }))(evaluatePrGateCoordination(input)), failure);
-    assert.equal(kept.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, failure);
-  }
-  // An unknown (null) cap-round failure at the cap fails closed: the act list never replaces the refusal.
-  const unknown = evaluatePrGateCoordination({ ...base, draftRoundRefused: true, draftCapRoundFailure: null, draftOpenActList: open });
-  assert.equal(unknown.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, unknown.reason);
+  const refused = evaluatePrGateCoordination({ ...base, draftRoundRefused: true, draftOpenActList: open });
+  assert.deepEqual({ next: refused.nextAction, on: refused.blockedOn, remedy: refused.agentRemedy }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION, remedy: undefined });
+  assert.match(refused.reason, /operator focus item whose decision names the open act items by fingerprint/);
   // A blocked verdict is no findings_present verdict, so the act list never changes its routing.
   const blockedVerdict = { ...verdict, verdict: "blocked" };
   const blockedInput = { ...base, draftGate: blockedVerdict, draftGateMarker: blockedVerdict };
@@ -4844,7 +4814,7 @@ test("3105 AC15: a posted findings_present draft_gate verdict with an open act l
 test("3309: a cap-round body-only act list routes to the converged post, never the fixer; a clean converged verdict ends the block", async () => {
   const head = "ab".repeat(20);
   const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
-  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict, draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record" };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict };
   const result = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 2, blockers: [], bodyOnly: true } });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
   assert.match(result.agentRemedy.command, /^dev-loops-run scripts\/github\/upsert-checkpoint-verdict\.mjs --repo o\/r --pr 9 .*--converged-json/);
@@ -5064,7 +5034,7 @@ test("the raw copilotRequestNotObservable flag never bypasses an observable Copi
   }
 });
 
-test("#3373: the reply_resolve_review_threads reason names the close-gate-findings rerun for a judge-act pr_body thread, on the clean-marker and cap-round-fixed branches", () => {
+test("#3373: the reply_resolve_review_threads reason names the close-gate-findings rerun for a judge-act pr_body thread, on the clean-marker branch", () => {
   const base = {
     pr: 10,
     currentHeadSha: "abc123456789",
@@ -5079,17 +5049,28 @@ test("#3373: the reply_resolve_review_threads reason names the close-gate-findin
     draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
     draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
   });
-  const capFixed = evaluatePrGateCoordination({
-    ...base,
-    draftCapRoundFixed: true,
-    draftGate: gate({ visible: true, headSha: "def5678", verdict: "findings_present" }),
-  });
-  for (const result of [cleanMarker, capFixed]) {
+  for (const result of [cleanMarker]) {
     assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
     assert.match(result.reason, /judge-act thread with remedyKind pr_body is closed by a close-gate-findings rerun after the PR-body edit/);
     assert.match(result.reason, /judge-disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied — closed by a close-gate-findings rerun/);
   }
-  assert.match(capFixed.reason, /cap round's fixer pass landed/);
+});
+
+// ADR 0324 (AC3): a draft PR goes ready only on clean current-head draft_gate evidence; a findings cap round with a landed fix is never a ready route.
+test("a draft PR whose cap round has findings and a landed fix routes to the scoped round, never to ready (ADR 0324)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "success",
+    unresolvedGateThreadCount: 0,
+    draftCapRoundFixed: true,
+    draftGate: gate({ visible: true, headSha: "def5678", verdict: "findings_present" }),
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, result.reason);
+  assert.ok(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
 });
 
 // Issue 3414 ac:1: a draft round fans out only on settled green current-head CI.
@@ -5189,4 +5170,41 @@ test("cap brakes: at the draft cap round a non-shrinking act count stops the lan
   const stalled = evaluatePrGateCoordination({ ...base, capBrakes: brakes([3, 3]) });
   assert.deepEqual({ next: stalled.nextAction, on: stalled.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION });
   assert.match(stalled.reason, /non_convergence/);
+});
+
+// Issue 3464 AC2, AC5, AC7: the draft cap and the growth brake, both gates, through the one policy.
+test("cap brakes: a draft_gate round past the scoped final round stops with round_cap_reached, while the scoped round itself runs (cap 2)", () => {
+  const head = "ab".repeat(20);
+  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict, draftOpenActList: { headSha: head, openActCount: 1, blockers: [] } };
+  const items = ["[medium] guard is missing (new_act)"];
+  const stop = evaluatePrGateCoordination({ ...base, capBrakes: { gate: "draft_gate", round: 4, cap: 2, actCounts: [3, 2, 1], items } });
+  assert.deepEqual({ next: stop.nextAction, on: stop.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION });
+  assert.match(stop.reason, /round_cap_reached.*round 4 is past the round cap of 2.*draft_gate/);
+  const scoped = evaluatePrGateCoordination({ ...base, capBrakes: { gate: "draft_gate", round: 3, cap: 2, actCounts: [3, 2], items } });
+  assert.doesNotMatch(scoped.reason, /round_cap_reached/);
+});
+
+test("cap brakes: growth stops both gates above twice the forecast, with both numbers; at the threshold and with the largest of several forecasts it runs; a cleared stop recurs (AC5, AC7)", () => {
+  const head = "ab".repeat(20);
+  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
+  const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
+  const shapes = {
+    draft_gate: { prDraft: true, lifecycleState: STATE.PR_DRAFT, draftGate: verdict, draftGateMarker: verdict, draftOpenActList: { headSha: head, openActCount: 1, blockers: [] } },
+    pre_approval_gate: { prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, maxCopilotRounds: 0, draftGate: clean, draftGateMarker: clean, preApprovalGate: verdict, preApprovalGateMarker: verdict },
+  };
+  for (const [gate, shape] of Object.entries(shapes)) {
+    const base = { pr: 9, repo: "o/r", currentHeadSha: head, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", ...shape };
+    const brakes = (wholeLogicLoc, forecastWloc) => ({ gate, round: 1, cap: 2, actCounts: [1], items: ["[medium] guard is missing (new_act)"], wholeLogicLoc, forecastWloc });
+    const above = evaluatePrGateCoordination({ ...base, capBrakes: brakes(761, 380) });
+    assert.deepEqual({ next: above.nextAction, on: above.blockedOn, remedy: above.agentRemedy }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION, remedy: undefined }, gate);
+    assert.match(above.reason, /growth_past_forecast.*wholeLogicLoc 761 is above 2 times the forecast wloc 380/, gate);
+    assert.match(above.reason, /operator focus item whose decision names the act items by fingerprint/, gate);
+    // A cleared stop recurs at the next judged head while the head stays above twice the forecast (AC7).
+    assert.equal(evaluatePrGateCoordination({ ...base, capBrakes: brakes(900, 380) }).nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, gate);
+    assert.doesNotMatch(evaluatePrGateCoordination({ ...base, capBrakes: brakes(760, 380) }).reason, /growth_past_forecast/, `${gate} at the threshold`);
+    // The largest of several forecast lines is the forecast the caller passes (forecastWlocs, max), so 761 is below twice 400.
+    assert.doesNotMatch(evaluatePrGateCoordination({ ...base, capBrakes: brakes(761, Math.max(120, 400, 380)) }).reason, /growth_past_forecast/, `${gate} several forecasts`);
+    assert.doesNotMatch(evaluatePrGateCoordination({ ...base, capBrakes: brakes(5000, null) }).reason, /growth_past_forecast/, `${gate} no forecast never stops`);
+  }
 });
