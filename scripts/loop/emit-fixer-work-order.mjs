@@ -738,7 +738,13 @@ async function emitPlan({
     }
     // GATE-EXEC-CAP-BRAKES: the act list of a round past the cap (the scoped final round's findings) reaches the fixer only when an operator focus decision names each item by fingerprint.
     const preCap = resolveGateConfig(config, "preApproval").maxReviewRounds;
-    if (preCap > 0 && await countCapRounds({ repo, pr, gate, headSha: guardHead, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: (await memoFetchBase())?.baseRefName }) > preCap) {
+    const preRounds = preCap > 0 ? await countCapRounds({ repo, pr, gate, headSha: guardHead, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: (await memoFetchBase())?.baseRefName }) : 0;
+    // At the cap round the cap-round blocker set (GATE-EXEC-SOFT-CAP) stops the fixer, as on draft_gate.
+    if (preCap > 0 && preRounds === preCap) {
+      const blockers = pastCapBlockers(guardParsed, { round: preRounds, cap: preCap });
+      if (blockers.length > 0) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-SOFT-CAP): the pre_approval_gate cap round (cap ${preCap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
+    }
+    if (preCap > 0 && preRounds > preCap) {
       const decided = new Set((operatorFocusRaw?.items ?? []).filter((item) => item.decision !== undefined).map((item) => item.fingerprint));
       const undecided = guardParsed.filter((f) => !decided.has(f.fingerprint)).map((f) => `${f.fingerprint} ${JSON.stringify(f.summary)}`);
       if (undecided.length > 0) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-CAP-BRAKES): act list ${guardFile} belongs to a pre_approval_gate round past the cap (${preCap}); every act item goes to the operator. Pass --operator-focus-file with an item holding a decision for each fingerprint: ${undecided.join("; ")}`);

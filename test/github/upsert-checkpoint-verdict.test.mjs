@@ -12,6 +12,7 @@ import {
   buildCoordinationEvaluatorInput,
   buildInlineExecutionWarning,
   collectPreApprovalGateBlockers,
+  composeBlockedBy,
   composeCheckpointVerdict,
   parseUpsertCheckpointVerdictCliArgs,
   normalizeStructuredFindings,
@@ -13556,4 +13557,18 @@ test("deriveEffectiveNextAction names the operator step when no blockedBy cause 
   assert.equal(deriveEffectiveNextAction("blocked", "pre_approval_gate", [], false, ["size_budget", "ci"]), "operator step: grant a size waiver or split the PR; wait for CI");
   assert.equal(deriveEffectiveNextAction("blocked", "pre_approval_gate", [], false, ["findings", "ci"]), "rerun gate");
   assert.equal(deriveEffectiveNextAction("blocked", "draft_gate", [], false, []), "stay draft and fix");
+});
+
+// AC9/AC10: composeBlockedBy keeps `findings` in a mixed block, or the emitter refuses a legitimate fix round with blocked_without_findings.
+test("composeBlockedBy derives the blocked-by causes for each branch", () => {
+  const unticked = { kind: "unticked spec-of-record Acceptance criteria", item: "AC1" };
+  const cases = [
+    { name: "unticked only", input: { verdict: "blocked", blockers: [unticked] }, expected: ["unticked_checkboxes"] },
+    { name: "act items plus unticked", input: { verdict: "blocked", blockers: [unticked], hasActItems: true }, expected: ["findings", "unticked_checkboxes"] },
+    { name: "a non-checkbox blocker plus unticked", input: { verdict: "blocked", blockers: [unticked, { kind: "round_cap_reached", item: "x" }] }, expected: ["findings", "unticked_checkboxes"] },
+    { name: "a non-checkbox blocker only", input: { verdict: "blocked", blockers: [{ kind: "round_cap_reached", item: "x" }] }, expected: ["findings"] },
+    { name: "no blockers at all falls back to findings", input: { verdict: "blocked" }, expected: ["findings"] },
+    { name: "a non-blocked verdict", input: { verdict: "findings_present", blockers: [unticked], hasActItems: true }, expected: [] },
+  ];
+  for (const { name, input, expected } of cases) assert.deepEqual(composeBlockedBy(input), expected, name);
 });

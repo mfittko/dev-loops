@@ -410,9 +410,9 @@ const GateConfig = z.strictObject({
 });
 
 // Only the draft and preApproval gates read maxReviewRounds, so only they accept it.
-// No schema-level `.default()` (same layer-shadowing hazard); resolveGateConfig applies 4.
+// No schema-level `.default()` (same layer-shadowing hazard); resolveGateConfig applies 4 on draft and 2 on preApproval.
 const DraftGateConfig = GateConfig.extend({
-  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for the draft and pre-approval gates: a round whose count of completed judged rounds reaches this number is past the cap, and at the cap round only a named human decision blocks with round_cap_reached (GATE-EXEC-SOFT-CAP); other act items go to the fixer, and a round after the cap round is refused. 0 disables the cap. Default 4 on draft, 2 on preApproval."),
+  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for the draft and pre-approval gates: a round whose count of completed judged rounds reaches this number is past the cap, and at the cap round only a named human decision blocks with round_cap_reached (GATE-EXEC-SOFT-CAP); other act items go to the fixer, and on draft a round after the cap round is refused. On preApproval the round after the cap round runs as the scoped final round within gates.capFixMaxLines (GATE-EXEC-CAP-BRAKES). 0 disables the cap. Default 4 on draft, 2 on preApproval."),
 });
 
 // One named group of angles dispatched together onto a single reviewer under
@@ -1043,7 +1043,7 @@ const FileGatesConfig = z.strictObject({
   fanout: FanoutConfig.partial().superRefine(rejectInvalidFanoutGroupNames).superRefine(rejectInvalidFanoutSizeTiers).describe("Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate).").optional(),
   reviewDiff: ReviewDiffConfig.partial().describe("Reviewer-diff shaping (global, applies on every gate): excludeGlobs drops matching file blocks from the required filtered diff read.").optional(),
   contextExpansion: ContextExpansionConfig.partial().describe("Adaptive reviewer-context expansion caps (global, applies on every gate): maxFiles and maxBytes bound the importers and sibling functions added per round.").optional(),
-  capFixMaxLines: z.number().int().nonnegative().describe("Fix budget past the round cap, shared by draft_gate and pre_approval_gate: the most logic LOC the PR-own diff since the cap-round head may add before the fix goes to the operator (GATE-EXEC-CAP-BRAKES). Default 60.").optional(),
+  capFixMaxLines: z.number().int().nonnegative().describe("Fix budget past the round cap, read by pre_approval_gate in this slice (draft_gate follows in issue 3464): the most logic LOC the PR-own diff since the cap-round head may add before the fix goes to the operator (GATE-EXEC-CAP-BRAKES). Default 60.").optional(),
 });
 
 // ============================================================================

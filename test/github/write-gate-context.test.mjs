@@ -11631,7 +11631,85 @@ test("CLI refuses a scoped final pre_approval_gate context with the policy reaso
   }
 });
 
-test("a pre_approval_gate round forced by a base merge does not count toward the cap and runs scoped over the PR-own delta", async () => {
+test("a pre_approval_gate base-merge head with a PR-own resolution change counts as a round, while a pure base merge does not (AC6)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["checkout", "-q", "-b", "mainline", baseSha]);
+    await writeFile(path.join(repoRoot, "src/other.mjs"), "export const other = 1;\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "main advances"]);
+    const mainSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", mainSha]);
+    const merge = async (resolution) => {
+      git(repoRoot, ["checkout", "-q", "--detach", headSha]);
+      git(repoRoot, ["merge", "--no-ff", "--no-commit", mainSha]);
+      if (resolution) await writeFile(path.join(repoRoot, "src/changed.mjs"), 'import { helper } from "./dep.mjs";\nexport function changed() { return helper() + 2; }\n', "utf8");
+      git(repoRoot, ["add", "-A"]);
+      git(repoRoot, ["commit", "-q", "-m", "merge main"]);
+      return git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    };
+    const pure = await merge(false);
+    const resolved = await merge(true);
+    // Seed after the commits: `git add -A` would otherwise commit the ledgers into the merges.
+    await seedClosedRounds(repoRoot, 67, ["1".repeat(40), baseSha, headSha], "pre_approval_gate");
+    assert.equal(await countCapRounds({ repo: "owner/repo", pr: 67, gate: "pre_approval_gate", headSha: pure }, { repoRoot, prBase: "main" }), 3, "a pure base merge does not count");
+    assert.equal(await countCapRounds({ repo: "owner/repo", pr: 67, gate: "pre_approval_gate", headSha: resolved }, { repoRoot, prBase: "main" }), 4, "a merge resolution with a PR-own change counts");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("the scoped final round diffs from the previous round head: a PR change committed before it is absent from the persisted diff (AC3)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+    await writeFile(path.join(repoRoot, "src/changed.mjs"), 'import { helper } from "./dep.mjs";\nexport function changed() { return helper() + 5; }\n', "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "cap-round fix"]);
+    const newHead = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    // The previous round head (headSha) lies after the base and carries the PR change `helper() + 1`.
+    await seedClosedRounds(repoRoot, 68, ["1".repeat(40), headSha], "pre_approval_gate");
+    const { out, exitCode } = await runPreApprovalContext(repoRoot, 68, newHead, baseSha);
+    assert.notEqual(exitCode, 1, out);
+    const diff = await readFile(path.resolve(repoRoot, buildGateDiffPath({ repo: "owner/repo", pr: 68, gate: "pre_approval_gate", headSha: newHead })), "utf8");
+    assert.match(diff, /^\+export function changed\(\) \{ return helper\(\) \+ 5; \}$/m);
+    assert.doesNotMatch(diff, /^-export function changed\(\) \{ return helper\(\); \}$/m, "the base-relative removed line must be absent");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("the context writer refuses the next round on non-convergence on both gates: 3 then 3 acted clusters", async () => {
+  for (const gate of ["draft_gate", "pre_approval_gate"]) {
+    const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+    try {
+      git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+      const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-69");
+      await mkdir(dir, { recursive: true });
+      const acts = ["a", "b", "c"].map((k) => ({ severity: "medium", summary: `finding ${k}`, files: [`src/${k}.mjs`], line: 1, judgeDisposition: "act", judgeTitle: `Finding ${k}`, judgeFix: "fix" }));
+      for (const [i, head] of ["1".repeat(40), "2".repeat(40)].entries()) {
+        await writeFile(path.join(dir, `${gate}-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 69, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: acts.map((a, j) => ({ ...a, clusterId: j })) }), "utf8");
+      }
+      let out = "", exitCode;
+      const realOut = process.stdout.write.bind(process.stdout), realErr = process.stderr.write.bind(process.stderr), prior = process.exitCode;
+      process.stdout.write = (c) => { out += String(c); return true; };
+      process.stderr.write = (c) => { out += String(c); return true; };
+      process.exitCode = undefined;
+      try {
+        await main(["--repo", "owner/repo", "--pr", "69", "--gate", gate, "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], { repoRoot, run: stubGhRun });
+        exitCode = process.exitCode;
+      } finally {
+        process.stdout.write = realOut; process.stderr.write = realErr; process.exitCode = prior;
+      }
+      assert.equal(exitCode, 1, `${gate}: ${out}`);
+      assert.match(out, /non_convergence/, gate);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a pre_approval_gate round forced by a pure base merge does not count toward the cap and is refused scoped as an empty PR-own delta", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
     git(repoRoot, ["checkout", "-q", "-b", "mainline", baseSha]);
@@ -11641,9 +11719,7 @@ test("a pre_approval_gate round forced by a base merge does not count toward the
     const mainSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
     git(repoRoot, ["checkout", "-q", "--detach", headSha]);
     git(repoRoot, ["merge", "--no-ff", "--no-commit", mainSha]);
-    await writeFile(path.join(repoRoot, "src/changed.mjs"), 'import { helper } from "./dep.mjs";\nexport function changed() { return helper() + 2; }\n', "utf8");
-    git(repoRoot, ["add", "-A"]);
-    git(repoRoot, ["commit", "-q", "-m", "merge main with a resolution"]);
+    git(repoRoot, ["commit", "-q", "-m", "merge main"]);
     const mergedHead = git(repoRoot, ["rev-parse", "HEAD"]).trim();
     git(repoRoot, ["update-ref", "refs/remotes/origin/main", mainSha]);
     await seedClosedRounds(repoRoot, 64, ["1".repeat(40), baseSha, headSha], "pre_approval_gate");
@@ -11651,9 +11727,8 @@ test("a pre_approval_gate round forced by a base merge does not count toward the
     assert.equal(await countCompletedRounds(ids, { repoRoot }), 4, "the raw count includes the merge-forced round");
     assert.equal(await countCapRounds(ids, { repoRoot, prBase: "main" }), 3, "the merge-forced round does not count");
     const { out, exitCode } = await runPreApprovalContext(repoRoot, 64, mergedHead, "origin/main");
-    assert.notEqual(exitCode, 1, out);
-    const artifact = JSON.parse(await readFile(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-64", `pre_approval_gate-${mergedHead}.json`), "utf8"));
-    assert.equal(artifact.scope.closureRound.fromHead, headSha);
+    assert.equal(exitCode, 1);
+    assert.match(out, /closure_delta_no_pr_own_change.*empty/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -11697,7 +11772,7 @@ test("an operator decision naming every act item by fingerprint runs the round p
     await writePlan({ gate: "pre_approval_gate", headSha: newHead, operatorFocus: focus });
     const second = await runPreApprovalContext(repoRoot, 65, third, baseSha);
     assert.equal(second.exitCode, 1);
-    assert.match(second.out, /round_cap_reached/);
+    assert.match(second.out, /round_cap_reached|non_convergence/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

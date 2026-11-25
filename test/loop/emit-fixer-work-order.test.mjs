@@ -5060,6 +5060,20 @@ test("a pre_approval_gate act list of round cap+1 is refused unless an operator 
   });
 });
 
+// GATE-EXEC-SOFT-CAP: at the pre_approval_gate cap round (round 2 of 2) a question act item is a cap-round blocker and never reaches the fixer.
+test("a pre_approval_gate act list holding a question at the cap round is refused with round_cap_reached", async () => {
+  await withFixture(async ({ root, files, emit }) => {
+    const file = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `pre_approval_gate-${"d".repeat(40)}.json`);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+    const gated = { gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined };
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "question", judgeFix: "guard the deref" })]));
+    await assert.rejects(emit(gated), (e) => e.refusal === "round_cap_reached" && /cap round/.test(e.message));
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
+    assert.equal((await emit(gated)).workOrder.source, "act-list", "a medium act item at the cap round still reaches the fixer");
+  });
+});
+
 // GATE-COMMENT-BLOCKED-BY: a blocked verdict whose causes hold no findings entry has no fix round.
 test("a pre_approval_gate fix round after a blocked verdict with no findings cause is refused with blocked_without_findings naming the operator step", async () => {
   await withFixture(async ({ head, files, emit }) => {

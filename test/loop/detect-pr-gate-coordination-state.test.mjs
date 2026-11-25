@@ -5467,3 +5467,41 @@ test("resolveCapBrakes does not count a pre_approval_gate round forced by a base
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// GATE-EXEC-CAP-BRAKES (AC7): an unreadable cap-brakes ledger read is advisory; a sealed-ledger tamper still propagates.
+async function detectWithPriorLedger(headSummary, { tamper = false } = {}) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-cap-brakes-warning-"));
+  try {
+    initGitFixture(tempDir, { branch: "main" });
+    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1 }));
+    const headSha = "abc1234567".repeat(4);
+    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findings, { recursive: true });
+    const ledger = (head, loggedAt, list) => writeSealed(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt, findings: list }));
+    const act = { severity: "medium", summary: headSummary, file: "src/x.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix x" };
+    await ledger("1".repeat(40), "2026-11-15T00:01:00.000Z", []);
+    await ledger(headSha, "2026-11-16T00:00:00.000Z", [act]);
+    if (tamper) {
+      const file = path.join(findings, `draft_gate-${"1".repeat(40)}.json`);
+      await writeFile(file, (await readFile(file, "utf8")).replace("2026-11-15", "2026-11-14"));
+    }
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    return await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("a cap-brakes read that throws a non-tamper error sets capBrakesWarning and keeps the route", async () => {
+  const healthy = await detectWithPriorLedger("x");
+  assert.equal(healthy.capBrakesWarning, undefined);
+  // A summary object whose own `toString` is not callable makes the brakes read throw while formatting the item text.
+  const broken = await detectWithPriorLedger({ toString: 1 });
+  assert.match(broken.capBrakesWarning, /^GATE-EXEC-CAP-BRAKES \(advisory\): the cap brakes could not be evaluated \(/);
+  assert.equal(broken.nextAction, healthy.nextAction, "the route is unchanged");
+});
+
+test("a cap-brakes read that meets a tampered sealed ledger propagates OUT_OF_BAND_WRITE", async () => {
+  await assert.rejects(detectWithPriorLedger("x", { tamper: true }), (error) => error.code === OUT_OF_BAND_WRITE);
+});

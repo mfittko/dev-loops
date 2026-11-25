@@ -2165,12 +2165,12 @@ export async function countCompletedRounds(options, { repoRoot, includeLiveCurre
 }
 
 /**
- * Round-cap state of the round being posted (GATE-EXEC-ROUND-CAP). The cap exists only for draft_gate, so any
- * other gate is never past it. One resolver for the judge pass, the ledger writer and the fixer emitter.
+ * Round-cap state of the round being posted (GATE-EXEC-ROUND-CAP). This resolves the draft_gate cap only, so any
+ * other gate is never past it; the pre_approval_gate cap lives in countCapRounds and decideCapRound (GATE-EXEC-CAP-BRAKES). One resolver for the judge pass, the ledger writer and the fixer emitter.
  * @returns {Promise<{ pastCap: boolean, round: number, cap: number, lowFixCapped: boolean }>}
  */
 export async function resolveDraftRoundCap(options, { repoRoot, includeLiveCurrentHead = false }) {
-  // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate has no round count and defers a low in every round.
+  // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate defers a low in every round; its round count is countCapRounds, not this resolver.
   if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0, lowFixCapped: options.gate === "pre_approval_gate" };
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
   const cap = resolveGateConfig(config, "draft").maxReviewRounds;
@@ -2210,12 +2210,10 @@ export async function resolveClosureRound(options, { repoRoot, cap, prBase, incl
   return { fromHead: closureFromHeadOf(closed), priorActItems: await listPriorActItems(options, { repoRoot }) };
 }
 
-/** `head` is reached from `fromHead` by merges only: no PR commit that `mainRef` lacks (a base merge, possibly with a resolution). */
+/** `head` is reached from `fromHead` by a base-only merge: merges only and an empty PR-own delta, so a merge resolution that carries PR-own changes is a real round. */
 async function isBaseMergeRound({ fromHead, head, mainRef, repoRoot }) {
   if (!fromHead || !head || fromHead === head) return false;
-  if ((await runGitCommand(["merge-base", "--is-ancestor", fromHead, head], { repoRoot })).code !== 0) return false;
-  const own = await runGitCommand(["rev-list", "--no-merges", "--count", `${fromHead}..${head}`, `^${mainRef}`], { repoRoot });
-  return own.code === 0 && own.stdout.trim() === "0";
+  return isBaseOnlyMergeSince({ fromHead, head, mainRef, repoRoot });
 }
 
 /**
@@ -2274,6 +2272,19 @@ async function resolveOperatorClearedRound(options, { repoRoot, cap, prBase }) {
   const decided = new Set((issued.operatorFocus?.items ?? []).filter((item) => item.decision !== undefined).map((item) => item.fingerprint));
   if (!last.every((fp) => decided.has(fp))) return null;
   return { fromHead: closureFromHeadOf(closed), priorActItems: await listPriorActItems(options, { repoRoot }) };
+}
+
+/**
+ * The non-convergence backstop of the context writer (GATE-EXEC-CAP-BRAKES), for draft_gate and pre_approval_gate: the next round is refused when the
+ * effective closed rounds' acted cluster counts did not shrink. Cap 0 leaves only the cap-less brake in `decideCapRound`.
+ */
+export async function refuseNonConvergence(options, { repoRoot, prBase }) {
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot });
+  const effective = await effectiveRounds(closed, { prBase: options.gate === "pre_approval_gate" ? prBase : undefined, repoRoot });
+  const decision = decideCapRound({ round: effective.length + 1, cap: 0, actCounts: effective.map((log) => capRoundActList(log.findings, log.headSha).length) });
+  if (decision.action === "operator") {
+    throw Object.assign(new Error(`${describeCapStop(decision)}. Report blocked with blockedOn operator_decision.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); the operator clears it with an operator focus item whose decision names the act items by fingerprint (GATE-EXEC-CAP-BRAKES)` });
+  }
 }
 
 /**
@@ -4787,6 +4798,7 @@ export async function main(
       throw new Error(`${freshness.error}: origin/${freshness.base} has ${freshness.newerCommits.length} commit(s) the PR head lacks (${shown}${more}); files differing only because of the stale base: ${freshness.foreignFiles.join(", ") || "none"}. ${freshness.remedy}`);
     }
     // GATE-EXEC-CAP-BRAKES: a pre_approval_gate round past the cap is the scoped final round, or refuses with the policy reason. The findings ledger is main-anchored.
+    if (options.gate === "draft_gate" || options.gate === "pre_approval_gate") await refuseNonConvergence({ ...options, tmpRoot: undefined }, { repoRoot, prBase });
     if (options.gate === "pre_approval_gate") {
       options.closureRound = await resolveScopedFinalRound({ ...options, tmpRoot: undefined }, { repoRoot, prBase, config }) ?? undefined;
     }
@@ -4809,7 +4821,8 @@ export async function main(
         }
         closurePaths = own.changedFiles;
       }
-      diff = captureDiffFromBase(options.base, { repoRoot, paths: closurePaths });
+      // The scoped round diffs from the previous round head (AC3), restricted to the PR-own paths; other rounds diff from the PR base.
+      diff = captureDiffFromBase(options.closureRound?.fromHead ?? options.base, { repoRoot, paths: closurePaths });
       const scope = await resolveDiffScope(
         { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", expansion: options.config?.gates?.contextExpansion },
         { repoRoot },
