@@ -1366,3 +1366,18 @@ test("isGateMachineArtifactBody recognizes the untrusted-comments-skipped note, 
   assert.equal(isGateMachineArtifactBody("<!-- dev-loops:untrusted-comments-skipped head=abc -->\nSkipped 1 review thread(s)"), true);
   assert.equal(isGateMachineArtifactBody("quote <!-- dev-loops:untrusted-comments-skipped head=abc --> mid-line"), false);
 });
+
+test("summarizeGateReviewCommentMarkers parses the Blocked by line into blockedBy and drops unknown causes (GATE-COMMENT-BLOCKED-BY)", () => {
+  const body = (blockedByLine) => [
+    "### Gate review: `pre_approval_gate`",
+    "**Reviewed head SHA:** `abc1234`",
+    "**Verdict:** blocked",
+    ...blockedByLine,
+    "**Findings summary:** none",
+    "**Next action:** rerun gate",
+  ].join("\n");
+  const parse = (lines) => summarizeGateReviewCommentMarkers([{ id: 7, updated_at: "2024-02-01T00:00:00Z", body: body(lines) }], { headSha: "abc1234" }).pre_approval_gate;
+  assert.deepEqual(parse(["**Blocked by:** unticked_checkboxes, size_budget, bogus"]).blockedBy, ["unticked_checkboxes", "size_budget"]);
+  assert.deepEqual(parse(["**Blocked by:** findings"]).blockedBy, ["findings"]);
+  assert.equal(parse([]).blockedBy, undefined);
+});

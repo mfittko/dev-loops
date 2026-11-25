@@ -1735,7 +1735,7 @@ export function assertJudgeSpecSourceMatchesLedger(options, ledgerFindings) {
 // `nonLocatableFindings` also drives an invisible fingerprint+disposition
 // marker per finding, load-bearing for GATE-EXEC-FINDING-THREADS's
 // cross-round suppression/deferral tracking.
-export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, converged, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, closureFromHead, pr, judgeSpecSource, judgeUnavailableReason, staleBaseNote, judgeSkippedNoFindings }) {
+export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, converged, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, closureFromHead, pr, judgeSpecSource, judgeUnavailableReason, staleBaseNote, judgeSkippedNoFindings, blockedBy }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1758,6 +1758,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     ...(gate === "draft_gate" && normalizeFullHeadSha(closureFromHead ?? "") ? [`closure round: diff from ${normalizeFullHeadSha(closureFromHead)}`] : []),
     ...(staleBaseNote ? [`**Base freshness:** stale; ${staleBaseNote}`] : []),
     ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockerCounts(gateBlockers)}`] : []),
+    ...(verdict === "blocked" && Array.isArray(blockedBy) && blockedBy.length > 0 ? [`**Blocked by:** ${blockedBy.join(", ")}`] : []),
     ...(judgeSpecSource ? [judgeSpecSource === "unavailable" ? JUDGE_UNAVAILABLE_LINES[judgeUnavailableReason] : JUDGE_SPEC_LINES[judgeSpecSource]] : []),
     ...(judgeSkippedNoFindings && !judgeSpecSource ? ["**Judge:** skipped, the round has no findings to dispose"] : []),
     ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),
@@ -2611,6 +2612,15 @@ export function composeCheckpointVerdict({ reviewVerdict, blockers = [] }) {
   return reviewVerdict;
 }
 
+// GATE-COMMENT-BLOCKED-BY: the causes of a composed `blocked` verdict. Unticked boxes are the only cause the blockers prove,
+// so a blocked round with any other blocker or an open act item names `findings`. size_budget and ci are named by their own posters.
+export function composeBlockedBy({ verdict, blockers = [], hasActItems = false }) {
+  if (verdict !== "blocked") return [];
+  const unticked = blockers.some((b) => PRE_APPROVAL_BLOCKER_SOURCES.some(([, kind]) => kind === b.kind));
+  const findings = hasActItems || blockers.some((b) => !PRE_APPROVAL_BLOCKER_SOURCES.some(([, kind]) => kind === b.kind)) || !unticked;
+  return [...(findings ? ["findings"] : []), ...(unticked ? ["unticked_checkboxes"] : [])];
+}
+
 // The `**Gate blockers:**` line and the verdict-contradiction error state only
 // the count per kind; the item text lives in the visible list below.
 function formatGateBlockerCounts(blockers) {
@@ -2637,7 +2647,8 @@ function renderGateBlockerItemsList(blockers) {
 // lifecycle gate returns null for a `clean` verdict only on pre_approval_gate
 // (the caller's value is accepted unchanged); a clean draft_gate derives
 // `mark ready for review`.
-export function deriveEffectiveNextAction(verdict, gate, actItems = [], unjudgedFindings = false) {
+const BLOCKED_BY_OPERATOR_STEPS = { unticked_checkboxes: "tick the verified PR-body checkboxes", size_budget: "grant a size waiver or split the PR", ci: "wait for CI" };
+export function deriveEffectiveNextAction(verdict, gate, actItems = [], unjudgedFindings = false, blockedBy = []) {
   if (gate === "review") {
     // Count distinct act items: the ledger and --findings-json can carry the same finding, and a cluster is one item.
     const stamped = actItems.length > 0 && actItems.every((f) => Number.isInteger(f?.clusterId));
@@ -2651,6 +2662,8 @@ export function deriveEffectiveNextAction(verdict, gate, actItems = [], unjudged
     // A clean draft_gate has one legal next step; "request Copilot review while draft" is refused by request-copilot-review.mjs (suppressed_draft).
     return gate === "draft_gate" && verdict === "clean" ? "mark ready for review" : null;
   }
+  // GATE-COMMENT-BLOCKED-BY: a blocked verdict with no findings cause has no fix round; its next step is the operator's.
+  if (verdict === "blocked" && blockedBy.length > 0 && !blockedBy.includes("findings")) return `operator step: ${blockedBy.map((cause) => BLOCKED_BY_OPERATOR_STEPS[cause]).join("; ")}`;
   // draft_gate: the PR stays draft and fixes are required before retrying.
   // pre_approval_gate: follow-up fixes are required before final approval —
   // address the findings and re-run the gate.
@@ -3536,7 +3549,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     }
     // else: a matching explicit --verdict is accepted unchanged.
     if (composedVerdict !== ledgerVerdict) {
-      checkpointComposition = { reviewVerdict: ledgerVerdict, blockers: gateBlockers };
+      checkpointComposition = { reviewVerdict: ledgerVerdict, blockers: gateBlockers, blockedBy: composeBlockedBy({ verdict: composedVerdict, blockers: gateBlockers, hasActItems: guardedRoundActs.length > 0 }) };
     }
   } else if (options.verdict === undefined) {
     // --findings-ledger absent OR present without overallVerdict (a legacy/
@@ -3644,7 +3657,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   const ledgerActItems = listOpenActItems(preloadedFindingsLedger?.findings ?? []);
   const ledgerActFingerprints = new Set(ledgerActItems.map((f) => fingerprintFinding(f ?? {})));
   const nextActionItems = [...ledgerActItems, ...enrichedActItems.filter((f) => !ledgerActFingerprints.has(fingerprintFinding(f ?? {})))];
-  const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate, nextActionItems, (preloadedFindingsLedger?.findings?.length ?? 0) > 0 && !judgedRound);
+  const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate, nextActionItems, (preloadedFindingsLedger?.findings?.length ?? 0) > 0 && !judgedRound, checkpointComposition?.blockedBy);
   if (derivedNextAction !== null) {
     options.nextAction = derivedNextAction;
   } else if (options.gate === "pre_approval_gate" && options.verdict === "clean" && options.nextAction === undefined) {
@@ -3984,7 +3997,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     structuredFindings,
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
-    ...(checkpointComposition ? { reviewVerdict: checkpointComposition.reviewVerdict, gateBlockers: checkpointComposition.blockers } : {}),
+    ...(checkpointComposition ? { reviewVerdict: checkpointComposition.reviewVerdict, gateBlockers: checkpointComposition.blockers, blockedBy: checkpointComposition.blockedBy } : {}),
     ...(capRoundHead && !findingSurface ? { round: draftGateConfig.maxReviewRounds } : {}),
     ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable, locatableFindings: findingSurface.locatable, foldedFindings: findingSurface.folded } : {}),
   });
