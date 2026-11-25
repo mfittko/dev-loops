@@ -2147,7 +2147,7 @@ export async function countCompletedRounds(options, { repoRoot, includeLiveCurre
 /**
  * Round-cap state of the round being posted (GATE-EXEC-ROUND-CAP). This resolves the draft_gate cap only, so any
  * other gate is never past it; the pre_approval_gate cap lives in countCapRounds and decideCapRound (GATE-EXEC-CAP-BRAKES). One resolver for the judge pass, the ledger writer and the fixer emitter.
- * The round is a {@link countCapRounds} count, so a base-merge-forced round never counts. The PR base is `prBase`, else the base the head's gate-context artifact (under `contextTmpRoot`) recorded; with neither it refuses when a merge commit lies between two round heads (`prBase: null` keeps the raw count).
+ * The round is a {@link countCapRounds} count, so a base-merge-forced round never counts. The PR base is `prBase`, else the base the head's gate-context artifact (under `contextTmpRoot`) recorded; with neither it refuses when a merge commit lies between two round heads or the merge probe fails (an unknown head, a shallow clone, a timeout); `prBase: null` keeps the raw count.
  * @returns {Promise<{ pastCap: boolean, round: number, cap: number, lowFixCapped: boolean }>}
  */
 export async function resolveDraftRoundCap(options, { repoRoot, includeLiveCurrentHead = false, prBase, contextTmpRoot }) {
@@ -2164,14 +2164,13 @@ export async function resolveDraftRoundCap(options, { repoRoot, includeLiveCurre
   // With no base, a base-merge-forced round cannot be ruled out whenever a merge commit lies between two consecutive round heads: refuse instead of counting it.
   if (base === undefined) {
     const heads = [...(await readClosedPriorRoundLogs(options, { repoRoot })).map((l) => String(l.headSha).trim().toLowerCase()), String(options.headSha).trim().toLowerCase()];
-    let mergeBetween = false;
-    for (let i = 1; i < heads.length && !mergeBetween; i += 1) {
+    const unresolved = (why) => new Error(`round_cap_base_unresolved: no gate-context artifact under --context-tmp-root, the ledger tmp root or the checkout tmp records the PR base, so a base-merge-forced round cannot be told from a real one${why}; pass --context-tmp-root (the tmp root that holds this head's gate-context artifact) (GATE-EXEC-ROUND-CAP).`);
+    for (let i = 1; i < heads.length; i += 1) {
       if (heads[i - 1] === heads[i]) continue;
-      const merges = await runGitCommand(["rev-list", "--merges", "--max-count=1", `${heads[i - 1]}..${heads[i]}`], { repoRoot }).catch(() => ({ code: 128 }));
-      mergeBetween = merges.code === 0 && merges.stdout.trim().length > 0;
-    }
-    if (mergeBetween) {
-      throw new Error("round_cap_base_unresolved: no gate-context artifact under --context-tmp-root, the ledger tmp root or the checkout tmp records the PR base, so a base-merge-forced round cannot be told from a real one; pass --context-tmp-root (the tmp root that holds this head's gate-context artifact) (GATE-EXEC-ROUND-CAP).");
+      // Only exit 0 with empty stdout rules a merge out; a nonzero exit, a spawn error or a timeout (an unknown head, a shallow clone) is unresolved.
+      const merges = await runGitCommand(["rev-list", "--merges", "--max-count=1", `${heads[i - 1]}..${heads[i]}`], { repoRoot, timeout: 30_000 }).catch((error) => ({ code: null, stderr: String(error?.message ?? error) }));
+      if (merges.code !== 0) throw unresolved(` (the merge probe ${heads[i - 1]}..${heads[i]} failed: ${String(merges.stderr ?? "").trim() || `exit ${merges.code}`}; fetch the missing commit)`);
+      if (merges.stdout.trim().length > 0) throw unresolved("");
     }
   }
   const round = await countCapRounds(options, { repoRoot, prBase: base, includeLiveCurrentHead });

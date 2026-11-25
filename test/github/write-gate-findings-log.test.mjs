@@ -2769,6 +2769,11 @@ async function writeCapPrior(tmpDir, { pr = 42, head, findings, gate = "draft_ga
       repo: "owner/repo", pr, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${head[0]}T00:00:00.000Z`, findings,
     }), "utf8");
   }
+  // The seeded heads are not commits of the fixture repository, so the round count reads the PR base from a context artifact instead of probing git for a base merge.
+  const { buildGateContextPath } = await import("../../scripts/github/_gate-artifact-paths.mjs");
+  const ctx = path.resolve(tmpDir, buildGateContextPath({ repo: "owner/repo", pr, gate, headSha: CAP_HEAD, tmpRoot: tmpDir }));
+  await mkdir(path.dirname(ctx), { recursive: true });
+  await writeFile(ctx, JSON.stringify({ baseFreshness: { base: "main" } }), "utf8");
 }
 async function writeCapRound(tmpDir, rawFindings, dispositions) {
   const judgeVerdict = path.join(tmpDir, "judge-verdict.json");
@@ -2793,6 +2798,11 @@ test("writeGateFindingsLog counts rounds from the custom --tmp-root it persists 
     await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 4\n", "utf8");
     // Successive writes to the custom root: a nit act holds in round 1 and rejects in round 2.
     const results = [];
+    // The heads are not commits of any repository, so the PR base comes from a context artifact in the custom root.
+    const { buildGateContextPath } = await import("../../scripts/github/_gate-artifact-paths.mjs");
+    const ctx = path.resolve(custom, buildGateContextPath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: capPriorHeads[1], tmpRoot: custom }));
+    await mkdir(path.dirname(ctx), { recursive: true });
+    await writeFile(ctx, JSON.stringify({ baseFreshness: { base: "main" } }), "utf8");
     for (const headSha of [capPriorHeads[0], capPriorHeads[1]]) {
       const judgeVerdict = path.join(tmpDir, `judge-${headSha[0]}.json`);
       await writeFile(judgeVerdict, JSON.stringify({
@@ -2940,6 +2950,25 @@ test("resolveDraftRoundCap keeps the raw count for prBase null and reads the rec
     await mkdir(path.dirname(ledgerRootCtx), { recursive: true });
     await writeFile(ledgerRootCtx, JSON.stringify({ baseFreshness: { base: "main" } }), "utf8");
     assert.equal((await resolveDraftRoundCap(input, { repoRoot: tmpDir })).round, 1, "the context under the ledger tmp root is read without --context-tmp-root");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveDraftRoundCap refuses when the merge probe fails because a prior round head is absent from the repository", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-capbase-missing-head-"));
+  try {
+    const git = (...args) => runGitFixture(tmpDir, args);
+    initGitFixture(tmpDir, { branch: "main", commit: null });
+    await writeFile(path.join(tmpDir, "a.txt"), "a", "utf8");
+    git("add", "a.txt"); git("commit", "-q", "-m", "m0");
+    const presentHead = git("rev-parse", "HEAD");
+    await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 4\n", "utf8");
+    const { resolveDraftRoundCap } = await import("../../scripts/github/write-gate-context.mjs");
+    const input = { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: presentHead, tmpRoot: tmpDir };
+    await writeCapPrior(tmpDir, { head: "f".repeat(40), findings: [] });
+    await assert.rejects(resolveDraftRoundCap(input, { repoRoot: tmpDir }), /round_cap_base_unresolved/, "a prior head absent from the repository makes rev-list exit nonzero: refuse, never a silent raw count");
+    assert.equal((await resolveDraftRoundCap(input, { repoRoot: tmpDir, prBase: null })).round, 2, "an explicit prBase null keeps the raw count without probing");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

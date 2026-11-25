@@ -35,7 +35,11 @@ test("the draft cap exit rule is deleted and GATE-EXEC-CAP-BRAKES names the draf
   const contract = await read("skills/docs/gate-review-sub-loop-contract.md");
   assert.ok(!contract.includes(["GATE-EXEC-ROUND-CAP", "EXIT"].join("-")), "the cap exit rule and every reference are gone");
   const brakes = contract.split("<!-- rule: GATE-EXEC-CAP-BRAKES -->")[1].split("\n")[1];
-  for (const text of ["(default 2, `0` disables the cap)", "the clean verdict of the draft scoped final round is the draft exit", "ADR 0324 amends ADR 0322", "(3) Growth:", "`forecastWlocs`"]) assert.ok(brakes.includes(text), text);
+  for (const text of ["(default 2, `0` disables the cap)", "(3) Growth:"]) assert.ok(brakes.includes(text), text);
+  // AC4: the rule carries no ADR 0324 sentence; GATE-EXEC-ROUND-CAP states the draft exit and the enforcementNote carries the growth-read detail.
+  assert.ok(!brakes.includes("ADR 0324"), "GATE-EXEC-CAP-BRAKES carries no ADR 0324 sentence");
+  assert.ok(contract.includes("A draft PR goes ready only on clean current-head `draft_gate` evidence (ADR 0324)."), "GATE-EXEC-ROUND-CAP states the draft exit");
+  assert.ok((await read("skills/docs/required-rules.json")).includes("forecastWlocs in spec-lint.mjs"), "the growth-read detail lives in the enforcementNote");
   assert.ok(!brakes.includes("slice 2"), "no slice sentence is left");
   for (const doc of [contract, await read("skills/copilot-pr-followup/SKILL.md")]) assert.match(doc, /any refusal keeps the full round, except at the cap: a `locally_clear` delta result that carries a new low finding ends in the scoped final round after the push \(`GATE-EXEC-CAP-BRAKES`\)/i);
   assert.ok(!contract.includes("Any refusal keeps the full round."), "the unqualified sentence is gone");
