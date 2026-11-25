@@ -2310,9 +2310,9 @@ export async function refuseNonConvergence(options, { repoRoot, prBase }) {
     throw Object.assign(new Error(`non_convergence cannot be evaluated: prior round ledger ${unreadable.join(", ")} is unreadable (GATE-EXEC-CAP-BRAKES). Report blocked with blockedOn operator_decision.`), { recovery: "stop: report_blocked with blockedOn operator_decision (unreadable prior round ledger); the operator repairs or retires the unreadable ledger (GATE-EXEC-CAP-BRAKES)" });
   }
   // A malformed focus file refuses here, before any artifact is written.
-  const focus = await readOperatorFocusFile(options.operatorFocusFile ? path.resolve(process.cwd(), options.operatorFocusFile) : undefined, { allowItems: true });
+  const focus = await readOperatorFocusFile(options.operatorFocusFile ? path.resolve(repoRoot, options.operatorFocusFile) : undefined, { allowItems: true });
   // One round per head: a retained same-head round that a later round at that head replaced is not a comparison point.
-  const perHead = closed.filter((l, i) => closed.findLastIndex((x) => x.headSha === l.headSha) === i);
+  const perHead = closed.filter((l, i) => closed.findLastIndex((x) => String(x.headSha).trim().toLowerCase() === String(l.headSha).trim().toLowerCase()) === i);
   const effective = await effectiveRounds(perHead, { prBase: options.gate === "pre_approval_gate" ? prBase : undefined, repoRoot });
   const decision = decideCapRound({ round: effective.length + 1, cap: 0, actCounts: effective.map((log) => capRoundActList(log.findings, log.headSha).length) });
   if (decision.action !== "operator") return undefined;
@@ -2322,7 +2322,7 @@ export async function refuseNonConvergence(options, { repoRoot, prBase }) {
   const undecided = last.filter((fp) => !decided.has(fp));
   if (last.length > 0 && undecided.length === 0) return { reason: decision.reason, fingerprints: last };
   if (await operatorDecidedLatestRound(options, { repoRoot, latest: closed.at(-1), last: actFingerprintSet(closed.at(-1)) })) return undefined;
-  throw Object.assign(new Error(`${describeCapStop(decision)}. Undecided act fingerprints: ${undecided.join(", ") || "none"}. Report blocked with blockedOn operator_decision.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); the operator clears it with --operator-focus-file <path>, a focus file with a decision item for each act fingerprint of the latest round (${last.join(", ")}) (GATE-EXEC-CAP-BRAKES)` });
+  throw Object.assign(new Error(`${describeCapStop(decision)}. Undecided act fingerprints: ${undecided.join(", ") || "none"}. Report blocked with blockedOn operator_decision, or clear it with --operator-focus-file <path>.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); the operator clears it with --operator-focus-file <path>, a focus file with a decision item for each act fingerprint of the latest round (${last.join(", ")}) (GATE-EXEC-CAP-BRAKES)` });
 }
 
 /**

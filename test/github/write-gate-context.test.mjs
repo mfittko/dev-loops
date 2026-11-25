@@ -11792,7 +11792,9 @@ test("--operator-focus-file clears a non_convergence stop with no fixer plan and
     const refused = await t.run([]);
     assert.equal(refused.exitCode, 1, refused.out);
     assert.match(refused.out, /non_convergence/);
-    assert.match(refused.out, /--operator-focus-file/, "the message and recovery name the clear input");
+    const refusal = JSON.parse(refused.out.slice(refused.out.indexOf("{")));
+    assert.match(refusal.error ?? refusal.message, /--operator-focus-file/, "the message names the clear input");
+    assert.match(refusal.recovery, /--operator-focus-file/, "the recovery names the clear input");
     const decisions = (fps) => JSON.stringify({ items: fps.map((fingerprint) => ({ fingerprint, decision: "fix it" })) });
     const [one, two] = t.fingerprints["2"];
     await writeFile(t.focusFile, decisions([one]), "utf8");
