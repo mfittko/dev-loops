@@ -28,6 +28,7 @@ import { link, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/pro
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
+import { readOperatorFocusFile } from "../loop/_operator-focus.mjs";
 
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveCapFixMaxLines, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveFanoutSizeTier, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveGateDispatchMode, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
@@ -302,7 +303,7 @@ export function rationaleFromResolver(resolverResult) {
   return { resolvedAngles: [...recommended], rationale };
 }
 
-const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--harness <pi|claude|codex>] [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--pr-body <text>] [--issue-body <text>] [--prefix-file <path>] [--validation-posture <text>] [--tmp-root <path>]
+const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--harness <pi|claude|codex>] [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--pr-body <text>] [--issue-body <text>] [--prefix-file <path>] [--validation-posture <text>] [--tmp-root <path>] [--operator-focus-file <path>]
 Write a deterministic gate-review context-builder handoff artifact under tmp/ paths.
 Required:
   --repo <owner/name>
@@ -327,6 +328,7 @@ Optional:
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, and a carried angle in a mixed group is stripped from it (recorded membership stays whole), so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). A carried body-reading angle is dropped (it re-runs) when the PR body digest differs from the head's sticky baseline (\`prBodyBaselineSha256\`, kept in \`<gate>-<headSha>.pr-body-baseline\` beside the context so a failed write keeps it). Omit for today's full-count behavior (nothing excluded).
   --known-findings <path>        Default \`capture-review-threads.mjs --repo --pr\` output (every open or resolved thread, full bodies). Rendered to the digest-keyed round-bound <gate>-<headSha>.known-findings-<digest12>.json and hash-bound as a required \`known-findings\` read (volatile tail and every work order; never the prefix) when at least one thread exists. Fails closed (exit 1) if unreadable or not that shape.
+  --operator-focus-file <path>   GATE-EXEC-OPERATOR-FOCUS JSON with a fingerprint item carrying a decision for each act fingerprint of the latest effective closed round (draft_gate and pre_approval_gate only). Clears a non_convergence stop and records operatorClear.
   --tmp-root <path>              Root tmp directory. Omitted, the worktree-local gate-context
                                  bundle is written under the worktree's tmp/ while the prior-round
                                  findings-log ledgers are read from the MAIN worktree's tmp/ (the stable
@@ -464,6 +466,7 @@ export function parseWriteGateContextCliArgs(argv) {
       "carried-angles": { type: "string" },
       "known-findings": { type: "string" },
       "tmp-root": { type: "string" },
+      "operator-focus-file": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -656,6 +659,12 @@ export function parseWriteGateContextCliArgs(argv) {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
     }
+    if (token.name === "operator-focus-file") {
+      const trimmed = requireTokenValue(token, parseError).trim();
+      if (trimmed.length === 0) throw parseError("--operator-focus-file must not be empty/whitespace-only");
+      options.operatorFocusFile = trimmed;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -664,6 +673,7 @@ export function parseWriteGateContextCliArgs(argv) {
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
   }
+  if (options.operatorFocusFile !== undefined && options.gate === "review") throw parseError("--operator-focus-file applies only to draft_gate and pre_approval_gate");
   return options;
 }
 
@@ -2303,12 +2313,20 @@ export async function refuseNonConvergence(options, { repoRoot, prBase }) {
   if (unreadable.length > 0) {
     throw Object.assign(new Error(`non_convergence cannot be evaluated: prior round ledger ${unreadable.join(", ")} is unreadable (GATE-EXEC-CAP-BRAKES). Report blocked with blockedOn operator_decision.`), { recovery: "stop: report_blocked with blockedOn operator_decision (unreadable prior round ledger); the operator repairs or retires the unreadable ledger (GATE-EXEC-CAP-BRAKES)" });
   }
-  const effective = await effectiveRounds(closed, { prBase: options.gate === "pre_approval_gate" ? prBase : undefined, repoRoot });
+  // A malformed focus file refuses here, before any artifact is written.
+  const focus = await readOperatorFocusFile(options.operatorFocusFile ? path.resolve(repoRoot, options.operatorFocusFile) : undefined, { allowItems: true });
+  // One round per head: a retained same-head round that a later round at that head replaced is not a comparison point.
+  const perHead = closed.filter((l, i) => closed.findLastIndex((x) => String(x.headSha).trim().toLowerCase() === String(l.headSha).trim().toLowerCase()) === i);
+  const effective = await effectiveRounds(perHead, { prBase: options.gate === "pre_approval_gate" ? prBase : undefined, repoRoot });
   const decision = decideCapRound({ round: effective.length + 1, cap: 0, actCounts: effective.map((log) => capRoundActList(log.findings, log.headSha).length) });
+  if (decision.action !== "operator") return undefined;
   // An operator decision on every act item of the latest closed round clears the stop (GATE-EXEC-CAP-BRAKES); the once-per-set rule stays with resolveOperatorClearedRound.
-  if (decision.action === "operator" && !(await operatorDecidedLatestRound(options, { repoRoot, latest: closed.at(-1), last: actFingerprintSet(closed.at(-1)) }))) {
-    throw Object.assign(new Error(`${describeCapStop(decision)}. Report blocked with blockedOn operator_decision.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); the operator clears it with an operator focus item whose decision names the act items by fingerprint (GATE-EXEC-CAP-BRAKES)` });
-  }
+  const last = actFingerprintSet(effective.at(-1));
+  const decided = new Set((focus?.items ?? []).filter((item) => item.fingerprint !== undefined && item.decision !== undefined).map((item) => item.fingerprint));
+  const undecided = last.filter((fp) => !decided.has(fp));
+  if (last.length > 0 && undecided.length === 0) return { reason: decision.reason, fingerprints: last };
+  if (await operatorDecidedLatestRound(options, { repoRoot, latest: closed.at(-1), last: actFingerprintSet(closed.at(-1)) })) return undefined;
+  throw Object.assign(new Error(`${describeCapStop(decision)}. Undecided act fingerprints: ${undecided.join(", ") || "none"}. Report blocked with blockedOn operator_decision, or clear it with --operator-focus-file <path>.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); the operator clears it with --operator-focus-file <path>, a focus file with a decision item for each act fingerprint of the latest round (${last.join(", ")}) (GATE-EXEC-CAP-BRAKES)` });
 }
 
 /**
@@ -3227,6 +3245,7 @@ export function buildGateContextArtifact(options) {
   }
   // Stale-base preflight result (issue 2885); the CLI sets it on every run.
   if (options.baseFreshness) artifact.baseFreshness = options.baseFreshness;
+  if (options.operatorClear) artifact.operatorClear = options.operatorClear;
   return artifact;
 }
 
@@ -4822,7 +4841,7 @@ export async function main(
       throw new Error(`${freshness.error}: origin/${freshness.base} has ${freshness.newerCommits.length} commit(s) the PR head lacks (${shown}${more}); files differing only because of the stale base: ${freshness.foreignFiles.join(", ") || "none"}. ${freshness.remedy}`);
     }
     // GATE-EXEC-CAP-BRAKES: a pre_approval_gate round past the cap is the scoped final round, or refuses with the policy reason. The findings ledger is main-anchored.
-    if (options.gate === "draft_gate" || options.gate === "pre_approval_gate") await refuseNonConvergence({ ...options, tmpRoot: undefined }, { repoRoot, prBase });
+    if (options.gate === "draft_gate" || options.gate === "pre_approval_gate") options.operatorClear = await refuseNonConvergence({ ...options, tmpRoot: undefined }, { repoRoot, prBase });
     if (options.gate === "pre_approval_gate") {
       options.closureRound = await resolveScopedFinalRound({ ...options, tmpRoot: undefined }, { repoRoot, prBase, config }) ?? undefined;
     }
