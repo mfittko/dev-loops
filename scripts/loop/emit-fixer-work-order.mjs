@@ -742,7 +742,10 @@ async function emitPlan({
     }
     // GATE-EXEC-CAP-BRAKES: the act list of a round past the cap (the scoped final round's findings) reaches the fixer only when an operator focus decision names each item by fingerprint.
     const preCap = resolveGateConfig(config, mapGateToConfigKey(gate)).maxReviewRounds;
-    const preRounds = preCap > 0 ? await countCapRounds({ repo, pr, gate, headSha: guardHead, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: (await memoFetchBase())?.baseRefName }) : 0;
+    // The PR base (a gh read, and a test-visible fetchPr call) is read only when the raw count reaches the cap, where base-only merges can lower it.
+    const countArgs = [{ repo, pr, gate, headSha: guardHead, tmpRoot }];
+    let preRounds = preCap > 0 ? await countCapRounds(...countArgs, { repoRoot: resolveRepoRoot(cwd) }) : 0;
+    if (preCap > 0 && preRounds >= preCap) preRounds = await countCapRounds(...countArgs, { repoRoot: resolveRepoRoot(cwd), prBase: (await memoFetchBase())?.baseRefName });
     // One ledger read at guardHead (pre_approval_gate from its cap round on, draft_gate at its scoped round; the draft cap round reads its ledger below): ledger-only blockers (a judge-deferred or judge-rejected high, a failOpen closed finding) never ride the act list, yet the poster composes blocked from them.
     // A missing ledger skips only the round being posted (as on draft_gate); an unreadable one fails closed.
     let ledgerFindings = [];
