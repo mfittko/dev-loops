@@ -1449,7 +1449,8 @@ export async function resolveCapBrakes(context, { repoRoot, config }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
   const gate = context.prData?.isDraft === true ? "draft_gate" : "pre_approval_gate";
-  const logs = await readClosedPriorRoundLogs({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, includeLiveCurrentHead: true });
+  // An unreadable ledger leaves a gap in the round list: throw so the caller sets capBrakesWarning and leaves the brakes unevaluated (AC7).
+  const logs = await readClosedPriorRoundLogs({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, includeLiveCurrentHead: true, onUnreadable: (name) => { throw new Error(`prior round ledger ${name} is unreadable`); } });
   const last = logs.at(-1);
   if (!last || String(last.headSha).trim().toLowerCase() !== head) return null;
   const open = listOpenActItems(last.findings);

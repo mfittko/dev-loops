@@ -30,6 +30,8 @@ import {
   buildGateReviewsDir,
   buildValidationResultsPath,
   captureDiffFromBase,
+  capFixBudgetFacts,
+  refuseNonConvergence,
   collapsePureSubstitutionRuns,
   prematureGateOrderingRefusal,
   ISSUE_BODY_ABSENT_SENTINEL,
@@ -11773,6 +11775,40 @@ test("an operator decision naming every act item by fingerprint runs the round p
     const second = await runPreApprovalContext(repoRoot, 65, third, baseSha);
     assert.equal(second.exitCode, 1);
     assert.match(second.out, /round_cap_reached/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("capFixBudgetFacts refuses when the added-file git diff exits nonzero, never counting zero added files", async () => {
+  const { repoRoot, baseSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+    await writeFile(path.join(repoRoot, "src/added.mjs"), "export const added = 1;\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "add a file"]);
+    const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    const args = { fromHead: baseSha, headSha, prBase: "main", repoRoot };
+    assert.equal((await capFixBudgetFacts(args)).addedFiles, 1);
+    const failing = async () => ({ code: 128, stdout: "", stderr: "fatal: bad object" });
+    await assert.rejects(capFixBudgetFacts({ ...args, runGit: failing }), /closure_delta_added_files_unmeasured.*exited 128.*fatal: bad object/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("refuseNonConvergence refuses with the operator_decision recovery when a prior closed ledger is unreadable (AC7)", async () => {
+  const { repoRoot } = await makeBaseDiffRepo();
+  try {
+    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-70");
+    await mkdir(dir, { recursive: true });
+    const acts = ["a", "b", "c"].map((k, j) => ({ severity: "medium", summary: `finding ${k}`, files: [`src/${k}.mjs`], line: 1, judgeDisposition: "act", judgeTitle: `Finding ${k}`, judgeFix: "fix", clusterId: j }));
+    await writeFile(path.join(dir, `draft_gate-${"1".repeat(40)}.json`), JSON.stringify({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: "1".repeat(40), verdict: "findings_present", loggedAt: "2026-11-01T00:00:00.000Z", findings: acts }), "utf8");
+    await writeFile(path.join(dir, `draft_gate-${"2".repeat(40)}.json`), "{ not json", "utf8");
+    await assert.rejects(
+      refuseNonConvergence({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: "3".repeat(40) }, { repoRoot }),
+      (error) => /unreadable/.test(error.message) && /operator_decision/.test(error.recovery),
+    );
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

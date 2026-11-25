@@ -2230,13 +2230,15 @@ export async function countCapRounds(options, { repoRoot, prBase, includeLiveCur
 }
 
 /** The fix-budget facts of the PR-own diff from `fromHead` to `headSha`: its logic LOC and its added files. An unproven PR-own delta refuses. */
-async function capFixBudgetFacts({ fromHead, headSha, prBase, repoRoot }) {
+export async function capFixBudgetFacts({ fromHead, headSha, prBase, repoRoot, runGit = runGitCommand }) {
   const own = await captureMainRelativeChangedFilesSince({ base: fromHead, head: headSha, mainRef: `origin/${prBase}`, repoRoot });
   if (!own.reduced) throw new Error(`closure_delta_no_pr_own_change: the PR-own delta since ${fromHead} is unproven (origin/${prBase} does not resolve); the fix budget cannot be measured (GATE-EXEC-CAP-BRAKES).`);
   // An empty PR-own delta is refused later with its own reason (closure_delta_no_pr_own_change).
   if (own.changedFiles.length === 0) return { logicLoc: 0, addedFiles: 0 };
   const { wholeLogicLoc } = await evaluatePrSizeBudget({ base: fromHead, head: headSha, repoRoot, paths: own.changedFiles });
-  const added = await runGitCommand(["diff", "--name-status", "--diff-filter=A", `${fromHead}..${headSha}`, "--", ...own.changedFiles], { repoRoot });
+  const added = await runGit(["diff", "--name-status", "--diff-filter=A", `${fromHead}..${headSha}`, "--", ...own.changedFiles], { repoRoot });
+  // runGitCommand resolves on a nonzero exit: an unmeasured added-file count refuses like an unproven PR-own delta, never reads as zero.
+  if (added.code !== 0) throw new Error(`closure_delta_added_files_unmeasured: git diff --diff-filter=A since ${fromHead} exited ${added.code} (${String(added.stderr ?? "").trim()}); the fix budget cannot be measured (GATE-EXEC-CAP-BRAKES).`);
   return { logicLoc: wholeLogicLoc, addedFiles: added.stdout.split("\n").filter(Boolean).length };
 }
 
@@ -2284,7 +2286,12 @@ async function resolveOperatorClearedRound(options, { repoRoot, cap, prBase }) {
  * effective closed rounds' acted cluster counts did not shrink. Cap 0 leaves only the cap-less brake in `decideCapRound`.
  */
 export async function refuseNonConvergence(options, { repoRoot, prBase }) {
-  const closed = await readClosedPriorRoundLogs(options, { repoRoot });
+  // An unreadable closed ledger leaves a gap in the round list, so the brake cannot be evaluated: the round is refused (AC7).
+  const unreadable = [];
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot, onUnreadable: (name) => unreadable.push(name) });
+  if (unreadable.length > 0) {
+    throw Object.assign(new Error(`non_convergence cannot be evaluated: prior round ledger ${unreadable.join(", ")} is unreadable (GATE-EXEC-CAP-BRAKES). Report blocked with blockedOn operator_decision.`), { recovery: "stop: report_blocked with blockedOn operator_decision (unreadable prior round ledger); the operator repairs or retires the unreadable ledger (GATE-EXEC-CAP-BRAKES)" });
+  }
   const effective = await effectiveRounds(closed, { prBase: options.gate === "pre_approval_gate" ? prBase : undefined, repoRoot });
   const decision = decideCapRound({ round: effective.length + 1, cap: 0, actCounts: effective.map((log) => capRoundActList(log.findings, log.headSha).length) });
   // An operator decision on every act item of the latest closed round clears the stop (GATE-EXEC-CAP-BRAKES); the once-per-set rule stays with resolveOperatorClearedRound.

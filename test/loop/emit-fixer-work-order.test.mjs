@@ -5074,6 +5074,39 @@ test("a pre_approval_gate act list holding a question at the cap round is refuse
   });
 });
 
+// GATE-EXEC-SOFT-CAP: a high the judge deferred or rejected lives only in the ledger; the poster composes blocked from it, so no fixer order follows (both pre_approval_gate branches).
+test("a pre_approval_gate cap round or past-cap round whose ledger holds a judge-closed high is refused with round_cap_reached", async () => {
+  const ledgerHigh = (judgeDisposition) => ({ ...ACT[0], severity: "high", summary: "ledger-only high", judgeDisposition, judgeRationale: "decided" });
+  const writeLedger = async (root, sha, findings) => {
+    const file = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `pre_approval_gate-${sha}.json`);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: sha, verdict: "findings_present", findings }));
+  };
+  const act = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
+  const gated = { gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined };
+  await withFixture(async ({ root, head, files, emit }) => {
+    await writeFile(files.actList, JSON.stringify([act]));
+    await writeLedger(root, "d".repeat(40), []);
+    await writeLedger(root, head, [{ ...act, judgeDisposition: "act" }, ledgerHigh("defer")]);
+    await assert.rejects(emit(gated), (e) => e.refusal === "round_cap_reached" && /ledger-only high/.test(e.message));
+    await writeLedger(root, head, [{ ...act, judgeDisposition: "act" }]);
+    assert.equal((await emit(gated)).workOrder.source, "act-list", "the same cap round without the ledger-only high reaches the fixer");
+    await writeFile(path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `pre_approval_gate-${head}.json`), "{ not json");
+    await assert.rejects(emit(gated), (e) => e.refusal === "round_cap_reached", "an unreadable cap-round ledger fails closed");
+  });
+  await withFixture(async ({ root, head, files, emit }) => {
+    await writeFile(files.actList, JSON.stringify([act]));
+    await writeLedger(root, "d".repeat(40), []);
+    await writeLedger(root, "e".repeat(40), []);
+    await writeLedger(root, head, [{ ...act, judgeDisposition: "act" }, ledgerHigh("reject")]);
+    const focusFile = path.join(root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: act.fingerprint, decision: "Fix it in this PR" }] }));
+    await assert.rejects(emit({ ...gated, operatorFocusFile: focusFile }), (e) => e.refusal === "round_cap_reached" && /ledger-only high/.test(e.message));
+    await writeLedger(root, head, [{ ...act, judgeDisposition: "act" }]);
+    assert.equal((await emit({ ...gated, operatorFocusFile: focusFile })).workOrder.source, "act-list");
+  });
+});
+
 // GATE-COMMENT-BLOCKED-BY: a blocked verdict whose causes hold no findings entry has no fix round.
 test("a pre_approval_gate fix round after a blocked verdict with no findings cause is refused with blocked_without_findings naming the operator step", async () => {
   await withFixture(async ({ head, files, emit }) => {

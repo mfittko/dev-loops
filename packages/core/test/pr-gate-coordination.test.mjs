@@ -5164,7 +5164,7 @@ test("cap brakes: non-convergence stops the lane before another fixer pass on bo
   }
 });
 
-test("cap brakes: findings in the pre_approval_gate scoped final round go to the operator with the items named", () => {
+test("cap brakes: a round past the pre_approval_gate scoped final round stops with round_cap_reached and the named items, while the scoped round itself runs", () => {
   const head = "ab".repeat(20);
   const verdict = { visible: true, headSha: head, verdict: "blocked", contractComplete: true };
   const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
