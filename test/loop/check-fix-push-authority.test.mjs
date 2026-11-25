@@ -262,7 +262,7 @@ for (const bad of ["garbage1", "own er/name", "a/b/c"]) {
   });
 }
 
-// Hook-style pushes: remoteRef is set and the push URL is the pre-push hook's second argument.
+// Hook-style pushes: remoteRef is set and the push URL is the CLI's second argument (git's pre-push argument order).
 test("hook-style push to the marker's branch name: another repo's marker with an absent baseline does not block it; the marker's own repo does", async () => {
   await withRepo(async (root, head, git) => {
     git("remote", "add", "origin", "https://github.com/o/a.git");

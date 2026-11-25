@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * check-fix-push-authority: harness-neutral push gate for PRE-PUSH-DELTA-PUSH-AUTHORITY
- * (skills/docs/pre-pr-review-contract.md). resolve-pr-conflicts.mjs runs it before a base merge (no git hook calls it, ADR 0323), with
- * `<local ref> <local sha> <remote ref> <remote sha>` lines on stdin. Exit 1 refuses the push while
+ * (skills/docs/pre-pr-review-contract.md). resolve-pr-conflicts.mjs calls checkFixPushAuthority with the pre-merge head and branch ref before a base merge (no git hook calls it, ADR 0323).
+ * The CLI form takes `<local ref> <local sha> <remote ref> <remote sha>` lines on stdin. Exit 1 refuses the push while
  * a gate fix sequence is active for any pushed sha (the sha is the baseline or descends from it, and the PR
  * branch's remote ref has not advanced past the baseline) and the full work order has not granted the push;
  * exit 0 allows it. A marker that names a branch covers a push only when the known push target is

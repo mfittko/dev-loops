@@ -13,7 +13,7 @@ A gate fix sequence could reach a state with no sanctioned exit. A `commit_only`
 - The pre-push hook that `renderGuardHook` generates has no push-authority block. It no longer calls `scripts/loop/check-fix-push-authority.mjs` and no longer scans `tmp/gate-delta`. It keeps its default-branch refusal, and `DEVLOOPS_ALLOW_MAIN=1` still bypasses only that refusal.
 - `ensure-worktree` rewrites every hook it owns on each run, so a re-run replaces an old hook. An old marker blocks no push.
 - The delta review still runs, but it no longer blocks the push. A pushed fix commit moves the remote-tracking ref of the branch past the baseline, which ends the sequence under the existing marker rule. The next full gate round reviews `git diff <base>...HEAD`, which contains the pushed fix commits.
-- The rule `PRE-PUSH-DELTA-PUSH-AUTHORITY` keeps its ID, because runtime refusal texts cite it. The delta reviewer and the `commit_only` fixer still MUST NOT push. `resolve-pr-conflicts.mjs` still runs `check-fix-push-authority.mjs` before a base merge.
+- The rule `PRE-PUSH-DELTA-PUSH-AUTHORITY` keeps its ID, because runtime refusal texts cite it. The delta reviewer and the `commit_only` fixer still MUST NOT push. The full-phase fixer pushes after a clearing delta record. The coordinator pushes the committed fix commit when the sealed delta record cannot clear, which ends the sequence and routes the head to the next full gate round. `resolve-pr-conflicts.mjs` still runs `check-fix-push-authority.mjs` before a base merge.
 - The delta chain code (`fix-push-authority.mjs`, the marker writes, `check-pre-push-delta.mjs`, `close-gate-sequence.mjs`) stays for issue 2937 to delete.
 
 ## Consequences
