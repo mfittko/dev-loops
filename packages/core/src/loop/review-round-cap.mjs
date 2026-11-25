@@ -1,5 +1,5 @@
 /**
- * The single statement of the review-round cap shape (GATE-EXEC-ROUND-CAP, ADR 0208).
+ * The single statement of the review-round cap shape (GATE-EXEC-ROUND-CAP, ADR 0208) and, in `decideCapRound`, of the cap brakes (GATE-EXEC-CAP-BRAKES).
  * Pure and dependency-free. `draft_gate` uses it today; Copilot rounds import it later.
  *
  * Rounds 1..cap run, including the cap round (count equal to the cap). A clean round stops early.
@@ -29,4 +29,26 @@ export function capRoundShape({ round, cap, clean, hasFindings }) {
     fixerRuns: clean !== true && hasFindings === true,
     nextAfterFix: isCapRound(round, cap) ? CAP_ROUND_FIXED_NEXT_ACTION : null,
   };
+}
+
+/** A head whose wholeLogicLoc is above this multiple of the forecast wloc stops the lane (issue 3464). */
+export const GROWTH_FACTOR = 2;
+
+/**
+ * The cap brakes of draft_gate and pre_approval_gate (GATE-EXEC-CAP-BRAKES): the one policy that decides
+ * whether round `round` (1-based, the round about to run) is a full round, the scoped final round, or goes to the operator.
+ * `actCounts` holds the distinct acted cluster count of each closed round, oldest first. `fixBudget` is
+ * `{ logicLoc, addedFiles, maxLines }` for the PR-own diff since the cap-round head. A null `forecastWloc` never trips growth.
+ * @returns {{action: "full_round"|"scoped_final_round"}|{action: "operator", reason: string, numbers: object}}
+ */
+export function decideCapRound({ round, cap, actCounts = [], fixBudget, wholeLogicLoc, forecastWloc }) {
+  const operator = (reason, numbers) => ({ action: "operator", reason, numbers });
+  if (forecastWloc > 0 && wholeLogicLoc > GROWTH_FACTOR * forecastWloc) return operator("growth_past_forecast", { wholeLogicLoc, forecastWloc });
+  const [previous, current] = actCounts.slice(-2);
+  if (actCounts.length >= 2 && current > 0 && current >= previous) return operator("non_convergence", { previous, current });
+  if (!(cap > 0) || round <= cap) return { action: "full_round" };
+  if (round > cap + 1) return operator("round_cap_reached", { round, cap });
+  const { logicLoc, addedFiles, maxLines } = fixBudget;
+  if (logicLoc > maxLines || addedFiles > 0) return operator("cap_fix_over_budget", { logicLoc, maxLines, addedFiles });
+  return { action: "scoped_final_round" };
 }
