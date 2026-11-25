@@ -660,7 +660,9 @@ export function parseWriteGateContextCliArgs(argv) {
       continue;
     }
     if (token.name === "operator-focus-file") {
-      options.operatorFocusFile = requireTokenValue(token, parseError).trim();
+      const trimmed = requireTokenValue(token, parseError).trim();
+      if (trimmed.length === 0) throw parseError("--operator-focus-file must not be empty/whitespace-only");
+      options.operatorFocusFile = trimmed;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;

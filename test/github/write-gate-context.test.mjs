@@ -484,6 +484,10 @@ test("parseWriteGateContextCliArgs accepts --operator-focus-file for the draft a
   const base = ["--repo", "owner/repo", "--pr", "42", "--head-sha", "abc1234567890abcdef", "--operator-focus-file", "focus.json"];
   for (const gate of ["draft_gate", "pre_approval_gate"]) assert.equal(parseWriteGateContextCliArgs([...base, "--gate", gate]).operatorFocusFile, "focus.json");
   assert.throws(() => parseWriteGateContextCliArgs([...base, "--gate", "review"]), /--operator-focus-file/);
+  assert.equal(parseWriteGateContextCliArgs([...base.slice(0, -1), "./tmp/focus.json", "--gate", "draft_gate"]).operatorFocusFile, "./tmp/focus.json");
+  for (const blank of ["", "  "]) {
+    assert.throws(() => parseWriteGateContextCliArgs([...base.slice(0, -1), blank, "--gate", "draft_gate"]), /--operator-focus-file/);
+  }
 });
 
 test("parseWriteGateContextCliArgs parses required args", () => {
