@@ -27,6 +27,9 @@ export const GATE_REVIEW_VERDICT_SET = new Set(["clean", "findings_present", "bl
 /** Causes a `blocked` gate verdict names in its `**Blocked by:**` line (GATE-COMMENT-BLOCKED-BY). */
 export const BLOCKED_BY_VALUES = Object.freeze(["findings", "unticked_checkboxes", "size_budget", "ci"]);
 
+/** The operator step each cause without findings names in the derived next action and in the fixer refusal (AC10). */
+export const BLOCKED_BY_OPERATOR_STEPS = Object.freeze({ unticked_checkboxes: "tick the verified PR-body checkboxes", size_budget: "grant a size waiver or split the PR", ci: "wait for CI" });
+
 /** Normalize a raw gate review verdict to a member of GATE_REVIEW_VERDICT_SET, or null. */
 export function normalizeGateReviewVerdict(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";

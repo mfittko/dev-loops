@@ -5034,3 +5034,42 @@ test("AC8: an escalated cap-ledger act finding binds as operator focus and joins
     await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile }), /empty and no operator focus item bound a cap-ledger act finding \(GATE-EXEC-ROUND-CAP-EXIT\)/);
   });
 });
+
+// GATE-EXEC-CAP-BRAKES: a pre_approval_gate act list of a round past the cap (cap 2) reaches the fixer only with an operator focus decision per act item.
+test("a pre_approval_gate act list of round cap+1 is refused unless an operator focus decision names each act item by fingerprint", async () => {
+  await withFixture(async ({ root, files, emit }) => {
+    const act = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
+    await writeFile(files.actList, JSON.stringify([act]));
+    const prior = async (sha) => {
+      const file = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `pre_approval_gate-${sha.repeat(40)}.json`);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: sha.repeat(40), verdict: "findings_present", findings: [] }));
+    };
+    const gated = { gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined };
+    await prior("d");
+    assert.equal((await emit(gated)).workOrder.source, "act-list", "the cap round reaches the fixer");
+    await prior("e");
+    await assert.rejects(emit(gated), (e) => e.refusal === "round_cap_reached" && /operator-focus-file/.test(e.message) && e.message.includes(act.fingerprint));
+    const focusFile = path.join(root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "0".repeat(16), decision: "Fix it in this PR" }] }));
+    await assert.rejects(emit({ ...gated, operatorFocusFile: focusFile }), (e) => e.refusal === "round_cap_reached");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: act.fingerprint, replyDisposition: "deferred", replyNote: "later" }] }));
+    await assert.rejects(emit({ ...gated, operatorFocusFile: focusFile }), (e) => e.refusal === "round_cap_reached", "an item without a decision does not clear the stop");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: act.fingerprint, decision: "Fix it in this PR" }] }));
+    assert.equal((await emit({ ...gated, operatorFocusFile: focusFile })).workOrder.source, "act-list");
+  });
+});
+
+// GATE-COMMENT-BLOCKED-BY: a blocked verdict whose causes hold no findings entry has no fix round.
+test("a pre_approval_gate fix round after a blocked verdict with no findings cause is refused with blocked_without_findings naming the operator step", async () => {
+  await withFixture(async ({ head, files, emit }) => {
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
+    const blockedAt = (blockedBy) => async ({ headSha }) => summarizeGateReviewCommentMarkers([{
+      id: 1, surface: "review", state: "COMMENTED", submitted_at: "2026-10-19T00:00:00Z", updated_at: "2026-10-19T00:00:00Z",
+      body: ["Gate review: pre_approval_gate", `Reviewed head SHA: ${head}`, "Verdict: blocked", `Blocked by: ${blockedBy}`, "Findings summary: boxes", "Next action: rerun gate"].join("\n"),
+    }], { headSha });
+    const gated = { gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined };
+    await assert.rejects(emit({ ...gated, fetchVerdictMarkers: blockedAt("unticked_checkboxes, ci") }), (e) => e.refusal === "blocked_without_findings" && /tick the verified PR-body checkboxes; wait for CI/.test(e.message));
+    assert.equal((await emit({ ...gated, fetchVerdictMarkers: blockedAt("findings, unticked_checkboxes") })).workOrder.source, "act-list");
+  });
+});

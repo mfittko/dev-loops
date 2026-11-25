@@ -5,6 +5,7 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitiz
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { wrapOperatorOwnedPhrases } from "@dev-loops/core/github/operator-owned-lines";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
+import { BLOCKED_BY_OPERATOR_STEPS } from "@dev-loops/core/loop/policy-constants";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, isPastRoundCap, isSeededCapFinding, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, pastCapBlockers, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { composeBodyOnlyConvergedDraftGate, composeConvergedDraftGate, convergedActItemKey, isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -2647,7 +2648,6 @@ function renderGateBlockerItemsList(blockers) {
 // lifecycle gate returns null for a `clean` verdict only on pre_approval_gate
 // (the caller's value is accepted unchanged); a clean draft_gate derives
 // `mark ready for review`.
-const BLOCKED_BY_OPERATOR_STEPS = { unticked_checkboxes: "tick the verified PR-body checkboxes", size_budget: "grant a size waiver or split the PR", ci: "wait for CI" };
 export function deriveEffectiveNextAction(verdict, gate, actItems = [], unjudgedFindings = false, blockedBy = []) {
   if (gate === "review") {
     // Count distinct act items: the ledger and --findings-json can carry the same finding, and a cluster is one item.
