@@ -28,6 +28,7 @@ import { link, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/pro
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
+import { readOperatorFocusFile } from "../loop/_operator-focus.mjs";
 
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveCapFixMaxLines, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveFanoutSizeTier, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveGateDispatchMode, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
@@ -302,7 +303,7 @@ export function rationaleFromResolver(resolverResult) {
   return { resolvedAngles: [...recommended], rationale };
 }
 
-const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--harness <pi|claude|codex>] [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--pr-body <text>] [--issue-body <text>] [--prefix-file <path>] [--validation-posture <text>] [--tmp-root <path>]
+const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--harness <pi|claude|codex>] [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--pr-body <text>] [--issue-body <text>] [--prefix-file <path>] [--validation-posture <text>] [--tmp-root <path>] [--operator-focus-file <path>]
 Write a deterministic gate-review context-builder handoff artifact under tmp/ paths.
 Required:
   --repo <owner/name>
@@ -464,6 +465,7 @@ export function parseWriteGateContextCliArgs(argv) {
       "carried-angles": { type: "string" },
       "known-findings": { type: "string" },
       "tmp-root": { type: "string" },
+      "operator-focus-file": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -654,6 +656,10 @@ export function parseWriteGateContextCliArgs(argv) {
     }
     if (token.name === "tmp-root") {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "operator-focus-file") {
+      options.operatorFocusFile = requireTokenValue(token, parseError).trim();
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -2303,12 +2309,20 @@ export async function refuseNonConvergence(options, { repoRoot, prBase }) {
   if (unreadable.length > 0) {
     throw Object.assign(new Error(`non_convergence cannot be evaluated: prior round ledger ${unreadable.join(", ")} is unreadable (GATE-EXEC-CAP-BRAKES). Report blocked with blockedOn operator_decision.`), { recovery: "stop: report_blocked with blockedOn operator_decision (unreadable prior round ledger); the operator repairs or retires the unreadable ledger (GATE-EXEC-CAP-BRAKES)" });
   }
-  const effective = await effectiveRounds(closed, { prBase: options.gate === "pre_approval_gate" ? prBase : undefined, repoRoot });
+  // A malformed focus file refuses here, before any artifact is written.
+  const focus = await readOperatorFocusFile(options.operatorFocusFile ? path.resolve(process.cwd(), options.operatorFocusFile) : undefined, { allowItems: true });
+  // One round per head: a retained same-head round that a later round at that head replaced is not a comparison point.
+  const perHead = closed.filter((l, i) => closed.findLastIndex((x) => x.headSha === l.headSha) === i);
+  const effective = await effectiveRounds(perHead, { prBase: options.gate === "pre_approval_gate" ? prBase : undefined, repoRoot });
   const decision = decideCapRound({ round: effective.length + 1, cap: 0, actCounts: effective.map((log) => capRoundActList(log.findings, log.headSha).length) });
+  if (decision.action !== "operator") return undefined;
   // An operator decision on every act item of the latest closed round clears the stop (GATE-EXEC-CAP-BRAKES); the once-per-set rule stays with resolveOperatorClearedRound.
-  if (decision.action === "operator" && !(await operatorDecidedLatestRound(options, { repoRoot, latest: closed.at(-1), last: actFingerprintSet(closed.at(-1)) }))) {
-    throw Object.assign(new Error(`${describeCapStop(decision)}. Report blocked with blockedOn operator_decision.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); the operator clears it with an operator focus item whose decision names the act items by fingerprint (GATE-EXEC-CAP-BRAKES)` });
-  }
+  const last = actFingerprintSet(effective.at(-1));
+  const decided = new Set((focus?.items ?? []).filter((item) => item.fingerprint !== undefined && item.decision !== undefined).map((item) => item.fingerprint));
+  const undecided = last.filter((fp) => !decided.has(fp));
+  if (last.length > 0 && undecided.length === 0) return { reason: decision.reason, fingerprints: last };
+  if (await operatorDecidedLatestRound(options, { repoRoot, latest: closed.at(-1), last: actFingerprintSet(closed.at(-1)) })) return undefined;
+  throw Object.assign(new Error(`${describeCapStop(decision)}. Undecided act fingerprints: ${undecided.join(", ") || "none"}. Report blocked with blockedOn operator_decision.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); the operator clears it with --operator-focus-file <path>, a focus file with a decision item for each act fingerprint of the latest round (${last.join(", ")}) (GATE-EXEC-CAP-BRAKES)` });
 }
 
 /**
@@ -3227,6 +3241,7 @@ export function buildGateContextArtifact(options) {
   }
   // Stale-base preflight result (issue 2885); the CLI sets it on every run.
   if (options.baseFreshness) artifact.baseFreshness = options.baseFreshness;
+  if (options.operatorClear) artifact.operatorClear = options.operatorClear;
   return artifact;
 }
 
@@ -4822,7 +4837,7 @@ export async function main(
       throw new Error(`${freshness.error}: origin/${freshness.base} has ${freshness.newerCommits.length} commit(s) the PR head lacks (${shown}${more}); files differing only because of the stale base: ${freshness.foreignFiles.join(", ") || "none"}. ${freshness.remedy}`);
     }
     // GATE-EXEC-CAP-BRAKES: a pre_approval_gate round past the cap is the scoped final round, or refuses with the policy reason. The findings ledger is main-anchored.
-    if (options.gate === "draft_gate" || options.gate === "pre_approval_gate") await refuseNonConvergence({ ...options, tmpRoot: undefined }, { repoRoot, prBase });
+    if (options.gate === "draft_gate" || options.gate === "pre_approval_gate") options.operatorClear = await refuseNonConvergence({ ...options, tmpRoot: undefined }, { repoRoot, prBase });
     if (options.gate === "pre_approval_gate") {
       options.closureRound = await resolveScopedFinalRound({ ...options, tmpRoot: undefined }, { repoRoot, prBase, config }) ?? undefined;
     }
