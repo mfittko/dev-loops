@@ -623,7 +623,7 @@ async function emitPlan({
   const capture = await beginFixerEmission(dir);
   // The two baseRefName reads share one gh read; the mutation-authority read below stays live.
   const prViewMemo = new Map();
-  // One PR reviews read per run: the AC7 cap-exit check and the default verdict-marker read share it (issue 3460 AC3).
+  // One PR reviews read per run: the cap-round checks and the default verdict-marker read share it.
   let reviewsMemo;
   const readReviewsOnce = () => (reviewsMemo ??= fetchReview({ repo, pr, runtime: { env, ghCommand, runChild } }));
   if (fetchVerdictMarkers === defaultFetchVerdictMarkers) { const base = fetchVerdictMarkers; fetchVerdictMarkers = (a) => base({ ...a, readReviews: readReviewsOnce }); }
@@ -725,24 +725,28 @@ async function emitPlan({
       return currentHeadLedgerExists() ? null : originHead;
     } catch { return null; }
   })();
-  // One read of the operator focus file for the AC7 later-pass decision and the binding below: a shape error refuses here under GATE-EXEC-OPERATOR-FOCUS, never inside the swallowing cap-round catch.
+  // One read of the operator focus file for the scoped-round decision and the binding below: a shape error refuses here under GATE-EXEC-OPERATOR-FOCUS, never inside the swallowing cap-round catch.
   const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
   if ((gate === "pre_approval_gate" || gate === "draft_gate") && guardFile) {
     const runtime = { env, ghCommand, runChild };
     // GATE-COMMENT-BLOCKED-BY: a posted blocked verdict whose causes hold no findings entry has no fix round; its next step is the operator's.
     // A ledger-less head carries the origin head's round and verdict (the carry seam), so both reads follow the origin head.
     const guardHead = (!existsSync(ledgerPath(headSha)) && await carryOriginHead()) || headSha;
-    const blockedBy = (await fetchVerdictMarkers({ repo, pr, headSha: guardHead, gate, runtime }).catch(() => null))?.[gate]?.blockedBy;
+    // A failed read fails open only for an --act-list-file source, whose verdict_not_posted check below reads the same markers; a --ci-file source has no such check, so it refuses.
+    const blockedBy = (await fetchVerdictMarkers({ repo, pr, headSha: guardHead, gate, runtime }).catch((error) => {
+      if (ciActFile) throw new Refusal(`verdict_not_posted: could not read the PR's posted ${gate} verdicts at ${guardHead} (${error?.message ?? error}); the blocked_without_findings check needs them, so re-run once the read succeeds`, "verdict_not_posted");
+      return null;
+    }))?.[gate]?.blockedBy;
     if (blockedBy?.length > 0 && !blockedBy.includes("findings")) {
       throw new WorkOrderRefusal("blocked_without_findings", `blocked_without_findings (GATE-COMMENT-BLOCKED-BY): the posted ${gate} verdict is blocked by ${blockedBy.join(", ")} with no findings; no fixer order follows it. Operator step: ${blockedBy.map((cause) => BLOCKED_BY_OPERATOR_STEPS[cause]).join("; ")}`);
     }
     // GATE-EXEC-CAP-BRAKES: the act list of a round past the cap (the scoped final round's findings) reaches the fixer only when an operator focus decision names each item by fingerprint.
     const preCap = resolveGateConfig(config, mapGateToConfigKey(gate)).maxReviewRounds;
     const preRounds = preCap > 0 ? await countCapRounds({ repo, pr, gate, headSha: guardHead, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: (await memoFetchBase())?.baseRefName }) : 0;
-    // One ledger read at guardHead (pre_approval_gate; draft_gate reads its cap-round ledger below): ledger-only blockers (a judge-deferred or judge-rejected high, a failOpen closed finding) never ride the act list, yet the poster composes blocked from them.
+    // One ledger read at guardHead (pre_approval_gate from its cap round on, draft_gate at its scoped round; the draft cap round reads its ledger below): ledger-only blockers (a judge-deferred or judge-rejected high, a failOpen closed finding) never ride the act list, yet the poster composes blocked from them.
     // A missing ledger skips only the round being posted (as on draft_gate); an unreadable one fails closed.
     let ledgerFindings = [];
-    if (gate === "pre_approval_gate" && preCap > 0 && preRounds >= preCap) {
+    if (preCap > 0 && (gate === "pre_approval_gate" ? preRounds >= preCap : preRounds > preCap)) {
       const ledgerFile = ledgerPath(guardHead);
       const refusal = existsSync(ledgerFile) ? undefined : await missingCapLedgerRefusal({ repo, pr, gate, headSha, tmpRoot, repoRoot: resolveRepoRoot(cwd), probeVerdict: () => fetchVerdictMarkers({ repo, pr, headSha: guardHead, gate, runtime }) });
       if (refusal !== undefined) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the ${gate} findings log ${ledgerFile} does not exist${refusal}; failing closed at the cap round`);
@@ -755,7 +759,7 @@ async function emitPlan({
     }
     if (preCap > 0 && preRounds > preCap) {
       // The scoped ledger's findings that are no act item (a judge-rejected high) have no focus decision to clear them: the poster composes blocked from them.
-      const blockers = gate === "pre_approval_gate" ? pastCapBlockers(ledgerFindings.filter((f) => f.judgeDisposition !== "act"), { round: preCap, cap: preCap }) : [];
+      const blockers = pastCapBlockers(ledgerFindings.filter((f) => f.judgeDisposition !== "act"), { round: preCap, cap: preCap });
       if (blockers.length > 0) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-SOFT-CAP): the ${gate} scoped ledger past the cap (cap ${preCap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
       const decided = new Set((operatorFocusRaw?.items ?? []).filter((item) => item.decision !== undefined).map((item) => item.fingerprint));
       const undecided = guardParsed.filter((f) => !decided.has(f.fingerprint)).map((f) => `${f.fingerprint} ${JSON.stringify(f.summary)}`);
@@ -765,12 +769,14 @@ async function emitPlan({
   let capLedgerActs = []; // the act findings of the cap-round ledger, read at the cap round (issue 3460 AC8)
   if (guardFile && (gate === "draft_gate" || lowNitOnly)) {
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
-    let { lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot },{ repoRoot: resolveRepoRoot(cwd) });
+    // A ledger-less head keeps the raw count: the ADR 0197 block below reads a base-only merge of the cap round as round cap+1.
+    const roundBase = existsSync(ledgerPath(headSha)) ? (await memoFetchBase())?.baseRefName : undefined;
+    let { lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: roundBase });
     // Slice 4: when the seam accepts, the act list belongs to the origin head's round, so the round and cap are counted there, not one round late at the ledger-less head.
     let seamCounted = false; // the round is already counted at the origin head, so the ADR 0197 rewrite below must not reinterpret it
     let laterPass = false; // the head is a sealed chain candidate (a later cap-round pass)
     if (gate === "draft_gate" && !existsSync(ledgerPath(headSha)) && await carryOriginHead()) {
-      ({ lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha: await carryOriginHead(), tmpRoot }, { repoRoot: resolveRepoRoot(cwd) }));
+      ({ lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha: await carryOriginHead(), tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: (await memoFetchBase())?.baseRefName }));
       seamCounted = true;
     }
     // ADR 0197: a base-only merge after the cap round neither counts as a round nor consumes the closure round. The head with no ledger of its own,

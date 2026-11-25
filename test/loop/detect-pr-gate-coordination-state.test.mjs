@@ -4663,6 +4663,35 @@ test("3105 AC15: the detector derives the open act list from the current-head le
   }
 });
 
+test("GATE-EXEC-CAP-BRAKES: a draft round forced by a base merge never counts, so the real round after it is the cap round the detector routes to the fixer", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-draft-forced-"));
+  try {
+    initGitFixture(dir, { branch: "main" });
+    const git = (...a) => runGitFixture(dir, a).trim();
+    const commit = async (file, msg) => { await writeFile(path.join(dir, file), msg, "utf8"); git("add", "-A"); git("commit", "-q", "-m", msg); return git("rev-parse", "HEAD"); };
+    git("checkout", "-q", "-b", "pr");
+    const h1 = await commit("b.txt", "b");
+    git("checkout", "-q", "main");
+    const main = await commit("c.txt", "c");
+    git("checkout", "-q", "pr");
+    git("merge", "-q", "--no-ff", "-m", "merge main", "main");
+    const h2 = git("rev-parse", "HEAD");
+    git("update-ref", "refs/remotes/origin/main", main);
+    const h3 = await commit("d.txt", "d");
+    const findingsDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findingsDir, { recursive: true });
+    for (const [head, day] of [[h1, 1], [h2, 2], [h3, 3]]) {
+      await writeSealed(path.join(findingsDir, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${day}T00:00:00.000Z`, findings: head === h3 ? [ACT] : [ACT, { ...ACT, summary: "fix y", line: 9 }] }));
+    }
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha: h3, verdict: "findings_present", findingsSummary: "1 medium", nextAction: "fix" });
+    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(await capFixedDetectorEnv(dir, { isDraft: true, headSha: h3, draftGateBody: body }), { repoRoot: dir, evaluateEarlySurface: PASS_EARLY_SURFACE, checkBaseFreshness: async () => STALE }));
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
+    assert.match(result.agentRemedy.command, new RegExp(`--head-sha ${h3} `));
+    assert.deepEqual(await resolveDraftOpenActList({ repo: "owner/repo", pr: 10, currentHeadSha: h3, prData: { baseRefName: "main" } }, { repoRoot: dir, cap: 2 }), { headSha: h3, openActCount: 1, blockers: [] });
+    assert.equal(await resolveDraftOpenActList({ repo: "owner/repo", pr: 10, currentHeadSha: h3 }, { repoRoot: dir, cap: 2 }), null, "without the PR base the raw round 3 is past the cap");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test("3105 AC15: a head-matching marker without a next action keeps the base integration", async () => {
   const fixture = await actListFixture({ "": { findings: [ACT] } }, { nextAction: "" });
   try {
@@ -5381,7 +5410,10 @@ test("resolveCapBrakes carries forecastWloc and the wholeLogicLoc of the head, a
     const grown = await resolveCapBrakes(ctx({ forecastWloc: 380 }), { repoRoot: tempDir, config: { version: 1 }, evaluateSize });
     assert.deepEqual({ forecastWloc: grown.forecastWloc, wholeLogicLoc: grown.wholeLogicLoc }, { forecastWloc: 380, wholeLogicLoc: 761 });
     assert.deepEqual(reads, [{ base: "origin/main", head, repoRoot: tempDir }]);
-    const bare = await resolveCapBrakes(ctx({ linkedIssue: null }), { repoRoot: tempDir, config: { version: 1 }, evaluateSize });
+    // A failed growth read keeps the other brake facts and names the failure instead of dropping every brake.
+    const failed = await resolveCapBrakes(ctx({ forecastWloc: 380 }), { repoRoot: tempDir, config: { version: 1 }, evaluateSize: async () => { throw new Error("git diff failed"); } });
+    assert.deepEqual({ round: failed.round, hasLoc: "wholeLogicLoc" in failed, growthReadError: failed.growthReadError }, { round: grown.round, hasLoc: false, growthReadError: "git diff failed" });
+    const bare =await resolveCapBrakes(ctx({ linkedIssue: null }), { repoRoot: tempDir, config: { version: 1 }, evaluateSize });
     assert.deepEqual({ forecastWloc: bare.forecastWloc, hasLoc: "wholeLogicLoc" in bare, reads: reads.length }, { forecastWloc: null, hasLoc: false, reads: 1 });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -5476,7 +5508,7 @@ test("a linked issue without a forecast line sets capBrakesWarning naming the is
     const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
     const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body, linkedIssueBody: issueBody });
     const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
-    assert.match(result.capBrakesWarning, /linked issue #900 has no `- forecast: slice=<id> wloc=<n> files=<paths>` line under `## Size forecast`/);
+    assert.match(result.capBrakesWarning, /linked issue #900 has no `- forecast: slice=<id> wloc=<n> files=<paths>` line with wloc above 0 under `## Size forecast`/);
     assert.doesNotMatch(result.reason, /growth_past_forecast|round_cap_reached|non_convergence/, "no cap-brake stop");
   } finally {
     await rm(tempDir, { recursive: true, force: true });

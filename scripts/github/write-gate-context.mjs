@@ -119,7 +119,7 @@ export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied
  * The one cap-round-fixed fact of a PR coordination context (issue 3139): `{ capRoundFixed, failure }`, `failure` the typed `resolveCapRoundFixed` `onFailure` condition
  * (`cap_round_unresolved` on a throw or a cap reached with an unreadable ledger; a PR below the cap reports `failure: null`), or `clean_cap_verdict_unposted` for a clean cap round with no posted draft_gate review at its head (read from `prData.reviews`, trusted authors only).
  * `requirePostedCleanCap` (default true) turns the posted-verdict check off; `trustRuntime` is the runtime the trusted-evidence predicate reads. The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
- * A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); only a ready PR reads this fact (a draft PR goes ready on clean current-head draft_gate evidence, ADR 0324).
+ * A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); the detector reads this fact for a ready PR (a draft PR goes ready on clean current-head draft_gate evidence, ADR 0324), and the verdict poster's gate check and sealed cap-round catch-up post read it too.
  * @param {{ repo: string, pr: number, currentHeadSha: string, prData?: { isDraft?: boolean, baseRefName?: string, reviews?: object[] } }} context
  */
 export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = resolveCapRoundFixed, requirePostedCleanCap = true, trustRuntime = {} }) {
@@ -2147,14 +2147,16 @@ export async function countCompletedRounds(options, { repoRoot, includeLiveCurre
 /**
  * Round-cap state of the round being posted (GATE-EXEC-ROUND-CAP). This resolves the draft_gate cap only, so any
  * other gate is never past it; the pre_approval_gate cap lives in countCapRounds and decideCapRound (GATE-EXEC-CAP-BRAKES). One resolver for the judge pass, the ledger writer and the fixer emitter.
+ * The round is a {@link countCapRounds} count, so a base-merge-forced round never counts. The PR base is `prBase`, else the base the head's gate-context artifact (under `contextTmpRoot`) recorded; with neither the raw count stands.
  * @returns {Promise<{ pastCap: boolean, round: number, cap: number, lowFixCapped: boolean }>}
  */
-export async function resolveDraftRoundCap(options, { repoRoot, includeLiveCurrentHead = false }) {
+export async function resolveDraftRoundCap(options, { repoRoot, includeLiveCurrentHead = false, prBase, contextTmpRoot }) {
   // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate defers a low in every round; its round count is countCapRounds, not this resolver.
   if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0, lowFixCapped: options.gate === "pre_approval_gate" };
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
   const cap = resolveGateConfig(config, "draft").maxReviewRounds;
-  const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead });
+  const base = prBase ?? (await readGateContext({ ...options, tmpRoot: contextTmpRoot }, { repoRoot }).catch(() => null))?.baseFreshness?.base;
+  const round = await countCapRounds(options, { repoRoot, prBase: base, includeLiveCurrentHead });
   const pastCap = isPastRoundCap(round, cap);
   // The draft gate fixes a low at the cap round; only pre_approval_gate defers it.
   return { pastCap, round, cap, lowFixCapped: false };
@@ -2252,8 +2254,8 @@ async function operatorDecidedLatestRound(options, { repoRoot, latest, last }) {
 }
 
 /**
- * The operator clear of a pre_approval_gate round past the scoped round (GATE-EXEC-CAP-BRAKES). The latest closed round's act items count as cleared when the issued
- * fixer plan (bound to that round's head, to pre_approval_gate and to its digest) holds an operator focus decision for each fingerprint. A set already held by an
+ * The operator clear of a draft_gate or pre_approval_gate round past the scoped round (GATE-EXEC-CAP-BRAKES). The latest closed round's act items count as cleared when the issued
+ * fixer plan (bound to that round's head, to `options.gate` and to its digest) holds an operator focus decision for each fingerprint. A set already held by an
  * earlier round from the round after the effective cap round on was re-opened once: it stays with the operator.
  * Returns the scoped round input `{ fromHead, priorActItems }`, or null.
  */

@@ -89,7 +89,7 @@ const defaultFetchPr = ({ repo, pr }, { env, ghCommand, runChild }) => ghJson(["
 export async function extendCapRoundChain(options, deps = {}) {
   const ready = {};
   const result = await extendChain(options, deps, ready);
-  // A ready PR is proven with anyHead (coordination's proof, resolveDraftCapRoundFact). The docs, tests and delta_covered seal for an available chain end runs first (the waiver and the fixer emitter name this command for it): the anyHead proof turns only a refusal into already_proven.
+  // A ready PR is proven with anyHead (coordination's proof, resolveDraftCapRoundFact). The docs, tests and delta_covered seal for an available chain end runs first (gate coordination names this command for it): the anyHead proof turns only a refusal into already_proven.
   if (!result.ok && ready.proves && await ready.proves()) return { ok: true, action: "already_proven", chainEnd: null, candidateHead: ready.head, files: [] };
   return result;
 }
