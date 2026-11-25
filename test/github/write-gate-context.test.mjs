@@ -11656,3 +11656,37 @@ test("a pre_approval_gate round forced by a base merge does not count toward the
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("an operator decision naming every act item by fingerprint runs the round past the scoped round as one scoped round, once per act-item set", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+    await writeFile(path.join(repoRoot, "src/changed.mjs"), 'import { helper } from "./dep.mjs";\nexport function changed() { return helper() + 3; }\n', "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "fix the named item"]);
+    const newHead = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    const act = { severity: "medium", summary: "guard missing", files: ["src/changed.mjs"], line: 2, judgeDisposition: "act", judgeTitle: "Guard is missing", judgeFix: "add the guard" };
+    await seedClosedRounds(repoRoot, 65, ["1".repeat(40), baseSha, headSha], "pre_approval_gate");
+    const undecided = await runPreApprovalContext(repoRoot, 65, newHead, baseSha);
+    assert.equal(undecided.exitCode, 1);
+    assert.match(undecided.out, /round_cap_reached/);
+    const planDir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", "pr-65");
+    await mkdir(planDir, { recursive: true });
+    await writeFile(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder: { operatorFocus: { items: [{ fingerprint: fingerprintFinding(act), decision: "fix it" }] } } }), "utf8");
+    const cleared = await runPreApprovalContext(repoRoot, 65, newHead, baseSha);
+    assert.notEqual(cleared.exitCode, 1, cleared.out);
+    const artifact = JSON.parse(await readFile(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-65", `pre_approval_gate-${newHead}.json`), "utf8"));
+    assert.equal(artifact.scope.closureRound.fromHead, headSha);
+    // The re-opened round found the same set again: a second clear of that set goes to the operator.
+    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-65", `pre_approval_gate-${newHead}.json`), JSON.stringify({ repo: "owner/repo", pr: 65, gate: "pre_approval_gate", headSha: newHead, verdict: "findings_present", loggedAt: "2026-11-09T00:00:00.000Z", findings: [act] }), "utf8");
+    await writeFile(path.join(repoRoot, "src/changed.mjs"), 'import { helper } from "./dep.mjs";\nexport function changed() { return helper() + 4; }\n', "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "fix again"]);
+    const third = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    const second = await runPreApprovalContext(repoRoot, 65, third, baseSha);
+    assert.equal(second.exitCode, 1);
+    assert.match(second.out, /round_cap_reached/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});

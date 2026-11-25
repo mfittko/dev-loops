@@ -2240,6 +2240,28 @@ async function capFixBudgetFacts({ fromHead, prBase, repoRoot }) {
   return { logicLoc: wholeLogicLoc, addedFiles: added.stdout.split("\n").filter(Boolean).length };
 }
 
+/** Sorted fingerprints of the open act items of one round ledger. */
+const actFingerprintSet = (log) => listOpenActItems(log.findings).map((f) => fingerprintFinding(f)).sort();
+
+/**
+ * The operator clear of a pre_approval_gate round past the scoped round (GATE-EXEC-CAP-BRAKES). The latest closed round's act items count as cleared when the issued
+ * fixer plan's operator focus holds a decision for each fingerprint. A set already held by an earlier round from the cap round on was re-opened once: it stays with the operator.
+ * Returns the scoped round input `{ fromHead, priorActItems }`, or null.
+ */
+async function resolveOperatorClearedRound(options, { repoRoot, cap }) {
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot });
+  if (closed.length === 0) return null;
+  const last = actFingerprintSet(closed.at(-1));
+  if (last.length === 0) return null;
+  if (closed.slice(cap, -1).some((log) => actFingerprintSet(log).join() === last.join())) return null;
+  const planPath = path.join(resolveGateArtifactTmpRoot(repoRoot), "gate-fixer", repoSlugFor(options.repo), `pr-${options.pr}`, "fixer-emit-plan.json");
+  let plan;
+  try { plan = JSON.parse(await readFile(planPath, "utf8")); } catch { return null; }
+  const decided = new Set((plan?.workOrder?.operatorFocus?.items ?? []).filter((item) => item.decision !== undefined).map((item) => item.fingerprint));
+  if (!last.every((fp) => decided.has(fp))) return null;
+  return { fromHead: closureFromHeadOf(closed), priorActItems: await listPriorActItems(options, { repoRoot }) };
+}
+
 /**
  * The scoped final round of a pre_approval_gate (GATE-EXEC-CAP-BRAKES): the one cap decision of the context writer.
  * Returns `{ fromHead, priorActItems }` for the scoped round, null for a full round, and throws the policy reason when the round goes to the operator.
@@ -2250,7 +2272,17 @@ export async function resolveScopedFinalRound(options, { repoRoot, prBase, confi
   const round = await countCapRounds(options, { repoRoot, prBase, includeLiveCurrentHead: true });
   const closure = round === cap + 1 ? await resolveClosureRound(options, { repoRoot, cap, prBase, includeLiveCurrentHead: true }) : null;
   const facts = closure ? await capFixBudgetFacts({ fromHead: closure.fromHead, prBase, repoRoot }) : { logicLoc: 0, addedFiles: 0 };
-  const decision = decideCapRound({ round, cap, fixBudget: { ...facts, maxLines: resolveCapFixMaxLines(config) } });
+  const fixBudget = { ...facts, maxLines: resolveCapFixMaxLines(config) };
+  let decision = decideCapRound({ round, cap, fixBudget });
+  if (decision.action === "operator" && decision.reason === "round_cap_reached") {
+    // GATE-EXEC-CAP-BRAKES: an operator clear of the latest round's act items opens one more scoped round, once per distinct act-item set.
+    const cleared = await resolveOperatorClearedRound(options, { repoRoot, cap, prBase });
+    if (cleared) {
+      const clearedFacts = await capFixBudgetFacts({ fromHead: cleared.fromHead, prBase, repoRoot });
+      decision = decideCapRound({ round: cap + 1, cap, fixBudget: { ...clearedFacts, maxLines: fixBudget.maxLines } });
+      if (decision.action === "scoped_final_round") return cleared;
+    }
+  }
   if (decision.action === "operator") throw new Error(`${describeCapStop(decision)}. Report blocked with blockedOn operator_decision.`);
   return decision.action === "scoped_final_round" ? closure : null;
 }
