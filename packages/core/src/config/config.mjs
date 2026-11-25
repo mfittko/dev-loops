@@ -409,10 +409,10 @@ const GateConfig = z.strictObject({
   tiers: z.array(GateTier).min(1).describe("Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class.").optional(),
 });
 
-// Only the draft gate reads maxReviewRounds, so only gates.draft accepts it.
+// Only the draft and preApproval gates read maxReviewRounds, so only they accept it.
 // No schema-level `.default()` (same layer-shadowing hazard); resolveGateConfig applies 4.
 const DraftGateConfig = GateConfig.extend({
-  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and at the cap round only a named human decision blocks with round_cap_reached (GATE-EXEC-SOFT-CAP); other act items go to the fixer, and a round after the cap round is refused. 0 disables the cap. Default 4."),
+  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for the draft and pre-approval gates: a round whose count of completed judged rounds reaches this number is past the cap, and at the cap round only a named human decision blocks with round_cap_reached (GATE-EXEC-SOFT-CAP); other act items go to the fixer, and a round after the cap round is refused. 0 disables the cap. Default 4 on draft, 2 on preApproval."),
 });
 
 // One named group of angles dispatched together onto a single reviewer under
@@ -575,7 +575,7 @@ const GatesConfig = z.strictObject({
   size: SizeConfig.optional(),
   // requireCi mirrors the draft gate: false ignores the CI verdict entirely at
   // this boundary, including a real failure (not merely "green optional").
-  preApproval: GateConfig.optional(),
+  preApproval: DraftGateConfig.optional(),
   // Relaxed spike gate profile: a findings-doc deliverable, resolved
   // through the same layering/resolveGateConfig path as draft/preApproval.
   spike: GateConfig.optional(),
@@ -611,6 +611,7 @@ const GatesConfig = z.strictObject({
   fanout: FanoutConfig.superRefine(rejectInvalidFanoutGroupNames).superRefine(rejectInvalidFanoutSizeTiers).optional(),
   reviewDiff: ReviewDiffConfig.optional(),
   contextExpansion: ContextExpansionConfig.optional(),
+  capFixMaxLines: z.number().int().nonnegative().optional(),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -1030,7 +1031,7 @@ const FileGatesConfig = z.strictObject({
   // .describe() clones of one shared partial, so no underlying def is shared
   // and per-gate metadata renders unambiguously.
   draft: DraftGateConfig.partial().describe("Draft gate config (runs before a PR leaves draft).").optional(),
-  preApproval: GateConfig.partial().describe("Pre-approval gate config (final re-review before the merge handoff).").optional(),
+  preApproval: DraftGateConfig.partial().describe("Pre-approval gate config (final re-review before the merge handoff).").optional(),
   spike: GateConfig.partial().describe("Relaxed spike gate profile; applies only to spike-mode work.").optional(),
   size: SizeConfig.partial().describe("Fail-closed PR size/tier budget: testDiscount, absoluteHardLoc, and per-tier soft/waiver/slice thresholds + patterns.").optional(),
   requireFanoutEvidence: z.boolean().describe("Require fan-out/fan-in review evidence on gate verdicts; inline single-agent verdicts are rejected except under the strict light-mode exception (under-threshold scope, no gate:full label, recorded inline reason).").optional(),
@@ -1042,6 +1043,7 @@ const FileGatesConfig = z.strictObject({
   fanout: FanoutConfig.partial().superRefine(rejectInvalidFanoutGroupNames).superRefine(rejectInvalidFanoutSizeTiers).describe("Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate).").optional(),
   reviewDiff: ReviewDiffConfig.partial().describe("Reviewer-diff shaping (global, applies on every gate): excludeGlobs drops matching file blocks from the required filtered diff read.").optional(),
   contextExpansion: ContextExpansionConfig.partial().describe("Adaptive reviewer-context expansion caps (global, applies on every gate): maxFiles and maxBytes bound the importers and sibling functions added per round.").optional(),
+  capFixMaxLines: z.number().int().nonnegative().describe("Fix budget past the round cap, shared by draft_gate and pre_approval_gate: the most logic LOC the PR-own diff since the cap-round head may add before the fix goes to the operator (GATE-EXEC-CAP-BRAKES). Default 60.").optional(),
 });
 
 // ============================================================================
@@ -2357,7 +2359,7 @@ export function resolveGateConfig(config, gate) {
     const resolved = resolveBlockingSeverities(config, g);
     if (g === gate) blockCleanOnFindingSeverities = resolved;
   }
-  const maxReviewRounds = gateConfig?.maxReviewRounds ?? 4;
+  const maxReviewRounds = gateConfig?.maxReviewRounds ?? (gate === "preApproval" ? 2 : 4);
   if (!Number.isInteger(maxReviewRounds) || maxReviewRounds < 0) {
     throw new Error(`gates.${gate}.maxReviewRounds must be a non-negative integer (0 disables the cap); got ${JSON.stringify(gateConfig.maxReviewRounds)}`);
   }
@@ -2405,6 +2407,11 @@ export function resolveGateConfig(config, gate) {
  */
 export function resolveRequireFanoutEvidence(config) {
   return config?.gates?.requireFanoutEvidence !== false;
+}
+
+/** The post-cap fix budget in logic LOC (`gates.capFixMaxLines`, default 60). */
+export function resolveCapFixMaxLines(config) {
+  return config?.gates?.capFixMaxLines ?? 60;
 }
 
 /**
