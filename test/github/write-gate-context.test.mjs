@@ -11794,11 +11794,45 @@ test("a clean scoped round followed by a base-only merge builds a scoped round a
     assert.notEqual(built.exitCode, 1, built.out);
     const artifact = JSON.parse(await readFile(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-72", `pre_approval_gate-${mergedHead}.json`), "utf8"));
     assert.equal(artifact.scope.closureRound.fromHead, headSha);
+    const ids = { repo: "owner/repo", pr: 72, gate: "pre_approval_gate", headSha: mergedHead };
+    const diff = await readFile(path.resolve(repoRoot, buildGateDiffPath(ids)), "utf8");
+    assert.match(diff, /src\/changed\.mjs/, "the bundle holds the PR-own hunks against the base");
+    assert.doesNotMatch(diff, /src\/other\.mjs/, "no base-only file");
+    const evidence = await readFile(path.resolve(repoRoot, buildGateBriefingEvidencePath(ids)), "utf8");
+    assert.match(evidence, /whole PR-own diff against the base/);
+    assert.doesNotMatch(evidence, /beyond the finding|PR-own change since/);
     // A prior round that is not clean keeps the refusal.
     await writeFile(ledger, JSON.stringify({ ...clean, verdict: "findings_present", findings: [{ severity: "medium", summary: "guard missing", files: ["src/changed.mjs"], line: 2, judgeDisposition: "act", judgeTitle: "Guard is missing", judgeFix: "add the guard" }] }), "utf8");
     const refused = await runPreApprovalContext(repoRoot, 72, mergedHead, "origin/main");
     assert.equal(refused.exitCode, 1);
     assert.match(refused.out, /closure_delta_no_pr_own_change/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a round past the scoped round that follows a clean round runs as a scoped round within the fix budget and refuses over it", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+    await writeFile(path.join(repoRoot, "src/changed.mjs"), 'import { helper } from "./dep.mjs";\nexport function changed() { return helper() + 3; }\n', "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "small PR-own change"]);
+    const within = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    await seedClosedRounds(repoRoot, 73, ["1".repeat(40), baseSha, headSha], "pre_approval_gate");
+    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-73", `pre_approval_gate-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 73, gate: "pre_approval_gate", headSha, verdict: "clean", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
+    const built = await runPreApprovalContext(repoRoot, 73, within, baseSha);
+    assert.notEqual(built.exitCode, 1, built.out);
+    const artifact = JSON.parse(await readFile(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-73", `pre_approval_gate-${within}.json`), "utf8"));
+    assert.equal(artifact.scope.closureRound.fromHead, headSha);
+    await writeFile(path.join(repoRoot, "src/added.mjs"), "export const added = 1;\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "adds a file"]);
+    const over = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-73", `pre_approval_gate-${within}.json`), JSON.stringify({ repo: "owner/repo", pr: 73, gate: "pre_approval_gate", headSha: within, verdict: "clean", loggedAt: "2026-11-10T00:00:00.000Z", findings: [] }), "utf8");
+    const refused = await runPreApprovalContext(repoRoot, 73, over, baseSha);
+    assert.equal(refused.exitCode, 1);
+    assert.match(refused.out, /cap_fix_over_budget/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
