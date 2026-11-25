@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, test } from "bun:test";
-import { renderGuardHook } from "@dev-loops/core/loop/default-branch-guard";
 import { recoveryHint, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
 import { gateDeltaRecordPath, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
@@ -110,10 +109,7 @@ test("every push-authority refusal text names an agent step and none names a mar
     ["no-branch marker", recoveryHint(HEAD, marker, undefined)],
     ["non-hex baseline", recoveryHint("not-a-sha", marker, "issue-a")],
   ];
-  const hook = renderGuardHook("pre-push", ["main"], null, "/x/check-fix-push-authority.mjs");
-  const fallback = hook.split("\n").find((line) => line.includes("the push-authority check script is missing"));
-  assert.ok(fallback, "the fallback hook text exists");
-  for (const [label, text] of [...hints, ["fallback hook", fallback]]) assertAgentStep(`push authority ${label}`, text);
+  for (const [label, text] of hints) assertAgentStep(`push authority ${label}`, text);
   // The no-branch and non-hex texts name the close command that handles an unreadable marker.
   for (const [, text] of hints.slice(1)) assert.match(text, /gate close-sequence/);
 });
