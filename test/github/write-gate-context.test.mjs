@@ -11772,7 +11772,7 @@ test("an operator decision naming every act item by fingerprint runs the round p
     await writePlan({ gate: "pre_approval_gate", headSha: newHead, operatorFocus: focus });
     const second = await runPreApprovalContext(repoRoot, 65, third, baseSha);
     assert.equal(second.exitCode, 1);
-    assert.match(second.out, /round_cap_reached|non_convergence/);
+    assert.match(second.out, /round_cap_reached/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

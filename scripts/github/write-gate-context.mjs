@@ -2251,6 +2251,17 @@ export async function effectiveRounds(closed, { prBase, repoRoot }) {
   return closed.filter((_, i) => keep[i]);
 }
 
+/** Whether the issued fixer plan (bound to the latest closed round's head, to the gate and to its digest) holds an operator focus decision for each act fingerprint `last` of that round. */
+async function operatorDecidedLatestRound(options, { repoRoot, latest, last }) {
+  const planPath = path.join(resolveGateArtifactTmpRoot(repoRoot), "gate-fixer", repoSlugFor(options.repo), `pr-${options.pr}`, "fixer-emit-plan.json");
+  let plan;
+  try { plan = JSON.parse(await readFile(planPath, "utf8")); } catch { return false; }
+  const issued = plan?.workOrder;
+  if (!issued || issued.gate !== options.gate || String(issued.headSha).trim().toLowerCase() !== String(latest.headSha).trim().toLowerCase() || workOrderDigest(issued) !== plan.workOrderDigest) return false;
+  const decided = new Set((issued.operatorFocus?.items ?? []).filter((item) => item.decision !== undefined).map((item) => item.fingerprint));
+  return last.length > 0 && last.every((fp) => decided.has(fp));
+}
+
 /**
  * The operator clear of a pre_approval_gate round past the scoped round (GATE-EXEC-CAP-BRAKES). The latest closed round's act items count as cleared when the issued
  * fixer plan (bound to that round's head, to pre_approval_gate and to its digest) holds an operator focus decision for each fingerprint. A set already held by an
@@ -2264,13 +2275,7 @@ async function resolveOperatorClearedRound(options, { repoRoot, cap, prBase }) {
   const last = actFingerprintSet(latest);
   if (last.length === 0) return null;
   if ((await effectiveRounds(closed, { prBase, repoRoot })).slice(cap).some((log) => log !== latest && actFingerprintSet(log).join() === last.join())) return null;
-  const planPath = path.join(resolveGateArtifactTmpRoot(repoRoot), "gate-fixer", repoSlugFor(options.repo), `pr-${options.pr}`, "fixer-emit-plan.json");
-  let plan;
-  try { plan = JSON.parse(await readFile(planPath, "utf8")); } catch { return null; }
-  const issued = plan?.workOrder;
-  if (!issued || issued.gate !== "pre_approval_gate" || String(issued.headSha).trim().toLowerCase() !== String(latest.headSha).trim().toLowerCase() || workOrderDigest(issued) !== plan.workOrderDigest) return null;
-  const decided = new Set((issued.operatorFocus?.items ?? []).filter((item) => item.decision !== undefined).map((item) => item.fingerprint));
-  if (!last.every((fp) => decided.has(fp))) return null;
+  if (!(await operatorDecidedLatestRound(options, { repoRoot, latest, last }))) return null;
   return { fromHead: closureFromHeadOf(closed), priorActItems: await listPriorActItems(options, { repoRoot }) };
 }
 
@@ -2282,7 +2287,8 @@ export async function refuseNonConvergence(options, { repoRoot, prBase }) {
   const closed = await readClosedPriorRoundLogs(options, { repoRoot });
   const effective = await effectiveRounds(closed, { prBase: options.gate === "pre_approval_gate" ? prBase : undefined, repoRoot });
   const decision = decideCapRound({ round: effective.length + 1, cap: 0, actCounts: effective.map((log) => capRoundActList(log.findings, log.headSha).length) });
-  if (decision.action === "operator") {
+  // An operator decision on every act item of the latest closed round clears the stop (GATE-EXEC-CAP-BRAKES); the once-per-set rule stays with resolveOperatorClearedRound.
+  if (decision.action === "operator" && !(await operatorDecidedLatestRound(options, { repoRoot, latest: closed.at(-1), last: actFingerprintSet(closed.at(-1)) }))) {
     throw Object.assign(new Error(`${describeCapStop(decision)}. Report blocked with blockedOn operator_decision.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); the operator clears it with an operator focus item whose decision names the act items by fingerprint (GATE-EXEC-CAP-BRAKES)` });
   }
 }
