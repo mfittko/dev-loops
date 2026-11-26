@@ -688,8 +688,31 @@ test("a draft_gate run at a stale head names the base merge when the base change
     git("reset", "-q", "--hard", "HEAD~1");
     const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
     assert.equal(result.status, "incomplete");
-    assert.match(result.reason, /base branch changed its validation config.*merge origin\/main/i);
-    assert.doesNotMatch(result.reason, /config-source change/);
+    assert.match(result.reason, /config-source change.*The head is also stale: base_stale_integrate_first.*origin\/main/s);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(`${repoRoot}-origin.git`, { recursive: true, force: true });
+  }
+});
+
+test("a draft_gate run at a stale head keeps the config-source refusal when the PR edited its own validation block", async () => {
+  const base = "version: 1\nvalidation:\n  mode: local\n  fullCommand: echo base-ran\n";
+  const { repoRoot, headSha: baseSha } = await bareFixture(base);
+  try {
+    const git = (...a) => execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...a], { cwd: repoRoot });
+    await writeFile(path.join(repoRoot, "unrelated.txt"), "x");
+    git("add", "unrelated.txt");
+    git("commit", "-qm", "base moves on");
+    git("push", "-q", "origin", "HEAD:refs/heads/main");
+    git("reset", "-q", "--hard", baseSha);
+    await writeFile(path.join(repoRoot, ".devloops"), base.replace("echo base-ran", "echo pr-edit"));
+    git("commit", "-qam", "pr edit");
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /config-source change/);
+    assert.match(result.reason, /base_stale_integrate_first/);
+    assert.doesNotMatch(result.reason, /base branch changed its validation config/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
     await rm(`${repoRoot}-origin.git`, { recursive: true, force: true });
