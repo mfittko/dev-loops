@@ -14,7 +14,7 @@ A `draft_gate` round reviews `git diff origin/<base>...HEAD`, the merge-base dif
 
 ## Decision
 
-1. `write-gate-context.mjs` refuses a stale head for the `pre_approval_gate` only. A `draft_gate` context records the non-current `baseFreshness.status` and continues, as the `review` gate does.
+1. `write-gate-context.mjs` refuses a stale head for the `pre_approval_gate` only. A `draft_gate` context records `base_stale_integrate_first` and continues, as the `review` gate does. A `draft_gate` context still refuses `base_fetch_failed` and `base_head_unresolved`: after a failed fetch the merge-base diff uses the local `origin/<base>`, which can be older than a base tip the PR branch already merged, so the diff would hold base commits as PR changes.
 2. `upsert-verdict` runs the stale-base refusal and the ADR 0299 stale-line path for the `pre_approval_gate` only. A clean `draft_gate` verdict records at a stale head with no stale line. The draft-only refusal code (the early check before the draft conversion, and the converged and cap-round head branches) is deleted.
 3. `pr reconcile-draft` runs no base check and takes no `checkBaseFreshness` option.
 4. `gate resolve-validation --gate draft_gate` runs validation at a stale head. Every other gate keeps the stale-base result.

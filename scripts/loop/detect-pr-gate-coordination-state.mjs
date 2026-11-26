@@ -1741,7 +1741,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     result.reason = "No contract-complete pre_approval_gate marker exists for the current head SHA; run pre_approval_gate before proceeding.";
     result.allowedNextActions = [PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE];
   }
-  // GATE-EXEC-BASE-REFRESH: a stale head must integrate the base before a gate-run action. A fetch failure or unresolved head keeps the action (write-gate-context still refuses at dispatch).
+  // GATE-EXEC-BASE-REFRESH: a stale head must integrate the base before run_pre_approval_gate or await_final_human_approval only (ADR 0326). A fetch failure or unresolved head keeps the action (write-gate-context still refuses a pre_approval_gate dispatch, and a draft_gate dispatch on those two errors).
   // ADR 0299: the same check guards the routes a clean verdict posted with the stale-base line would otherwise reach.
   if ([PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL].includes(result.nextAction)) {
     const checkFreshness = runtime.checkBaseFreshness ?? (runtime.runChild ? null : checkBaseFreshness);

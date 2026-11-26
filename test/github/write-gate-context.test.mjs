@@ -8913,6 +8913,31 @@ test("issue 2885: a failed preflight fetch exits 1 with base_fetch_failed, the P
   }
 });
 
+for (const error of ["base_fetch_failed", "base_head_unresolved"]) {
+  test(`issue 3571: a draft_gate dispatch still refuses ${error} and writes no artifact (ADR 0326)`, async () => {
+    const { root, clone, headSha } = await makeOriginFixture();
+    try {
+      const failing = async ({ base }) => ({ ok: false, error, base, message: "x" });
+      const argv = ["--repo", "owner/repo", "--pr", "72", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["correctness"]'];
+      const before = process.exitCode;
+      const realWrite = process.stderr.write.bind(process.stderr);
+      let errText = "";
+      process.stderr.write = (chunk) => { errText += String(chunk); return true; };
+      try {
+        await mainImpl(argv, { repoRoot: clone, run: stubGhRun, checkBaseFreshness: failing });
+        assert.equal(process.exitCode, 1);
+        assert.match(errText, new RegExp(error, "u"));
+      } finally {
+        process.stderr.write = realWrite;
+        process.exitCode = before;
+      }
+      assert.equal(existsSync(path.join(clone, "tmp/gate-context")), false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("issue 2885: a stale local refs/heads/main base diffs against origin/main, not the local ref", async () => {
   const { root, clone, advanceOrigin } = await makeOriginFixture();
   try {
