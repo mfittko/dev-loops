@@ -318,6 +318,9 @@ async function writeStoppedFiles(tmpRoot, { verdict = STOPPED, plan = true } = {
   const verdictFile = path.join(dir, "spec-authority-verdict.json");
   if (verdict !== null) await writeFile(verdictFile, typeof verdict === "string" ? verdict : JSON.stringify(verdict));
   if (plan) await writeFile(path.join(dir, "judge-emit-plan.json"), typeof plan === "string" ? plan : JSON.stringify({ workOrder: { authority: { specDigest: OLD_DIGEST }, outputRefs: [path.join(dir, "judge-verdict.json"), verdictFile] } }));
+  // The sentinel and record predate the plan by a clear margin: same-millisecond writes tie, and a tie counts as a newer fan-out.
+  const old = new Date(Date.now() - 60_000);
+  for (const f of [SENTINEL_FILE, `checkpoint-dispatch-prompt-draft-gate-coverage-${HEAD}.json`]) await utimes(path.join(tmpRoot, f), old, old);
 }
 
 async function withStoppedRound(fn, setup) {
