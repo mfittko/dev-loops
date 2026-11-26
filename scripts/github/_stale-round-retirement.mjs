@@ -82,7 +82,11 @@ export async function retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdi
   const hasRecords = names.some((n) => n.endsWith(suffix) && n.startsWith(sentinelPrefix))
     || recordNames.some((n) => n.endsWith(suffix) && n.startsWith(recordPrefix));
   if (!hasRecords && (liveOnly || !hasFindings)) return { retiredRound: null };
-  const stopped = currentSpecDigest ? await findSpecDecisionStop({ repo, pr, gate, head, verdictRoots, currentSpecDigest }) : null;
+  const roundFiles = [
+    ...names.filter((n) => n.endsWith(suffix) && n.startsWith(sentinelPrefix)).map((n) => path.join(tmpRoot, n)),
+    ...recordNames.filter((n) => n.endsWith(suffix) && n.startsWith(recordPrefix)).map((n) => path.join(recordsTmpRoot, n)),
+  ];
+  const stopped = currentSpecDigest ? await findSpecDecisionStop({ repo, pr, gate, head, verdictRoots, currentSpecDigest, roundFiles }) : null;
   if (specDecisionOnly && !stopped) return { retiredRound: null };
   for (const root of verdictRoots) {
     const key = { repo, pr, gate, headSha: head, tmpRoot: root };
@@ -135,17 +139,21 @@ export async function retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdi
 /**
  * The round stopped at the human-spec-decision state and the spec has changed since: no findings log in any verdict root
  * (the verdict comment renders only from it), a judge plan whose spec-authority verdict holds a `spec_cannot_decide`
- * decision, and a plan-pinned spec digest that differs from `currentSpecDigest`. Returns `{ pinnedDigest }` or null; any
+ * decision, and a plan-pinned spec digest that differs from `currentSpecDigest`. The plan must be newer than every sentinel and
+ * dispatch record in `roundFiles`: a newer fan-out that has not replaced the plan yet leaves the stopped round's plan stale. Returns `{ pinnedDigest }` or null; any
  * missing or unreadable file is null, so the check never fails open.
  */
-async function findSpecDecisionStop({ repo, pr, gate, head, verdictRoots, currentSpecDigest }) {
+async function findSpecDecisionStop({ repo, pr, gate, head, verdictRoots, currentSpecDigest, roundFiles }) {
   for (const root of verdictRoots) {
     if (await exists(buildLogPath({ repo, pr, gate, headSha: head, tmpRoot: root }))) return null;
   }
   for (const root of verdictRoots) {
     try {
       const dir = buildGateArtifactPath({ repo, pr, gate, headSha: head, tmpRoot: root, dir: "gate-judge" });
-      const plan = JSON.parse(await readFile(path.join(dir, "judge-emit-plan.json"), "utf8"));
+      const planFile = path.join(dir, "judge-emit-plan.json");
+      const plan = JSON.parse(await readFile(planFile, "utf8"));
+      const planTime = (await stat(planFile)).mtimeMs;
+      for (const file of roundFiles) if ((await stat(file)).mtimeMs > planTime) return null;
       const pinnedDigest = plan?.workOrder?.authority?.specDigest;
       const outputRef = plan?.workOrder?.outputRefs?.find((ref) => path.basename(String(ref)) === "spec-authority-verdict.json");
       if (typeof pinnedDigest !== "string" || pinnedDigest === currentSpecDigest || typeof outputRef !== "string") continue;

@@ -3,7 +3,12 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import fsp from "node:fs/promises";
+import { mock, test } from "bun:test";
+import { specDigestFromBody } from "@dev-loops/core/loop/spec-authority";
+import { initGitFixture, runGitFixture } from "../_helpers.mjs";
+import { parseWriteGateContextCliArgs, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { buildRetireCommand, retireStaleRound } from "../../scripts/github/_stale-round-retirement.mjs";
 import { buildGateArtifactPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 
@@ -387,5 +392,115 @@ test("a findings log at the head keeps the refusal even when the spec decision f
     const result = await retireStaleRound({ ...KEY, tmpRoot, ...decided });
     assert.match(result.refusal.error, /a verdict is already recorded/);
     assert.match(result.refusal.recovery, /^operator: /);
+  });
+});
+
+// Builder-level shape: the lane worktree is one git checkout, the builder scans its tmp/ and the guard creates sentinels there.
+const SPEC_BODY = (nonGoal) => `## Acceptance criteria\n\n- [ ] a\n\n## Definition of done\n- b\n\n\n## Non-goals\n- ${nonGoal}`;
+const BUILDER_SCOPE = "draft-gate-scope";
+const GUARD = path.resolve("scripts/github/verify-fresh-review-context.mjs");
+
+async function withLaneWorktree(fn) {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "stale-round-lane-"));
+  try {
+    initGitFixture(repoRoot, { branch: "main" });
+    const head = runGitFixture(repoRoot, ["rev-parse", "HEAD"]);
+    const key = { repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: head, tmpRoot: path.join(repoRoot, "tmp") };
+    // A fixed --prefix-file keeps the prefix bytes identical while the spec body changes.
+    await writeFile(path.join(repoRoot, "prefix.md"), "briefing prefix\n");
+    const build = async (nonGoal) => writeGateContext(parseWriteGateContextCliArgs(["--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate", "--head-sha", head, "--angles", '["scope"]', "--acceptance-criteria", "#9", "--prefix-file", "prefix.md", "--issue-body", SPEC_BODY(nonGoal)]), { repoRoot });
+    const guard = (prefixHash) => JSON.parse(spawnSync("node", [GUARD, "--scope", BUILDER_SCOPE, "--prefix-hash", prefixHash], { cwd: repoRoot, encoding: "utf8" }).stdout);
+    return await fn({ repoRoot, head, key, build, guard });
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+}
+const later = async (file, seconds) => { const t = new Date(Date.now() + seconds * 1000); await utimes(file, t, t); };
+
+// The stopped round's files at the builder's scan root: sentinel (made by the guard), record, finished artifact, ledger, plan and verdict.
+async function leaveStoppedRound({ key, head, body, guard, prefixHash }) {
+  assert.equal(guard(prefixHash).fresh, true);
+  await writeFile(path.join(key.tmpRoot, `checkpoint-dispatch-prompt-${BUILDER_SCOPE}-${head}.json`), "{}");
+  const dir = buildGateReviewsDir(key);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", headSha: head, findings: [] }));
+  await later(path.join(dir, "scope.json"), 5);
+  const ledger = buildGateFaninLedgerPath(key);
+  await mkdir(path.dirname(ledger), { recursive: true });
+  await writeFile(ledger, "{}");
+  const judgeDir = buildGateArtifactPath({ ...key, dir: "gate-judge" });
+  await mkdir(judgeDir, { recursive: true });
+  const verdictFile = path.join(judgeDir, "spec-authority-verdict.json");
+  await writeFile(verdictFile, JSON.stringify(STOPPED));
+  const planFile = path.join(judgeDir, "judge-emit-plan.json");
+  await writeFile(planFile, JSON.stringify({ workOrder: { authority: { specDigest: specDigestFromBody(SPEC_BODY(body)) }, outputRefs: [verdictFile] } }));
+  await later(planFile, 10);
+}
+
+test("builder: identical prefix bytes after a spec-decision stop retire the round, the guard sentinel moves and the next reviewer is fresh", async () => {
+  await withLaneWorktree(async ({ repoRoot, head, key, build, guard }) => {
+    const first = await build("a");
+    const sentinel = path.join(repoRoot, "tmp", `checkpoint-context-sentinel-${BUILDER_SCOPE}-${head}.json`);
+    await leaveStoppedRound({ key, head, body: "a", guard, prefixHash: first.prefixHash });
+    assert.equal(existsSync(sentinel), true, "the sentinel the guard created is in the builder scan root");
+    const rebuilt = await build("a, edited after the decision");
+    assert.equal(rebuilt.prefixHash, first.prefixHash, "the prefix bytes are identical");
+    assert.equal(rebuilt.retiredRound.retired, 1);
+    assert.equal(existsSync(sentinel), false);
+    const dir = rebuilt.retiredRound.retirementDir;
+    assert.equal(existsSync(path.join(dir, path.basename(sentinel))), true);
+    assert.equal(existsSync(path.join(dir, `checkpoint-dispatch-prompt-${BUILDER_SCOPE}-${head}.json`)), true);
+    assert.match(JSON.parse(await readFile(path.join(dir, "retirement.json"), "utf8")).reason, /SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT/);
+    assert.equal(path.dirname(path.dirname(dir)), path.join(repoRoot, "tmp", "retired-gate-rounds"));
+    assert.equal(guard(first.prefixHash).fresh, true);
+  });
+});
+
+test("builder: a crash during the retirement is finished by the next rebuild, a second stop retires again and a findings log refuses", async () => {
+  await withLaneWorktree(async ({ repoRoot, head, key, build, guard }) => {
+    const first = await build("a");
+    await leaveStoppedRound({ key, head, body: "a", guard, prefixHash: first.prefixHash });
+    // Fail the second move (the dispatch record), after the sentinel moved.
+    const real = fsp.rename;
+    let calls = 0;
+    mock.module("node:fs/promises", () => ({ ...fsp, default: fsp, rename: (...args) => (++calls === 2 ? Promise.reject(new Error("injected move failure")) : real(...args)) }));
+    try {
+      await build("b");
+    } catch { /* a failed retirement may surface or be swallowed; the next rebuild decides */ } finally {
+      mock.module("node:fs/promises", () => ({ ...fsp, default: fsp, rename: real }));
+    }
+    assert.ok(calls >= 2, "the injected failure fired");
+    const record = path.join(repoRoot, "tmp", `checkpoint-dispatch-prompt-${BUILDER_SCOPE}-${head}.json`);
+    assert.equal(existsSync(record), true, "the record is still in place after the crash");
+    const finished = await build("b");
+    assert.ok(finished.retiredRound.dispatchPromptRecords.length >= 1);
+    assert.equal(existsSync(record), false);
+    // A second rebuild is a no-op and never refuses on the ledger left in place.
+    assert.equal((await build("b")).retiredRound ?? null, null);
+    // A second stop and spec edit at the same head retires again.
+    await leaveStoppedRound({ key, head, body: "b", guard, prefixHash: first.prefixHash });
+    assert.ok((await build("c")).retiredRound.retired >= 1);
+    // A findings log from the new round is a posted verdict.
+    await leaveStoppedRound({ key, head, body: "c", guard, prefixHash: first.prefixHash });
+    const log = buildLogPath(key);
+    await mkdir(path.dirname(log), { recursive: true });
+    await writeFile(log, "{}");
+    const sentinel = path.join(repoRoot, "tmp", `checkpoint-context-sentinel-${BUILDER_SCOPE}-${head}.json`);
+    // With identical prefix bytes a posted verdict is left alone (no retirement, no refusal) ...
+    assert.equal((await build("d")).retiredRound ?? null, null);
+    assert.equal(existsSync(sentinel), true);
+    // ... and a changed prefix reaches the refusal with its operator recovery.
+    await writeFile(path.join(repoRoot, "prefix.md"), "a different briefing prefix\n");
+    await assert.rejects(build("d"), (err) => /a verdict is already recorded/.test(err.message) && /^operator: /.test(err.recovery));
+  });
+});
+
+test("a judge plan older than a sentinel of a newer fan-out is stale: the new round is left alone", async () => {
+  await withStoppedRound(async (tmpRoot) => {
+    const t = new Date(Date.now() + 60_000);
+    await utimes(path.join(tmpRoot, SENTINEL_FILE), t, t);
+    const result = await retireStaleRound({ ...KEY, tmpRoot, ...decided });
+    assert.match(result.refusal.error, /a verdict is already recorded/);
+    assert.equal(existsSync(path.join(tmpRoot, SENTINEL_FILE)), true);
   });
 });
