@@ -1327,7 +1327,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // GATE-EXEC-CAP-BRAKES: `capBrakes` is `{ gate, round, cap, actCounts, items }` for the gate whose round is posted at this head. The one policy
   // (decideCapRound) stops the lane before another fixer pass; only an operator focus decision that names the items clears the stop.
   const capStop = input.capBrakes ? decideCapRound({ ...input.capBrakes, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 } }) : null;
-  if (capStop?.action === "operator") {
+  if (capStop?.action === "operator" && input.capBrakes.operatorCleared !== true) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
     pushUnique(forbiddenActions, [
       PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
@@ -1351,7 +1351,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       forbiddenActions,
       nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
       blockedOn: BLOCKED_ON.OPERATOR_DECISION,
-      reason: `${describeCapStop(capStop)} (${input.capBrakes.gate}).${named}`,
+      reason: `${describeCapStop(capStop)} (${input.capBrakes.gate}).${named} Clear it with --operator-focus-file <path> on loop gate-coordination.`,
       mergeStateStatus,
       conflictFiles,
       refinementArtifact,

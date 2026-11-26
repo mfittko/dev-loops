@@ -5190,3 +5190,26 @@ test("cap brakes: at the draft cap round a non-shrinking act count stops the lan
   assert.deepEqual({ next: stalled.nextAction, on: stalled.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION });
   assert.match(stalled.reason, /non_convergence/);
 });
+
+// Issue 3589: an operator decision on every act item clears a cap brake stop where it is reported.
+test("cap brakes: operatorCleared routes past each operator stop; without it the stop names the items and --operator-focus-file", () => {
+  const head = "ab".repeat(20);
+  const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
+  const verdict = { visible: true, headSha: head, verdict: "blocked", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", maxCopilotRounds: 0, draftGate: clean, draftGateMarker: clean, preApprovalGate: verdict, preApprovalGateMarker: verdict };
+  const items = ["abcdef0123456789 [medium] body wording (new_act)"];
+  const cases = {
+    growth_past_forecast: { gate: "pre_approval_gate", round: 3, cap: 2, actCounts: [3], wholeLogicLoc: 810, forecastWloc: 380, items },
+    non_convergence: { gate: "pre_approval_gate", round: 3, cap: 2, actCounts: [3, 3], items },
+    round_cap_reached: { gate: "pre_approval_gate", round: 4, cap: 2, actCounts: [3, 2, 1], items },
+  };
+  for (const [reason, brakes] of Object.entries(cases)) {
+    const stopped = evaluatePrGateCoordination({ ...base, capBrakes: brakes });
+    assert.deepEqual({ next: stopped.nextAction, on: stopped.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION }, reason);
+    assert.match(stopped.reason, new RegExp(reason));
+    assert.ok(stopped.reason.includes(items[0]), reason);
+    assert.match(stopped.reason, /--operator-focus-file <path> on loop gate-coordination/, reason);
+    const cleared = evaluatePrGateCoordination({ ...base, capBrakes: { ...brakes, operatorCleared: true } });
+    assert.notEqual(cleared.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, `${reason}: ${cleared.reason}`);
+  }
+});

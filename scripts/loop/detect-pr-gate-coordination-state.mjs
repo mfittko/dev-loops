@@ -32,7 +32,8 @@ import {
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { convergedCarryAccepts } from "../github/_carried-verdict.mjs";
-import { capRoundActList, countCapRounds, countCompletedRounds, effectiveRounds, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { capRoundActList, countCapRounds, countCompletedRounds, effectiveRounds, operatorDecidedLatestRound, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { readOperatorFocusFile } from "./_operator-focus.mjs";
 import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
@@ -91,6 +92,10 @@ Optional:
   --spike          This PR is a spike run: relax the required designer/vision
                   recorded-evidence check like the other relaxed-gate
                   carve-outs (#1443).
+  --operator-focus-file <path>
+                  Operator decision file (GATE-EXEC-OPERATOR-FOCUS, items with
+                  fingerprint and decision): a decision on every act item of
+                  the latest judged round clears a cap brake stop.
   --designer-review-evidence <path>
                   Path to the designer/vision loop's recorded evidence JSON
                   (the existing outcome + artifact bundle, no new schema).
@@ -189,6 +194,7 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
       spike: { type: "boolean" },
       "expected-issue": { type: "string" },
       "designer-review-evidence": { type: "string" },
+      "operator-focus-file": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -228,6 +234,10 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
     }
     if (token.name === "designer-review-evidence") {
       options.designerReviewEvidence = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "operator-focus-file") {
+      options.operatorFocusFile = requireTokenValue(token, parseError).trim();
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -1440,11 +1450,23 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnly
 }
 
 /**
+ * GATE-EXEC-CAP-BRAKES: whether an operator decision (`--operator-focus-file` or the issued fixer plan) covers every act fingerprint of the latest judged round.
+ * With the cap on and the round past the scoped final round, a set an earlier effective round from the round after the cap on already held stays with the operator
+ * (the once-per-set rule of resolveOperatorClearedRound in write-gate-context.mjs).
+ */
+async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round, cap }) {
+  const sets = (log) => capRoundActList(log.findings, log.headSha).map((a) => a.fingerprint).sort();
+  const last = logs.at(-1), fingerprints = sets(last);
+  if (cap > 0 && round > cap + 1 && (await effectiveRounds(logs, { prBase: context.prData?.baseRefName, repoRoot })).slice(cap).some((log) => log !== last && sets(log).join() === fingerprints.join())) return false;
+  return operatorDecidedLatestRound({ repo: context.repo, pr: context.pr, gate, operatorFocusFile }, { repoRoot, latest: last, last: fingerprints });
+}
+
+/**
  * GATE-EXEC-CAP-BRAKES: the facts of the gate whose judged round is posted at the current head (draft_gate while the PR is draft, else pre_approval_gate),
  * or null when that head holds no judged round with an open act item. The evaluator applies the one policy (decideCapRound) to them.
  * The draft round cap keeps its own routing until its exit moves to the scoped final round, so draft_gate carries cap 0 and only the cap-less brakes apply.
  */
-export async function resolveCapBrakes(context, { repoRoot, config }) {
+export async function resolveCapBrakes(context, { repoRoot, config, operatorFocusFile }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
   const gate = context.prData?.isDraft === true ? "draft_gate" : "pre_approval_gate";
@@ -1454,7 +1476,7 @@ export async function resolveCapBrakes(context, { repoRoot, config }) {
   if (!last || String(last.headSha).trim().toLowerCase() !== head) return null;
   const open = listOpenActItems(last.findings);
   if (open.length === 0) return null;
-  return {
+  const facts = {
     gate,
     // A base-merge-forced round never counts (countCapRounds), as in the poster and the emitter.
     round: await countCapRounds({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, prBase: context.prData?.baseRefName, includeLiveCurrentHead: true }),
@@ -1463,6 +1485,7 @@ export async function resolveCapBrakes(context, { repoRoot, config }) {
     // One item per acted cluster: the emitter binds an operator focus item only to an act-list fingerprint (GATE-EXEC-CAP-BRAKES).
     items: capRoundActList(last.findings, last.headSha).map((a) => `${a.fingerprint} [${normalizeSeverity(a.severity)}] ${String(a.summary ?? "").trim()}`),
   };
+  return await operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round: facts.round, cap: facts.cap }) ? { ...facts, operatorCleared: true } : facts;
 }
 
 // Builds the exact input object passed to evaluatePrGateCoordination.
@@ -1561,6 +1584,8 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   // The config loads first: a config load error refuses before any gh read.
   const config = (await loadDevLoopConfigStrict({ repoRoot })).config ?? {};
+  // A malformed operator focus file refuses here (GATE-EXEC-OPERATOR-FOCUS), before any gh read.
+  await readOperatorFocusFile(options.operatorFocusFile ? path.resolve(repoRoot, options.operatorFocusFile) : undefined, { allowItems: true });
   // ADR 0117 (issue 3139): an open self-hosting PR is answered by its own head's toolchain; another checkout refuses inside the loader, before any shared gate state is written.
   const fetchedAtMs = Date.now();
   const context = await loadPrGateCoordinationContext(options, { ...runtime, guardToolchain: true });
@@ -1640,7 +1665,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0 }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
     : null;
   let capBrakesError = null;
-  const capBrakes = await resolveCapBrakes(context, { repoRoot, config }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; capBrakesError = error; return null; });
+  const capBrakes = await resolveCapBrakes(context, { repoRoot, config, operatorFocusFile: options.operatorFocusFile }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; capBrakesError = error; return null; });
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,

@@ -725,13 +725,22 @@ async function emitPlan({
       return currentHeadLedgerExists() ? null : originHead;
     } catch { return null; }
   })();
+  // Issue 3589: a ledgerless head that a base-only merge follows the latest closed round head with reads the cap-round ledger and verdict at that head (the round countCapRounds drops).
+  const baseMergeCapHead = async () => {
+    try {
+      if (currentHeadLedgerExists()) return null;
+      const from = closureFromHeadOf(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), onUnreadable: () => { throw new Error("unreadable prior ledger"); } }));
+      const baseRefName = (await memoFetchBase())?.baseRefName;
+      return from && from !== headSha && baseRefName && await isBaseOnlyMergeSince({ fromHead: from, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd }) ? from : null;
+    } catch { return null; }
+  };
   // One read of the operator focus file for the AC7 later-pass decision and the binding below: a shape error refuses here under GATE-EXEC-OPERATOR-FOCUS, never inside the swallowing cap-round catch.
   const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
   if (gate === "pre_approval_gate" && guardFile) {
     const runtime = { env, ghCommand, runChild };
     // GATE-COMMENT-BLOCKED-BY: a posted blocked verdict whose causes hold no findings entry has no fix round; its next step is the operator's.
     // A ledger-less head carries the origin head's round and verdict (the carry seam), so both reads follow the origin head.
-    const guardHead = (!existsSync(ledgerPath(headSha)) && await carryOriginHead()) || headSha;
+    const guardHead = (!existsSync(ledgerPath(headSha)) && (await carryOriginHead() || await baseMergeCapHead())) || headSha;
     const blockedBy = (await fetchVerdictMarkers({ repo, pr, headSha: guardHead, gate, runtime }))?.[gate]?.blockedBy;
     if (blockedBy?.length > 0 && !blockedBy.includes("findings")) {
       throw new WorkOrderRefusal("blocked_without_findings", `blocked_without_findings (GATE-COMMENT-BLOCKED-BY): the posted pre_approval_gate verdict is blocked by ${blockedBy.join(", ")} with no findings; no fixer order follows it. Operator step: ${blockedBy.map((cause) => BLOCKED_BY_OPERATOR_STEPS[cause]).join("; ")}`);

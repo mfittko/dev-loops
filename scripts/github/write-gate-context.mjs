@@ -2272,14 +2272,16 @@ export async function effectiveRounds(closed, { prBase, repoRoot }) {
   return closed.filter((_, i) => keep[i]);
 }
 
-/** Whether the issued fixer plan (bound to the latest closed round's head, to the gate and to its digest) holds an operator focus decision for each act fingerprint `last` of that round. */
-async function operatorDecidedLatestRound(options, { repoRoot, latest, last }) {
+/** Whether the direct operator focus file (`options.operatorFocusFile`) or the issued fixer plan (bound to the latest closed round's head, to the gate and to its digest) holds an operator focus decision for each act fingerprint `last` of that round. */
+export async function operatorDecidedLatestRound(options, { repoRoot, latest, last }) {
+  const decided = new Set(((await readOperatorFocusFile(options.operatorFocusFile ? path.resolve(repoRoot, options.operatorFocusFile) : undefined, { allowItems: true }))?.items ?? []).filter((item) => item.decision !== undefined).map((item) => item.fingerprint));
   const planPath = path.join(resolveGateArtifactTmpRoot(repoRoot), "gate-fixer", repoSlugFor(options.repo), `pr-${options.pr}`, "fixer-emit-plan.json");
-  let plan;
-  try { plan = JSON.parse(await readFile(planPath, "utf8")); } catch { return false; }
-  const issued = plan?.workOrder;
-  if (!issued || issued.gate !== options.gate || String(issued.headSha).trim().toLowerCase() !== String(latest.headSha).trim().toLowerCase() || workOrderDigest(issued) !== plan.workOrderDigest) return false;
-  const decided = new Set((issued.operatorFocus?.items ?? []).filter((item) => item.decision !== undefined).map((item) => item.fingerprint));
+  try {
+    const plan = JSON.parse(await readFile(planPath, "utf8")), issued = plan?.workOrder;
+    if (issued && issued.gate === options.gate && String(issued.headSha).trim().toLowerCase() === String(latest.headSha).trim().toLowerCase() && workOrderDigest(issued) === plan.workOrderDigest) {
+      for (const item of issued.operatorFocus?.items ?? []) if (item.decision !== undefined) decided.add(item.fingerprint);
+    }
+  } catch { /* no issued plan: only the direct file decides */ }
   return last.length > 0 && last.every((fp) => decided.has(fp));
 }
 

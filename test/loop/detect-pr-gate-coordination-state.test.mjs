@@ -5529,3 +5529,62 @@ test("a cap-brakes read over an unreadable prior ledger leaves the brakes uneval
 test("a cap-brakes read that meets a tampered sealed ledger propagates OUT_OF_BAND_WRITE", async () => {
   await assert.rejects(detectWithPriorLedger("x", { tamper: true }), (error) => error.code === OUT_OF_BAND_WRITE);
 });
+
+// Issue 3589: an operator decision on every act fingerprint of the latest judged round marks the cap brakes operatorCleared.
+async function capBrakesLedgers(gate, heads, { sets = heads.map(() => ["a", "b"]) } = {}) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-operator-"));
+  const act = (k) => ({ severity: "medium", angle: "correctness", summary: `defect ${k}`, files: [`src/${k}.mjs`], line: 1, judgeDisposition: "act", judgeTitle: `defect ${k}`, judgeFix: "fix it" });
+  for (const [i, head] of heads.entries()) {
+    const file = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-10", `${gate}-${head}.json`);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 10, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: sets[i].map(act) }), "utf8");
+  }
+  const head = heads.at(-1);
+  const ctx = { repo: "owner/repo", pr: 10, currentHeadSha: head, prData: { isDraft: gate === "draft_gate" } };
+  const brakes = (operatorFocusFile) => resolveCapBrakes(ctx, { repoRoot: dir, config: { version: 1 }, operatorFocusFile });
+  const fingerprints = (await brakes()).items.map((item) => item.slice(0, 16));
+  const focus = async (fps, name = "focus.json") => { const f = path.join(dir, name); await writeFile(f, JSON.stringify({ items: fps.map((fingerprint) => ({ fingerprint, decision: "fix it" })) }), "utf8"); return f; };
+  return { dir, head, brakes, fingerprints, focus };
+}
+
+test("resolveCapBrakes sets operatorCleared only when every act fingerprint has a decision, from the focus file or the issued fixer plan", async () => {
+  const heads = ["1", "2", "3"].map((c) => c.repeat(40));
+  const t = await capBrakesLedgers("pre_approval_gate", heads, { sets: [["a", "b", "c"], ["a", "b"], ["a", "b"]] });
+  try {
+    assert.equal((await t.brakes()).operatorCleared, undefined, "no file");
+    assert.equal((await t.brakes(await t.focus(t.fingerprints.slice(0, 1)))).operatorCleared, undefined, "a partial file");
+    assert.equal((await t.brakes(await t.focus(t.fingerprints))).operatorCleared, true, "a full file");
+    const workOrder = { gate: "pre_approval_gate", headSha: t.head, operatorFocus: { items: t.fingerprints.map((fingerprint) => ({ fingerprint, decision: "fix it" })) } };
+    const plan = path.join(t.dir, "tmp", "gate-fixer", "owner-repo", "pr-10", "fixer-emit-plan.json");
+    await mkdir(path.dirname(plan), { recursive: true });
+    await writeFile(plan, JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder) }), "utf8");
+    assert.equal((await t.brakes()).operatorCleared, true, "a decision only in the issued fixer plan");
+  } finally {
+    await rm(t.dir, { recursive: true, force: true });
+  }
+});
+
+test("resolveCapBrakes: the once-per-set rule holds past the cap on pre_approval_gate, while a repeated draft_gate set with cap 0 still clears", async () => {
+  const pre = await capBrakesLedgers("pre_approval_gate", ["1", "2", "3", "4"].map((c) => c.repeat(40)));
+  const draft = await capBrakesLedgers("draft_gate", ["1", "2", "3"].map((c) => c.repeat(40)));
+  try {
+    assert.equal((await pre.brakes(await pre.focus(pre.fingerprints))).operatorCleared, undefined, "the set repeats past the scoped final round");
+    assert.equal((await draft.brakes(await draft.focus(draft.fingerprints))).operatorCleared, true, "cap 0 never runs the once-per-set check");
+  } finally {
+    await rm(pre.dir, { recursive: true, force: true });
+    await rm(draft.dir, { recursive: true, force: true });
+  }
+});
+
+test("loop gate-coordination refuses a malformed --operator-focus-file before any GitHub read", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-malformed-"));
+  try {
+    assert.equal(parseDetectPrGateCoordinationCliArgs(["--repo", "o/r", "--pr", "1", "--operator-focus-file", "f.json"]).operatorFocusFile, "f.json");
+    const file = path.join(dir, "focus.json");
+    await writeFile(file, "{ not json", "utf8");
+    const runChild = async () => { throw new Error("GitHub was read"); };
+    await assert.rejects(detectPrGateCoordinationState({ repo: "o/r", pr: 1, operatorFocusFile: file }, { repoRoot: dir, runChild }), /GATE-EXEC-OPERATOR-FOCUS|operator focus/i);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -364,3 +364,9 @@ test("AC6: the USAGE, CLI description and changelog call the output a pinned pro
     assert.doesNotMatch(text, /compiled|generated gate/i);
   }
 });
+
+test("issue 3588: step 3 passes the operator decision file to write-gate-context, steps 7 and 11 keep the round-text file", () => {
+  const step3 = runbook.slice(runbook.indexOf("\n3. Context"), runbook.indexOf("\n4. Spec identity"));
+  assert.match(step3, /decision file \(focus `items`\) add[^\n]*`--operator-focus-file <that file>`/);
+  assert.match(runbook, /pass `--operator-focus-file "\$F\/focus.json"` to steps 7 and 11/);
+});

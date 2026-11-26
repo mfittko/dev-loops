@@ -12064,3 +12064,39 @@ test("a scoped final pre_approval_gate round whose PR-own delta is unproven is r
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+// Issue 3589 and 3588: the direct focus file clears round_cap_reached in resolveScopedFinalRound, as the issued fixer plan does, and a routed step 3 passes it.
+test("--operator-focus-file clears a round_cap_reached stop of a pre_approval_gate round past the scoped round", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+    await writeFile(path.join(repoRoot, "src/changed.mjs"), "export function changed() { return 3; }\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "small fix"]);
+    const newHead = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    await seedClosedRounds(repoRoot, 64, ["1".repeat(40), baseSha, headSha], "pre_approval_gate");
+    const ledger = JSON.parse(await readFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-64", `pre_approval_gate-${headSha}.json`), "utf8"));
+    const [fingerprint] = capRoundActList(ledger.findings, headSha).map((a) => a.fingerprint);
+    const focusFile = path.join(repoRoot, "focus.json");
+    const run = async (...extra) => {
+      const prior = process.exitCode, write = process.stderr.write.bind(process.stderr), out = process.stdout.write.bind(process.stdout);
+      let text = "";
+      process.exitCode = undefined; process.stderr.write = (c) => { text += String(c); return true; }; process.stdout.write = (c) => { text += String(c); return true; };
+      try {
+        await main(["--repo", "owner/repo", "--pr", "64", "--gate", "pre_approval_gate", "--head-sha", newHead, "--angles", '["scope"]', "--base", baseSha, ...extra], { repoRoot, run: stubGhRun });
+        return { text, exitCode: process.exitCode };
+      } finally { process.stderr.write = write; process.stdout.write = out; process.exitCode = prior; }
+    };
+    const refused = await run();
+    assert.equal(refused.exitCode, 1, refused.text);
+    assert.match(refused.text, /round_cap_reached/);
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "0".repeat(16), decision: "fix it" }] }), "utf8");
+    assert.equal((await run("--operator-focus-file", focusFile)).exitCode, 1, "a file that decides no act fingerprint keeps the stop");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint, decision: "fix it" }] }), "utf8");
+    const cleared = await run("--operator-focus-file", focusFile);
+    assert.notEqual(cleared.exitCode, 1, cleared.text);
+    assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-64", `pre_approval_gate-${newHead}.json`)), true);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});

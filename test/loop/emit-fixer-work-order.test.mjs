@@ -5165,3 +5165,19 @@ test("a pre_approval_gate act list at a base-merge-forced head without a carry d
     await assert.rejects(fx.emit(over(merged)), (e) => e.refusal === "round_cap_reached");
   });
 });
+
+// Issue 3589 (shape 2): a ledgerless base-merged head whose carry seam does not accept it (no verdict posted at the cap-round head) still reads the cap-round ledger at the cap-round head.
+test("a pre_approval_gate act list at a base-only merge of the cap round head reads the cap-round ledger instead of failing on the missing merged-head log", async () => {
+  await withFixture(async (fx) => {
+    const { origin, merged, over } = await mergedPreApprovalScenario(fx);
+    // The first verdict read is the carry seam's: it finds no posted verdict at the cap-round head and refuses the carry. The cap guard's reads follow.
+    const probed = [];
+    const base = over(origin);
+    const fetchVerdictMarkers = (a) => { probed.push(a.headSha); return base.fetchVerdictMarkers(probed.length === 1 ? { ...a, headSha: "0".repeat(40) } : a); };
+    // The later post-before-fix check of pre_approval_gate still reads the merged head (its draft_gate rewrite follows the issue 3464 branch), so the emit may refuse there.
+    await fx.emit({ ...base, fetchVerdictMarkers }).catch(() => {});
+    assert.equal(probed[0], origin, "the carry seam reads the cap-round head");
+    assert.equal(probed[1], origin, "the cap guard reads the verdict at the cap-round head, not the ledgerless merged head");
+    assert.notEqual(probed[1], merged);
+  });
+});
