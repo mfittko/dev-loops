@@ -431,7 +431,11 @@ async function withLaneWorktree(fn) {
     // A fixed --prefix-file keeps the prefix bytes identical while the spec body changes.
     await writeFile(path.join(repoRoot, "prefix.md"), "briefing prefix\n");
     const build = async (nonGoal) => writeGateContext(parseWriteGateContextCliArgs(["--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate", "--head-sha", head, "--angles", '["scope"]', "--acceptance-criteria", "#9", "--prefix-file", "prefix.md", "--issue-body", SPEC_BODY(nonGoal)]), { repoRoot });
-    const guard = (prefixHash) => JSON.parse(spawnSync("node", [GUARD, "--scope", BUILDER_SCOPE, "--prefix-hash", prefixHash], { cwd: repoRoot, encoding: "utf8" }).stdout);
+    const guard = (prefixHash) => {
+      const result = spawnSync("node", [GUARD, "--scope", BUILDER_SCOPE, "--prefix-hash", prefixHash], { cwd: repoRoot, encoding: "utf8", timeout: 30_000 });
+      assert.equal(result.status, 0, result.stderr);
+      return JSON.parse(result.stdout);
+    };
     return await fn({ repoRoot, head, key, build, guard });
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -475,6 +479,30 @@ test("builder: identical prefix bytes after a spec-decision stop retire the roun
     assert.match(JSON.parse(await readFile(path.join(dir, "retirement.json"), "utf8")).reason, /SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT/);
     assert.equal(path.dirname(path.dirname(dir)), path.join(repoRoot, "tmp", "retired-gate-rounds"));
     assert.equal(guard(first.prefixHash).fresh, true);
+  });
+});
+
+test("builder: changed prefix bytes after a spec-decision stop with a ledger and no findings log retire the round and name the new PR body digest", async () => {
+  await withLaneWorktree(async ({ repoRoot, head, key, guard }) => {
+    const issueBody = SPEC_BODY("issue body spec");
+    const oldPrBody = SPEC_BODY("pr body spec");
+    const newPrBody = SPEC_BODY("pr body spec, edited after the decision");
+    const build = (prBody) => writeGateContext(parseWriteGateContextCliArgs(["--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate", "--head-sha", head, "--angles", '["scope"]', "--acceptance-criteria", "#9", "--prefix-file", "prefix.md", "--issue-body", issueBody, "--pr-body", prBody]), { repoRoot });
+    const first = await build(oldPrBody);
+    await leaveStoppedRound({ key, head, body: "unused", guard, prefixHash: first.prefixHash, pinnedDigest: specDigestFromBody(oldPrBody, { prDescription: true }) });
+    const sentinel = path.join(repoRoot, "tmp", `checkpoint-context-sentinel-${BUILDER_SCOPE}-${head}.json`);
+    await writeFile(path.join(repoRoot, "prefix.md"), "a different briefing prefix\n");
+    const rebuilt = await build(newPrBody);
+    assert.equal(rebuilt.retiredRound.retired, 1);
+    assert.equal(existsSync(sentinel), false);
+    const dir = rebuilt.retiredRound.retirementDir;
+    assert.equal(path.dirname(path.dirname(dir)), path.join(repoRoot, "tmp", "retired-gate-rounds"));
+    assert.equal(existsSync(path.join(dir, path.basename(sentinel))), true);
+    assert.equal(existsSync(path.join(dir, `checkpoint-dispatch-prompt-${BUILDER_SCOPE}-${head}.json`)), true);
+    const { reason } = JSON.parse(await readFile(path.join(dir, "retirement.json"), "utf8"));
+    const short = (d) => d.replace(/^sha256:/, "").slice(0, 12);
+    assert.ok(reason.includes(short(specDigestFromBody(oldPrBody, { prDescription: true }))), reason);
+    assert.ok(reason.includes(short(specDigestFromBody(newPrBody, { prDescription: true }))), reason);
   });
 });
 

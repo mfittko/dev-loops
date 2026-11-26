@@ -682,7 +682,7 @@ does the same (see Automatic retirement above). When a verdict is posted, both r
 (ADR 0333): a fan-in ledger without a findings log is no posted verdict when all three hold at the
 full head: no findings log in any verdict root; the round's judge plan names a
 `spec-authority-verdict.json` that holds a `spec_cannot_decide` decision; and the plan-pinned
-`specDigest` differs from the digest of the spec the builder loaded. The builder then retires
+`specDigest` differs from the digest of the spec the builder loaded (the issue body digest and the PR body digest both differ from it). The judge plan must be newer than every sentinel and dispatch record of the round. The builder then retires
 the round automatically on every rebuild at that head, also with unchanged prefix bytes, and the
 retirement reason names `SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT` and both digests. No single
 spec source, a missing or unreadable judge file or an unchanged digest keeps the refusal. A rewrite of a prior-dispositions

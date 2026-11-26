@@ -61,7 +61,9 @@ export function buildRetireCommand({ gate, headSha, tmpRoot, findingsDir = null,
  * `recordsTmpRoot` (default `tmpRoot`) is the root the emitter wrote the dispatch records under (--tmp-root). `liveOnly` counts a
  * round as live only when it has sentinels or dispatch records, so a findings directory alone is left in place.
  * `currentSpecDigest` is the digest of the spec the builder just loaded (null when no single spec source exists): with it, a
- * round that stopped for a human spec decision (see findSpecDecisionStop) retires past its fan-in ledger. `specDecisionOnly`
+ * round that stopped for a human spec decision (see findSpecDecisionStop) retires past its fan-in ledger. The stop also needs the
+ * judge plan newer than every sentinel and dispatch record of the round, and the pinned digest to differ from the issue body and
+ * the PR body digest (`currentSpecDigest` and `otherSpecDigests`); the retirement reason names every candidate as the new digest. `specDecisionOnly`
  * returns `{ retiredRound: null }` for every other round, so an unchanged rebuild never refuses on an ordinary posted verdict.
  * Returns `{ retiredRound }` (null when nothing was live) or `{ refusal: { error, recovery } }`.
  */
@@ -132,7 +134,7 @@ async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdic
     };
   }
   const reason = stopped
-    ? `automatic: SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT stopped the round and the spec changed (specDigest ${shortDigest(stopped.pinnedDigest)} to ${shortDigest(currentSpecDigest)}); no verdict was posted`
+    ? `automatic: SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT stopped the round and the spec changed (specDigest ${shortDigest(stopped.pinnedDigest)} to ${[currentSpecDigest, ...otherSpecDigests].map(shortDigest).join(" or ")}); no verdict was posted`
     : "automatic: the gate context was rebuilt or the round re-emitted at the same head before any verdict was recorded";
   const distinctRecords = recordsTmpRoot !== tmpRoot && recordNames.some((n) => n.endsWith(suffix) && n.startsWith(recordPrefix));
   const findingsOpt = hasFindings ? { findingsDir } : { noFindingsArtifacts: true };

@@ -12,7 +12,7 @@ Amends [0314](./0314-gate-rebuild-retires-the-stale-round.md): a fan-in ledger w
 
 ## Decision
 
-1. `retireStaleRound` retires the round through the existing `retireGateRound` when all three hold at the full head: no findings log in any verdict root; the judge plan's `spec-authority-verdict.json` holds a `spec_cannot_decide` decision; and the plan-pinned `workOrder.authority.specDigest` differs from the digest the builder computes from the spec it loaded.
+1. `retireStaleRound` retires the round through the existing `retireGateRound` when all three hold at the full head: no findings log in any verdict root; the judge plan's `spec-authority-verdict.json` holds a `spec_cannot_decide` decision; and the plan-pinned `workOrder.authority.specDigest` differs from the digest the builder computes from the spec it loaded (the pinned digest differs from both the issue body digest and the PR body digest). The judge plan must be newer than every sentinel and dispatch record of the round.
 2. The builder computes the digest through `specDigestFromBody`, the spec-source branch it shares with `spec-context.mjs`. No single spec source means no digest and the refusal stands.
 3. The builder runs the check on every rebuild at the head, also with unchanged prefix bytes. The retirement reason names `SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT` and both 12-character digests.
 4. A findings log, a missing or unreadable judge file or an unchanged digest keeps the refusal and its operator recovery. The live-sentinel refusal is unchanged.
