@@ -1194,7 +1194,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     copilotBodyFeedbackUnresolved: bodyFeedback.copilotBodyFeedbackUnresolved && !bodyRoutedToJudge,
     copilotPriorHeadBodyFeedbackUnresolved: bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved && !bodyRoutedToJudge,
     copilotRequestNotObservable: await readRequestNotObservable(
-      { repo: options.repo, pr: options.pr, headSha: currentHeadSha, baseRef: typeof prData.baseRefName === "string" && prData.baseRefName.trim() ? `origin/${prData.baseRefName.trim()}` : null, repoRoot: runtime.repoRoot },
+      { repo: options.repo, pr: options.pr, headSha: currentHeadSha, baseRef: typeof prData.baseRefName === "string" && prData.baseRefName.trim() ? `origin/${prData.baseRefName.trim()}` : null, repoRoot: runtime.repoRoot ?? resolveRepoRoot(process.cwd()) },
       { checkpointDir: runtime.checkpointDir, ...(runtime.baseOnlyMerge ? { baseOnlyMerge: runtime.baseOnlyMerge } : {}) },
     ),
   });

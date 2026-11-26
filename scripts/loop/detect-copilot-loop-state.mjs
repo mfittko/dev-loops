@@ -368,7 +368,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
     copilotBodyFeedbackUnresolved: bodyFeedback.copilotBodyFeedbackUnresolved,
     copilotPriorHeadBodyFeedbackUnresolved: bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved,
     copilotRequestNotObservable: await readRequestNotObservable(
-      { repo, pr, headSha: prHeadSha, baseRef: typeof prData.baseRefName === "string" && prData.baseRefName.trim() ? `origin/${prData.baseRefName.trim()}` : null, repoRoot: cwd },
+      { repo, pr, headSha: prHeadSha, baseRef: typeof prData.baseRefName === "string" && prData.baseRefName.trim() ? `origin/${prData.baseRefName.trim()}` : null, repoRoot: cwd ?? resolveRepoRoot(process.cwd()) },
       { checkpointDir },
     ),
   });
