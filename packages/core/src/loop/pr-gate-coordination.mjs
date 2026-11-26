@@ -1785,7 +1785,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
         ...(actBlockers.length > 0 ? { blockedOn: BLOCKED_ON.OPERATOR_DECISION } : bodyOnlyList ? remedyOrOperator(input, (r, n) => ({
-          command: `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo ${r} --pr ${n} --gate draft_gate --verdict clean --head-sha ${actList.headSha} --findings-ledger <draft_gate ledger of the act list's round> --findings-summary <text> --next-action "mark ready for review" --execution-mode fanout_fanin --converged-json <path to a file holding { fixerCommit${actList.carriedToHead ? ` (${actList.headSha})` : ""}, actList, bodyOnly: true }>`,
+          command: `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo ${r} --pr ${n} --gate draft_gate --verdict clean --head-sha ${actList.headSha} --findings-ledger '<draft_gate ledger of the act list round>' --findings-summary '<text>' --next-action "mark ready for review" --execution-mode fanout_fanin --converged-json '<path to a file holding { fixerCommit${actList.carriedToHead ? ` (${actList.headSha})` : ""}, actList, bodyOnly: true }>'`,
           summary: "Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (ADR 0271, ADR 0332); that verdict is the proof for ready-for-review and the ADR waiver.",
         })) : capRoundExit(input.draftCapRoundFailure, input)),
         reason: actBlockers.length > 0
