@@ -155,7 +155,7 @@ for (const scenario of ["carried", "rejected", "touch-revert", "site-differs", "
       handoff: { dispositions: [{ threadId: "t", disposition: "tackled" }] },
       parsed: { comments: [{ threadId: "t", id: "root", databaseId: "1" }] }, repoRoot: root }, deps);
     if (scenario === "carried") await proof();
-    else await assert.rejects(proof, (error) => /thread_site_(unverifiable|changed): t/.test(error.message)
+    else await assert.rejects(proof, (error) => new RegExp(`${scenario === "touch-revert" ? "thread_site_changed" : "thread_site_unverifiable"}: t`).test(error.message)
       && /pre_approval_gate/.test(error.message) && /gate close-sequence/.test(error.message) && /draft_gate/.test(error.message));
   });
 });

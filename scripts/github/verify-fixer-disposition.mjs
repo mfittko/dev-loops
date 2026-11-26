@@ -826,7 +826,7 @@ export async function assertDescendantThreadSites({ repo, pr, candidateHead, hea
     };
     await git("cat-file", "-e", `${site.original_commit_id}:${site.path}`);
     await walk(site.original_commit_id, candidateHead, false);
-    if (await carried() && (await quietGit("diff", "--quiet", candidateHead, headSha, "--", site.path)).code === 0) continue;
+    if (await carried() && (await quietGit("diff", "--quiet", "--no-ext-diff", "--no-textconv", candidateHead, headSha, "--", site.path)).code === 0) continue;
     await walk(candidateHead, headSha, true);
   }
 }
