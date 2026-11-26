@@ -52,14 +52,16 @@ that resolves outside the provisioned worktree, a destructive migration lacking
 with exit code and log tail), a `readyUrl` that already answers before boot
 (`ready-url-in-use`, an earlier app still holds it), or a readiness probe timeout. Every bounded cap is
 logged. The `ready-url-in-use` stop carries a `recovery`: run
-`loop ui-review-teardown --repo-root <p> --provision-result <earlier provision --out file>`, then re-run
-provision with a new `--out` path, because a re-run on the same path overwrites the earlier result, which holds the
-boot pid; with no earlier result file, stop the process that serves `<readyUrl>`.
+`loop ui-review-teardown --repo-root <p> --provision-result <earlier provision --out file>` only while that file still
+holds the earlier boot pid, then re-run provision with a new `--out` path. When the refusing run reused the earlier
+`--out` path, it overwrote that file with this stop result, which has no boot pid; that case, like no earlier result
+file, falls to stopping the process that serves `<readyUrl>`.
 
 Every stage (provision, drive, diagnose, report, teardown) accepts `--out <p>`. It writes the full result JSON
 to `<p>` (creating the parent directory, overwriting an existing file) whatever `--jq` or `--silent` do. Run a stage with
 `--out <file> --silent` and pass `<file>` to the next stage's result flag (`--provision-result`,
-`--drive-result`, `--diagnose-result`, `--report-result`). Do not use a shell redirect or a wrapper script.
+`--drive-result`, `--diagnose-result`, `--report-result`). Every provision run, including a re-run on a reused
+worktree, writes `--out` to a path no earlier run used. Do not use a shell redirect or a wrapper script.
 
 A project declares the run recipe as `uiReview.run` in `.devloops`: a boot
 `command`, an HTTP `readyUrl`, probe `readyTimeoutMs`/`readyIntervalMs`, an

@@ -210,15 +210,20 @@ export async function provisionAndBoot(
   //     ready, so refuse. A false, thrown or timed-out probe continues.
   const preTimeout = probeTimeout(recipe.readyTimeoutMs);
   let inUse = false;
+  let preOutcome = "free";
   try {
-    inUse = (await Promise.race([Promise.resolve(probe(recipe.readyUrl)), preTimeout])) === true;
+    const answer = await Promise.race([Promise.resolve(probe(recipe.readyUrl)), preTimeout.then(() => "timeout")]);
+    inUse = answer === true;
+    preOutcome = inUse ? "in use" : answer === "timeout" ? `timed out after ${recipe.readyTimeoutMs}ms` : "free";
   } catch {
     inUse = false;
+    preOutcome = "threw";
   } finally {
     preTimeout.clear?.();
   }
+  record(`pre-boot probe of ${recipe.readyUrl}: ${preOutcome}${inUse ? "" : "; continuing to boot"}`);
   if (inUse) {
-    const recovery = `run loop ui-review-teardown --repo-root <p> --provision-result <earlier provision --out file>, then re-run provision with a new --out path (a re-run on the same path overwrites the earlier result, which holds the pid); with no earlier result file, stop the process that serves ${recipe.readyUrl}`;
+    const recovery = `run loop ui-review-teardown --repo-root <p> --provision-result <earlier provision --out file> only while that file still holds the earlier boot pid, then re-run provision with a new --out path (every provision run needs a --out path no earlier run used, because a run on a reused path overwrites the earlier result; this stop result has no boot pid); when the earlier --out file was overwritten by this stop result or no earlier result file exists, stop the process that serves ${recipe.readyUrl}`;
     return stop(
       `readyUrl ${recipe.readyUrl} already answers; an earlier app still holds it`,
       {

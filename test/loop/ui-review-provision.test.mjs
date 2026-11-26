@@ -228,6 +228,9 @@ test("ready-url-in-use: a readyUrl that already answers stops before migrations 
   assert.equal(result.findings[0].severity, "must-fix");
   assert.match(result.findings[0].recovery, /loop ui-review-teardown --repo-root <p> --provision-result <earlier provision --out file>/);
   assert.match(result.findings[0].recovery, /re-run provision with a new --out path/);
+  assert.match(result.findings[0].recovery, /only while that file still holds the earlier boot pid/);
+  assert.match(result.findings[0].recovery, /overwritten by this stop result or no earlier result file exists, stop the process that serves http/);
+  assert.ok(result.logs.some((l) => /pre-boot probe of .*: in use$/.test(l)));
   assert.equal(result.recovery, result.findings[0].recovery);
   assert.equal(result.boot, undefined);
   assert.equal(migrated, 0);
@@ -253,6 +256,7 @@ test("ready-url-in-use: a timed-out pre-boot probe continues to migrations and b
   assert.equal(result.ok, true);
   assert.equal(result.boot.ready, true);
   assert.equal(migrated, 1);
+  assert.ok(result.logs.some((l) => /pre-boot probe of .*: timed out after 5000ms; continuing to boot/.test(l)));
 });
 
 test("ready-url-in-use: a throwing pre-boot probe continues to boot", async () => {
@@ -269,6 +273,7 @@ test("ready-url-in-use: a throwing pre-boot probe continues to boot", async () =
 
   assert.equal(result.ok, true);
   assert.equal(result.boot.ready, true);
+  assert.ok(result.logs.some((l) => /pre-boot probe of .*: threw; continuing to boot/.test(l)));
 });
 
 test("parseUiReviewProvisionCliArgs: --ack-destructive-migration=false does NOT ack (fail closed)", () => {
@@ -775,16 +780,14 @@ test("boot-exited: an exit during the interval wait stops at once and clears the
 });
 
 test("ready-url-in-use: the pre-boot probe is bounded by readyTimeoutMs, not readyIntervalMs", async () => {
-  const root = makeFixture(RECIPE_YAML);
-  const budgets = [];
-  const { seams } = baseSeams(root, {
-    probeTimeout: (ms) => { budgets.push(ms); return new Promise(() => {}); },
-  });
-  // Slow earlier app: answers true after more than readyIntervalMs (1000), less than readyTimeoutMs (5000).
-  seams.probe = () => new Promise((resolve) => setTimeout(() => resolve(true), 20));
+  // Real timers, default probeTimeout: the earlier app answers true after 150ms,
+  // more than readyIntervalMs (20) and less than readyTimeoutMs (2000).
+  const root = makeFixture(RECIPE_YAML.replace("readyTimeoutMs: 5000", "readyTimeoutMs: 2000").replace("readyIntervalMs: 1000", "readyIntervalMs: 20"));
+  const { seams } = baseSeams(root, {});
+  delete seams.probeTimeout;
+  seams.probe = () => new Promise((resolve) => setTimeout(() => resolve(true), 150));
 
   const result = await provisionAndBoot({ repoRoot: "/main", pr: 9 }, seams);
 
-  assert.equal(budgets[0], 5000);
   assert.equal(result.findings[0].kind, "ready-url-in-use");
 });
