@@ -46,7 +46,7 @@ async function write(file, record) {
 const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
 const isHead = (value) => typeof value === "string" && value.length > 0;
 
-// shortcut: this and recordTimedOutProbe do an unlocked read-modify-write, so two concurrent writers for one PR can lose an increment; the loss undercounts and delays copilot_unavailable. recordTimedOutProbe re-reads and compares the consumed start, which leaves a narrow read-to-write window that could still count twice; add a lock if that matters.
+// shortcut: this and recordTimedOutProbe do an unlocked read-modify-write, so two concurrent writers for one PR can lose an increment; the loss undercounts and delays copilot_unavailable. add a lock if that matters.
 // Counts one accepted-but-unobservable request on `headSha`; a different head restarts the count.
 export async function recordUnobservableRequest({ repo, pr, headSha }, opts = {}) {
   if (!isHead(headSha)) return null;
