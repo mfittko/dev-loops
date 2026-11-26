@@ -1937,10 +1937,16 @@ const SHELL_WRITE_CASES = [
   ["sed -i.bak 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
   ["sed --in-place 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
   ["sed -i -e 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["sed -i -e's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["sed -i -es/a/b/ src/a.mjs", [w("src/a.mjs")]],
+  ["sed -n '1,5p' src/a.mjs", []],
+  ["sed -i 's/a/b/' tmp/x.md", [w("tmp/x.md")]],
   ["sed -i '' 's/a/b/' .devloops", [w(".devloops")]],
   // row 2
   ["perl -pi -e 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
   ["perl -0pi -e 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["perl -pi -e's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["perl -0pi -e's/a/b/' src/a.mjs", [w("src/a.mjs")]],
   // row 3
   ["printf 'x' > changes/x.md", [w("changes/x.md")]],
   ["echo x >> src/a.mjs", [w("src/a.mjs")]],

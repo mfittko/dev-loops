@@ -1215,7 +1215,7 @@ function segmentWriteTargets(seg, place) {
   else if (head === "sed" || head === "perl") {
     // Without `-e`/`-f` the first positional is the script; with one, every positional is a file.
     if (flags.some((f) => (head === "sed" ? SED_IN_PLACE_RE : PERL_IN_PLACE_RE).test(f))) {
-      const files = positional.slice(flags.some((f) => takesScript(f) || /^--(?:expression|file)=/.test(f)) ? 0 : 1);
+      const files = positional.slice(flags.some((f) => takesScript(f) || /^--(?:expression|file)=|^-[a-zA-Z]*[ef]./.test(f)) ? 0 : 1);
       files.forEach((p) => add(p, "write"));
       // An in-place edit behind `xargs` or `find -exec` takes its files from the pipe, so no literal file means an unresolvable target.
       if (launched && !files.length) out.push({ path: "<stdin>", unresolvable: true, op: "write" });
@@ -1246,7 +1246,7 @@ function segmentWriteTargets(seg, place) {
  * A `copy` entry also carries `sources`, the `cp`/`mv` source words; the hook resolves a directory destination to `<dir>/<basename(source)>` with them.
  * The caller resolves the remaining relative paths against its cwd and judges them.
  * shortcut: a `cd` inside a `( ... )` group or a pipe stage leaks into later segments; the leak joins a path to the wrong directory, and extend the model when a lane shows one.
- * @param {string} command @returns {{ path: string, op: "write"|"copy"|"remove"|"run", unresolvable: boolean, sources?: string[] }[]} `sources` is present for `op: "copy"`.
+ * @param {string} command @returns {{ path: string, op: "write"|"copy"|"remove"|"run", unresolvable: boolean, sources?: string[], launcher?: boolean }[]} `sources` is present for `op: "copy"`; `launcher` marks a `dev-loops-run` script resolved against a checkout root.
  */
 export function shellWriteTargets(command) {
   const out = [];
