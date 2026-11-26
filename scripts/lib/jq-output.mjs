@@ -30,6 +30,8 @@
 // from @dev-loops/core, and jq-output sits on the release-script import closure
 // (verify-release-approval imports it), which the release workflows load with
 // bare `node` before any install. See scripts/lib/format-cli-error.mjs.
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { formatCliError } from "./format-cli-error.mjs";
 
 export class JqFilterError extends Error {
@@ -565,8 +567,16 @@ export function emitResult(
     stdout = process.stdout,
     stderr = process.stderr,
     ok = result?.ok !== false,
+    out = undefined,
   } = {},
 ) {
+  // `out` saves the full result JSON before any --jq/--silent handling, so a lane
+  // that cannot redirect stdout still hands the file to the next stage. A write
+  // error throws before anything reaches stdout.
+  if (out !== undefined) {
+    mkdirSync(dirname(out), { recursive: true });
+    writeFileSync(out, `${JSON.stringify(result)}\n`);
+  }
   if (fields !== undefined) {
     // --fields is a standalone read mode. Combining it with --jq or --silent has
     // no coherent meaning, so fail closed rather than silently pick a winner.
