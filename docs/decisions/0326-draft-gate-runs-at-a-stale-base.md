@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (operator mfittko, 2026-11-26, ask tool; issue 3571)
+Accepted — 2026-11-26 ([issue 3571](https://github.com/mfittko/dev-loops/issues/3571)); operator mfittko, ask tool.
 
 Amends [0096](./0096-integrate-base-before-every-gate-round.md) (as amended by [0296](./0296-narrow-base-merge-carry-gate-tooling-rule.md), whose carry classifier is unchanged), [0194](./0194-stale-base-preflight-on-lifecycle-gates.md), [0260](./0260-gate-coordination-reroutes-stale-base.md), [0284](./0284-stale-base-preflight-in-validation-and-verdict-seams.md) (as amended by [0299](./0299-stale-base-round-post-and-coordination-guard.md)), and [0294](./0294-converged-draft-gate-record-carries-from-its-fixer-commit.md) (its base-freshness check at the converged head) for the `draft_gate` scope. Those records stay unedited.
 
