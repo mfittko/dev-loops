@@ -1696,10 +1696,10 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     ? { capRoundFixed: false, failure: null }
     : await resolveDraftCapRoundFact(context, { repoRoot, resolve: runtime.resolveCapRoundFixed ?? resolveCapRoundFixed, trustRuntime: { env: runtime.env, ghCommand: runtime.ghCommand, runChild: runtime.runChild } });
   // GATE-EXEC-CAP-BRAKES: the round after the scoped final round is refused unless the operator cleared it; round cap+1 is the scoped round.
-  const draftRound = { repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha };
+  const draftRound = { repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha, operatorFocusFile };
   const draftRoundRefused = context.prData?.isDraft === true
     && await countCapRounds(draftRound, { repoRoot, prBase: prBaseRefName, includeLiveCurrentHead: true })
-      .then((round) => refusesPastScopedRound(draftRound, { repoRoot, prBase: prBaseRefName, cap: draftGateConfig.maxReviewRounds ?? 0, round }), () => false);
+      .then((round) => refusesPastScopedRound(draftRound, { repoRoot, prBase: prBaseRefName, cap: draftGateConfig.maxReviewRounds ?? 0, round, includeLiveCurrentHead: true }), () => false);
   const draftOpenActList = context.prData?.isDraft === true
     ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0 }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
     : null;

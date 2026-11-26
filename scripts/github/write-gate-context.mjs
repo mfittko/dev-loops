@@ -2288,8 +2288,8 @@ export async function operatorDecidedLatestRound(options, { repoRoot, latest, la
  * earlier round from the round after the effective cap round on was re-opened once: it stays with the operator.
  * Returns the scoped round input `{ fromHead, priorActItems }`, or null.
  */
-async function resolveOperatorClearedRound(options, { repoRoot, cap, prBase }) {
-  const closed = await readClosedPriorRoundLogs(options, { repoRoot });
+async function resolveOperatorClearedRound(options, { repoRoot, cap, prBase, includeLiveCurrentHead = false }) {
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead });
   if (closed.length === 0) return null;
   const latest = closed.at(-1);
   const last = actFingerprintSet(latest);
@@ -2333,9 +2333,9 @@ export async function refuseNonConvergence(options, { repoRoot, prBase }) {
  * Whether `round` of a gate with cap `cap` is past the scoped final round and not cleared by the operator (GATE-EXEC-CAP-BRAKES): the shared refusal
  * of the draft_gate poster and detector, so the round cap+1 is never refused. `round` is a {@link countCapRounds} count.
  */
-export async function refusesPastScopedRound(options, { repoRoot, prBase, cap, round }) {
+export async function refusesPastScopedRound(options, { repoRoot, prBase, cap, round, includeLiveCurrentHead = false }) {
   const decision = decideCapRound({ round, cap, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 } });
-  return decision.reason === "round_cap_reached" && !(await resolveOperatorClearedRound(options, { repoRoot, cap, prBase }));
+  return decision.reason === "round_cap_reached" && !(await resolveOperatorClearedRound(options, { repoRoot, cap, prBase, includeLiveCurrentHead }));
 }
 
 /**

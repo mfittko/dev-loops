@@ -5639,6 +5639,41 @@ test("detectPrGateCoordinationState forwards --operator-focus-file into the cap 
   assert.notEqual(cleared.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
 });
 
+// Issue 3464: a draft PR past the scoped final round is cleared by a focus file deciding every act fingerprint of the latest judged round.
+async function detectPastScopedRound({ withFocusFile }) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-scoped-final-clear-"));
+  try {
+    initGitFixture(tempDir, { branch: "main" });
+    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 1 } } }));
+    const headSha = "abc1234567".repeat(4);
+    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findings, { recursive: true });
+    const act = (k) => ({ severity: "medium", summary: `defect ${k}`, file: `src/${k}.mjs`, line: 1, judgeDisposition: "act", judgeFix: "fix it" });
+    const ledger = (head, loggedAt, list) => writeSealed(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt, findings: list }));
+    await ledger("1".repeat(40), "2026-11-14T00:00:00.000Z", [act("a")]);
+    await ledger("2".repeat(40), "2026-11-15T00:00:00.000Z", [act("b")]);
+    await ledger(headSha, "2026-11-16T00:00:00.000Z", [act("c")]);
+    let operatorFocusFile;
+    if (withFocusFile) {
+      const { items } = await resolveCapBrakes({ repo: "owner/repo", pr: 10, currentHeadSha: headSha, prData: { isDraft: true } }, { repoRoot: tempDir, config: { version: 1, gates: { draft: { maxReviewRounds: 1 } } } });
+      operatorFocusFile = path.join(tempDir, "focus.json");
+      await writeFile(operatorFocusFile, JSON.stringify({ items: items.map((item) => ({ fingerprint: item.slice(0, 16), decision: "fix it" })) }), "utf8");
+    }
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    return await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10, operatorFocusFile }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("an operator focus file deciding every act fingerprint clears the scoped-final-round stop of a draft PR", async () => {
+  const stopped = await detectPastScopedRound({ withFocusFile: false });
+  assert.equal(stopped.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  const cleared = await detectPastScopedRound({ withFocusFile: true });
+  assert.notEqual(cleared.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, cleared.reason);
+});
+
 test("a cap-brakes read that throws a non-tamper error sets capBrakesWarning and keeps the route", async () => {
   const healthy = await detectWithPriorLedger("x");
   assert.match(healthy.capBrakesWarning, /the growth limit is not evaluated because the PR has no linked issue/);
