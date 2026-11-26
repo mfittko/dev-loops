@@ -9,6 +9,8 @@
  * Pure and side-effect free.
  */
 
+import path from "node:path";
+
 /**
  * The dev-loops repo itself. Retained ONLY for the Pi extension's
  * (`extension/post-merge-update.ts`) dev-loops-repo SELF-UPDATE scoping (`markPendingUpdate` /
@@ -1038,6 +1040,94 @@ function writeTargets(seg) {
   return targets.filter((t) => t && !/^\d+$|^-$/.test(t)).map((t) => t.replace(/^\.\//, ""));
 }
 
+const UNRESOLVABLE_WORD_RE = /[$`*?[{]|^~/;
+const LAUNCHER_RE = /^(?:command|env|exec|sudo|nohup|nice|builtin|time)$/;
+const SED_IN_PLACE_RE = /^(?:-[a-zA-Z]*i|--in-place)/;
+const PERL_IN_PLACE_RE = /^-[0-9pnalswWtTuUSc]*i/;
+const TMP_SCRIPT_RE = /^(?:\.\/)?tmp\//;
+
+/**
+ * Write targets of one segment: redirect words (an operator is read from the raw word, so a quoted `">"` is data) and the program's own operands.
+ * `place` joins a word to the last literal `cd` and flags it unresolvable. shortcut: `cp`/`mv -t DIR` and `dd of=`, `install`, `ln`, `touch` are not read; extend when a lane shows one.
+ */
+function segmentWriteTargets(seg, place) {
+  const out = [];
+  const operands = [];
+  const { words } = seg;
+  for (let k = 0; k < words.length; k++) {
+    const w = words[k];
+    if (w.op) continue;
+    const m = REDIRECT_RE.exec(w.raw);
+    if (!m) { operands.push(w); continue; }
+    const attached = m[1];
+    const target = attached ? w.value.slice(w.raw.length - attached.length) : words[++k]?.value;
+    if (target && !/^\d+$|^-$|^\(/.test(target)) out.push({ ...place(target), op: "write" });
+  }
+  let i = 0;
+  while (operands[i] && ENV_ASSIGNMENT_WORD_RE.test(operands[i].raw)) i++;
+  while (LAUNCHER_RE.test(operands[i]?.value.split("/").pop() ?? "")) for (i++; operands[i]?.value.startsWith("-") || ENV_ASSIGNMENT_WORD_RE.test(operands[i]?.raw ?? ""); i++);
+  const head = operands[i]?.value.split("/").pop() ?? "";
+  const args = operands.slice(i + 1).map((o) => o.value);
+  const flags = args.filter((a) => a.startsWith("-"));
+  const dashes = args.indexOf("--");
+  // A `-e`/`-f` flag takes the next word as its script, not as a file.
+  const takesScript = (a) => (head === "sed" || head === "perl") && /^-[a-zA-Z]*[ef]$|^--(?:expression|file)$/.test(a);
+  const positional = args.filter((a, j) => a && (!a.startsWith("-") || (dashes >= 0 && j > dashes)) && !takesScript(args[j - 1] ?? ""));
+  const add = (value, op) => out.push({ ...place(value), op });
+  if (head === "tee") positional.forEach((p) => add(p, "write"));
+  else if (head === "sed" || head === "perl") {
+    // Without `-e`/`-f` the first positional is the script; with one, every positional is a file.
+    if (flags.some((f) => (head === "sed" ? SED_IN_PLACE_RE : PERL_IN_PLACE_RE).test(f))) positional.slice(flags.some((f) => takesScript(f) || /^--(?:expression|file)=/.test(f)) ? 0 : 1).forEach((p) => add(p, "write"));
+  } else if (head === "cp" || head === "mv") {
+    if (positional.length >= 2) {
+      if (head === "mv") positional.slice(0, -1).forEach((p) => add(p, "remove"));
+      add(positional.at(-1), "copy");
+    }
+  } else if (head === "rm") positional.forEach((p) => add(p, "remove"));
+  else if (/^(?:dev-loops-run|node|bun)$/.test(head)) {
+    // The script word: skip flags, the `--repo-root` value and `run`.
+    const script = args.find((a, j) => !a.startsWith("-") && a !== "run" && args[j - 1] !== "--repo-root");
+    if (script && TMP_SCRIPT_RE.test(script)) add(script, "run");
+  }
+  return out;
+}
+
+/**
+ * OPS-EDITOR-TOOL-WRITES: the files a shell command writes, as `{ path, op, unresolvable }` in command order.
+ * `op` is `write` (redirect, `tee`, `sed -i`, `perl -i`), `copy` (a `cp`/`mv` destination), `remove` (an `rm`/`mv` source) or `run` (a `dev-loops-run`/`node`/`bun` script under `tmp/`).
+ * Walks the tokenizer's segments, so heredoc bodies and quoted data yield no target, and recurses into payload words (`bash -c`, `eval`) and substitutions.
+ * A relative path joins the last literal `cd` of the command. A word holding `$`, a backtick, a glob character or a leading `~`, or a relative path after a `cd` with a non-literal argument, is `unresolvable`.
+ * The caller resolves the remaining relative paths against its cwd and judges them.
+ * shortcut: a `cd` inside a `( ... )` group or a pipe stage leaks into later segments; the leak joins a path to the wrong directory, and extend the model when a lane shows one.
+ * @param {string} command @returns {{ path: string, op: "write"|"copy"|"remove"|"run", unresolvable: boolean }[]}
+ */
+export function shellWriteTargets(command) {
+  const out = [];
+  const walk = (segments, state) => {
+    for (const seg of segments) {
+      const place = (value) => {
+        const unresolvable = UNRESOLVABLE_WORD_RE.test(value);
+        if (path.posix.isAbsolute(value)) return { path: value, unresolvable };
+        if (state.cdBad) return { path: value, unresolvable: true };
+        return { path: state.cd ? path.posix.join(state.cd, value) : value.replace(/^\.\//, ""), unresolvable };
+      };
+      if (segmentHead(seg) === "cd") {
+        const arg = seg.words.slice(1).find((w) => !w.op && !w.value.startsWith("-"))?.value;
+        if (!arg || arg === "-" || UNRESOLVABLE_WORD_RE.test(arg)) state.cdBad = true;
+        else if (path.posix.isAbsolute(arg)) Object.assign(state, { cd: arg, cdBad: false });
+        else state.cd = state.cd ? path.posix.join(state.cd, arg) : arg;
+      }
+      out.push(...segmentWriteTargets(seg, place));
+      seg.words.forEach((w, k) => {
+        if (isPayloadWord(seg.words, k)) walk(tokenizeShellCommand(w.value).segments, { ...state });
+        for (const sub of w.subs) walk(sub.segments, { ...state });
+      });
+    }
+  };
+  walk(tokenizeShellCommand(command).segments, { cd: null, cdBad: false });
+  return out;
+}
+
 const TEXT_FLAG_RE = /^(?:-m|--message|--body|--title|--notes)$/;
 const TEXT_FLAG_ATTACHED_RE = /^--(?:message|body|title|notes)=/;
 /** A `git commit` segment whose head is the bare name: the only host whose text flag value is inert. `gh` hosts are excluded. */
@@ -1854,6 +1944,9 @@ const PACKAGE_MANAGER_VERIFY_RUN_RE = new RegExp(
  */
 const VITEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}(?:(?:npx|bunx)\\s+|bun\\s+x\\s+)?vitest(?:\\s|$)`, "i");
 
+/** The sanctioned test wrapper `dev-loops-run [--repo-root <wt>] scripts/run-bun-test.mjs`, which runs the same checks as `bun test`. */
+const RUN_BUN_TEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}dev-loops-run\\s+(?:--repo-root\\s+\\S+\\s+)?(?:\\S*/)?scripts/run-bun-test\\.mjs(?:\\s|$)`, "i");
+
 /**
  * COORDINATOR-VERIFY-BOUNDARY: whether `command` contains a known code-verification/
  * build entrypoint in ANY shell segment — `bun test`/`bun run verify`/`bun run build`, `vitest`,
@@ -1868,7 +1961,7 @@ const VITEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}(?:(?:npx|bunx)\\s+|bun\\s+x
  * @param {string} command @returns {boolean}
  */
 export function commandContainsCodeVerificationEntrypoint(command) {
-  return shellSegments(command).some((segment) => PACKAGE_MANAGER_VERIFY_RUN_RE.test(segment) || VITEST_RE.test(segment));
+  return shellSegments(command).some((segment) => PACKAGE_MANAGER_VERIFY_RUN_RE.test(segment) || VITEST_RE.test(segment) || RUN_BUN_TEST_RE.test(segment));
 }
 
 /**

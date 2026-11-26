@@ -145,6 +145,8 @@ export const isFixerPullAttempt = (command) => typeof command === "string" && co
  * @param {boolean} [params.enforceCoordinator] - Strict mode for the COORDINATOR-VERIFY-BOUNDARY
  *   boundary, derived by the hook from `DEVLOOPS_COORDINATOR_READONLY=1` — the SAME flag that
  *   gates `decideCoordinatorWriteGuard`. Default fail-open (mirrors that boundary).
+ * @param {{path: string, op: string, unresolvable: boolean, repoMutation?: boolean, existingFile?: boolean}[]} [params.shellWrites] - The command's
+ *   shell write targets (`shellWriteTargets`), each classified by the hook against its cwd (OPS-EDITOR-TOOL-WRITES).
  * @returns {HookDecision}
  */
 export function decideBashGate({
@@ -157,6 +159,7 @@ export function decideBashGate({
   agentType = null,
   humanMergeOnly = false,
   enforceCoordinator = false,
+  shellWrites = [],
 }) {
   // The unresolve owner allowlist (issue 2577) is checked FIRST, ahead of the two Claude-edge role
   // boundaries below, because that is the order this seam has always evaluated it in: a `judge`
@@ -205,6 +208,7 @@ export function decideBashGate({
     inManagedContext,
     humanMergeOnly,
     enforceCoordinator,
+    shellWrites,
     readyGate: { passed: gatePassed, error: gateError },
   });
   return deny ? { decision: "deny", reason: deny.reason } : ALLOW;

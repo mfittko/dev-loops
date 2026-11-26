@@ -126,7 +126,7 @@ need it:
 
 - agents that dispatch children, such as the gate coordinator: `GATE-EXEC-HARNESS-JOIN`;
 - editing workers (developer, docs): `WORKTREE-NONINTERACTIVE-FILE-OPS` and
-  `OPS-NO-INLINE-INTERPRETER` (a fixer gets both through its agent definition; a reviewer and judge get only `WORKTREE-NONINTERACTIVE-FILE-OPS` that way);
+  `OPS-NO-INLINE-INTERPRETER`, plus `OPS-EDITOR-TOOL-WRITES` (a developer and a fixer get it through their agent definitions, and a fixer gets both others the same way; a reviewer and judge get only `WORKTREE-NONINTERACTIVE-FILE-OPS` that way);
 - script runners (any role that runs repo scripts; a reviewer, judge or fixer gets it through its agent definition):
   `WORKTREE-SCRIPT-LAUNCHER-CWD`.
 

@@ -50,6 +50,9 @@
  *     records its agent_id as the binding the Write/Edit guard checks (ADR 0107); a modified
  *     fixer pull line (prefix, suffix, redirect, `cd`) is denied with the exact line to run.
  *     The fixer Bash commit/push boundary is owned by issue 2534.
+ *   - a shell write to a repository file (`OPS-EDITOR-TOOL-WRITES`, issue 2683): a redirect, `tee`, `sed -i`, `perl -i`, a `cp`/`mv`/`rm`
+ *     target, or a `tmp/` script run, from a coordinator (`DEVLOOPS_COORDINATOR_READONLY=1`) or a developer or fixer (always on).
+ *     `shellWriteTargets` reads the targets; the hook classifies each with `classifyRepoMutation`; `decideBashGate` applies the role table.
  *   - every command from the read-only `judge` subagent except its sanctioned work-order pull
  *     (`dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>`, ADR 0106, ADR 0115),
  *     its decision check (`check-judge-decision.mjs`) and its read-only search commands (ADR 0269).
@@ -67,8 +70,10 @@ import {
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   normalizeGitHubRepoSlug,
+  shellWriteTargets,
   tokenizeShellCommand,
 } from "./_bash-command-classify.mjs";
+import { classifyRepoMutation } from "./_worktree-guard.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
 
@@ -286,8 +291,20 @@ if (inManagedContext) {
 // as boundary 3 of pre-tool-use-write-guard.mjs (decideCoordinatorWriteGuard).
 const enforceCoordinator = process.env.DEVLOOPS_COORDINATOR_READONLY === "1";
 
+// OPS-EDITOR-TOOL-WRITES (issue 2683): resolve each shell write target against cwd and classify it with the Write guard's repo-mutation test.
+// Only the guarded roles pay the git calls. An unresolvable target stays unclassified (the decider denies it fail closed).
+const shellWrites = typeof command === "string" && /(?:^|:)(?:developer|fixer|dev-loop|gate-coordinator)$/.test(agentType ?? "")
+  ? shellWriteTargets(command).map((target) => {
+    if (target.op === "run" || target.unresolvable) return { ...target, repoMutation: true, existingFile: false };
+    const abs = path.resolve(cwd, target.path);
+    const { isRepoMutation } = classifyRepoMutation(abs);
+    return { ...target, repoMutation: isRepoMutation, existingFile: isRepoMutation && fs.statSync(abs, { throwIfNoEntry: false })?.isFile() === true };
+  })
+  : [];
+
 const bashGateFacts = {
   command,
+  shellWrites,
   repoSlug,
   managedRepoSlug,
   inManagedContext,

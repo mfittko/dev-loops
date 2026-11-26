@@ -30,6 +30,7 @@ const TARGET = "mfittko/dev-loops";
 // stay fragment-pinned, because each must name the fact it rejected, which an exact literal would not
 // add. Reordering two checks, rewording a pinned reason or dropping a rule fails here — which is what
 // makes a later edit to the shared set (or a second adapter that consumes it) safe to review.
+const SHELL_WRITE = Object.freeze({ path: "src/a.mjs", op: "write", unresolvable: false, repoMutation: true, existingFile: true });
 const BASE = Object.freeze({
   role: null,
   repoSlug: TARGET,
@@ -176,6 +177,17 @@ const RULE_FIXTURES = [
       " (pre-merge gate evidence check also failed: draft-gate guard unavailable)" +
       " This command also writes gate evidence, but hooks evaluate before the command runs — never chain an evidence write with the merge.",
   },
+  {
+    // OPS-EDITOR-TOOL-WRITES (issue 2683): the worker variant. The coordinator variant is an inline deny below.
+    id: "OPS-EDITOR-TOOL-WRITES",
+    facts: { ...BASE, role: "developer", command: "echo x > src/a.mjs", shellWrites: [SHELL_WRITE] },
+    reason: "OPS-EDITOR-TOOL-WRITES: a developer or fixer writes repository files only with the Edit and Write tools, and this command writes \"src/a.mjs\" from the shell. Write the file with the Edit or Write tool.",
+  },
+  {
+    id: "OPS-EDITOR-TOOL-WRITES",
+    facts: { ...BASE, role: "fixer", command: "echo x > $out", shellWrites: [{ path: "$out", op: "write", unresolvable: true }] },
+    reason: "OPS-EDITOR-TOOL-WRITES: a developer or fixer writes repository files only with the Edit and Write tools, and this command writes \"$out\" from the shell. The target is not a literal path, so rerun with a literal path. Write the file with the Edit or Write tool.",
+  },
 ];
 
 /** The inline denies: real denials that carry no registered rule ID, so they stay out of the list. */
@@ -185,6 +197,12 @@ const INLINE_FIXTURES = [
     denyId: "UNRESOLVE_OWNER",
     facts: { ...BASE, role: "fixer", command: "dev-loops-run scripts/github/unresolve-review-thread.mjs --repo mfittko/dev-loops --pr 5 --thread-id T1" },
     reason: "The fixer agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs is owned by the orchestrator (main agent) and the dev-loop coordinator. Report the wrongly resolved thread in your hand-back and let the owner run it.",
+  },
+  {
+    name: "coordinator shell write",
+    denyId: "COORDINATOR_DELEGATION_BOUNDARY",
+    facts: { ...BASE, role: "dev-loop", enforceCoordinator: true, command: "echo x > src/a.mjs", shellWrites: [SHELL_WRITE] },
+    reason: "Coordinator write boundary: this command writes \"src/a.mjs\" from the shell. Delegate this edit to a fresh developer worker instead of writing it directly. See skills/docs/main-agent-contract.md.",
   },
   {
     name: "subagent ad-hoc external write",
@@ -217,6 +235,7 @@ const MARKED_RULES = [
   "OPS-DRAFT-FIRST-PR",
   "OPERATOR-OWNED-LINE",
   "COORDINATOR-VERIFY-BOUNDARY",
+  "OPS-EDITOR-TOOL-WRITES",
   "COORDINATOR_DELEGATION_BOUNDARY",
   "GATE_COORDINATOR_REQUIRED",
   "JUDGE_READ_BOUNDARY",
@@ -378,6 +397,13 @@ const ORDER_PAIRS = [
     later: "GATE-COMMENT-DRAFT-REQUIREMENTS",
     command: "gh pr merge 5 && gh pr ready 5",
     laterOnly: "gh pr ready 5",
+  },
+  {
+    earlier: "GATE-COMMENT-DRAFT-REQUIREMENTS",
+    later: "OPS-EDITOR-TOOL-WRITES",
+    facts: { ...BASE, role: "developer", shellWrites: [SHELL_WRITE] },
+    command: "gh pr ready 5",
+    laterOnly: "echo x > src/a.mjs",
   },
 ];
 

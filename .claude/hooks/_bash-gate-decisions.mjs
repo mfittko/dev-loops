@@ -136,6 +136,7 @@ export const BASH_GATE_RULES = Object.freeze([
   "OPS-DRAFT-FIRST-PR",
   "RAW-GH-PR-MERGE-BYPASS",
   "GATE-COMMENT-DRAFT-REQUIREMENTS",
+  "OPS-EDITOR-TOOL-WRITES",
 ]);
 
 /**
@@ -156,6 +157,7 @@ export const POLICY_HOOK_COMPLIANT_FORMS = Object.freeze({
   "OPS-DRAFT-FIRST-PR": "open the PR with `dev-loops-run cli/index.mjs pr create`",
   "OPERATOR-OWNED-LINE": "write the comment through scripts/github/comment-issue.mjs or edit-comment.mjs with --body-file, and run any read as a separate call",
   "COORDINATOR-VERIFY-BOUNDARY": "delegate the check to a quality worker; a gate coordinator runs `gate resolve-validation` or returns a typed observation",
+  "OPS-EDITOR-TOOL-WRITES": "write the file with the Edit or Write tool",
   "COORDINATOR_DELEGATION_BOUNDARY": "delegate the edit to a developer worker; a gate coordinator writes only round artifacts under `tmp/` and returns a typed observation",
   "GATE_COORDINATOR_REQUIRED": "dispatch one `gate-coordinator` agent for the round",
   "JUDGE_READ_BOUNDARY": "read with `Read` or a listed read-only search form",
@@ -322,8 +324,36 @@ export function decideMergePrOwnerDeny({ command, role }) {
  *   line of the reason; the null-ID denies mark themselves with their own deny id.
  */
 export function decideBashGateDeny(facts = {}) {
-  const deny = decideBashGateDenyUnmarked(facts);
+  const deny = decideBashGateDenyUnmarked(facts) ?? decideShellWriteDeny(facts ?? {});
   return deny && { ...deny, reason: withHookMarker(deny.ruleId, deny.reason) };
+}
+
+/** A developer or fixer by bare name or the `dev-loops:` namespace only; `otherplugin:developer` is a namesake. */
+const isShellWriteWorker = (role) => typeof role === "string" && /^(?:dev-loops:)?(?:developer|fixer)$/.test(role);
+const SHELL_WRITE_VERB = { write: "writes", copy: "copies to", remove: "removes", run: "runs the script" };
+
+/**
+ * OPS-EDITOR-TOOL-WRITES (issue 2683), the last rule: a shell write by a coordinator (under `enforceCoordinator`) or a developer or fixer (always on).
+ * The adapter supplies `shellWrites`, each target classified as `{ path, op, unresolvable, repoMutation, existingFile }` (absent means none, so an adapter without the fact, such as Pi, never denies).
+ * A coordinator is denied a repo-mutating write or copy, the removal of an existing file and a script run under `tmp/`.
+ * A worker is denied a repo-mutating write and a copy over an existing file; its rename to a new path and `rm` stay (WORKTREE-NONINTERACTIVE-FILE-OPS).
+ * An unresolvable target is denied for either role, except a worker `rm`. A coordinator deny keeps the COORDINATOR_DELEGATION_BOUNDARY marker, so its `ruleId` is null.
+ */
+function decideShellWriteDeny({ role = null, enforceCoordinator = false, shellWrites = [] }) {
+  const coordinator = enforceCoordinator === true && isCoordinatorRole(role);
+  if (!coordinator && !isShellWriteWorker(role)) return null;
+  const denies = (t) => {
+    if (t.op === "run") return coordinator;
+    if (t.op === "remove") return coordinator ? t.unresolvable || t.existingFile : false;
+    return t.unresolvable || (coordinator || t.op === "write" ? t.repoMutation : t.existingFile);
+  };
+  const target = Array.isArray(shellWrites) ? shellWrites.find(denies) : null;
+  if (!target) return null;
+  const what = `${SHELL_WRITE_VERB[target.op]} ${JSON.stringify(target.path)} from the shell`;
+  const literal = target.unresolvable ? " The target is not a literal path, so rerun with a literal path." : "";
+  return coordinator
+    ? { ruleId: null, reason: withHookMarker("COORDINATOR_DELEGATION_BOUNDARY", `Coordinator write boundary: this command ${what}.${literal} Delegate this edit to a fresh developer worker instead of writing it directly. See skills/docs/main-agent-contract.md.`) }
+    : { ruleId: "OPS-EDITOR-TOOL-WRITES", reason: `OPS-EDITOR-TOOL-WRITES: a developer or fixer writes repository files only with the Edit and Write tools, and this command ${what}.${literal} Write the file with the Edit or Write tool.` };
 }
 
 function decideBashGateDenyUnmarked(facts) {

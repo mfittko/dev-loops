@@ -4,10 +4,11 @@
  * Extracted from `scripts/loop/pre-commit-branch-guard.mjs` so that both the
  * pre-commit guard and the new pre-flight gate share one implementation.
  *
- * This module is intentionally pure and side-effect free.
+ * This module is intentionally side-effect free; `classifyRepoMutation` only reads (git and the filesystem).
  */
 
-import { realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -296,6 +297,49 @@ export function realpathNearestExisting(p, realpath = realpathSync.native) {
       dir = parent;
     }
   }
+}
+
+/**
+ * Classify an absolute target path for the Write guard and the Bash gate's shell-write rule (one function for both hooks).
+ *
+ * A repo mutation is a path inside the working tree of the repository that CONTAINS it (not the caller's cwd) and not gitignored there,
+ * or any path under a `.git` segment (a hook write is code execution; rev-parse can fail there or return a toplevel that does not contain a submodule git dir).
+ * A linked worktree under a gitignored directory of the main checkout is its own repository, so its tracked files count.
+ * Fails closed: an unreadable ignore status leaves `isRepoMutation` true, a failed git-dir lookup leaves `inLinkedWorktree` false.
+ *
+ * @param {string} abs - Absolute or cwd-relative path (possibly not yet existing).
+ * @returns {{ isRepoMutation: boolean, inLinkedWorktree: boolean, targetReal: string }}
+ */
+export function classifyRepoMutation(abs) {
+  let isRepoMutation = false;
+  let inLinkedWorktree = false;
+  const targetReal = realpathNearestExisting(abs);
+  try {
+    const gitOpts = { encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_COMMON_DIR: undefined, GIT_INDEX_FILE: undefined }, stdio: ["ignore", "pipe", "ignore"] };
+    let dir = targetReal;
+    while (!statSync(dir, { throwIfNoEntry: false })?.isDirectory() && path.dirname(dir) !== dir) dir = path.dirname(dir);
+    const repoRoot = execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], gitOpts).trim();
+    if (targetReal === repoRoot || targetReal.startsWith(repoRoot + "/")) {
+      try {
+        // `git check-ignore -q` exits 0 when ignored, 1 when not ignored.
+        execFileSync("git", ["check-ignore", "-q", "--", targetReal], { ...gitOpts, cwd: repoRoot });
+        isRepoMutation = false;
+      } catch {
+        isRepoMutation = true;
+      }
+      try {
+        const gitDirs = ["--git-dir", "--git-common-dir"].map((flag) =>
+          path.resolve(repoRoot, execFileSync("git", ["-C", repoRoot, "rev-parse", flag], gitOpts).trim()));
+        inLinkedWorktree = gitDirs[0] !== gitDirs[1];
+      } catch {
+        inLinkedWorktree = false;
+      }
+    }
+  } catch {
+    // Outside every repo: not a mutation (the `.git` rule below still applies).
+  }
+  if (targetReal.split("/").includes(".git")) isRepoMutation = true;
+  return { isRepoMutation, inLinkedWorktree, targetReal };
 }
 
 /**

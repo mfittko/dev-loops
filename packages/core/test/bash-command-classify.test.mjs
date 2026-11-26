@@ -45,6 +45,7 @@ import {
   commandContainsInlineInterpreter,
   classifyDecisionRecorderCommand,
   commandContainsCodeVerificationEntrypoint,
+  shellWriteTargets,
   tokenizeShellCommand,
 } from "../src/loop/bash-command-classify.mjs";
 import { decideBashGate } from "../src/claude/hook-decisions.mjs";
@@ -1926,4 +1927,90 @@ test("commandContainsInlineInterpreter shifts a wrapper flag value that is named
 
 test("classifyDecisionRecorderCommand keeps a launcher word after a bare wrapper flag", () => {
   assert.notEqual(classifyDecisionRecorderCommand("sudo -n node scripts/github/record-operator-*.mjs --repo o/n"), null);
+});
+
+// OPS-EDITOR-TOOL-WRITES (issue 2683): shellWriteTargets, one case per command form of the rows 1 to 18 table.
+const w = (path, op = "write", unresolvable = false) => ({ path, op, unresolvable });
+const SHELL_WRITE_CASES = [
+  // row 1
+  ["sed -i '' 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["sed -i.bak 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["sed --in-place 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["sed -i -e 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["sed -i '' 's/a/b/' .devloops", [w(".devloops")]],
+  // row 2
+  ["perl -pi -e 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["perl -0pi -e 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  // row 3
+  ["printf 'x' > changes/x.md", [w("changes/x.md")]],
+  ["echo x >> src/a.mjs", [w("src/a.mjs")]],
+  ["cmd 2> src/a.mjs", [w("src/a.mjs")]],
+  ["cmd &> src/a.mjs", [w("src/a.mjs")]],
+  ["cmd >| src/a.mjs", [w("src/a.mjs")]],
+  ["printf x >changes/x.md", [w("changes/x.md")]],
+  // row 4
+  ["cat >> src/a.mjs <<EOF\nline\nEOF", [w("src/a.mjs")]],
+  ["cat > src/a.mjs <<'EOF'\nline\nEOF", [w("src/a.mjs")]],
+  // row 5
+  ["cmd | tee src/a.mjs", [w("src/a.mjs")]],
+  ["cmd | tee -a src/a.mjs", [w("src/a.mjs")]],
+  ["{ a; b; } > src/a.mjs", [w("src/a.mjs")]],
+  ["( a ) >> src/a.mjs", [w("src/a.mjs")]],
+  // row 6, 7, 8
+  ["command cp -f x src/a.mjs", [w("src/a.mjs", "copy")]],
+  ["command cp -f x changes/x.md", [w("changes/x.md", "copy")]],
+  ["command mv -f src/a.mjs changes/x.md", [w("src/a.mjs", "remove"), w("changes/x.md", "copy")]],
+  ["command rm -f src/a.mjs", [w("src/a.mjs", "remove")]],
+  ["rm bun.lock && bun install", [w("bun.lock", "remove")]],
+  // row 9: the target joins the last literal cd
+  ["cd /x/wt && sed -i 's/a/b/' src/a.mjs", [w("/x/wt/src/a.mjs")]],
+  ["cd sub && cd deeper && echo x > a.md", [w("sub/deeper/a.md")]],
+  ["cd sub && echo x > /abs/a.md", [w("/abs/a.md")]],
+  // row 10: unresolvable targets
+  ["sed -i 's/a/b/' \"$f\"", [w("$f", "write", true)]],
+  ["echo x > $out", [w("$out", "write", true)]],
+  ["cd \"$W\" && echo x > a.md", [w("a.md", "write", true)]],
+  ["cd a && cd \"$W\" && echo x > b", [w("b", "write", true)]],
+  ["echo x > docs/*.md", [w("docs/*.md", "write", true)]],
+  // row 11: payload words
+  ["bash -c \"sed -i 's/a/b/' src/a.mjs\"", [w("src/a.mjs")]],
+  ["eval \"echo x > src/a.mjs\"", [w("src/a.mjs")]],
+  // row 12: targets the hook classifies as outside every repository or ignored
+  ["sed -i 's/a/b/' tmp/x.md", [w("tmp/x.md")]],
+  ["printf x > tmp/x.md", [w("tmp/x.md")]],
+  ["cmd > /dev/null 2>&1", [w("/dev/null")]],
+  ["cmd 2>&1", []],
+  ["cp /dev/null /dev/null", [w("/dev/null", "copy")]],
+  ["sed -n '1,5p' src/a.mjs", []],
+  // row 13
+  ["dev-loops-run --repo-root /x/wt scripts/loop/x.mjs --a b > tmp/out.json", [w("tmp/out.json")]],
+  // row 14
+  ["grep -n \"sed -i\" src/a.mjs", []],
+  ["rg 'perl -pi' skills", []],
+  ["git commit -m \"drop sed -i > x\"", []],
+  ["echo \"> x\"", []],
+  // row 15
+  ["cat > tmp/x.md <<'EOF'\nsed -i s/a/b/ src/a.mjs\necho x > src/a.mjs\nEOF", [w("tmp/x.md")]],
+  // row 16
+  ["git apply p.patch", []],
+  ["node scripts/claude/generate-claude-assets.mjs", []],
+  ["cd \"$W\" && dev-loops-run scripts/loop/x.mjs --construct", []],
+  // row 18: a script under tmp/
+  ["dev-loops-run --repo-root /x/wt tmp/x.mjs", [w("tmp/x.mjs", "run")]],
+  ["node tmp/x.mjs", [w("tmp/x.mjs", "run")]],
+  ["bun tmp/x.mjs", [w("tmp/x.mjs", "run")]],
+  ["bun run tmp/x.mjs", [w("tmp/x.mjs", "run")]],
+  ["cd /x/wt && node tmp/x.mjs", [w("/x/wt/tmp/x.mjs", "run")]],
+];
+
+test("shellWriteTargets returns each write target with its operation (issue 2683 rows 1 to 18)", () => {
+  for (const [command, expected] of SHELL_WRITE_CASES) {
+    assert.deepEqual(shellWriteTargets(command), expected, command);
+  }
+});
+
+test("commandContainsCodeVerificationEntrypoint matches the run-bun-test wrapper line, with or without --repo-root (issue 2683 row 17)", () => {
+  assert.equal(commandContainsCodeVerificationEntrypoint("dev-loops-run scripts/run-bun-test.mjs packages/core/test/a.test.mjs"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("dev-loops-run --repo-root /x/wt scripts/run-bun-test.mjs a.test.mjs"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("dev-loops-run scripts/loop/other.mjs"), false);
 });

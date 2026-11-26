@@ -833,6 +833,9 @@
       "id": "OPS-DRAFT-FIRST-PR"
     },
     {
+      "id": "OPS-EDITOR-TOOL-WRITES"
+    },
+    {
       "id": "OPS-PR-VALIDATION-STABLE-EVIDENCE",
       "enforcement": "doc"
     },
