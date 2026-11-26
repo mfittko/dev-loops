@@ -33,6 +33,7 @@ test("AC1 the run-ending list names the gate-round end and the fix-pass end", as
   assert.match(text, /fresh fixer child/);
   assert.match(text, /`ROUTINE_BOUNDARY_CAP`/);
   assert.match(text, /`routineBoundaries`/);
+  assert.match(text, /not a recurrence under `RECOVERY-COMMAND-REQUIRED`/);
   for (const action of ROUTINE_NEXT_ACTIONS) assert.ok(text.includes(action), `routine action ${action}`);
   for (const field of ["`pr`", "`head`", "`nextAction`", "`workerRunning`"]) assert.ok(text.includes(field), `field ${field}`);
   assert.match(text, /`COORDINATOR-HANDBACK-ONE-REPORT`/);
@@ -43,6 +44,8 @@ test("AC1 the run-ending list names the gate-round end and the fix-pass end", as
   assert.match(text, /the coordinator, fresh or continuing, runs the fix pass on that act list before it takes `nextAction`/);
   assert.match(text, /runs its fix pass before that `nextAction`/);
   const agent = await readRepo("agents/dev-loop.agent.md");
+  assert.match(agent, /never the report point name `gate_verdict_posted`/);
+  assert.match(agent, /is a new step, not a recurrence/);
   assert.doesNotMatch(agent, /hands? back at `gate_verdict_posted`/);
   assert.doesNotMatch(agent, /At `gate_verdict_posted`, hand back/);
   assert.doesNotMatch(agent, /up to your first gate-round end/);
@@ -207,6 +210,7 @@ test("issue 3097 ac:1 a routine nextAction at a round boundary below the cap is 
       { nextAction, status: null },
       { nextAction, status: "" },
       { nextAction, status: "   " },
+      { nextAction, status: " gate_round_end " },
       { nextAction, status: 7 },
       { nextAction, status: "gate_round_end", routineBoundaries: "3" },
       { nextAction, status: "gate_round_end", routineBoundaries: 3.5 },

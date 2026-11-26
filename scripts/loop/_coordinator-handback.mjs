@@ -43,7 +43,7 @@ export function validateCoordinatorHandback(handback) {
   // A null, empty or non-string status counts as missing, so as a round-boundary packet; any other status is another run-ending case.
   const statusMissing = typeof handback.status !== "string" || handback.status.trim() === "";
   const crossed = Number.isInteger(handback.routineBoundaries) && handback.routineBoundaries > 0 ? handback.routineBoundaries : 0;
-  if ((statusMissing || ROUND_BOUNDARY_STATUSES.includes(handback.status)) && ROUTINE_NEXT_ACTIONS.includes(handback.nextAction) && crossed < ROUTINE_BOUNDARY_CAP) {
+  if ((statusMissing || ROUND_BOUNDARY_STATUSES.includes(handback.status.trim())) && ROUTINE_NEXT_ACTIONS.includes(handback.nextAction) && crossed < ROUTINE_BOUNDARY_CAP) {
     return {
       ok: false,
       refusal: "routine_boundary",
