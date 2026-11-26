@@ -4873,7 +4873,7 @@ test("3105 AC15: a hand-edited sealed ledger at the current head throws OUT_OF_B
 
 // Issue 3105 AC15: at the cap round, a high act item without a judgeFix is a named human decision, so the act list keeps report_blocked.
 // `priorRounds` closed ledgers precede the current head's ledger, so the current head's round is priorRounds + 1.
-async function detectCapFixture({ cap, priorRounds, finding, extraFindings = [], twice = false, priorActs = 3 }) {
+async function detectCapFixture({ cap, priorRounds, finding, extraFindings = [], twice = false, priorActs = 3, unposted = false }) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-act-list-cap-"));
   try {
     initGitFixture(tempDir, { branch: "main" });
@@ -4885,7 +4885,7 @@ async function detectCapFixture({ cap, priorRounds, finding, extraFindings = [],
     for (let i = 1; i <= priorRounds; i += 1) await ledger(String(i).repeat(40), `2026-11-15T00:0${i}:00.000Z`, [{ severity: "medium", summary: `round ${i}`, file: "src/a.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix a" }, { severity: "medium", summary: `round ${i} other`, file: "src/b.mjs", line: 2, judgeDisposition: "act", judgeFix: "fix b" }, { severity: "medium", summary: `round ${i} third`, file: "src/c.mjs", line: 3, judgeDisposition: "act", judgeFix: "fix c" }].slice(0, priorActs)); // the third item keeps the act count shrinking against the 2-item body-only rounds; `priorActs: 2` makes the counts equal and trips non_convergence
     await ledger(headSha, "2026-11-16T00:00:00.000Z", [{ file: "src/x.mjs", line: 3, judgeDisposition: "act", ...finding }, ...extraFindings]);
     const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
-    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: unposted ? "no verdict posted" : body });
     const detect = () => detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
     const first = await detect();
     // `twice` reruns the detector on the same fixture directory, so the second run sees any state the first wrote.
@@ -4952,6 +4952,20 @@ test("3611: equal act counts with an all-PR-body act list still return the body-
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
   assert.doesNotMatch(result.reason, /non_convergence|did not shrink/);
   assert.match(result.agentRemedy?.command ?? "", /upsert-checkpoint-verdict\.mjs .*bodyOnly: true/);
+});
+
+// The brake exemption holds only when the body-only route answers: without a posted findings_present verdict the non_convergence stop stays.
+test("3611: equal act counts with an all-PR-body act list and no posted verdict keep the non_convergence stop", async () => {
+  const finding = { file: undefined, severity: "medium", summary: "PR body lacks non-goals" };
+  const result = await detectCapFixture({ cap: 4, priorRounds: 1, priorActs: 2, unposted: true, finding, extraFindings: [{ severity: "low", judgeDisposition: "act", summary: "PR body lacks a validation section" }] });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+  assert.match(result.reason, /non_convergence/);
+});
+
+test("3611: one prior act and one high all-PR-body item name the non_convergence stop", async () => {
+  const result = await detectCapFixture({ cap: 4, priorRounds: 1, priorActs: 1, finding: { file: undefined, severity: "high", summary: "decide the auth model" } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+  assert.match(result.reason, /non_convergence/);
 });
 
 test("3611: a below-cap all-PR-body act list with a high item reports blocked on an operator decision", async () => {

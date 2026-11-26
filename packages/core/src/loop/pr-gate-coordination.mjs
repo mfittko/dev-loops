@@ -1327,11 +1327,24 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // GATE-EXEC-CAP-BRAKES: `capBrakes` is `{ gate, round, cap, actCounts, items, operatorCleared?, notClearable? }` for the gate whose round is posted at this head. The one policy
   // (decideCapRound) stops the lane before another fixer pass; only an operator focus decision that names the items clears the stop (`operatorCleared: true` routes past it; `notClearable: true` marks a set that already had its one re-open, which no focus file clears).
   const capStop = input.capBrakes ? decideCapRound({ ...input.capBrakes, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 } }) : null;
-  // GATE-EXEC-NO-DEAD-END: a blocker-free all-PR-body act list at this head posts no review round, so the non_convergence brake (which guards the next round) skips it and the body-only route below answers.
-  const openList = input.draftOpenActList;
-  const bodyOnlyExempt = capStop?.reason === "non_convergence" && openList?.bodyOnly === true && openList.openActCount > 0
-    && (openList.blockers ?? []).length === 0
-    && [openList.headSha, openList.carriedToHead].some((h) => String(h ?? "").toLowerCase() === String(currentHeadSha ?? "").toLowerCase());
+  // Issue 3105 AC15 (ADR 0288): the open draft_gate act list at the current head; the fixer route below consumes it.
+  const actList = input.draftOpenActList;
+  // A carried list (a base-only merge of the cap head A) keeps its findings_present marker at A: findings_present markers never carry across a merge.
+  const carriedMarker = normalizeGateComment(input.draftGateMarker);
+  const markerAtCarriedList = trimmedOrNull(actList?.carriedToHead)?.toLowerCase() === currentHeadSha?.toLowerCase() && carriedMarker.visible && carriedMarker.contractComplete
+    && carriedMarker.verdict === "findings_present" && carriedMarker.headSha !== null && String(actList.headSha ?? "").toLowerCase().startsWith(carriedMarker.headSha.toLowerCase());
+  // Issue 3460 AC5: at the cap exit the open act list loads before ready, also once the gate threads are resolved.
+  const headActList = (!draftReady || capRoundFixed) && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"))
+    && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase())
+    && Number.isInteger(actList.openActCount) && actList.openActCount > 0
+    // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.
+    && (input.draftRoundRefused !== true || input.draftCapRoundFailure === "no_clearing_record");
+  // ADR 0271: a round of PR-body items only has no fixer route; its exit is the body-only converged post, named in the cap refusal below.
+  const bodyOnlyList = headActList && actList.bodyOnly === true;
+  // GATE-EXEC-NO-DEAD-END: the non_convergence brake (which guards the next round) skips a blocker-free all-PR-body list only when the body-only route or the satisfied-gate route answers instead.
+  const bodyOnlyExempt = capStop?.reason === "non_convergence" && actList?.bodyOnly === true && actList.openActCount > 0
+    && (actList.blockers ?? []).length === 0 && (bodyOnlyList || draftReady)
+    && [actList.headSha, actList.carriedToHead].some((h) => String(h ?? "").toLowerCase() === String(currentHeadSha ?? "").toLowerCase());
   if (capStop?.action === "operator" && input.capBrakes.operatorCleared !== true && !bodyOnlyExempt) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
     pushUnique(forbiddenActions, [
@@ -1432,20 +1445,6 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  // Issue 3105 AC15 (ADR 0288): the open draft_gate act list at the current head; the fixer route below consumes it.
-  const actList = input.draftOpenActList;
-  // A carried list (a base-only merge of the cap head A) keeps its findings_present marker at A: findings_present markers never carry across a merge.
-  const carriedMarker = normalizeGateComment(input.draftGateMarker);
-  const markerAtCarriedList = trimmedOrNull(actList?.carriedToHead)?.toLowerCase() === currentHeadSha?.toLowerCase() && carriedMarker.visible && carriedMarker.contractComplete
-    && carriedMarker.verdict === "findings_present" && carriedMarker.headSha !== null && String(actList.headSha ?? "").toLowerCase().startsWith(carriedMarker.headSha.toLowerCase());
-  // Issue 3460 AC5: at the cap exit the open act list loads before ready, also once the gate threads are resolved.
-  const headActList = (!draftReady || capRoundFixed) && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"))
-    && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase())
-    && Number.isInteger(actList.openActCount) && actList.openActCount > 0
-    // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.
-    && (input.draftRoundRefused !== true || input.draftCapRoundFailure === "no_clearing_record");
-  // ADR 0271: a round of PR-body items only has no fixer route; its exit is the body-only converged post, named in the cap refusal below.
-  const bodyOnlyList = headActList && actList.bodyOnly === true;
   const actBlockers = headActList && Array.isArray(actList.blockers) ? actList.blockers : [];
   // An eligible draft act list wins over a BEHIND-only refresh; a real conflict (CONFLICTING, DIRTY, conflict files) still resolves first.
   const actListWinsOverBehind = mergeStateStatus === "BEHIND" && mergeable !== "CONFLICTING" && conflictFiles.length === 0
