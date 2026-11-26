@@ -731,7 +731,7 @@ test("any subagent role is denied a command that runs the merge script, --check 
   }
 });
 
-// Issue 3605 (ADR 0331): the deny matches the run position. Names are built from parts so this file stays name-free for the hook.
+// Issue 3605 (ADR 0331): the deny matches the run position.
 const MERGE_SCRIPT = ["merge", "pr.mjs"].join("-");
 const MERGE_PATH = `scripts/github/${MERGE_SCRIPT}`;
 const MERGE_RUN_FORMS = [
