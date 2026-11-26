@@ -46,6 +46,10 @@ test("AC1 the run-ending list names the gate-round end and the fix-pass end", as
   assert.doesNotMatch(agent, /hands? back at `gate_verdict_posted`/);
   assert.doesNotMatch(agent, /At `gate_verdict_posted`, hand back/);
   assert.doesNotMatch(agent, /up to your first gate-round end/);
+  assert.doesNotMatch(agent, /You run one step/);
+  const handoff = await readRepo("skills/docs/workflow-handoff-contract.md");
+  assert.doesNotMatch(handoff, /hands back at the verdict boundary|and hands back, in order/);
+  assert.match(handoff, /continues at a routine `nextAction` and hands back at a stop under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`/);
 });
 
 test("AC1 the rule is registered and ADR 0181 carries the amendment note", async () => {

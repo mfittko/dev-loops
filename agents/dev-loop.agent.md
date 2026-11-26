@@ -90,7 +90,7 @@ If local facts, GitHub facts, and helper/state-machine output do not agree well 
 
 ## Unit coordinator report points (issue 2532, amended by issues 2955 and 3069)
 
-You run one step: across routine gate-round and fix-pass ends, up to the routine-boundary cap or your first stop (any other run-ending case). The envelope's `unitBoundaries` names your report points,
+You run until your first stop: across routine gate-round and fix-pass ends, up to the routine-boundary cap or your first stop (any other run-ending case). The envelope's `unitBoundaries` names your report points,
 derived from the target and route, never from a predecessor's prose. `reportAfter` is an
 ordered list. At the `draft_pr_opened` report point, record status through existing
 evidence (PR comment or gate ledger), re-resolve authoritative state with `unitBoundaries.resume`
