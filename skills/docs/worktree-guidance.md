@@ -418,7 +418,7 @@ before a `pre_approval_gate` validation and before a `pre_approval_gate` dispatc
 `base_stale_integrate_first`, the newer commits and any `foreignFiles` (files that differ from
 `origin/<base>` only because the base moved), with `base_fetch_failed` when the fetch fails or times
 out, or with `base_not_origin_branch` for a SHA, revision expression or non-origin remote ref.
-Every `write-gate-context.mjs` run, with or without `--base`, checks the reviewed PR head against `origin/<PR base>`. A `pre_approval_gate` run refuses with `base_stale_integrate_first`, `base_fetch_failed` or `base_head_unresolved`, writing no artifact. A `draft_gate` or `review` run records the non-current status in `baseFreshness` and continues. An unreadable PR base (`base_unresolved`) refuses on every gate.
+Every `write-gate-context.mjs` run, with or without `--base`, checks the reviewed PR head against `origin/<PR base>`. A `pre_approval_gate` run refuses with `base_stale_integrate_first`, `base_fetch_failed` or `base_head_unresolved`, writing no artifact. A `draft_gate` run refuses with `base_fetch_failed` or `base_head_unresolved` and records `base_stale_integrate_first` in `baseFreshness` and continues. A `review` run records any non-current status in `baseFreshness` and continues. An unreadable PR base (`base_unresolved`) refuses on every gate.
 
 ## Fallback when worktrees are unavailable
 
