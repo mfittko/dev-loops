@@ -635,6 +635,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   if (completion && (!actList || !deltaStatuses)) throw new Error("completion requires semantic ACT and Delta authorities");
   return {
     handoff,
+    orderHeadSha: order.headSha,
     actList,
     deltaStatuses,
     completion,
@@ -866,8 +867,8 @@ export async function verifyFixerDisposition(options, deps = {}) {
   try {
     result = await verifyFixerDispositionCore(options, deps);
   } catch (error) {
-    // The original refusal always propagates; a failed publish must not replace it.
-    await publishReport(options.reportPath, { ok: false, outcome: "refused", error: error instanceof Error ? error.message : String(error) }).catch(() => {});
+    // The original refusal always propagates; a failed publish must not replace it. A ci_pending refusal publishes nothing: the rerun after CI settles publishes the one final report.
+    if (!error?.ciPending) await publishReport(options.reportPath, { ok: false, outcome: "refused", error: error instanceof Error ? error.message : String(error) }).catch(() => {});
     throw error;
   }
   await publishReport(options.reportPath, { ...result, outcome: result.complete ? "complete" : "incomplete" });
@@ -884,7 +885,7 @@ async function verifyFixerDispositionCore(
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   const runtime = { env, ghCommand, runChild };
-  const { handoff, actList, deltaStatuses, completion, constructedReport, operatorFocus, operatorFocusDigest, reviewId, reviewBodySha256, reviewCommitId, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  const { handoff, orderHeadSha, actList, deltaStatuses, completion, constructedReport, operatorFocus, operatorFocusDigest, reviewId, reviewBodySha256, reviewCommitId, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
   const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,statusCheckRollup,baseRefName"], env);
   const livePayload = live.code === 0 ? (() => { try { return JSON.parse(live.stdout); } catch { return null; } })() : null;
@@ -966,12 +967,24 @@ async function verifyFixerDispositionCore(
         commitStatus: ci.statuses.commitStatus,
         checkRunsUnsupportedCompleted: ci.checkRuns.visibleSignal.unsupportedCompleted,
       }).overallStatus;
+    const emptyHead = state === "none" && ci.checkRuns.nonLoopDerivedCount === 0 && ci.statuses.nonLoopDerivedCount === 0;
+    // A pushed head can look check-less before its checks register: the order head shows whether the PR runs CI at all.
+    let ordersCiUnregistered = false, orderCiUnreadable = false;
+    if (emptyHead && orderHeadSha !== options.headSha) {
+      const orderCi = await observeHeadCiSignals({ repo: options.repo, headSha: orderHeadSha, prVisibleCheckNames }, runtime);
+      orderCiUnreadable = !orderCi.checkRuns.ok || !orderCi.statuses.ok;
+      ordersCiUnregistered = !orderCiUnreadable && (orderCi.checkRuns.nonLoopDerivedCount > 0 || orderCi.statuses.nonLoopDerivedCount > 0);
+    }
     // A head with no check runs and no statuses besides the loop-derived gate-evidence is settled (wait-pr-checks settles it); anything else must be green.
-    const checkless = state === "none" && ci.checkRuns.nonLoopDerivedCount === 0 && ci.statuses.nonLoopDerivedCount === 0
+    const checkless = emptyHead && !ordersCiUnregistered && !orderCiUnreadable
       && prVisibleCheckNames.every((name) => LOOP_DERIVED_CI_CHECK_NAMES.includes(name));
     if (state !== "success" && !checkless) {
-      const code = state === "pending" ? "ci_pending" : "ci_unknown";
-      throw new Error(`${code}: checks at ${options.headSha} are ${state}, not settled green; resolve no thread, hand back ${code}`);
+      const code = ordersCiUnregistered || state === "pending" ? "ci_pending" : "ci_unknown";
+      const shown = code === "ci_pending" ? "pending" : state;
+      const recovery = code === "ci_pending"
+        ? `; recovery: run wait-pr-checks.mjs --repo ${options.repo} --pr ${options.pr} (re-issue it while it prints pending), then rerun this verifier command unchanged; a ci_pending refusal publishes no report`
+        : "";
+      throw Object.assign(new Error(`${code}: checks at ${options.headSha} are ${shown}, not settled green; resolve no thread, hand back ${code}${recovery}`), code === "ci_pending" ? { ciPending: true } : {});
     }
   }
   if (!options.check) {

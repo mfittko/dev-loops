@@ -257,6 +257,7 @@ function fullPhaseSteps(workOrder, verifier, { push, handoffStep = null }) {
 4. ${handoffStep ?? `Run \`${verifier} --construct\`. If it fails because the output exists, go to step 5. If step 5 refuses the report as hand-written, rm only this execution's refused outputRef and its corresponding stale \`<outputRef>.constructed\` marker, then re-run step 4. Preserve accepted construction evidence and unrelated files.`}
 5. Run \`${verifier}\`.
 6. Run \`${verifier} --check --report-path ${shellQuote(fixerReportPath(workOrder.outputRefs[0]))}\`. It publishes the final join report there, last; no earlier step writes it.
+On a \`ci_pending\` refusal from step 5 or 6, follow its recovery once; a second \`ci_pending\` refusal hands back \`ci_pending\` with the refusal text.
 ${handoffStep ? REVIEW_BODY_EDIT_RULE : EDIT_RULE}`;
 }
 

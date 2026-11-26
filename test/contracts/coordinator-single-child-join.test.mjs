@@ -52,6 +52,15 @@ test("COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK is registered, follows
   }
 });
 
+test("the fallback sends a ci_pending hand-back without a report to the verifier's recovery, and ADR 0334 amends ADR 0223 item 1", () => {
+  const contract = read("skills/docs/gate-review-sub-loop-contract.md");
+  assert.match(contract, /After a `ci_pending` hand-back with no report, the coordinator follows the recovery in the verifier's refusal text with the order's emitted `--check` step \(it restates no command; ADR 0334\)/);
+  assert.match(contract, /A `ci_pending` refusal publishes no report under `--report-path`; every other outcome publishes once\./);
+  const adr = read("docs/decisions/0334-fixer-verifier-ci-pending-publishes-no-report.md");
+  assert.match(adr, /Amends \[0223\][^\n]*item 1/);
+  assert.match(adr, /\[0277\][^\n]*amended item 3/);
+});
+
 test("the interim-notification bullet and the bounded-wait fixer bullet are pinned", () => {
   const contract = read("skills/docs/gate-review-sub-loop-contract.md");
   assert.match(contract, /Claude Code interim notification: .*The Claude Code "report has not been delivered" prompt during that turn end is not a forced hand-back: the dev-loop coordinator answers it with a plain-text pause that names the child by agent id and `joinRef`, and calls no `SubagentHandback` while the child runs \(`COORDINATOR-HANDBACK-ONE-REPORT`/);
