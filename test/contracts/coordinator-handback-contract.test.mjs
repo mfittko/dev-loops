@@ -34,6 +34,7 @@ test("AC1 the run-ending list names the gate-round end and the fix-pass end", as
   assert.match(text, /`ROUTINE_BOUNDARY_CAP`/);
   assert.match(text, /`routineBoundaries`/);
   assert.match(text, /not a recurrence under `RECOVERY-COMMAND-REQUIRED`/);
+  assert.match(text, /the report point name `gate_verdict_posted`/);
   for (const action of ROUTINE_NEXT_ACTIONS) assert.ok(text.includes(action), `routine action ${action}`);
   for (const field of ["`pr`", "`head`", "`nextAction`", "`workerRunning`"]) assert.ok(text.includes(field), `field ${field}`);
   assert.match(text, /`COORDINATOR-HANDBACK-ONE-REPORT`/);
@@ -211,6 +212,7 @@ test("issue 3097 ac:1 a routine nextAction at a round boundary below the cap is 
       { nextAction, status: "" },
       { nextAction, status: "   " },
       { nextAction, status: " gate_round_end " },
+      { nextAction, status: "gate_verdict_posted" },
       { nextAction, status: 7 },
       { nextAction, status: "gate_round_end", routineBoundaries: "3" },
       { nextAction, status: "gate_round_end", routineBoundaries: 3.5 },

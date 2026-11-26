@@ -12,7 +12,7 @@ export const CI_ROUTE_NEXT_ACTION = "fix_ci_failure";
 // Issue 3097 (ADR 0325): a round-boundary packet with one of these nextActions continues in the same run until the cap.
 export const ROUTINE_NEXT_ACTIONS = ["run_draft_gate", "address_review_feedback", "mark_ready_for_review", "run_pre_approval_gate", "wait_for_ci"];
 export const ROUTINE_BOUNDARY_CAP = 3;
-const ROUND_BOUNDARY_STATUSES = ["gate_round_end", "fix_pass_end"];
+const ROUND_BOUNDARY_STATUSES = ["gate_round_end", "fix_pass_end", "gate_verdict_posted"];
 
 // The pre-fan-out CI stop (GATE-EXEC-GATE-COORDINATOR): a wait-pr-checks result that is not settled green at the head stops the round with this observation.
 export const CI_NOT_GREEN_OBSERVATION = "ci_not_green";
