@@ -767,6 +767,13 @@ const MERGE_RUN_FORMS = [
   // A quoted pattern with a separator and the name is a fail-closed over-deny (ADR 0331).
   `rg "foo|${MERGE_SCRIPT}" cli/`,
   `grep -nE "(${MERGE_SCRIPT}|x)" cli/`,
+  // Fail-closed over-denies and run forms across a newline, pinned as today's behavior (ADR 0331).
+  `node\n${MERGE_PATH}`,
+  `node \\\n  ${MERGE_PATH}`,
+  `node scripts/x.mjs\ngrep -n ${MERGE_SCRIPT} cli/`,
+  `bun test foo.test.mjs\nrg ${MERGE_SCRIPT.replace(".mjs", "")} cli/`,
+  `sed -n 1,20p \\\n  ${MERGE_PATH}`,
+  `grep -n foo \\\n  ${MERGE_PATH}`,
 ];
 const MERGE_READ_ONLY_FORMS = [
   `git grep -n ${MERGE_SCRIPT} cli/`,
