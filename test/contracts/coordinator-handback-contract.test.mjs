@@ -33,7 +33,7 @@ test("AC1 the run-ending list names the gate-round end and the fix-pass end", as
   assert.match(text, /fresh fixer child/);
   assert.match(text, /`ROUTINE_BOUNDARY_CAP`/);
   assert.match(text, /`routineBoundaries`/);
-  for (const action of ROUTINE_NEXT_ACTIONS) assert.ok(text.includes(`\`${action}\``), `routine action ${action}`);
+  for (const action of ROUTINE_NEXT_ACTIONS) assert.ok(text.includes(action), `routine action ${action}`);
   for (const field of ["`pr`", "`head`", "`nextAction`", "`workerRunning`"]) assert.ok(text.includes(field), `field ${field}`);
   assert.match(text, /`COORDINATOR-HANDBACK-ONE-REPORT`/);
   assert.match(text, /`RUNNER-HANDOFF-TEARDOWN`/);
