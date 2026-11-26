@@ -157,27 +157,16 @@ test("an all-low/nit act list with a clean delta updates the comment at A to cle
   }, { prefix: "dev-loops-converged-ok-" });
 });
 
-// GATE-EXEC-BASE-REFRESH: a converged post checks the current PR head (the fixer commit), not the reviewed head A.
-test("a converged post checks base freshness at the fixer commit, so a merged base posts and a stale one refuses", async () => {
+// A converged post is a draft_gate post, so a stale base neither refuses it nor runs a freshness check.
+test("a converged post at a stale base posts and runs no freshness check", async () => {
   await withTempDir(async (tempDir) => {
     const findings = [finding("low", 1)];
     const heads = [];
-    const check = (stale) => async ({ base, head }) => { heads.push(head); return stale ? { ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: "R" } : { ok: true, status: "base_current", base }; };
-    const fresh = await post(tempDir, { findings, converged: convergedInput(findings), checkBaseFreshness: check(false) });
-    assert.equal(fresh.error, undefined);
-    assert.equal(fresh.result.action, "updated");
-    // A base_current context at the reviewed head A (ADR 0299 proof) never lifts the refusal for a converged catch-up post.
-    const ctx = path.join(repoRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A }));
-    await mkdir(path.dirname(ctx), { recursive: true });
-    await writeFile(ctx, JSON.stringify({ baseFreshness: { status: "base_current", base: "main" } }), "utf8");
-    let stale;
-    try {
-      stale = await post(tempDir, { findings, converged: convergedInput(findings), checkBaseFreshness: check(true) });
-    } finally {
-      await rm(ctx, { force: true });
-    }
-    assert.match(stale.error, new RegExp(`^base_stale_integrate_first: head ${FIX} does not contain origin/main`));
-    assert.deepEqual(heads, [FIX, FIX]);
+    const stale = async ({ base, head }) => { heads.push(head); return { ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: "R" }; };
+    const out = await post(tempDir, { findings, converged: convergedInput(findings), checkBaseFreshness: stale });
+    assert.equal(out.error, undefined);
+    assert.equal(out.result.action, "updated");
+    assert.deepEqual(heads, []);
   }, { prefix: "dev-loops-converged-base-" });
 });
 
@@ -579,16 +568,16 @@ test("a converged post on a cap-fixed PR is still refused when coordination forb
   }, { prefix: "dev-loops-converged-capfixed-closed-" });
 });
 
-// ADR 0271 (GATE-EXEC-NO-DEAD-END): a cap round whose act items are all PR-body items clears with no commit.
+// ADR 0271 (GATE-EXEC-NO-DEAD-END): a round whose act items are all PR-body items clears with no commit.
 const EDITED_BODY = `${DEFAULT_TEST_PR_BODY}\nEdited for the cap round.`;
 // ledgerTmpRoot puts the findings ledger and the prior rounds under another tmp root than the cap-round context (the main checkout versus the reviewed worktree).
-async function bodyOnlyPost(tempDir, { findings, actList = findings, fixer = A, input = {}, reviewedBody = DEFAULT_TEST_PR_BODY, runChildOptions = {}, ledgerTmpRoot }) {
+async function bodyOnlyPost(tempDir, { findings, actList = findings, fixer = A, input = {}, reviewedBody = DEFAULT_TEST_PR_BODY, runChildOptions = {}, ledgerTmpRoot, priorRounds = 3 }) {
   const ledgerPath = ledgerTmpRoot ? path.join(ledgerTmpRoot, "gate-findings", "owner-repo", "pr-17", "ledger.json") : undefined;
   const ctx = path.join(capOnRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
   await mkdir(path.dirname(ctx), { recursive: true });
   await writeFile(ctx, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(reviewedBody) }] }), "utf8");
   let out;
-  await withPriorRounds(3, async () => {
+  await withPriorRounds(priorRounds, async () => {
     out = await post(tempDir, { findings, converged: { fixerCommit: fixer, actList, bodyOnly: true, ...input }, root: capOnRoot, ledgerPath, runChildOptions: { currentHead: fixer, liveBody: EDITED_BODY, ...runChildOptions } });
   }, ledgerTmpRoot);
   await rm(ctx, { force: true });
@@ -606,6 +595,17 @@ test("body-only: an unchanged head and a head moved by a base-only merge both po
       assert.match(body, new RegExp(`\\*\\*Converged:\\*\\* fixer \`${fixer}\` delta \`sha256:[a-f0-9]{64}\``));
     }
   }, { prefix: "dev-loops-converged-bodyonly-ok-" });
+});
+
+// ADR 0332: the body-only post applies at every draft_gate round, so round 2 of cap 4 posts after a body edit at the same head.
+test("body-only: round 2 of cap 4 with two pr_body act items posts the converged record after a body edit at the same head", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [bodyFinding("medium", 1), bodyFinding("low", 2)];
+    const { result, body, error } = await bodyOnlyPost(tempDir, { findings, priorRounds: 1 });
+    assert.equal(error, undefined);
+    assert.equal(result.action, "updated");
+    assert.match(body, /\*\*Converged:\*\*/);
+  }, { prefix: "dev-loops-converged-bodyonly-below-cap-" });
 });
 
 test("a mixed code and PR-body converged post reads the body digests: unchanged refuses body_unchanged, an unrecorded read refuses body_read_unrecorded, a changed body posts", async () => {
@@ -823,7 +823,7 @@ async function withMergeShape(template, { baseFile = "docs/main-only.md", baseCo
 
 const REFUSED = /is not the current PR head/;
 
-test("slice 5: a code-fix converged post at a base merge M after F records convergence and checks base freshness at M", async () => {
+test("slice 5: a code-fix converged post at a base merge M after F records convergence and refreshes the base at M before the carry classifier", async () => {
   await withTempDir(async (tempDir) => {
     const findings = [finding("low", 1)];
     const savedFix = FIX;
@@ -835,7 +835,7 @@ test("slice 5: a code-fix converged post at a base merge M after F records conve
       assert.equal(out.error, undefined);
       assert.equal(out.result.action, "updated");
       assert.match(out.body, new RegExp(`\\*\\*Converged:\\*\\* fixer \`${f}\``));
-      assert.deepEqual(heads, [m, m], "one refresh before the carry classifier, one freshness check, both at M");
+      assert.deepEqual(heads, [m], "one refresh before the carry classifier, at M");
     }).finally(() => { FIX = savedFix; });
   }, { prefix: "dev-loops-converged-carry-code-" });
 });

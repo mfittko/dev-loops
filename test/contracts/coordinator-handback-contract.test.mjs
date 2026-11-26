@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSyncTrusted as spawnSync } from "../_helpers.mjs";
 import { claimRunnerOwnership, handoffRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
-import { validateCoordinatorHandback } from "../../scripts/loop/_coordinator-handback.mjs";
+import { ROUTINE_BOUNDARY_CAP, ROUTINE_NEXT_ACTIONS, validateCoordinatorHandback } from "../../scripts/loop/_coordinator-handback.mjs";
 import { runCli as handbackCli } from "../../scripts/loop/validate-coordinator-handback.mjs";
 import { renderCoordinatorWorkOrder, runCli as emitCli } from "../../scripts/loop/emit-coordinator-work-order.mjs";
 import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
@@ -28,14 +28,32 @@ test("AC1 the run-ending list names the gate-round end and the fix-pass end", as
   assert.match(content, /one canonical list of run-ending cases[^]*?the end of a gate round, the end of a fix pass,/);
   const text = await rule();
   assert.match(text, /end of every gate round and at the end of every fix pass/);
-  assert.match(text, /never continues into the next round/);
+  assert.match(text, /continues at a routine boundary and hands back at a stop/);
+  assert.match(text, /fresh gate-coordinator child/);
+  assert.match(text, /fresh fixer child/);
+  assert.match(text, /`ROUTINE_BOUNDARY_CAP`/);
+  assert.match(text, /`routineBoundaries`/);
+  assert.match(text, /not a recurrence under `RECOVERY-COMMAND-REQUIRED`/);
+  assert.match(text, /the report point name `gate_verdict_posted`/);
+  for (const action of ROUTINE_NEXT_ACTIONS) assert.ok(text.includes(action), `routine action ${action}`);
   for (const field of ["`pr`", "`head`", "`nextAction`", "`workerRunning`"]) assert.ok(text.includes(field), `field ${field}`);
   assert.match(text, /`COORDINATOR-HANDBACK-ONE-REPORT`/);
   assert.match(text, /`RUNNER-HANDOFF-TEARDOWN`/);
   assert.match(text, /`COORDINATOR-CONTINUITY-SOFT-CAP` stays advisory/);
   assert.match(text, /compact relay packet, which still carries `status` and the startup-output path/);
   assert.match(text, /runs `loop startup --pr <n>` before the hand-back and names that output/);
-  assert.match(text, /runs the fix pass on that act list before it takes `nextAction`/);
+  assert.match(text, /the coordinator, fresh or continuing, runs the fix pass on that act list before it takes `nextAction`/);
+  assert.match(text, /runs its fix pass before that `nextAction`/);
+  const agent = await readRepo("agents/dev-loop.agent.md");
+  assert.match(agent, /never the report point name `gate_verdict_posted`/);
+  assert.match(agent, /is a new step, not a recurrence/);
+  assert.doesNotMatch(agent, /hands? back at `gate_verdict_posted`/);
+  assert.doesNotMatch(agent, /At `gate_verdict_posted`, hand back/);
+  assert.doesNotMatch(agent, /up to your first gate-round end/);
+  assert.doesNotMatch(agent, /You run one step/);
+  const handoff = await readRepo("skills/docs/workflow-handoff-contract.md");
+  assert.doesNotMatch(handoff, /hands back at the verdict boundary|and hands back, in order/);
+  assert.match(handoff, /continues at a routine `nextAction` and hands back at a stop under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`/);
 });
 
 test("AC1 the rule is registered and ADR 0181 carries the amendment note", async () => {
@@ -46,7 +64,7 @@ test("AC1 the rule is registered and ADR 0181 carries the amendment note", async
 });
 
 test("AC3 the validator refuses a hand-back with a running worker or a missing field", () => {
-  const good = { pr: 7, head: HEAD, nextAction: "run_pre_approval_gate", workerRunning: false };
+  const good = { pr: 7, head: HEAD, nextAction: "await_final_human_approval", workerRunning: false };
   assert.deepEqual(validateCoordinatorHandback(good), { ok: true });
   const running = validateCoordinatorHandback({ ...good, workerRunning: true });
   assert.equal(running.ok, false);
@@ -122,7 +140,7 @@ test("AC2 the emitted fresh coordinator brief derives state and embeds no head S
 
 test("AC3 validate-handback exits 0 on a valid packet and 1 on a refusal", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "round-handback-cli-"));
-  const good = { pr: 7, head: HEAD, nextAction: "run_pre_approval_gate", workerRunning: false };
+  const good = { pr: 7, head: HEAD, nextAction: "await_final_human_approval", workerRunning: false };
   try {
     const run = async (packet) => {
       const file = path.join(dir, "packet.json");
@@ -180,4 +198,48 @@ test("issue 3414 the emitter refusal JSON for a bad CI source carries a recovery
   const out = JSON.parse(result.stdout);
   assert.equal(out.refusal, "ambiguous_source");
   assert.match(out.recovery, /--ci-file <wait-pr-checks JSON> --act-list-file/);
+});
+
+test("issue 3097 ac:1 a routine nextAction at a round boundary below the cap is refused with the gate-coordination route", () => {
+  const base = { pr: 7, head: HEAD, workerRunning: false };
+  for (const nextAction of ROUTINE_NEXT_ACTIONS) {
+    const packets = [
+      { nextAction, status: "gate_round_end" },
+      { nextAction, status: "fix_pass_end", routineBoundaries: 0 },
+      { nextAction, status: "gate_round_end", routineBoundaries: ROUTINE_BOUNDARY_CAP - 1 },
+      { nextAction },
+      { nextAction, status: null },
+      { nextAction, status: "" },
+      { nextAction, status: "   " },
+      { nextAction, status: " gate_round_end " },
+      { nextAction, status: "gate_verdict_posted" },
+      { nextAction, status: 7 },
+      { nextAction, status: "gate_round_end", routineBoundaries: "3" },
+      { nextAction, status: "gate_round_end", routineBoundaries: 3.5 },
+      { nextAction, status: "gate_round_end", routineBoundaries: -1 },
+    ];
+    for (const packet of packets) {
+      const result = validateCoordinatorHandback({ ...base, ...packet });
+      assert.equal(result.refusal, "routine_boundary", JSON.stringify(packet));
+      assert.match(result.message, new RegExp(ID));
+      assert.ok(result.recovery.includes("loop gate-coordination --pr 7 --repo <owner/name>"), "names the driver with its required --repo");
+      assert.ok(result.recovery.includes(`"${nextAction}"`), "names the routine action");
+    }
+  }
+});
+
+test("issue 3097 ac:2 a stop action, the cap and another run-ending status are accepted; the existing refusals stay", () => {
+  const base = { pr: 7, head: HEAD, workerRunning: false };
+  for (const nextAction of ["report_blocked", "await_final_human_approval", "report_done", "resolve_merge_conflicts"]) {
+    assert.deepEqual(validateCoordinatorHandback({ ...base, nextAction, status: "gate_round_end", routineBoundaries: 0 }), { ok: true }, nextAction);
+  }
+  for (const nextAction of ROUTINE_NEXT_ACTIONS) {
+    assert.deepEqual(validateCoordinatorHandback({ ...base, nextAction, status: "gate_round_end", routineBoundaries: ROUTINE_BOUNDARY_CAP }), { ok: true }, nextAction);
+    for (const status of ["operator_direction", "lockout", "final_approval_ready", "gate_round_ended"]) {
+      assert.deepEqual(validateCoordinatorHandback({ ...base, nextAction, status }), { ok: true }, `${nextAction} ${status}`);
+    }
+  }
+  assert.equal(validateCoordinatorHandback({ ...base, nextAction: "run_draft_gate", workerRunning: true }).refusal, "worker_running");
+  assert.equal(validateCoordinatorHandback({ ...base, nextAction: "" }).refusal, "missing_fields");
+  assert.equal(validateCoordinatorHandback({ ...base, nextAction: "run_draft_gate", verdictRefusal: { reason: "ci_red" } }).refusal, "verdict_refusal_route");
 });

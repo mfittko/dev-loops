@@ -147,7 +147,7 @@ const REMOVED_FLAGS = new Set([
   "--force",
   "--force-reason",
 ]);
-// GATE-EXEC-BASE-REFRESH proof that only the base moved: every same-head round's write-gate-context refuses at a stale base, so a base_current context for this gate and head proves the head held the base when that context was written.
+// GATE-EXEC-BASE-REFRESH proof that only the base moved: every same-head pre_approval_gate round's write-gate-context refuses at a stale base, so a base_current context for this gate and head proves the head held the base when that context was written.
 // Only the reviewed worktree (the first checkout) counts: a context in another checkout belongs to an earlier same-head round (as in readReviewedBodySha256).
 // A missing or unreadable context, or one for another base, is no proof (fail closed).
 async function roundStartedAtCurrentBase(options, headSha, repoRoot, base) {
@@ -270,7 +270,7 @@ Optional:
   --converged-json <path>                   draft_gate low/nit convergence
                                             (GATE-EXEC-LOW-NIT-CONVERGENCE):
                                             { fixerCommit, actList, deltaResult }.
-                                            A cap round whose open act items are
+                                            A round whose open act items are
                                             all PR-body items (no file named, or
                                             remedyKind pr_body)
                                             clears with no commit through
@@ -278,9 +278,11 @@ Optional:
                                             and no deltaResult (ADR 0271); it
                                             refuses body_item_locatable,
                                             body_unchanged, own_commit_in_range,
-                                            body_read_unrecorded (no cap-round
-                                            pr-body read: fix with a commit and
-                                            check-pre-push-delta.mjs --reviewer-only),
+                                            body_read_unrecorded (no round
+                                            pr-body read: fix with a commit, then
+                                            at the cap run check-pre-push-delta.mjs
+                                            --reviewer-only, below it the next
+                                            draft_gate round),
                                             or blocked_item. A bodyOnly input
                                             with a deltaResult is refused. Requires --gate draft_gate and
                                             --findings-ledger, with
@@ -1905,7 +1907,9 @@ function resolveGateAction(gate) {
     : PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE;
 }
 function buildGateEntryRefusalError({ options, coordination }) {
-  return `Cannot enter ${options.gate} on ${options.repo}#${options.pr}: ${coordination.reason}`;
+  const error = new Error(`Cannot enter ${options.gate} on ${options.repo}#${options.pr}: ${coordination.reason}`);
+  error.recovery = `Run \`loop gate-coordination --repo ${options.repo} --pr ${options.pr}\` to re-read the boundary; the refused coordination nextAction is ${coordination.nextAction}.`;
+  return error;
 }
 function selectGateEvidence(evidence, gate) {
   if (gate === "draft_gate") {
@@ -2160,6 +2164,8 @@ export function buildCoordinationEvaluatorInput({
     // sameHeadCleanConverged, so an outstanding request on the current head refuses
     // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.
     copilotReviewRequestStatus: coordinationContext.snapshot?.copilotReviewRequestStatus ?? "none",
+    // Without it the evaluator refuses gate entry for an unavailable Copilot that the lifecycle state already reports.
+    copilotRequestNotObservable: coordinationContext.snapshot?.copilotRequestNotObservable === true,
     draftGateRequireCi: draftGateConfig.requireCi,
     preApprovalRequireCi: preApprovalGateConfig.requireCi,
     draftGate: coordinationContext.gateEvidence.draftGate,
@@ -2794,10 +2800,10 @@ export async function upsertCheckpointVerdict(options, runtime = {}) {
   }
 }
 
-async function postCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner, countPrOwnCommits = realCountPrOwnCommits, checkBaseFreshness, coordinationSnapshotRoot } = {}) {
+async function postCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner, countPrOwnCommits = realCountPrOwnCommits, checkBaseFreshness, coordinationSnapshotRoot, checkpointDir } = {}) {
   // One memo per invocation: the three baseRefOid,labels reads share one gh read; the write-guard re-reads stay live.
   const prViewMemo = new Map();
-  const gh = { env, ghCommand, repoRoot, runChild, coordinationSnapshotRoot, prViewMemo };
+  const gh = { env, ghCommand, repoRoot, runChild, coordinationSnapshotRoot, checkpointDir, prViewMemo };
   // Optional --spec-authority stamps the RETURNED result (this script's
   // durable verdict record — it posts no file of its own) with the pinned
   // revision identity, via the ONE shared stamp helper (ADR 0061). Read up
@@ -2943,12 +2949,12 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     const capacity = { gate: options.gate, headSha: canonicalHeadSha, round, cap: draftGateConfig?.maxReviewRounds ?? 0, roundActItems, converged: convergedInput };
     if (convergedInput.bodyOnly !== undefined && typeof convergedInput.bodyOnly !== "boolean") throw new Error(`--converged-json bodyOnly must be a boolean, got ${JSON.stringify(convergedInput.bodyOnly)}`);
     if (convergedInput.bodyOnly === true) {
-      // ADR 0271: the narrow facts the body-only exit checks; the pr-body digest is the one the cap round's context recorded at A.
+      // ADR 0271: the narrow facts the body-only exit checks; the pr-body digest is the one the round's context recorded at A.
       const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "body,baseRefName"], { env, ghCommand, runChild });
       // The same count check-pre-push-delta.mjs uses (fetches origin/<base>, base-only-merge test, resolution merges).
       const composeInput = {
         ...capacity,
-        // The ledger plus the passed findings, as for the act items: the cap-round blocking set reads the whole round.
+        // The ledger plus the passed findings, as for the act items: the blocking set reads the whole round.
         roundFindings: [...(preloadedFindingsLedger.findings ?? []), ...findings.filter((f) => !(preloadedFindingsLedger.findings ?? []).includes(f))],
         reviewedBodySha: await readReviewedBodySha256(options, canonicalHeadSha, repoRoot),
         liveBodySha: prBodySha256(live.body),
@@ -2977,18 +2983,17 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     }
     return [];
   };
-  // GATE-EXEC-BASE-REFRESH (issue 2885): a clean draft_gate or pre_approval_gate never records at a head that lacks origin/<base>.
+  // GATE-EXEC-BASE-REFRESH: a clean pre_approval_gate never records at a head that lacks origin/<base>; a draft_gate verdict records at a stale head.
   // An injected runChild test double skips the fetch unless the test injects the checker too.
   let staleBaseNote = null;
-  const refuseStaleBase = async (verdict = options.verdict) => {
+  const refuseStaleBase = async () => {
     const checkFreshness = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
     const prBase = coordinationContext?.prData?.baseRefName;
-    if (verdict === "clean" && !isReviewGate && checkFreshness && typeof prBase === "string" && prBase.trim()) {
-      // A converged or cap-round catch-up post records at the reviewed head; the base check belongs to the current PR head (the fixer commit, or a base merge after it).
+    if (options.verdict === "clean" && options.gate === "pre_approval_gate" && checkFreshness && typeof prBase === "string" && prBase.trim()) {
       let seen;
-      const stale = await staleBaseReason({ base: prBase.trim(), head: convergedInput || capRoundHead ? evidence.currentHeadSha : canonicalHeadSha, cwd: repoRoot, env, check: async (input) => (seen = await checkFreshness(input)) });
+      const stale = await staleBaseReason({ base: prBase.trim(), head: canonicalHeadSha, cwd: repoRoot, env, check: async (input) => (seen = await checkFreshness(input)) });
       // Only the base moved during the round: post the verdict with a visible note; the base-merge carry decides whether it stands at the new head.
-      if (stale && !convergedInput && !capRoundHead && await roundStartedAtCurrentBase(options, canonicalHeadSha, repoRoot, prBase.trim())) {
+      if (stale && await roundStartedAtCurrentBase(options, canonicalHeadSha, repoRoot, prBase.trim())) {
         staleBaseNote = `origin/${prBase.trim()} moved during the round (${seen.newerCommits.length} newer commit(s)). Merge it via scripts/loop/resolve-pr-conflicts.mjs; the base-merge carry decides whether this verdict stands at the new head.`;
         return;
       }
@@ -3038,7 +3043,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     if (convergedInput) {
       // A clean base merge after the fixer commit leaves the PR patch unchanged, so the fixer commit still stands for the PR head.
       const baseName = coordinationContext.prData?.baseRefName;
-      // Refresh origin/<base> first so the classifier reads the same base tip as the freshness check; the result is ignored here.
+      // Refresh origin/<base> first so the classifier reads the current base tip; the result is ignored here.
       const refreshBase = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
       if (convergedInput.fixerCommit !== evidence.currentHeadSha && refreshBase && typeof baseName === "string" && baseName.trim()) {
         await refreshBase({ base: baseName.trim(), head: evidence.currentHeadSha, cwd: repoRoot, env, trusted: true }).catch(() => null);
@@ -3164,21 +3169,14 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       && !coordination.draftGateAlreadySatisfied
       && coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE)
     ) {
-      // Refuse before the transition mutates the PR (draft conversion and restore). Without --verdict the ledger verdict stands in, composed like the later derivation except that it omits the past-cap draft_gate blockers: a fully judged ledger is clean when it has no open act item, whatever its severity overallVerdict says. On a past-cap round a ledger that would compose blocked there is still refused at a stale head, and the merge remedy applies before any post. With --findings-json the act items are not loaded yet, so the final verdict can be findings_present (unchanged by this refusal) and clean (still refused): the early check is skipped and the post-transition refuseStaleBase call decides, restoring ready on error.
-      let earlyVerdict = options.verdict;
-      let earlyLedger;
       if (options.findingsLedger) {
-        // The ledger decides the execution mode, so the inline-reason refusal also runs before the transition.
-        earlyLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+        // The ledger decides the execution mode, so the inline-reason refusal runs before the transition.
+        const earlyLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
         promoteLedgerFanout(options, earlyLedger);
         if ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent" && options.inlineReason === undefined) {
           throw new Error(INLINE_REASON_REQUIRED_MESSAGE);
         }
       }
-      if (earlyVerdict === undefined && earlyLedger && !options.findingsJson) {
-        earlyVerdict = composeReviewVerdict(earlyLedger.overallVerdict, earlyLedger.findings ?? []);
-      }
-      await refuseStaleBase(earlyVerdict);
       return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild, checkBaseFreshness, coordinationSnapshotRoot });
     }
     // Fail closed on a lagged draft-state read: we are re-entering FROM
@@ -3213,7 +3211,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       prDraft: true,
     }), requestedGateAction);
     if (gateActionForbidden && !forbidOnlyByCapFixed && !capRoundWaiver) {
-      throw new Error(buildGateEntryRefusalError({ options, coordination }));
+      throw buildGateEntryRefusalError({ options, coordination });
     }
     // Post-time fan-out evidence enforcement: refuse an under-qualified inline
     // verdict here, before it is posted, for every verdict value. No override

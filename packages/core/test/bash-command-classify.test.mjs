@@ -45,6 +45,7 @@ import {
   commandContainsInlineInterpreter,
   classifyDecisionRecorderCommand,
   commandContainsCodeVerificationEntrypoint,
+  shellWriteTargets,
   tokenizeShellCommand,
 } from "../src/loop/bash-command-classify.mjs";
 import { decideBashGate } from "../src/claude/hook-decisions.mjs";
@@ -1926,4 +1927,178 @@ test("commandContainsInlineInterpreter shifts a wrapper flag value that is named
 
 test("classifyDecisionRecorderCommand keeps a launcher word after a bare wrapper flag", () => {
   assert.notEqual(classifyDecisionRecorderCommand("sudo -n node scripts/github/record-operator-*.mjs --repo o/n"), null);
+});
+
+// OPS-EDITOR-TOOL-WRITES (issue 2683): shellWriteTargets, one case per command form of the rows 1 to 18 table.
+const w = (path, op = "write", unresolvable = false, sources) => ({ path, op, unresolvable, ...(sources && { sources }) });
+const SHELL_WRITE_CASES = [
+  // row 1
+  ["sed -i '' 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["sed -i.bak 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["sed --in-place 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["sed -i -e 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["sed -i -e's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["sed -i -es/a/b/ src/a.mjs", [w("src/a.mjs")]],
+  ["sed -isafe 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["sed -E -i 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["sed -n '1,5p' src/a.mjs", []],
+  ["setsid sed -i 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["gtimeout 5 sed -i 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["busybox sed -i 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["ionice -c3 sed -i 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["setsid sed -n '1,5p' src/a.mjs", []],
+  ["gtimeout 5 grep -n 'sed -i' src/a.mjs", []],
+  ["sed -i 's/a/b/' tmp/x.md", [w("tmp/x.md")]],
+  ["sed -isafe 's/a/b/' tmp/x.md", [w("tmp/x.md")]],
+  ["sed -E -i 's/a/b/' tmp/x.md", [w("tmp/x.md")]],
+  ["sed -i '' 's/a/b/' .devloops", [w(".devloops")]],
+  // row 2
+  ["perl -pi -e 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["perl -0pi -e 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["perl -pi -e's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["perl -0pi -e's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["perl -pi -E's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["perl -0pi -E's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["perl -pi -Esay src/a.mjs", [w("src/a.mjs")]],
+  // row 3
+  ["printf 'x' > changes/x.md", [w("changes/x.md")]],
+  ["echo x >> src/a.mjs", [w("src/a.mjs")]],
+  ["cmd 2> src/a.mjs", [w("src/a.mjs")]],
+  ["cmd &> src/a.mjs", [w("src/a.mjs")]],
+  ["cmd >| src/a.mjs", [w("src/a.mjs")]],
+  ["printf x >changes/x.md", [w("changes/x.md")]],
+  // row 4
+  ["cat >> src/a.mjs <<EOF\nline\nEOF", [w("src/a.mjs")]],
+  ["cat > src/a.mjs <<'EOF'\nline\nEOF", [w("src/a.mjs")]],
+  // row 5
+  ["cmd | tee src/a.mjs", [w("src/a.mjs")]],
+  ["cmd | tee -a src/a.mjs", [w("src/a.mjs")]],
+  // a `tee` operand inside `>(...)` is the substitution's command, not a file
+  ["bun test 2>&1 | tee >(grep -c fail) tmp/log", [w("tmp/log")]],
+  ["cmd | tee >(wc -l) /dev/null", [w("/dev/null")]],
+  // `>` inside `(( ))` and `[[ ]]` is a comparison, not a redirect
+  ["(( i > n )) && echo y", []],
+  ["[[ \"$a\" > \"$b\" ]]", []],
+  ["for f in a b; do (( i > n )) && break; done", []],
+  ["((i>n)) && echo y > src/a.mjs", [w("src/a.mjs")]],
+  // a group opens only at command position: a `[[` argument is a plain word, and an escaped `))` closes no `((` group
+  ["echo [[ > src/a.mjs ]]", [w("src/a.mjs")]],
+  ["((echo hi) > src/a.mjs 2>x\\))", [w("src/a.mjs"), w("x")]],
+  ["if [[ \"$a\" > \"$b\" ]]; then echo y; fi", []],
+  // quoted and escaped parens in `<(...)` do not count toward its depth
+  ["cat <(echo '(') > src/a.mjs", [w("src/a.mjs")]],
+  ["cat <(echo \\() > src/a.mjs", [w("src/a.mjs")]],
+  ["cat <(echo \"(\") > src/a.mjs", [w("src/a.mjs")]],
+  ["((echo hi) > src/a.mjs)", [w("src/a.mjs")]],
+  // a `((` group is arithmetic only while its parens stay balanced up to the closing `))`; otherwise bash reads nested subshells
+  ["((cat) > src/a.mjs < <(echo))", [w("src/a.mjs")]],
+  ["((echo hi) > src/a.mjs 2> >(cat))", [w("src/a.mjs")]],
+  // a redirect glued after the `)` that closes a process substitution is still read
+  ["cat <(echo hi)>src/a.mjs", [w("src/a.mjs")]],
+  ["cmd | tee >(grep x)>src/a.mjs", [w("src/a.mjs")]],
+  ["{ a; b; } > src/a.mjs", [w("src/a.mjs")]],
+  ["( a ) >> src/a.mjs", [w("src/a.mjs")]],
+  // row 6, 7, 8
+  ["command cp -f x src/a.mjs", [w("src/a.mjs", "copy", false, ["x"])]],
+  ["command cp -f x changes/x.md", [w("changes/x.md", "copy", false, ["x"])]],
+  ["command mv -f src/a.mjs changes/x.md", [w("src/a.mjs", "remove"), w("changes/x.md", "copy", false, ["src/a.mjs"])]],
+  ["cp x src/", [w("src/", "copy", false, ["x"])]],
+  ["cp a b src/", [w("src/", "copy", false, ["a", "b"])]],
+  ["cp -t dir src", []],
+  ["cp --target-directory=dir src", []],
+  ["command rm -f src/a.mjs", [w("src/a.mjs", "remove")]],
+  ["rm bun.lock && bun install", [w("bun.lock", "remove")]],
+  // row 9: the target joins the last literal cd
+  ["cd /x/wt && sed -i 's/a/b/' src/a.mjs", [w("/x/wt/src/a.mjs")]],
+  ["cd sub && cd deeper && echo x > a.md", [w("sub/deeper/a.md")]],
+  ["cd sub && echo x > /abs/a.md", [w("/abs/a.md")]],
+  // row 10: unresolvable targets
+  ["sed -i 's/a/b/' \"$f\"", [w("$f", "write", true)]],
+  ["echo x > $out", [w("$out", "write", true)]],
+  ["cd \"$W\" && echo x > a.md", [w("a.md", "write", true)]],
+  ["cd a && cd \"$W\" && echo x > b", [w("b", "write", true)]],
+  ["echo x > docs/*.md", [w("docs/*.md", "write", true)]],
+  // row 11: payload words
+  ["bash -c \"sed -i 's/a/b/' src/a.mjs\"", [w("src/a.mjs")]],
+  ["eval \"echo x > src/a.mjs\"", [w("src/a.mjs")]],
+  // row 12: targets the hook classifies as outside every repository or ignored
+  ["sed -i 's/a/b/' tmp/x.md", [w("tmp/x.md")]],
+  ["sed -isafe 's/a/b/' tmp/x.md", [w("tmp/x.md")]],
+  ["sed -E -i 's/a/b/' tmp/x.md", [w("tmp/x.md")]],
+  ["printf x > tmp/x.md", [w("tmp/x.md")]],
+  ["cmd > /dev/null 2>&1", [w("/dev/null")]],
+  ["cmd 2>&1", []],
+  ["cp /dev/null /dev/null", [w("/dev/null", "copy", false, ["/dev/null"])]],
+  ["sed -n '1,5p' src/a.mjs", []],
+  // row 13
+  ["dev-loops-run --repo-root /x/wt scripts/loop/x.mjs --a b > tmp/out.json", [w("tmp/out.json")]],
+  // row 14
+  ["grep -n \"sed -i\" src/a.mjs", []],
+  ["rg 'perl -pi' skills", []],
+  ["git commit -m \"drop sed -i > x\"", []],
+  ["echo \"> x\"", []],
+  // row 15
+  ["cat > tmp/x.md <<'EOF'\nsed -i s/a/b/ src/a.mjs\necho x > src/a.mjs\nEOF", [w("tmp/x.md")]],
+  // row 16
+  ["git apply p.patch", []],
+  ["node scripts/claude/generate-claude-assets.mjs", []],
+  ["cd \"$W\" && dev-loops-run scripts/loop/x.mjs --construct", []],
+  // row 18: a script under tmp/
+  ["dev-loops-run --repo-root /x/wt tmp/x.mjs", [{ ...w("tmp/x.mjs", "run"), launcher: true }]],
+  ["cd packages && dev-loops-run tmp/x.mjs", [{ ...w("tmp/x.mjs", "run"), launcher: true }]],
+  ["cd packages && dev-loops-run scripts/loop/x.mjs", []],
+  ["node tmp/x.mjs", [w("tmp/x.mjs", "run")]],
+  ["bun tmp/x.mjs", [w("tmp/x.mjs", "run")]],
+  ["bun run tmp/x.mjs", [w("tmp/x.mjs", "run")]],
+  ["cd /x/wt && node tmp/x.mjs", [w("/x/wt/tmp/x.mjs", "run")]],
+  ["node --import tsx tmp/x.mjs", [w("tmp/x.mjs", "run")]],
+  ["cd tmp && node x.mjs", [w("tmp/x.mjs", "run")]],
+  ["node /x/wt/tmp/x.mjs", [w("/x/wt/tmp/x.mjs", "run")]],
+  ["node scripts/x.mjs", []],
+  // a redirect operator embedded in a word, with no space
+  ["printf x>changes/x.md", [w("changes/x.md")]],
+  ["echo x>src/a.mjs", [w("src/a.mjs")]],
+  ["echo x>>src/a.mjs", [w("src/a.mjs")]],
+  ["cat>src/a.mjs<<EOF\nline\nEOF", [w("src/a.mjs")]],
+  ["{ echo x; }>src/a.mjs", [w("src/a.mjs")]],
+  ["echo x&>src/a.mjs", [w("src/a.mjs")]],
+  ["echo x 2>/dev/null>src/a.mjs", [w("/dev/null"), w("src/a.mjs")]],
+  ["echo x 2>&1>src/a.mjs", [w("src/a.mjs")]],
+  ["echo \"a>b\" 'c>d' e\\>f", []],
+  // launchers: xargs, find -exec and value-taking flags
+  ["git ls-files | xargs sed -i 's/a/b/'", [w("<stdin>", "write", true)]],
+  ["xargs -0 perl -pi -e 's/a/b/'", [w("<stdin>", "write", true)]],
+  ["xargs -I{} sed -i 's/a/b/' {}", [w("{}", "write", true)]],
+  ["find src -exec sed -i 's/a/b/' {} +", [w("{}", "write", true)]],
+  ["find src -execdir sed -i 's/a/b/' {} \\;", [w("{}", "write", true)]],
+  ["find src -name x -exec echo {} \\;", []],
+  ["timeout 5 sed -i 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["env -u X cp x src/a.mjs", [w("src/a.mjs", "copy", false, ["x"])]],
+  ["sudo -u u cp x src/a.mjs", [w("src/a.mjs", "copy", false, ["x"])]],
+  // a fully single-quoted path is literal; an unquoted or double-quoted metacharacter is not
+  ["echo x > 'tmp/a[1].md'", [w("tmp/a[1].md")]],
+  ["printf x > 'tmp/run-$1.md'", [w("tmp/run-$1.md")]],
+  ["echo x > \"$f\"", [w("$f", "write", true)]],
+  ["echo x > tmp/*.md", [w("tmp/*.md", "write", true)]],
+  ["echo x > \"tmp/$x.md\"", [w("tmp/$x.md", "write", true)]],
+  // a process substitution writes no file
+  ["cmd 2> >(grep x)", []],
+  ["cmd > >(tee f)", []],
+  ["bun test 2> >(grep -v warn >&2)", []],
+  // an input redirect and a subshell group
+  ["tee out < in", [w("out")]],
+  ["(cd a && echo x>c)", [w("a/c")]],
+  ["(cd a && echo x > c)", [w("a/c")]],
+];
+
+test("shellWriteTargets returns each write target with its operation (issue 2683 rows 1 to 18)", () => {
+  for (const [command, expected] of SHELL_WRITE_CASES) {
+    assert.deepEqual(shellWriteTargets(command), expected, command);
+  }
+});
+
+test("commandContainsCodeVerificationEntrypoint matches the run-bun-test wrapper line, with or without --repo-root (issue 2683 row 17)", () => {
+  assert.equal(commandContainsCodeVerificationEntrypoint("dev-loops-run scripts/run-bun-test.mjs packages/core/test/a.test.mjs"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("dev-loops-run --repo-root /x/wt scripts/run-bun-test.mjs a.test.mjs"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("dev-loops-run scripts/loop/other.mjs"), false);
 });

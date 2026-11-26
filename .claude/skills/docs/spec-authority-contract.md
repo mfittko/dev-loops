@@ -60,7 +60,7 @@ The judge-pass bridge (`judge-pass.mjs`, engaged by `--spec-file`) ENFORCES the 
 ## Last-resort human escalation
 
 <!-- rule: SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT -->
-`SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT`: only a `spec_cannot_decide` outcome escalates to the human-spec-decision state. A finding/remediation conflict alone does NOT justify escalation when the judge can reject it or route to a compliant alternative. When any finding needs a human spec decision, the judge-pass bridge fails closed and stops the loop at that state instead of feeding the fixer an act list from an undecidable spec.
+`SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT`: only a `spec_cannot_decide` outcome escalates to the human-spec-decision state. A finding/remediation conflict alone does NOT justify escalation when the judge can reject it or route to a compliant alternative. When any finding needs a human spec decision, the judge-pass bridge fails closed and stops the loop at that state instead of feeding the fixer an act list from an undecidable spec. After the human decision changes the spec, the same-head rerun retires the stopped round automatically when the spec digest differs from the one the round's judge plan pinned (`GATE-EXEC-ROUND-RETIREMENT`, ADR 0333), so no operator retirement is needed.
 
 ## Human-only spec change
 

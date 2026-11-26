@@ -275,7 +275,7 @@ stateDiagram-v2
 
 Type: `flowchart`
 
-How a `draft_gate` round ends under the round cap. Rounds 1 to the cap run and a clean round stops early. Round cap+1 is the scoped final round of `GATE-EXEC-CAP-BRAKES`, and its clean verdict is the only draft exit after the cap round. A later round goes to the operator. Below the cap, act items go to the fixer and the next full round runs. At the cap, only a named human decision blocks (`pastCapBlockers`); a low/nit act list or a body-only act list may converge without a new full round. A cap of 0 disables the cap, because `isRoundRefused` and `isCapRound` both require `cap > 0`. The growth stop (`growth_past_forecast`) is enforced: `resolveCapBrakes` reads the forecast and `decideCapRound` stops the lane. Derived from `packages/core/src/loop/review-round-cap.mjs`, `pastCapBlockers` in `packages/core/src/loop/gate-fanin.mjs`, `composeConvergedDraftGate` and `composeBodyOnlyConvergedDraftGate` in `packages/core/src/loop/pre-push-delta-review.mjs`, and `countCompletedRounds` in `scripts/github/write-gate-context.mjs`.
+How a `draft_gate` round ends under the round cap. Rounds 1 to the cap run and a clean round stops early. Round cap+1 is the scoped final round of `GATE-EXEC-CAP-BRAKES`, and its clean verdict is the only draft exit after the cap round. A later round goes to the operator. Below the cap, act items go to the fixer and the next full round runs. At the cap, only a named human decision blocks (`pastCapBlockers`); a low/nit act list may converge without a new full round. A body-only act list converges through the body-only post at every round up to the cap, and a blocker in it blocks at any round. A cap of 0 disables the cap, because `isRoundRefused` and `isCapRound` both require `cap > 0`. The growth stop (`growth_past_forecast`) is enforced: `resolveCapBrakes` reads the forecast and `decideCapRound` stops the lane. Derived from `packages/core/src/loop/review-round-cap.mjs`, `pastCapBlockers` in `packages/core/src/loop/gate-fanin.mjs`, `composeConvergedDraftGate` and `composeBodyOnlyConvergedDraftGate` in `packages/core/src/loop/pre-push-delta-review.mjs`, and `countCompletedRounds` in `scripts/github/write-gate-context.mjs`.
 
 ```mermaid
 flowchart TD
@@ -288,7 +288,7 @@ flowchart TD
   RF -->|no| CLN{"Posted clean?"}
   CLN -->|yes| PASS["Stop early: gate passes"]
   CLN -->|no| CAP{"n equals cap?"}
-  CAP -->|no| FIX["Fixer, then next full round"]
+  CAP -->|no| FIX["Fixer, then next full round<br/>(a body-only list takes the body-only post)"]
   CAP -->|yes| BLK{"pastCapBlockers non-empty?"}
   BLK -->|yes| HUM["blocked: round_cap_reached<br/>(operator decision)"]
   BLK -->|no| LOW{"All act items low or nit?"}

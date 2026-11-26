@@ -232,6 +232,11 @@ Post-watch read pattern: after a probe/watch settles, do not parse its output â€
 
 If the polling interval is 1 minute, do not treat silence shorter than one full poll interval as suspicious, and do not configure needs-attention thresholds close to a few seconds for this loop.
 
+## Hard rule: editor-tool writes
+
+<!-- rule: OPS-EDITOR-TOOL-WRITES -->
+`OPS-EDITOR-TOOL-WRITES`: A coordinator (`dev-loop`, `gate-coordinator`), developer or fixer MUST write repository files with the Edit and Write tools, never with a direct shell write (a redirect, `tee`, `sed -i`, `perl -i` or a `cp`/`mv` over an existing file). A repo script that a task or work order names, such as the asset generator or a `--construct` recorder, may write files. The Claude Bash gate denies a shell write whose target is a repository file that is not gitignored (tracked or new), or whose target it cannot resolve. A write is a redirect, `tee`, `sed -i` or `perl -i`. A coordinator is also denied a repo-mutating `cp`/`mv` destination, an `rm`/`mv` of an existing repository file or directory and a `dev-loops-run`, `node` or `bun` script under the repository `tmp/`. A developer or fixer is also denied a `cp`/`mv` over an existing file, including `<dir>/<basename>` for a directory destination, and any `cp`/`mv` under a `.git` segment, and keeps a copy or rename to a new path and `rm`, because Edit and Write cannot rename or delete (`WORKTREE-NONINTERACTIVE-FILE-OPS`). A target under `tmp/`, another gitignored path or outside every repository (`/dev/null`) is allowed. A coordinator deny names `COORDINATOR_DELEGATION_BOUNDARY` (delegate the edit to a developer worker). A developer or fixer deny names this rule (write the file with the Edit or Write tool). A deny of an unresolvable target also says to rerun with a literal path. The gate does not classify `git apply`, `patch`, `git checkout -- <path>`, package managers or scripts under `scripts/` or `cli/` that write files. Pi stays convention-only (ADR 0328).
+
 ## Hard rule: no timeout wrapper
 
 <!-- rule: OPS-NO-TIMEOUT-WRAPPER -->

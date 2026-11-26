@@ -41,6 +41,7 @@ Optional:
   --row-manifest <p>       Path to a JSON array of rows to drop (only used with --confirm).
   --confirm                Authorize the destructive steps (row drop + worktree removal + gist deletion).
   --no-stop-app            Do NOT stop the app process (clean shutdown otherwise runs regardless of --confirm).
+  --out <p>                Also write the result JSON to <p> (pass it to the next stage; no shell redirect).
   -h, --help               Show this help.
 Output (stdout, JSON):
   { "ok": bool, "confirmed": bool, "errors": [...], "logs": [...],
@@ -66,6 +67,7 @@ export function parseUiReviewTeardownCliArgs(argv) {
       "row-manifest": { type: "string" },
       confirm: { type: "boolean" },
       "no-stop-app": { type: "boolean" },
+      out: { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -88,6 +90,7 @@ export function parseUiReviewTeardownCliArgs(argv) {
       continue;
     }
     if (token.name === "no-stop-app") { options.stopApp = false; continue; }
+    if (token.name === "out") { options.out = requireTokenValue(token, parseError); continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -330,7 +333,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       log: (msg) => stderr.write(`[ui-review-teardown] ${msg}\n`),
     },
   );
-  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.ok });
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.ok, out: options.out });
 }
 
 if (isDirectCliRun(import.meta.url)) {

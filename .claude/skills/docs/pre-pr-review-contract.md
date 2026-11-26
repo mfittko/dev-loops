@@ -236,8 +236,13 @@ fixer and owns the push. The sequence is:
    After a pushed candidate X is contained by live H, the disposition verifier can
    deliver open threads at H while preserving X's authenticated report and Delta.
    It checks historical root ranges and every intervening commit before delivery.
+   A merge of the base branch between X and H passes when `fixerEmitCarryAccepts`
+   proves it, X..H holds no PR-own non-merge commit and the site file is
+   unchanged (ADR 0330).
    `thread_site_changed` or `thread_site_unverifiable` names the open thread for
-   the full `pre_approval_gate` input instead. LEFT-side or missing coordinates,
+   the full `pre_approval_gate` input on a ready PR; on a draft PR it names
+   `gate close-sequence`, then the next `draft_gate` round with the thread in
+   `--known-findings`. LEFT-side or missing coordinates,
    deleted/binary files and nonlinear history use this conservative fallback.
    Current-head CI and the existing draft boundary still apply. An unresolved
    gate-authored thread can still block admission to that full round; recovery

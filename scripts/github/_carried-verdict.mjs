@@ -106,8 +106,10 @@ export async function convergedCarryAccepts({ originHead, headSha, baseRef, repo
 /**
  * The fixer-emit carry seam (issue 2752 slice 4, GATE-EXEC-POST-BEFORE-FIX): true only when a verdict posted at
  * `originHead` may stand for `headSha` because every PR blob is identical at both heads (no conflict hunks).
- * It skips the gate-tooling rule, records nothing and returns no marker, so it never satisfies gate
- * coordination or merge-pr (their validator recomputes with the tooling rule). Any failure is false.
+ * It skips the gate-tooling rule, records nothing and returns no verdict marker, so it never satisfies a
+ * verdict check in gate coordination or the merge gate (their validator recomputes with the tooling rule).
+ * The unobservable-review-request record also calls it, to carry a threshold record across a base-only
+ * merge. Any failure is false.
  */
 export async function fixerEmitCarryAccepts({ originHead, headSha, baseRef, repoRoot }) {
   if (!originHead || !headSha || !baseRef) return false;

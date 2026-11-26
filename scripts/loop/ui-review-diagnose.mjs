@@ -39,6 +39,7 @@ Required:
   --drive-result <p>  Path to the drive stage's JSON result (its failures + captures).
 Optional:
   --repo <slug>       Repository slug (auto-detected from the git remote when omitted).
+  --out <p>           Also write the result JSON to <p> (pass it to the next stage; no shell redirect).
   -h, --help          Show this help.
 Output (stdout, JSON):
   { "ok": bool, "pr": {number,headRefName,headSha,baseRefName,state},
@@ -60,6 +61,7 @@ export function parseUiReviewDiagnoseCliArgs(argv) {
       pr: { type: "string" },
       "drive-result": { type: "string" },
       repo: { type: "string" },
+      out: { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -85,6 +87,7 @@ export function parseUiReviewDiagnoseCliArgs(argv) {
       options.repo = requireTokenValue(token, parseError);
       continue;
     }
+    if (token.name === "out") { options.out = requireTokenValue(token, parseError); continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -152,7 +155,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
 
   // ok reflects a clean review (no findings), consistent with the drive stage.
   const result = { ok: counts.total === 0, pr, findings, counts, states };
-  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.ok });
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.ok, out: options.out });
 }
 
 if (isDirectCliRun(import.meta.url)) {

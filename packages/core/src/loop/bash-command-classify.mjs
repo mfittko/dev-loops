@@ -8,6 +8,8 @@
  * Pure and side-effect free.
  */
 
+import path from "node:path";
+
 /**
  * The dev-loops repo itself. Retained ONLY for the Pi extension's
  * (`extension/post-merge-update.ts`) dev-loops-repo SELF-UPDATE scoping (`markPendingUpdate` /
@@ -1037,6 +1039,250 @@ function writeTargets(seg) {
   return targets.filter((t) => t && !/^\d+$|^-$/.test(t)).map((t) => t.replace(/^\.\//, ""));
 }
 
+export const UNRESOLVABLE_WORD_RE =/[$`*?[{]|^~/;
+/** Wrapper binaries whose first argument is the real command to classify. */
+const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command", "nohup", "exec", "stdbuf", "setsid", "ionice", "busybox"]);
+// One list owns wrapper heads: WRAPPER_BINARIES plus the timeouts and `builtin`.
+const LAUNCHER_NAMES = new Set([...WRAPPER_BINARIES, "timeout", "gtimeout", "builtin"]);
+const LAUNCHER_RE = { test: (name) => LAUNCHER_NAMES.has(name) };
+/** Launcher flags that take the next word as their value. */
+const LAUNCHER_VALUE_FLAG_RE = {
+  env: /^(?:-[uCS]|--(?:unset|chdir|split-string))$/,
+  sudo: /^-[ughpCDRTU]$/,
+  timeout: /^-[sk]$/,
+  gtimeout: /^-[sk]$/,
+  xargs: /^(?:-[InPLsdEa]|--(?:max-args|max-procs|delimiter|arg-file))$/,
+  nice: /^-n$/,
+};
+const SCRIPT_VALUE_FLAG_RE = /^(?:--import|--require|-r|--loader|--experimental-loader|--cwd|--repo-root|--env-file|--conditions|-C)$/;
+const EXEC_FLAG_WORD_RE = /^-(?:exec|execdir|ok|okdir)$/;
+
+/**
+ * Splits an unquoted word at each embedded redirect operator (`x>f`, `x&>f`, `cat>f`, `2>/dev/null>f`); a quoted or substituted `>` stays data.
+ * A piece starts at its operator, with the fd digits when they make up the whole piece start. shortcut: `<` is not split (the tokenizer already splits `<<`).
+ */
+function splitAtRedirects(raw) {
+  const cuts = [];
+  let quote = null, depth = 0, last = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (quote === "'") { if (c === "'") quote = null; continue; }
+    if (c === "\\") { i++; continue; }
+    if (quote === '"') { if (c === '"') quote = null; continue; }
+    if (c === "'" || c === '"') quote = c;
+    else if (c === "$" && raw[i + 1] === "(") { depth++; i++; }
+    else if (c === ")" && depth > 0) depth--;
+    else if (c === ">" && depth === 0) {
+      let start = raw[i - 1] === "&" ? i - 1 : i;
+      let s = start;
+      while (s > last && /\d/.test(raw[s - 1])) s--;
+      if (raw.slice(last, start) === raw.slice(s, start)) start = s;
+      if (start > last) { cuts.push(start); last = start; }
+      while (/[>&|]/.test(raw[i + 1] ?? "")) i++;
+    }
+  }
+  return [0, ...cuts].map((from, j, all) => raw.slice(from, all[j + 1]));
+}
+const SED_IN_PLACE_RE = /^(?:-[a-zA-Z]*i|--in-place)/;
+const PERL_IN_PLACE_RE = /^-[0-9pnalswWtTuUSc]*i/;
+const TMP_SCRIPT_RE = /(?:^|\/)tmp\//;
+
+/**
+ * Write targets of one segment: redirect words (an operator is read from the raw word, so a quoted `">"` is data) and the program's own operands.
+ * `place` joins a word to the last literal `cd` and flags it unresolvable. shortcut: `cp`/`mv -t DIR` and `dd of=`, `install`, `ln`, `touch` are not read; extend when a lane shows one.
+ */
+function segmentWriteTargets(seg, place) {
+  const out = [];
+  const operands = [];
+  const unparen = (v) => v.replace(/^\(+|\)+$/g, "");
+  // Quoted and escaped characters are data, so they never count as parens.
+  const parenDelta = (raw) => {
+    const bare = raw.replace(/'[^']*'|"(?:\\.|[^"\\])*"|\\./g, "");
+    return bare.split("(").length - bare.split(")").length;
+  };
+  // `close` ends the raw word with unescaped characters (an even run of backslashes before it).
+  const closes = (raw, close) => raw.endsWith(close) && (raw.slice(0, -close.length).match(/\\*$/)[0].length % 2 === 0);
+  // A `(( ... ))` or `[[ ... ]]` group that opens at command position and closes in this segment holds comparisons, so its `>` is no redirect. An unclosed `((` stays visible (it may be a subshell).
+  // A `((` group is arithmetic only when its unquoted parens never go below zero before a closing `))` at a word end; otherwise bash reads nested subshells (`((cat) > f < <(x))`).
+  const arithEnd = (from) => {
+    let depth = 0;
+    for (let j = from; j < seg.words.length; j++) {
+      const x = seg.words[j];
+      if (x.op) continue;
+      const raw = j === from ? x.raw.slice(2) : x.raw;
+      let q = null;
+      for (let k = 0; k < raw.length; k++) {
+        const c = raw[k];
+        if (q === "'") { if (c === "'") q = null; continue; }
+        if (c === "\\") { k++; continue; }
+        if (q === '"') { if (c === '"') q = null; continue; }
+        if (c === "'" || c === '"') q = c;
+        else if (c === "(") depth++;
+        else if (c === ")") {
+          if (depth > 0) depth--;
+          else return raw[k + 1] === ")" && k + 2 === raw.length ? j : -1;
+        }
+      }
+    }
+    return -1;
+  };
+  const noTests = [];
+  let atCommand = true;
+  for (let i = 0; i < seg.words.length; i++) {
+    const w = seg.words[i];
+    const end = !atCommand || w.op ? -1 : w.raw.startsWith("((") ? arithEnd(i) : w.raw === "[[" ? seg.words.findIndex((x, j) => j > i && !x.op && closes(x.raw, "]]")) : -1;
+    if (end >= 0) i = end;
+    else {
+      noTests.push(w);
+      atCommand &&= !w.op && (ENV_ASSIGNMENT_WORD_RE.test(w.raw) || /^(?:!|if|elif|while|until|do|then|else)$/.test(w.raw));
+    }
+  }
+  // The words of a `>(cmd args)` / `<(cmd args)` process substitution after its opening word are a command, not operands.
+  // The text after the unquoted `)` that brings `depth` to zero is outside the substitution (`<(a)>f`), so a redirect there is still read.
+  const afterClose = (raw, depth) => {
+    let q = null;
+    for (let k = 0; k < raw.length; k++) {
+      const c = raw[k];
+      if (q === "'") { if (c === "'") q = null; continue; }
+      if (c === "\\") { k++; continue; }
+      if (q === '"') { if (c === '"') q = null; continue; }
+      if (c === "'" || c === '"') q = c;
+      else if (c === "(") depth++;
+      else if (c === ")" && --depth === 0) return { depth, rest: raw.slice(k + 1) };
+    }
+    return { depth, rest: null };
+  };
+  let substDepth = 0;
+  const emit = (w) => {
+    if (w.op) return [w];
+    const pieces = splitAtRedirects(w.raw);
+    return pieces.length === 1 ? [w] : pieces.map((raw) => ({ raw, value: tokenizeShellCommand(raw).segments[0]?.words[0]?.value ?? raw }));
+  };
+  const words = noTests.flatMap((w) => {
+    if (substDepth > 0) {
+      const { depth, rest } = afterClose(w.raw, substDepth);
+      substDepth = depth;
+      return rest ? emit({ raw: rest, value: tokenizeShellCommand(rest).segments[0]?.words[0]?.value ?? rest }) : [];
+    }
+    if (!w.op && /^\d*[<>]\(/.test(w.raw)) substDepth = Math.max(0, parenDelta(w.raw));
+    return emit(w);
+  });
+  // A value is literal when every word that spells it is fully single-quoted, so `'tmp/a[1].md'` is no glob while `tmp/a[1].md` is.
+  const literal = new Map();
+  for (const w of words) {
+    if (w.op) continue;
+    const m = REDIRECT_RE.exec(w.raw);
+    const [value, raw] = m?.[1] ? [REDIRECT_RE.exec(w.value)?.[1] ?? "", m[1]] : [unparen(w.value), w.raw];
+    literal.set(value, (literal.get(value) ?? true) && /^'[^']*'$/.test(raw));
+  }
+  const at = (value) => place(value, literal.get(value) === true);
+  for (let k = 0; k < words.length; k++) {
+    const w = words[k];
+    // An input redirect (`<`, `<<`, `<<<`) consumes the next word, a file or a delimiter.
+    if (w.op || /^\d*<$/.test(w.raw)) { if (!w.op || w.op.startsWith("<")) k++; continue; }
+    const m = REDIRECT_RE.exec(w.raw);
+    if (!m) { operands.push({ ...w, value: unparen(w.value) }); continue; }
+    const named = m[1] ? REDIRECT_RE.exec(w.value)?.[1] ?? "" : words[++k]?.value ?? "";
+    const target = unparen(named);
+    // `>(cmd)` / `<(cmd)` is a process substitution, not a file (tested before `unparen` strips its paren).
+    if (target && !/^\d+$|^-$/.test(target) && !/^\(|^[<>]\(/.test(named)) out.push({ ...at(target), op: "write" });
+  }
+  let i = 0;
+  let launched = false;
+  const base = (o) => o?.value.split("/").pop() ?? "";
+  while (operands[i] && ENV_ASSIGNMENT_WORD_RE.test(operands[i].raw)) i++;
+  for (;;) {
+    const name = base(operands[i]);
+    if (name === "find") {
+      // The command after `-exec`/`-execdir` runs up to its `;` or `+` terminator.
+      const e = operands.findIndex((o, j) => j > i && EXEC_FLAG_WORD_RE.test(o.value));
+      if (e < 0) break;
+      const end = operands.findIndex((o, j) => j > e && /^[;+]$/.test(o.value));
+      operands.splice(end < 0 ? operands.length : end);
+      i = e + 1;
+      launched = true;
+    } else if (LAUNCHER_RE.test(name)) {
+      launched ||= name === "xargs";
+      for (i++; operands[i]?.value.startsWith("-") || ENV_ASSIGNMENT_WORD_RE.test(operands[i]?.raw ?? ""); i++) if (LAUNCHER_VALUE_FLAG_RE[name]?.test(operands[i].value)) i++;
+      if (name === "timeout" || name === "gtimeout") i++;
+    } else break;
+  }
+  const head = base(operands[i]);
+  const args = operands.slice(i + 1).map((o) => o.value);
+  const flags = args.filter((a) => a.startsWith("-"));
+  const dashes = args.indexOf("--");
+  // A `-e`/`-f` flag takes the next word as its script, not as a file.
+  // sed's letter run stops before `i` (the rest is a backup suffix); only perl reads `-E` as a script flag.
+  const scriptFlag = head === "perl" ? "[efE]" : "[ef]";
+  const flagRun = head === "sed" ? "[a-hj-zA-Z]*" : "[a-zA-Z]*";
+  const attachedScriptRe = new RegExp(`^-${flagRun}${scriptFlag}.`);
+  const takesScript = (a) => (head === "sed" || head === "perl") && (new RegExp(`^-${flagRun}${scriptFlag}$`).test(a) || /^--(?:expression|file)$/.test(a));
+  const positional = args.filter((a, j) => a && (!a.startsWith("-") || (dashes >= 0 && j > dashes)) && !takesScript(args[j - 1] ?? ""));
+  const add = (value, op) => out.push({ ...at(value), op });
+  if (head === "tee") positional.forEach((p) => add(p, "write"));
+  else if (head === "sed" || head === "perl") {
+    // Without `-e`/`-f` the first positional is the script; with one, every positional is a file.
+    if (flags.some((f) => (head === "sed" ? SED_IN_PLACE_RE : PERL_IN_PLACE_RE).test(f))) {
+      const files = positional.slice(flags.some((f) => takesScript(f) || /^--(?:expression|file)=/.test(f) || attachedScriptRe.test(f)) ? 0 : 1);
+      files.forEach((p) => add(p, "write"));
+      // An in-place edit behind `xargs` or `find -exec` takes its files from the pipe, so no literal file means an unresolvable target.
+      if (launched && !files.length) out.push({ path: "<stdin>", unresolvable: true, op: "write" });
+    }
+  } else if (head === "cp" || head === "mv") {
+    // shortcut: `-t DIR` / `--target-directory` puts the destination first and is not read.
+    if (positional.length >= 2 && !flags.some((f) => /^-[a-zA-Z]*t$|^--target-directory/.test(f))) {
+      if (head === "mv") positional.slice(0, -1).forEach((p) => add(p, "remove"));
+      out.push({ ...at(positional.at(-1)), op: "copy", sources: positional.slice(0, -1) });
+    }
+  } else if (head === "rm") positional.forEach((p) => add(p, "remove"));
+  else if (/^(?:dev-loops-run|node|bun)$/.test(head)) {
+    // The script word: skip flags, their values and `run`; a placed path with a `tmp/` segment is a candidate for the hook to confirm.
+    const script = args.find((a, j) => !a.startsWith("-") && a !== "run" && !SCRIPT_VALUE_FLAG_RE.test(args[j - 1] ?? ""));
+    const placed = script && at(script);
+    // `dev-loops-run` resolves a relative script against a checkout root, never the shell cwd, so a `tmp/` script word needs no `cd` join or cwd check (`launcher`).
+    if (head === "dev-loops-run" && script && /^(?:\.\/)?tmp\//.test(script)) out.push({ path: script.replace(/^\.\//, ""), unresolvable: false, op: "run", launcher: true });
+    else if (placed && TMP_SCRIPT_RE.test(placed.path)) out.push({ ...placed, op: "run" });
+  }
+  return out;
+}
+
+/**
+ * OPS-EDITOR-TOOL-WRITES: the files a shell command writes, as `{ path, op, unresolvable }` in command order.
+ * `op` is `write` (redirect, `tee`, `sed -i`, `perl -i`), `copy` (a `cp`/`mv` destination), `remove` (an `rm`/`mv` source) or `run` (a `dev-loops-run`/`node`/`bun` script under `tmp/`).
+ * Walks the tokenizer's segments, so heredoc bodies and quoted data yield no target, and recurses into payload words (`bash -c`, `eval`) and substitutions.
+ * A relative path joins the last literal `cd` of the command. A word holding `$`, a backtick, a glob character or a leading `~` (unless the word is fully single-quoted), or a relative path after a `cd` with a non-literal argument, is `unresolvable`.
+ * A `copy` entry also carries `sources`, the `cp`/`mv` source words; the hook resolves a directory destination to `<dir>/<basename(source)>` with them.
+ * The caller resolves the remaining relative paths against its cwd and judges them.
+ * shortcut: a `cd` inside a `( ... )` group or a pipe stage leaks into later segments; the leak joins a path to the wrong directory, and extend the model when a lane shows one.
+ * @param {string} command @returns {{ path: string, op: "write"|"copy"|"remove"|"run", unresolvable: boolean, sources?: string[], launcher?: boolean }[]} `sources` is present for `op: "copy"`; `launcher` marks a `dev-loops-run` script resolved against a checkout root.
+ */
+export function shellWriteTargets(command) {
+  const out = [];
+  const walk = (segments, state) => {
+    for (const seg of segments) {
+      const place = (value, literal = false) => {
+        const unresolvable = !literal && UNRESOLVABLE_WORD_RE.test(value);
+        if (path.posix.isAbsolute(value)) return { path: value, unresolvable };
+        if (state.cdBad) return { path: value, unresolvable: true };
+        return { path: state.cd ? path.posix.join(state.cd, value) : value.replace(/^\.\//, ""), unresolvable };
+      };
+      if (segmentHead(seg).replace(/^\(+/, "") === "cd") {
+        const arg = seg.words.slice(1).find((w) => !w.op && !w.value.startsWith("-"))?.value.replace(/\)+$/, "");
+        if (!arg || arg === "-" || UNRESOLVABLE_WORD_RE.test(arg)) state.cdBad = true;
+        else if (path.posix.isAbsolute(arg)) Object.assign(state, { cd: arg, cdBad: false });
+        else state.cd = state.cd ? path.posix.join(state.cd, arg) : arg;
+      }
+      out.push(...segmentWriteTargets(seg, place));
+      seg.words.forEach((w, k) => {
+        if (isPayloadWord(seg.words, k)) walk(tokenizeShellCommand(w.value).segments, { ...state });
+        for (const sub of w.subs) walk(sub.segments, { ...state });
+      });
+    }
+  };
+  walk(tokenizeShellCommand(command).segments, { cd: null, cdBad: false });
+  return out;
+}
+
 const TEXT_FLAG_RE = /^(?:-m|--message|--body|--title|--notes)$/;
 const TEXT_FLAG_ATTACHED_RE = /^--(?:message|body|title|notes)=/;
 /** A `git commit` segment whose head is the bare name: the only host whose text flag value is inert. `gh` hosts are excluded. */
@@ -1571,8 +1817,6 @@ export function commandContainsTimeoutWrappedSanctionedTool(command) {
   });
 }
 
-/** Wrapper binaries whose first argument is the real command to classify. */
-const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command", "nohup", "exec", "stdbuf", "setsid", "ionice", "busybox"]);
 // A bare wrapper flag (`-n`, `--user`) takes the next word as its argument, unless that word is itself the command.
 const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS, "timeout", "gtimeout", "sleep"]);
 // The decision-recorder scan also keeps a launcher word after a bare wrapper flag (`sudo -n node ...`). The shared set leaves it out so `sudo -u node node -e` still shifts the user name.
@@ -1853,6 +2097,9 @@ const PACKAGE_MANAGER_VERIFY_RUN_RE = new RegExp(
  */
 const VITEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}(?:(?:npx|bunx)\\s+|bun\\s+x\\s+)?vitest(?:\\s|$)`, "i");
 
+/** The sanctioned test wrapper `dev-loops-run [--repo-root <wt>] scripts/run-bun-test.mjs`, which runs the same checks as `bun test`. */
+const RUN_BUN_TEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}dev-loops-run\\s+(?:--repo-root\\s+\\S+\\s+)?(?:\\S*/)?scripts/run-bun-test\\.mjs(?:\\s|$)`, "i");
+
 /**
  * COORDINATOR-VERIFY-BOUNDARY: whether `command` contains a known code-verification/
  * build entrypoint in ANY shell segment — `bun test`/`bun run verify`/`bun run build`, `vitest`,
@@ -1867,7 +2114,7 @@ const VITEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}(?:(?:npx|bunx)\\s+|bun\\s+x
  * @param {string} command @returns {boolean}
  */
 export function commandContainsCodeVerificationEntrypoint(command) {
-  return shellSegments(command).some((segment) => PACKAGE_MANAGER_VERIFY_RUN_RE.test(segment) || VITEST_RE.test(segment));
+  return shellSegments(command).some((segment) => PACKAGE_MANAGER_VERIFY_RUN_RE.test(segment) || VITEST_RE.test(segment) || RUN_BUN_TEST_RE.test(segment));
 }
 
 /**

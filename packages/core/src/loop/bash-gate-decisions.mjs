@@ -94,7 +94,10 @@ export function normalizeAgentType(agentType) {
 
 // Intermediate tokens exclude shell separators so a compound command that only names the file is not an invocation.
 // The interpreter may carry a path prefix and follow a backtick; the script path itself also matches as a command head.
-const UNRESOLVE_INVOCATION = /(?:(?:^|[\s;&|(`])(?:[^\s;&|()`]*\/)?(?:node\s+(?:(?!(?:--check|-c)\s)[^\s;&|()`]+\s+)*?|(?:dev-loops-run|bun)\s+(?:[^\s;&|()`]+\s+)*?)|(?:^|[\n;&|(`])\s*)[^\s;&|()`]*unresolve-review-thread\.mjs(?=$|[\s;&|)`<>"'}])/;
+// `optionalExt` also matches the extensionless run form (`bun scripts/github/<stem>`); a `.test.mjs` path or a name with a suffix after the stem still fails the end lookahead.
+const scriptInvocationRe = (stem, optionalExt = false) => new RegExp(String.raw`(?:(?:^|[\s;&|(\`])(?:[^\s;&|()\`]*\/)?(?:node\s+(?:(?!(?:--check|-c)\s)[^\s;&|()\`]+\s+)*?|(?:dev-loops-run|bun)\s+(?:[^\s;&|()\`]+\s+)*?)|(?:^|[\n;&|(\`])\s*)[^\s;&|()\`]*${stem}${optionalExt ? String.raw`(?:\.mjs)?` : String.raw`\.mjs`}(?=$|[\s;&|)\`<>"'}])`);
+const UNRESOLVE_INVOCATION = scriptInvocationRe("unresolve-review-thread");
+const MERGE_INVOCATION = scriptInvocationRe("merge-pr", true);
 /** True when the command runs scripts/github/unresolve-review-thread.mjs (issue 2577). */
 export const isUnresolveInvocation = (command) => typeof command === "string" && UNRESOLVE_INVOCATION.test(command);
 
@@ -135,6 +138,7 @@ export const BASH_GATE_RULES = Object.freeze([
   "OPS-DRAFT-FIRST-PR",
   "RAW-GH-PR-MERGE-BYPASS",
   "GATE-COMMENT-DRAFT-REQUIREMENTS",
+  "OPS-EDITOR-TOOL-WRITES",
 ]);
 
 /**
@@ -155,6 +159,7 @@ export const POLICY_HOOK_COMPLIANT_FORMS = Object.freeze({
   "OPS-DRAFT-FIRST-PR": "open the PR with `dev-loops-run cli/index.mjs pr create`",
   "OPERATOR-OWNED-LINE": "write the comment through scripts/github/comment-issue.mjs or edit-comment.mjs with --body-file, and run any read as a separate call",
   "COORDINATOR-VERIFY-BOUNDARY": "delegate the check to a quality worker; a gate coordinator runs `gate resolve-validation` or returns a typed observation",
+  "OPS-EDITOR-TOOL-WRITES": "write the file with the Edit or Write tool",
   "COORDINATOR_DELEGATION_BOUNDARY": "delegate the edit to a developer worker; a gate coordinator writes only round artifacts under `tmp/` and returns a typed observation",
   "GATE_COORDINATOR_REQUIRED": "dispatch one `gate-coordinator` agent for the round",
   "JUDGE_READ_BOUNDARY": "read with `Read` or a listed read-only search form",
@@ -260,19 +265,20 @@ export function decideUnresolveOwnerDeny({ command, role }) {
   return null;
 }
 
-/** Whether the raw command text names `merge-pr`, in any form (`--check` included) except a merge-pr test-file path (`merge-pr<suffix>.test.mjs`), once quote and backslash characters are stripped (Bash drops them: `merge-""pr`, `merge\-pr`). */
-export const commandMentionsMergePr = (command) => typeof command === "string" && command.replace(/\$?["']|\\/g, "").search(/merge-pr\b(?![\w.-]*\.test\.mjs\b)/) !== -1;
+// Bash drops quotes and backslashes (`merge-""pr`, `merge\-pr`, `'node' <path>`), so strip them all before the run-position match. No quote pairing: an escaped quote cannot flip it.
+const normalizeForMergeMatch = (command) => command.replace(/\$(?=["'])|[\\"']/g, "");
 
 /**
- * Merge ownership (issue 2500): `merge-pr.mjs` is orchestrator-owned, so a subagent Bash command whose raw text contains `merge-pr` is denied, `--check` included.
- * A merge-pr test-file path (`merge-pr<suffix>.test.mjs`) is exempt, so every run of the merge script stays denied (docs/decisions/0297-subagent-may-run-merge-test-files.md).
+ * Merge ownership (issue 2500, ADR 0331): `merge-pr.mjs` is orchestrator-owned, so a subagent Bash command that RUNS it is denied, `--check` included.
+ * The match is the run position (`scriptInvocationRe`) on the command with every quote and backslash stripped (Bash drops them: `merge-""pr`, `merge\-pr`, `merge-"pr".mjs`), with or without the `.mjs` extension.
+ * A read-only mention (`grep`, `git show`, `sed -n`) and a `.test.mjs` path do not run the script and are allowed.
  * The top-level session (role null) keeps the script. Keys on the role name alone, like the unresolve allowlist.
- * ponytail: ceiling: a name assembled by variable or command substitution (`m=merge; ...$m-pr`), or a substitution or expansion applied to an exempt test path (`f=.../merge-pr.test.mjs; node ${f/.test/}`), is not caught; the orchestrator is the only actor allowed to run the script.
+ * ponytail: ceiling: only the listed run forms are denied and any other shell form that runs the script is uncaught, for example a brace group (`{ <path>; }`). A quoted search pattern that holds a separator and the name (`rg "foo|<name>.mjs"`, `grep -nE "(<name>.mjs|x)"`) is a fail-closed over-deny. A name assembled by variable or command substitution (`m=merge; ...$m-pr`) or by a shell glob or brace expansion of the file name (`merge-pr.m*`, `merge-pr.{mjs,}`) is not caught; the orchestrator is the only actor allowed to run the script.
  * @param {{command: string, role: string|null|undefined}} params
  * @returns {{ruleId: null, reason: string}|null}
  */
 export function decideMergePrOwnerDeny({ command, role }) {
-  if (typeof role !== "string" || !commandMentionsMergePr(command)) return null;
+  if (typeof role !== "string" || typeof command !== "string" || !MERGE_INVOCATION.test(normalizeForMergeMatch(command))) return null;
   return {
     ruleId: null,
     reason: withHookMarker("MERGE_PR_OWNER",
@@ -321,8 +327,36 @@ export function decideMergePrOwnerDeny({ command, role }) {
  *   line of the reason; the null-ID denies mark themselves with their own deny id.
  */
 export function decideBashGateDeny(facts = {}) {
-  const deny = decideBashGateDenyUnmarked(facts);
+  const deny = decideBashGateDenyUnmarked(facts) ?? decideShellWriteDeny(facts ?? {});
   return deny && { ...deny, reason: withHookMarker(deny.ruleId, deny.reason) };
+}
+
+/** A developer or fixer by bare name or the `dev-loops:` namespace only; `otherplugin:developer` is a namesake. */
+const isShellWriteWorker = (role) => typeof role === "string" && /^(?:dev-loops:)?(?:developer|fixer)$/.test(role);
+const SHELL_WRITE_VERB = { write: "writes", copy: "copies to", remove: "removes", run: "runs the script" };
+
+/**
+ * OPS-EDITOR-TOOL-WRITES (issue 2683), the last rule: a shell write by a coordinator (under `enforceCoordinator`) or a developer or fixer (always on).
+ * The adapter supplies `shellWrites`, each target classified as `{ path, op, unresolvable, repoMutation, existingFile }` (absent means none, so an adapter without the fact, such as Pi, never denies).
+ * A coordinator is denied a repo-mutating write or copy, the removal of an existing file and a script run under `tmp/`.
+ * A worker is denied a repo-mutating write, a copy over an existing file (the hook resolves a directory destination to `<dir>/<basename>`) and a copy under a `.git` segment (`gitDir`); its rename to a new path and `rm` stay (WORKTREE-NONINTERACTIVE-FILE-OPS).
+ * An unresolvable target is denied for either role, except a worker `rm`. A coordinator deny keeps the COORDINATOR_DELEGATION_BOUNDARY marker, so its `ruleId` is null.
+ */
+function decideShellWriteDeny({ role = null, enforceCoordinator = false, shellWrites = [] }) {
+  const coordinator = enforceCoordinator === true && isCoordinatorRole(role);
+  if (!coordinator && !isShellWriteWorker(role)) return null;
+  const denies = (t) => {
+    if (t.op === "run") return coordinator;
+    if (t.op === "remove") return coordinator ? t.unresolvable || t.existingFile : false;
+    return t.unresolvable || (coordinator || t.op === "write" ? t.repoMutation : t.existingFile || t.gitDir);
+  };
+  const target = Array.isArray(shellWrites) ? shellWrites.find(denies) : null;
+  if (!target) return null;
+  const what = `${SHELL_WRITE_VERB[target.op]} ${JSON.stringify(target.path)} from the shell`;
+  const literal = target.unresolvable ? " The target is not a literal path, so rerun with a literal path." : "";
+  return coordinator
+    ? { ruleId: null, reason: withHookMarker("COORDINATOR_DELEGATION_BOUNDARY", `Coordinator write boundary: this command ${what}.${literal} Delegate this edit to a fresh developer worker instead of writing it directly. See skills/docs/main-agent-contract.md.`) }
+    : { ruleId: "OPS-EDITOR-TOOL-WRITES", reason: `OPS-EDITOR-TOOL-WRITES denied: a developer or fixer writes repository files only with the Edit and Write tools, and this command ${what}.${literal} Write the file with the Edit or Write tool.` };
 }
 
 function decideBashGateDenyUnmarked(facts) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "bun:test";
@@ -662,6 +662,26 @@ test("runCli: malformed (non-string) provision worktreePath fails closed (DROP_F
   assert.equal(result.ledger.rows.status, ROW_STATUS.DROP_FAILED);
   assert.equal(result.ledger.rows.dropped, 0);
   assert.match(result.ledger.rows.detail, /malformed provision worktreePath|unverified scope/i);
+});
+
+test("parseUiReviewTeardownCliArgs: --out takes a value and rejects a missing one", () => {
+  const base = ["--repo-root", "/r", "--provision-result", "/p.json"];
+  assert.equal(parseUiReviewTeardownCliArgs([...base, "--out", "/o.json"]).out, "/o.json");
+  assert.throws(() => parseUiReviewTeardownCliArgs([...base, "--out"]), /--out/);
+});
+
+test("runCli: --out writes the same JSON the stdout line carries", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "teardown-out-"));
+  const provisionPath = join(dir, "provision.json");
+  writeFileSync(provisionPath, JSON.stringify(PROVISION));
+  const outFile = join(dir, "nested", "teardown.json");
+  let out = "";
+  const stdout = { write: (s) => { out += s; return true; } };
+  await runCli(["--repo-root", "/r", "--provision-result", provisionPath, "--no-stop-app", "--out", outFile], { stdout, stderr: { write: () => true } });
+  process.exitCode = 0;
+
+  assert.ok(out.length > 0);
+  assert.equal(readFileSync(outFile, "utf8"), out);
 });
 
 test("parseUiReviewTeardownCliArgs: requires --repo-root and --provision-result", () => {

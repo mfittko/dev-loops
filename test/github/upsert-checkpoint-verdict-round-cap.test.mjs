@@ -6,7 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
-import { buildGateContextPath } from "../../scripts/github/write-gate-context.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { capRoundWaives, parseUpsertCheckpointVerdictCliArgs, renderGateReviewCommentBody, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
@@ -508,28 +507,13 @@ test("a retained-only cap round passes the durable-ledger check with fan-out enf
   }, { prefix: "dev-loops-round-cap-retained-enforced-" });
 });
 
-test("a clean cap-round post checks base freshness against the current PR head, not the cap-round head", async () => {
+test("a clean cap-round post at a stale base posts and runs no freshness check", async () => {
   await withTempDir(async (tempDir) => {
     const heads = [];
-    const out = await postCleanCapRound(tempDir, { checkBaseFreshness: async ({ head }) => { heads.push(head); return { ok: true }; } });
+    const out = await postCleanCapRound(tempDir, { checkBaseFreshness: async ({ base, head }) => { heads.push(head); return { ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: "R" }; } });
     assert.equal(out.error, undefined);
-    assert.deepEqual(heads, [HEAD]);
+    assert.deepEqual(heads, []);
   }, { prefix: "dev-loops-round-cap-base-fresh-" });
-});
-
-// ADR 0299: a base_current context at the cap-round head never lifts the refusal for a cap-round catch-up post.
-test("a stale cap-round catch-up post refuses even when a base_current context exists at the cap-round head", async () => {
-  await withTempDir(async (tempDir) => {
-    const ctx = path.join(repoRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: CAP_HEAD }));
-    await mkdir(path.dirname(ctx), { recursive: true });
-    await writeFile(ctx, JSON.stringify({ baseFreshness: { status: "base_current", base: "main" } }), "utf8");
-    try {
-      const out = await postCleanCapRound(tempDir, { checkBaseFreshness: async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: "R" }) });
-      assert.match(out.error ?? "", /^base_stale_integrate_first:/);
-    } finally {
-      await rm(ctx, { force: true });
-    }
-  }, { prefix: "dev-loops-round-cap-base-stale-proof-" });
 });
 
 test("a pre_approval_gate stale-head refusal does not name a cap round", async () => {

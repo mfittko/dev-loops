@@ -318,6 +318,12 @@ test("parseUiReviewDiagnoseCliArgs: requires --pr and --drive-result", () => {
   assert.equal(o.repo, "o/n");
 });
 
+test("parseUiReviewDiagnoseCliArgs: --out takes a value and rejects a missing one", () => {
+  const base = ["--pr", "7", "--drive-result", "/r.json"];
+  assert.equal(parseUiReviewDiagnoseCliArgs([...base, "--out", "/o.json"]).out, "/o.json");
+  assert.throws(() => parseUiReviewDiagnoseCliArgs([...base, "--out"]), /--out/);
+});
+
 test("normalizePrInfo: surfaces the reviewed head SHA (headRefOid -> headSha) into the emitted pr envelope", () => {
   const pr = normalizePrInfo(
     { pr: { number: 7, headRefName: "issue-1119", headRefOid: "abc123def", baseRefName: "main", state: "OPEN" } },

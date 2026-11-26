@@ -83,6 +83,31 @@ test("every report_blocked result is typed or a listed known gap", () => {
   for (const [id, count] of hits) assert.ok(count > 0, `stale known-gap entry: ${id}`);
 });
 
+// ADR 0271 / ADR 0332: the body-only draft_gate act list. A full 40-hex head binds the list, so the body-only report_blocked branch and the cap-brake skip are walked.
+test("every body-only act list block is typed, with and without a blocker or a non_convergence brake", () => {
+  const FULL = "a".repeat(40);
+  const findings = gate(FULL, "findings_present");
+  const brake = { capBrakes: { gate: "pre_approval_gate", round: 3, cap: 0, actCounts: [3, 3], items: ["fp [medium] x"] } };
+  let removedRemedy = 0;
+  for (const [blockers, extra] of [[[], {}], [[{ item: "pick a design" }], {}], [[], brake]]) {
+    const input = {
+      pr: 7, repo: "o/r", currentHeadSha: FULL, prDraft: true, lifecycleState: STATE.PR_DRAFT_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED,
+      ciStatus: "success", maxCopilotRounds: 2, draftGate: findings, draftGateMarker: findings,
+      draftOpenActList: { headSha: FULL, openActCount: 2, blockers, bodyOnly: true }, ...extra,
+    };
+    const result = evaluatePrGateCoordination(input);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, JSON.stringify({ blockers, extra }));
+    assert.ok(isTypedOrKnownGap(input, result), JSON.stringify({ blockers, extra }));
+    if (blockers.length === 0) {
+      assert.match(result.agentRemedy.command, /upsert-checkpoint-verdict\.mjs/);
+      const { agentRemedy: _drop, ...stripped } = result;
+      assert.equal(isTypedOrKnownGap(input, stripped), false);
+      removedRemedy += 1;
+    } else assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+  }
+  assert.equal(removedRemedy, 2);
+});
+
 test("the predicate flags a typed result with its remedy stripped", () => {
   const input = { pr: 7, repo: "o/r", currentHeadSha: HEAD, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, prTitle: "WIP: x", draftGate: CLEAN, draftGateMarker: CLEAN, ciStatus: "success", maxCopilotRounds: 0 };
   const typed = evaluatePrGateCoordination(input);

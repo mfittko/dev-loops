@@ -704,6 +704,7 @@ describe("PR-body act items leave the delta act set", () => {
 
   test("an all-body act set refuses delta_body_only_act_set with the edit-pr and body-only converged remedy", () => {
     assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [body(1), body(2)] }), /delta_body_only_act_set[^]*edit-pr\.mjs[^]*--converged-json[^]*bodyOnly/);
+    assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [body(1), body(2)] }), (error) => !/next gate round below the cap/.test(error.message));
   });
 
   test("a pr_body item that names a file is a body item: an all-pr_body list refuses and a mixed list drops it from the act set", () => {

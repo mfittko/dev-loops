@@ -63,6 +63,8 @@ erDiagram
         string nextAction
         bool workerRunning
         object verdictRefusal
+        string status
+        int routineBoundaries
     }
 ```
 
@@ -448,7 +450,7 @@ requirementDiagram
 
 Type: `sequenceDiagram`
 
-How a coordinator round ends. The coordinator writes the four-field packet, plus an optional `verdictRefusal` when a verdict post was refused for red CI, and the validator CLI reads it before the hand-back. A refused packet never exits 0, whatever output flags the caller passes. Derived from `scripts/loop/validate-coordinator-handback.mjs` and `scripts/loop/_coordinator-handback.mjs`.
+How a coordinator round ends. The coordinator writes the four-field packet, plus an optional `verdictRefusal` when a verdict post was refused for red CI and the optional `status` and `routineBoundaries`, and the validator CLI reads it before the hand-back. A refused packet never exits 0, whatever output flags the caller passes. Derived from `scripts/loop/validate-coordinator-handback.mjs` and `scripts/loop/_coordinator-handback.mjs`.
 
 ```mermaid
 sequenceDiagram
@@ -456,7 +458,7 @@ sequenceDiagram
     participant F as packet.json
     participant V as validate-coordinator-handback
     participant M as Main agent
-    C->>F: write {pr, head, nextAction, workerRunning}
+    C->>F: write {pr, head, nextAction, workerRunning, status, routineBoundaries}
     C->>V: --packet path
     V->>F: read and JSON.parse
     alt packet unreadable or not JSON
@@ -467,6 +469,8 @@ sequenceDiagram
         V-->>C: ok false, refusal worker_running, exit 1
     else verdictRefusal malformed or nextAction not fix_ci_failure
         V-->>C: ok false, refusal verdict_refusal_route, recovery, exit 1
+    else routine nextAction at a round boundary below the cap
+        V-->>C: ok false, refusal routine_boundary, recovery, exit 1
     else valid
         V-->>C: ok true, exit 0
         C->>M: hand back with nextAction

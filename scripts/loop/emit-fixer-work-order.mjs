@@ -727,13 +727,31 @@ async function emitPlan({
       return currentHeadLedgerExists() ? null : originHead;
     } catch { return null; }
   })();
+  // Issue 3589: a ledgerless head that a base-only merge follows the latest closed round head with reads the cap-round ledger and verdict at that head (the round countCapRounds drops).
+  let baseMergeCapUsed = false; // the publish recheck below also covers a guardHead taken from this path
+  const baseMergeCapHead = async () => {
+    try {
+      if (currentHeadLedgerExists()) return null;
+      const from = closureFromHeadOf(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), onUnreadable: () => { throw new Error("unreadable prior ledger"); } }));
+      const baseRefName = (await memoFetchBase())?.baseRefName;
+      if (!(from && from !== headSha && baseRefName && await isBaseOnlyMergeSince({ fromHead: from, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd }))) return null;
+      // Below the cap the carry seam stays the only acceptance path for a ledgerless merged head.
+      const cap = resolveGateConfig(config, "preApproval").maxReviewRounds;
+      if (!(cap > 0 && await countCapRounds({ repo, pr, gate, headSha: from, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: baseRefName }) >= cap)) return null;
+      await capture.read(ledgerPath(from)); // pin the cap-round ledger like the carry seam
+      if (currentHeadLedgerExists()) return null; // re-check after the pending reads, as carryOriginHead does
+      baseMergeCapUsed = true;
+      return from;
+    } catch { return null; }
+  };
   // One read of the operator focus file for the scoped-round decision and the binding below: a shape error refuses here under GATE-EXEC-OPERATOR-FOCUS, never inside the swallowing cap-round catch.
   const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
   if ((gate === "pre_approval_gate" || gate === "draft_gate") && guardFile) {
     const runtime = { env, ghCommand, runChild };
     // GATE-COMMENT-BLOCKED-BY: a posted blocked verdict whose causes hold no findings entry has no fix round; its next step is the operator's.
     // A ledger-less head carries the origin head's round and verdict (the carry seam), so both reads follow the origin head.
-    const guardHead = (!existsSync(ledgerPath(headSha)) && await carryOriginHead()) || headSha;
+    const guardHead = (!existsSync(ledgerPath(headSha)) && (await carryOriginHead() || await baseMergeCapHead())) || headSha;
+    capRoundHead = guardHead; // the posted-verdict probe below reads the cap-round head, not the ledgerless merged head
     // A failed read fails open only for an --act-list-file source, whose verdict_not_posted check below reads the same markers; a --ci-file source has no such check, so it refuses.
     const blockedBy = (await fetchVerdictMarkers({ repo, pr, headSha: guardHead, gate, runtime }).catch((error) => {
       if (ciActFile) throw new Refusal(`verdict_not_posted: could not read the PR's posted ${gate} verdicts at ${guardHead} (${error?.message ?? error}); the blocked_without_findings check needs them, so re-run once the read succeeds`, "verdict_not_posted");
@@ -1120,7 +1138,7 @@ async function emitPlan({
   // A keyed plan records its parent execution; locateFixerUnit reports it stale once the parent is superseded or closed.
   await capture.write(tempPath, `${JSON.stringify(appendOnly ? { ...plan, parentExecutionIdentity: JSON.parse(originalBytes).executionIdentity } : plan, null, 2)}\n`);
   await capture.recheck();
-  if (carryMemo && await carryMemo && currentHeadLedgerExists()) throw new Refusal(`a gate round ledger appeared at ${headSha} while the work order was prepared; the carried verdict no longer authorizes a fixer, so re-run the emit`, "ledger_appeared");
+  if ((baseMergeCapUsed || (carryMemo && await carryMemo)) && currentHeadLedgerExists()) throw new Refusal(`a gate round ledger appeared at ${headSha} while the work order was prepared; the carried verdict no longer authorizes a fixer, so re-run the emit`, "ledger_appeared");
   rejectOriginalRetirement();
   recheckCandidate();
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: the marker is written last so a refused emit never grants the push; only a full work order grants the fixer.

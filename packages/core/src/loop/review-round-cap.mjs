@@ -6,6 +6,9 @@
  * A cap of 0 (or less) disables the cap. The round after the cap round is decided by `decideCapRound`.
  */
 
+/** The next action after the cap round's fixer pass landed: ready for review, then `pre_approval_gate`. */
+export const CAP_ROUND_FIXED_NEXT_ACTION = "mark_ready_for_review";
+
 /** Round `round` is the cap round. */
 export const isCapRound = (round, cap) => cap > 0 && round === cap;
 
@@ -43,4 +46,4 @@ const CAP_STOP_TEXT = {
 };
 
 /** One sentence naming the numbers of an `operator` decision, for the refusal and the `report_blocked` reason. */
-export const describeCapStop = ({ reason, numbers }) => `${reason}: ${CAP_STOP_TEXT[reason](numbers)}; the operator clears it with an operator focus item whose decision names the act items by fingerprint (GATE-EXEC-CAP-BRAKES)`;
+export const describeCapStop = ({ reason, numbers }, { clearable = true } = {}) => `${reason}: ${CAP_STOP_TEXT[reason](numbers)}${clearable ? "; the operator clears it with an operator focus item whose decision names the act items by fingerprint (GATE-EXEC-CAP-BRAKES)" : " (GATE-EXEC-CAP-BRAKES)"}`;
