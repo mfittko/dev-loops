@@ -125,6 +125,41 @@ for (const change of ["miss", "metadata-text", "mode", "offset", "offset-touch",
   });
 });
 
+// ADR 0330: a proven base-only merge between X and H passes the descendant site check.
+for (const scenario of ["carried", "rejected", "touch-revert", "site-differs", "unresolvable-base-ref", "throws"]) test(`base-only merge thread site carry: ${scenario}`, async () => {
+  await withRepoRoot(async (root) => {
+    await initPristineGitFixture(root);
+    const git = (...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+    const original = "one\ntwo\nthree\nfour\nfive\n";
+    const commit = async (name, text, message = "change") => { await writeFile(path.join(root, name), text); git("add", "-A"); git("commit", "-qm", message); return git("rev-parse", "HEAD"); };
+    const origin = await commit("site.txt", original);
+    const candidate = await commit("site.txt", original.replace("three", "fixed"));
+    if (scenario === "touch-revert") {
+      await commit("site.txt", original.replace("three", "changed"));
+      await commit("site.txt", original.replace("three", "fixed"));
+    }
+    git("checkout", "-qb", "base-line", candidate);
+    await commit(scenario === "site-differs" ? "site.txt" : "other.txt", scenario === "site-differs" ? original.replace("three", "fixed").replace("five", "elsewhere") : "base change\n", "base change");
+    git("checkout", "-q", "issue-1");
+    git("merge", "--no-ff", "base-line", "-m", "merge base");
+    const head = git("rev-parse", "HEAD");
+    const comment = { id: 1, node_id: "root", pull_request_url: `https://api.github.com/repos/${REPO}/pulls/${PR}`, path: "site.txt", original_commit_id: origin,
+      original_start_line: 2, original_line: 3, side: "RIGHT", start_side: "RIGHT" };
+    const deps = { env: runIdFreeEnv(), ghCommand: "gh", runChild: async (cmd, args) => {
+      if (cmd === "gh") return { code: 0, stdout: JSON.stringify(comment), stderr: "" };
+      const result = spawnSync(cmd, args, { cwd: root, env: gitEnvNoDirOverrides(), encoding: "utf8" });
+      return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+    } };
+    const proof = () => assertDescendantThreadSites({ repo: REPO, pr: PR, candidateHead: candidate, headSha: head, baseRef: scenario === "unresolvable-base-ref" ? "refs/heads/missing" : "base-line",
+      baseOnlyMergeCarries: async () => { if (scenario === "throws") throw new Error("predicate failed"); return scenario !== "rejected"; },
+      handoff: { dispositions: [{ threadId: "t", disposition: "tackled" }] },
+      parsed: { comments: [{ threadId: "t", id: "root", databaseId: "1" }] }, repoRoot: root }, deps);
+    if (scenario === "carried") await proof();
+    else await assert.rejects(proof, (error) => new RegExp(`${scenario === "touch-revert" ? "thread_site_changed" : "thread_site_unverifiable"}: t`).test(error.message)
+      && /pre_approval_gate/.test(error.message) && /gate close-sequence/.test(error.message) && /draft_gate/.test(error.message));
+  });
+});
+
 function threadsPayload(threads) {
   return `${JSON.stringify({
     data: { repository: { pullRequest: { reviewThreads: { nodes: threads } } } },
@@ -156,7 +191,7 @@ async function withRepoRoot(fn) {
 }
 
 function liveHeadEntry(headRefOid = HEAD_SHA, statusCheckRollup = []) {
-  return { assertArgs: ["pr", "view", String(PR), "--json", "headRefOid,statusCheckRollup"], stdout: `${JSON.stringify({ headRefOid, statusCheckRollup })}\n` };
+  return { assertArgs: ["pr", "view", String(PR), "--json", "headRefOid,statusCheckRollup,baseRefName"], stdout: `${JSON.stringify({ headRefOid, statusCheckRollup, baseRefName: "main" })}\n` };
 }
 
 // Prepends the live-head read the verifier makes before any checkpoint write.
@@ -636,7 +671,7 @@ test("--report-path parses as an absolute path and is refused without --check", 
 
 const repeatedDiffScenarios = ["myers", "histogram", "patience"].flatMap((algorithm) =>
   ["true", "false"].flatMap((heuristic) => ["miss", "touch"].map((change) => `${change}-repeated-${algorithm}-${heuristic}`)));
-for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-diff-opts", "miss-inter-hunk", "touch", "touch-diff-opts", "touch-inter-hunk", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source", ...repeatedDiffScenarios]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
+for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-diff-opts", "miss-inter-hunk", "touch", "touch-diff-opts", "touch-inter-hunk", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source", "base-merge", ...repeatedDiffScenarios]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
   await withRepoRoot(async (root) => {
     root = await realpath(root);
     const repeated = scenario.includes("-repeated-");
@@ -658,8 +693,16 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
     const text = scenario.startsWith("touch") ? "one\ntwo\nchanged\nfour\nfive\n" : "one\ntwo\nthree\nfour\nelsewhere\n";
     // Myers maps the original line 6 to 7; touching line 6 must pass and line 7 must refuse.
     const repeatedText = scenario.startsWith("touch") ? "start\na\nb\nc\nend\na\nchanged\nc\n" : "start\na\nb\nc\nend\nelsewhere\nb\nc\n";
-    await writeFile(path.join(root, "site.txt"), repeated ? repeatedText : interHunk ? text.replace("one", "before").replace("five", "after") : text);
-    git("add", "site.txt"); git("commit", "-qm", "developer");
+    if (scenario === "base-merge") {
+      // Real fixerEmitCarryAccepts: H is a base-only merge on top of the candidate X; origin/base-line is the PR base.
+      git("checkout", "-qb", "base-line", git("rev-list", "--max-parents=0", "HEAD")); await writeFile(path.join(root, "other.txt"), "base change\n");
+      git("add", "other.txt"); git("commit", "-qm", "base change");
+      git("update-ref", "refs/remotes/origin/base-line", "HEAD"); git("checkout", "-q", "-");
+      git("merge", "--no-ff", "base-line", "-m", "merge base");
+    } else {
+      await writeFile(path.join(root, "site.txt"), repeated ? repeatedText : interHunk ? text.replace("one", "before").replace("five", "after") : text);
+      git("add", "site.txt"); git("commit", "-qm", "developer");
+    }
     if (scenario.startsWith("touch-color")) git("config", scenario === "touch-color-diff" ? "color.diff" : "color.ui", "always");
     let head = git("rev-parse", "HEAD");
     const ids = route === "THREAD" ? ["PRRT_T1"] : ["PRRT_MERGED", "PRRT_SHARED"];
@@ -670,7 +713,7 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
     let resolved = false, reads = 0; const posts = [];
     const deps = { env: runIdFreeEnv(scenario.endsWith("diff-opts") ? { GIT_DIFF_OPTS: "-u100" } : {}), ghCommand: "gh", repoRoot: root, runChild: async (cmd, args, env, stdin) => {
       if (cmd === "git") { const r = spawnSync(cmd, args, { cwd: root, env, encoding: "utf8" }); return { code: r.status, stdout: r.stdout, stderr: r.stderr }; }
-      if (args[0] === "pr") return { code: 0, stdout: JSON.stringify({ headRefOid: scenario === "head-race" && reads++ ? candidate : head, statusCheckRollup: ["red", "pending"].includes(scenario) ? [{ name: "unit" }] : [] }) };
+      if (args[0] === "pr") return { code: 0, stdout: JSON.stringify({ headRefOid: scenario === "head-race" && reads++ ? candidate : head, statusCheckRollup: ["red", "pending"].includes(scenario) ? [{ name: "unit" }] : [], baseRefName: scenario === "base-merge" ? "base-line" : "main" }) };
       if (args[1] === "user") return { code: 0, stdout: JSON.stringify({ login: "gate" }) };
       if (args[1]?.includes("/compare/")) return { code: 0, stdout: JSON.stringify({ status: ["behind", "diverged"].includes(scenario) && args[1].endsWith(`${candidate}...${head}`) ? scenario : "ahead" }) };
       if (args[1]?.includes("/pulls/comments/")) {
@@ -688,7 +731,7 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
       throw new Error(`unexpected call ${cmd} ${args.join(" ")}`);
     } };
     const options = { repo: REPO, pr: PR, headSha: head, fixerPlan };
-    if (scenario !== "miss" && !scenario.startsWith("miss-")) {
+    if (scenario !== "miss" && scenario !== "base-merge" && !scenario.startsWith("miss-")) {
       const expected = repeated ? /thread_site_changed/ : { touch: /thread_site_changed/, "touch-diff-opts": /thread_site_changed/, "touch-inter-hunk": /thread_site_changed/, "touch-color-diff": /thread_site_changed/, "touch-color-ui": /thread_site_changed/, left: /thread_site_unverifiable/, behind: /not contained/, diverged: /not contained/, red: /ci_failed/, pending: /ci_pending/, "head-race": /live head changed/, "missing-report": /result_missing/, "forged-source": /differ|Invalid fixer review baseline/ }[scenario];
       await assert.rejects(verifyFixerDisposition(options, deps), expected); assert.deepEqual(posts, []);
       assert.equal(resolved, false);
@@ -716,6 +759,8 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
       const count = posts.length;
       assert.equal((await verifyFixerDisposition({ ...options, check: true }, deps)).complete, true);
       assert.equal(posts.length, count);
+      // A PR-own commit after the merge is not base-only, so the re-entry below does not apply.
+      if (scenario === "base-merge") return;
       await writeFile(path.join(root, "later.txt"), "another developer change\n");
       git("add", "later.txt"); git("commit", "-qm", "later developer");
       head = git("rev-parse", "HEAD");
