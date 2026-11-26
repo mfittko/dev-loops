@@ -56,6 +56,8 @@ test("a threshold record at head a carries to head b only when the base-only-mer
   assert.deepEqual(accepted.calls, [{ originHead: "a", headSha: "b", baseRef: "origin/main", repoRoot: "/r" }]);
   assert.equal((await read(false)).value, false);
   assert.equal((await read(true, {})).value, false);
+  const throwing = async () => { throw new Error("git failed"); };
+  assert.equal(await readRequestNotObservable({ ...pr, headSha: "b", baseRef: "origin/main", repoRoot: "/r" }, { checkpointDir, baseOnlyMerge: throwing }), false);
 });
 
 test("a below-threshold record never calls the base-only-merge check on another head", async () => {
