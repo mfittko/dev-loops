@@ -277,7 +277,7 @@ const normalizeForMergeMatch = (command) => command
  * The match is the run position (`scriptInvocationRe`) on the command with empty quote pairs and backslashes stripped (Bash drops them: `merge-""pr`, `merge\-pr`), with or without the `.mjs` extension.
  * A read-only mention (`grep`, `git show`, `sed -n`) and a `.test.mjs` path do not run the script and are allowed.
  * The top-level session (role null) keeps the script. Keys on the role name alone, like the unresolve allowlist.
- * ponytail: ceiling: a name assembled by variable or command substitution (`m=merge; ...$m-pr`) or by a shell glob or brace expansion of the file name (`merge-pr.m*`, `merge-pr.{mjs,}`) is not caught; the orchestrator is the only actor allowed to run the script.
+ * ponytail: ceiling: a name assembled by variable or command substitution (`m=merge; ...$m-pr`), by a shell glob or brace expansion of the file name (`merge-pr.m*`, `merge-pr.{mjs,}`) or by a non-empty quote split (`merge-"pr".mjs`, `'merge'-pr.mjs`) is not caught; the orchestrator is the only actor allowed to run the script.
  * @param {{command: string, role: string|null|undefined}} params
  * @returns {{ruleId: null, reason: string}|null}
  */

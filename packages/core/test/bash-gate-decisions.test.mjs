@@ -753,6 +753,9 @@ const MERGE_RUN_FORMS = [
   `bun "${MERGE_PATH}" --pr 5`,
   `bun ${MERGE_SCRIPT.replace("-", `-""`)} --pr 5`,
   `bun ${MERGE_SCRIPT.replace("-", "\\-")} --pr 5`,
+  // A separator inside quotes before a launcher word stays denied (the launcher lookahead in normalizeForMergeMatch).
+  `echo "$(node ${MERGE_PATH} --pr 5)"`,
+  `bash -c "echo x; node ${MERGE_PATH}"`,
 ];
 const MERGE_READ_ONLY_FORMS = [
   `git grep -n ${MERGE_SCRIPT} cli/`,
