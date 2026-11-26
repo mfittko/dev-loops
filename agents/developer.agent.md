@@ -24,6 +24,7 @@ Under Codex, read and apply [Codex runtime setup](../skills/docs/copilot-loop-op
 - Stay within the requested scope and files unless a small adjacent fix is required to complete the task safely.
 - Preserve existing project conventions and package/runtime behavior.
 - Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
+- Edit rule: write repository files per `OPS-EDITOR-TOOL-WRITES` in [Loop operations](../skills/docs/copilot-loop-operations.md#hard-rule-editor-tool-writes).
 - Size: follow `PRE-PR-SIZE-CHECK` and `LOCAL-DEV-SIZE-STOP` in [Pre-push review contract](../skills/docs/pre-pr-review-contract.md).
 - Pre-PR review: run the stale-surface sweep per `PRE-PR-STALE-SURFACE-SWEEP` in the same contract.
 - Self-check: read `selfCheck` from the implementation brief before writing code. Apply its angle constraint lines, `classes`, `copilotClasses` and the checklist `items` as constraints while you write each change, then record per-constraint evidence with `--self-check-file` per `PRE-PR-DEVELOPER-SELF-CHECK` in the same contract.

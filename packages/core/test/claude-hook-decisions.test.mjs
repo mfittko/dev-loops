@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 
 import { decideBashGate, decideJudgeWriteGuard, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, normalizeAgentType, decideFixerWriteGuard, decideAgentDispatch, isFixerPullAttempt, parseSanctionedPullLine } from "../src/claude/hook-decisions.mjs";
+import { shellWriteTargets } from "../src/loop/bash-command-classify.mjs";
 import { DISPATCH_POINTER_MAX_BYTES as CORE_DISPATCH_POINTER_MAX_BYTES } from "../src/loop/work-order-digest.mjs";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer } from "../../../scripts/github/_work-order-protocol.mjs";
 
@@ -1984,4 +1985,159 @@ test("decideAgentDispatch (#3199): deny reasons carry a bounded diagnostic", () 
 test("decideAgentDispatch (#3199): the diagnostic reports the byte cap separately from the trimmed shape", () => {
   const d = dispatch("gate-coordinator", "review", `${shortPointer("review")}${" ".repeat(500)}`);
   assert.match(d.reason, /received \d+ bytes \(cap 499\); pointer shape after trim: match/);
+});
+
+// ---------------------------------------------------------------------------
+// OPS-EDITOR-TOOL-WRITES (issue 2683): shell writes by the coordinator and worker roles
+// ---------------------------------------------------------------------------
+
+// Stand-in for the hook's classification. Fixture tree under /x/wt: `src/a.mjs`, `bun.lock` and `.devloops` are tracked,
+// `changes/x.md` is new, `tmp/` is gitignored; any other absolute path is outside every repository.
+const REPO = "/x/wt/";
+const TRACKED = new Set(["src/a.mjs", "bun.lock", ".devloops"]);
+const classifyForTest = (command) => shellWriteTargets(command).map((t) => {
+  const rel = t.path.startsWith(REPO) ? t.path.slice(REPO.length) : t.path;
+  const inRepo = !rel.startsWith("/") && !rel.startsWith("tmp/");
+  return { ...t, repoMutation: inRepo, existingFile: inRepo && TRACKED.has(rel) };
+});
+const shellGate = (command, agentType, enforceCoordinator = false) =>
+  decideBashGate({ command, agentType, enforceCoordinator, shellWrites: classifyForTest(command) });
+
+const COORDINATORS = ["dev-loop", "gate-coordinator", "dev-loops:dev-loop"];
+const DEVELOPERS = ["developer", "dev-loops:developer"];
+const FIXERS = ["fixer", "dev-loops:fixer"];
+const WORKERS = [...DEVELOPERS, ...FIXERS];
+
+// D for every guarded role (rows 1 to 6, 9 to 11).
+const DENY_FOR_ALL = [
+  "sed -i '' 's/a/b/' src/a.mjs",
+  "sed -i.bak 's/a/b/' src/a.mjs",
+  "sed --in-place 's/a/b/' src/a.mjs",
+  "sed -i '' 's/a/b/' .devloops", // PR 2902
+  "perl -pi -e 's/a/b/' src/a.mjs",
+  "perl -0pi -e 's/a/b/' src/a.mjs", // PR 2909
+  "printf 'x' > changes/x.md", // PR 2719
+  "echo x >> src/a.mjs",
+  "cmd 2> src/a.mjs",
+  "cmd &> src/a.mjs",
+  "cmd >| src/a.mjs",
+  "cat >> src/a.mjs <<EOF\nline\nEOF", // PR 2808
+  "cat > src/a.mjs <<'EOF'\nline\nEOF",
+  "cmd | tee src/a.mjs",
+  "cmd | tee -a src/a.mjs",
+  "{ a; b; } > src/a.mjs",
+  "( a ) >> src/a.mjs",
+  "command cp -f x src/a.mjs", // PR 2829, an existing file
+  "cd /x/wt && sed -i 's/a/b/' src/a.mjs",
+  "sed -i 's/a/b/' \"$f\"",
+  "echo x > $out",
+  "cd \"$W\" && echo x > a.md",
+  "cd a && cd \"$W\" && echo x > b",
+  "bash -c \"sed -i 's/a/b/' src/a.mjs\"",
+  "eval \"echo x > src/a.mjs\"",
+  "printf x>changes/x.md", // no space before the operator
+  "echo x>src/a.mjs",
+  "echo x>>src/a.mjs",
+  "cat>src/a.mjs<<EOF\nline\nEOF",
+  "{ echo x; }>src/a.mjs",
+  "echo x&>src/a.mjs",
+  "echo x 2>/dev/null>src/a.mjs",
+  "git ls-files | xargs sed -i 's/a/b/'", // launchers
+  "xargs -0 perl -pi -e 's/a/b/'",
+  "find src -exec sed -i 's/a/b/' {} +",
+  "timeout 5 sed -i 's/a/b/' src/a.mjs",
+  "env -u X cp x src/a.mjs",
+  "sudo -u u cp x src/a.mjs",
+  "(cd /x/wt/src && echo x>a.mjs)",
+];
+// D for a coordinator, A for a worker (rows 7, 8, 18).
+const DENY_FOR_COORDINATOR_ONLY = [
+  "command cp -f x changes/x.md",
+  "command mv -f src/a.mjs changes/x.md",
+  "command rm -f src/a.mjs",
+  "rm -f \"$f\"", // an unresolvable remove: a coordinator fails closed, a worker keeps rm
+  "rm bun.lock && bun install", // PR 2720
+  "dev-loops-run --repo-root /x/wt tmp/x.mjs", // issue 3395
+  "node tmp/x.mjs",
+  "bun tmp/x.mjs",
+  "node --import tsx tmp/x.mjs",
+  "cd /x/wt/tmp && node x.mjs",
+];
+// A for every role (rows 12 to 16).
+const ALLOW_FOR_ALL = [
+  "sed -i 's/a/b/' tmp/x.md",
+  "printf x > tmp/x.md",
+  "cmd > /dev/null 2>&1",
+  "cmd 2>&1",
+  "cp /dev/null /dev/null", // 2026-11-26
+  "cmd 2> >(grep -v warn >&2)",
+  "printf x > 'tmp/run-$1.md'",
+  "sed -n '1,5p' src/a.mjs",
+  "dev-loops-run --repo-root /x/wt scripts/loop/x.mjs --a b > tmp/out.json",
+  "grep -n \"sed -i\" src/a.mjs",
+  "rg 'perl -pi' skills",
+  "git commit -m \"drop sed -i > x\"",
+  "cat > tmp/x.md <<'EOF'\nsed -i s/a/b/ src/a.mjs\necho x > src/a.mjs\nEOF",
+  "git apply p.patch",
+  "node scripts/claude/generate-claude-assets.mjs",
+  "cd \"$W\" && dev-loops-run scripts/loop/x.mjs --construct",
+];
+
+test("OPS-EDITOR-TOOL-WRITES: a coordinator is denied every D row with the delegation reason naming the first target", () => {
+  for (const command of [...DENY_FOR_ALL, ...DENY_FOR_COORDINATOR_ONLY]) {
+    for (const role of COORDINATORS) {
+      const d = shellGate(command, role, true);
+      assert.equal(d.decision, "deny", `${role}: ${command}`);
+      assert.match(d.reason, /policy-hook: COORDINATOR_DELEGATION_BOUNDARY; compliant form: delegate the edit to a developer worker/, `${role}: ${command}`);
+    }
+  }
+  const d = shellGate("printf 'x' > changes/x.md", "dev-loop", true);
+  assert.match(d.reason, /changes\/x\.md/);
+});
+
+test("OPS-EDITOR-TOOL-WRITES: a developer or fixer is denied every D row, always on, naming the rule and the Edit and Write tools", () => {
+  for (const command of DENY_FOR_ALL) {
+    for (const role of WORKERS) {
+      const d = shellGate(command, role); // no coordinator switch, no pull grant
+      assert.equal(d.decision, "deny", `${role}: ${command}`);
+      assert.match(d.reason, /OPS-EDITOR-TOOL-WRITES/, `${role}: ${command}`);
+      assert.match(d.reason, /Edit and Write tools/, `${role}: ${command}`);
+      assert.match(d.reason, /policy-hook: OPS-EDITOR-TOOL-WRITES; compliant form: write the file with the Edit or Write tool/, `${role}: ${command}`);
+    }
+  }
+});
+
+test("OPS-EDITOR-TOOL-WRITES: an unresolvable target is denied with the literal-path recovery", () => {
+  const d = shellGate("echo x > $out", "developer");
+  assert.match(d.reason, /rerun with a literal path/);
+  assert.match(shellGate("echo x > $out", "dev-loop", true).reason, /rerun with a literal path/);
+});
+
+test("OPS-EDITOR-TOOL-WRITES: a worker keeps copy to a new path, rename and rm; a coordinator does not (rows 7 and 8)", () => {
+  for (const command of DENY_FOR_COORDINATOR_ONLY) {
+    for (const role of WORKERS) assert.equal(shellGate(command, role).decision, "allow", `${role}: ${command}`);
+    for (const role of COORDINATORS) assert.equal(shellGate(command, role, true).decision, "deny", `${role}: ${command}`);
+  }
+});
+
+test("OPS-EDITOR-TOOL-WRITES: every A row stays allowed for every guarded role", () => {
+  for (const command of ALLOW_FOR_ALL) {
+    for (const role of [...WORKERS, ...COORDINATORS]) assert.equal(shellGate(command, role, true).decision, "allow", `${role}: ${command}`);
+  }
+});
+
+test("OPS-EDITOR-TOOL-WRITES: the main agent, other subagents, a foreign namesake and a coordinator without the switch keep today's behavior", () => {
+  for (const command of [...DENY_FOR_ALL, ...DENY_FOR_COORDINATOR_ONLY]) {
+    for (const role of [null, "review", "quality", "docs", "otherplugin:developer", "otherplugin:fixer"]) {
+      assert.equal(shellGate(command, role, true).decision, "allow", `${role}: ${command}`);
+    }
+    assert.equal(shellGate(command, "dev-loop", false).decision, "allow", `no switch: ${command}`);
+  }
+});
+
+test("COORDINATOR-VERIFY-BOUNDARY: the run-bun-test wrapper line is denied to a coordinator and allowed to a worker (row 17)", () => {
+  for (const command of ["dev-loops-run scripts/run-bun-test.mjs a.test.mjs", "dev-loops-run --repo-root /x/wt scripts/run-bun-test.mjs a.test.mjs"]) {
+    for (const role of COORDINATORS) assert.match(shellGate(command, role, true).reason, /COORDINATOR-VERIFY-BOUNDARY/, `${role}: ${command}`);
+    for (const role of [...WORKERS, null]) assert.equal(shellGate(command, role, true).decision, "allow", `${role}: ${command}`);
+  }
 });
