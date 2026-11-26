@@ -1333,9 +1333,11 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const carriedMarker = normalizeGateComment(input.draftGateMarker);
   const markerAtCarriedList = trimmedOrNull(actList?.carriedToHead)?.toLowerCase() === currentHeadSha?.toLowerCase() && carriedMarker.visible && carriedMarker.contractComplete
     && carriedMarker.verdict === "findings_present" && carriedMarker.headSha !== null && String(actList.headSha ?? "").toLowerCase().startsWith(carriedMarker.headSha.toLowerCase());
+  // The one head binding of the open act list: a full current head SHA that the list names as its head or its carried head.
+  const actListHeadBound = /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase());
   // Issue 3460 AC5: at the cap exit the open act list loads before ready, also once the gate threads are resolved.
   const headActList = (!draftReady || capRoundFixed) && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"))
-    && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase())
+    && actListHeadBound
     && Number.isInteger(actList.openActCount) && actList.openActCount > 0
     // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.
     && (input.draftRoundRefused !== true || input.draftCapRoundFailure === "no_clearing_record");
@@ -1343,8 +1345,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const bodyOnlyList = headActList && actList.bodyOnly === true;
   // GATE-EXEC-NO-DEAD-END: the non_convergence brake (which guards the next round) skips a blocker-free all-PR-body list only when the body-only route or the satisfied-gate route answers instead.
   const bodyOnlyExempt = capStop?.reason === "non_convergence" && actList?.bodyOnly === true && actList.openActCount > 0
-    && (actList.blockers ?? []).length === 0 && (bodyOnlyList || draftReady)
-    && [actList.headSha, actList.carriedToHead].some((h) => String(h ?? "").toLowerCase() === String(currentHeadSha ?? "").toLowerCase());
+    && (actList.blockers ?? []).length === 0 && (bodyOnlyList || draftReady) && actListHeadBound;
   if (capStop?.action === "operator" && input.capBrakes.operatorCleared !== true && !bodyOnlyExempt) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
     pushUnique(forbiddenActions, [
