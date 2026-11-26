@@ -2975,18 +2975,17 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     }
     return [];
   };
-  // GATE-EXEC-BASE-REFRESH (issue 2885): a clean draft_gate or pre_approval_gate never records at a head that lacks origin/<base>.
+  // GATE-EXEC-BASE-REFRESH: a clean pre_approval_gate never records at a head that lacks origin/<base>; a draft_gate verdict records at a stale head.
   // An injected runChild test double skips the fetch unless the test injects the checker too.
   let staleBaseNote = null;
   const refuseStaleBase = async (verdict = options.verdict) => {
     const checkFreshness = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
     const prBase = coordinationContext?.prData?.baseRefName;
-    if (verdict === "clean" && !isReviewGate && checkFreshness && typeof prBase === "string" && prBase.trim()) {
-      // A converged or cap-round catch-up post records at the reviewed head; the base check belongs to the current PR head (the fixer commit, or a base merge after it).
+    if (verdict === "clean" && options.gate === "pre_approval_gate" && checkFreshness && typeof prBase === "string" && prBase.trim()) {
       let seen;
-      const stale = await staleBaseReason({ base: prBase.trim(), head: convergedInput || capRoundHead ? evidence.currentHeadSha : canonicalHeadSha, cwd: repoRoot, env, check: async (input) => (seen = await checkFreshness(input)) });
+      const stale = await staleBaseReason({ base: prBase.trim(), head: canonicalHeadSha, cwd: repoRoot, env, check: async (input) => (seen = await checkFreshness(input)) });
       // Only the base moved during the round: post the verdict with a visible note; the base-merge carry decides whether it stands at the new head.
-      if (stale && !convergedInput && !capRoundHead && await roundStartedAtCurrentBase(options, canonicalHeadSha, repoRoot, prBase.trim())) {
+      if (stale && await roundStartedAtCurrentBase(options, canonicalHeadSha, repoRoot, prBase.trim())) {
         staleBaseNote = `origin/${prBase.trim()} moved during the round (${seen.newerCommits.length} newer commit(s)). Merge it via scripts/loop/resolve-pr-conflicts.mjs; the base-merge carry decides whether this verdict stands at the new head.`;
         return;
       }
@@ -3162,21 +3161,14 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       && !coordination.draftGateAlreadySatisfied
       && coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE)
     ) {
-      // Refuse before the transition mutates the PR (draft conversion and restore). Without --verdict the ledger verdict stands in, composed like the later derivation except that it omits the past-cap draft_gate blockers: a fully judged ledger is clean when it has no open act item, whatever its severity overallVerdict says. On a past-cap round a ledger that would compose blocked there is still refused at a stale head, and the merge remedy applies before any post. With --findings-json the act items are not loaded yet, so the final verdict can be findings_present (unchanged by this refusal) and clean (still refused): the early check is skipped and the post-transition refuseStaleBase call decides, restoring ready on error.
-      let earlyVerdict = options.verdict;
-      let earlyLedger;
       if (options.findingsLedger) {
-        // The ledger decides the execution mode, so the inline-reason refusal also runs before the transition.
-        earlyLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+        // The ledger decides the execution mode, so the inline-reason refusal runs before the transition.
+        const earlyLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
         promoteLedgerFanout(options, earlyLedger);
         if ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent" && options.inlineReason === undefined) {
           throw new Error(INLINE_REASON_REQUIRED_MESSAGE);
         }
       }
-      if (earlyVerdict === undefined && earlyLedger && !options.findingsJson) {
-        earlyVerdict = composeReviewVerdict(earlyLedger.overallVerdict, earlyLedger.findings ?? []);
-      }
-      await refuseStaleBase(earlyVerdict);
       return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild, checkBaseFreshness, coordinationSnapshotRoot });
     }
     // Fail closed on a lagged draft-state read: we are re-entering FROM

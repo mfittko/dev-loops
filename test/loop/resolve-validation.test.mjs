@@ -56,7 +56,7 @@ function addOrigin(repoRoot) {
   execFileSync("git", ["remote", "set-head", "origin", "main"], { cwd: repoRoot });
 }
 
-const args = (headSha, profile = "full-repository") => ["--profile", profile, "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha];
+const args = (headSha, profile = "full-repository", gate = "draft_gate") => ["--profile", profile, "--repo", "owner/repo", "--pr", "1", "--gate", gate, "--head-sha", headSha];
 
 test("full validation resolves through gate CLI and preserves the legacy artifact", async () => {
   const { repoRoot, headSha } = await fixture();
@@ -481,10 +481,22 @@ function advanceOrigin(repoRoot) {
   git("reset", "-q", "--hard", "HEAD~1");
 }
 
-test("issue 2885: a stale-base head is incomplete and names the remedy; a current head runs", async () => {
+test("a draft_gate run at a stale-base head still runs validation", async () => {
   const { repoRoot, headSha } = await fixture();
   try {
+    advanceOrigin(repoRoot);
     const options = parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]);
+    assert.equal((await resolveValidation(options, { repoRoot })).status, "complete");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(`${repoRoot}-origin.git`, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885: a stale-base head is incomplete and names the remedy for a pre_approval_gate; a current head runs", async () => {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    const options = parseResolveValidationArgs([...args(headSha, "targeted", "pre_approval_gate"), "--suite", "test:scripts"]);
     assert.equal((await resolveValidation(options, { repoRoot })).status, "complete");
     advanceOrigin(repoRoot);
     const stale = await resolveValidation(options, { repoRoot });

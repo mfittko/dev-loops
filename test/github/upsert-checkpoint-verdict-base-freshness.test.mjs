@@ -96,9 +96,18 @@ async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDra
 
 const REMEDY = "Merge origin/main into the branch via scripts/loop/resolve-pr-conflicts.mjs. Never rebase a pushed branch. Never force-push. Push the merge, re-derive spec identity, and re-validate at the new head.";
 
-test("a clean draft_gate verdict at a stale-base head refuses, names the remedy and posts nothing", async () => {
+test("a clean draft_gate verdict at a stale-base head posts and runs no freshness check", async () => {
   await withTempDir(async (tempDir) => {
     const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer base commit"], foreignFiles: [], remedy: REMEDY }));
+    assert.equal(out.error, undefined);
+    assert.equal(out.calls.length, 0);
+    assert.match(out.posted.join("\n"), /\*\*Verdict:\*\* clean/);
+  }, { prefix: "dev-loops-base-freshness-stale-draft-" });
+});
+
+test("a clean pre_approval_gate verdict at a stale-base head refuses, names the remedy and posts nothing", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer base commit"], foreignFiles: [], remedy: REMEDY }), { gate: "pre_approval_gate", isDraft: false });
     assert.match(out.error, new RegExp(`^base_stale_integrate_first: head ${HEAD} does not contain origin/main; newer commits: 1234567 newer base commit\\.`));
     assert.ok(out.error.includes(REMEDY));
     assert.deepEqual(out.calls.map(({ base, head, trusted }) => ({ base, head, trusted })), [{ base: "main", head: HEAD, trusted: true }]);
@@ -109,7 +118,7 @@ test("a clean draft_gate verdict at a stale-base head refuses, names the remedy 
 test("a current base or a fetch failure posts the clean verdict unchanged", async () => {
   for (const verdict of [{ ok: true, status: "base_current", base: "main" }, { ok: false, error: "base_fetch_failed", base: "main", message: "offline" }]) {
     await withTempDir(async (tempDir) => {
-      const out = await postClean(tempDir, async () => verdict);
+      const out = await postClean(tempDir, async () => verdict, { gate: "pre_approval_gate", isDraft: false });
       assert.equal(out.error, undefined);
       assert.equal(out.calls.length, 1);
       assert.match(out.posted.join("\n"), /\*\*Verdict:\*\* clean/);
@@ -126,13 +135,13 @@ test("a findings_present draft_gate post skips the stale-base check and posts", 
   }, { prefix: "dev-loops-base-freshness-findings-" });
 });
 
-test("a clean draft_gate post on a ready PR refuses at a stale base before any draft conversion", async () => {
+test("a clean draft_gate post on a ready PR at a stale base posts with no stale line", async () => {
   await withTempDir(async (tempDir) => {
     const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY }), { isDraft: false });
-    assert.match(out.error, /^base_stale_integrate_first:/);
-    assert.equal(out.calls.length, 1);
-    assert.deepEqual(out.mutations, []);
-    assert.equal(out.posted.length, 0);
+    assert.equal(out.error, undefined);
+    assert.equal(out.calls.length, 0);
+    assert.match(out.posted.join("\n"), /\*\*Verdict:\*\* clean/);
+    assert.doesNotMatch(out.posted.join("\n"), /Base freshness/);
   }, { prefix: "dev-loops-base-freshness-ready-" });
 });
 
@@ -141,41 +150,6 @@ test("a clean draft_gate post on a ready PR at a current base reaches the draft 
     const out = await postClean(tempDir, async () => ({ ok: true, status: "base_current", base: "main" }), { isDraft: false });
     assert.ok(out.mutations.some((m) => m.includes("convertPullRequestToDraft")), `expected a draft conversion, got ${JSON.stringify(out.mutations)} / ${out.error}`);
   }, { prefix: "dev-loops-base-freshness-ready-current-" });
-});
-
-test("a ready-PR draft_gate post with no --verdict and a clean ledger refuses at a stale base before any draft conversion", async () => {
-  await withTempDir(async (tempDir) => {
-    const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY }), { isDraft: false, omitVerdict: true });
-    assert.match(out.error, /^base_stale_integrate_first:/);
-    assert.equal(out.calls.length, 1);
-    assert.deepEqual(out.mutations, []);
-    assert.equal(out.posted.length, 0);
-  }, { prefix: "dev-loops-base-freshness-ready-noverdict-" });
-});
-
-test("a ready-PR draft_gate post with a judged ledger whose severity verdict is findings_present but composes clean refuses at a stale base before any draft conversion", async () => {
-  await withTempDir(async (tempDir) => {
-    const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY }), { isDraft: false, omitVerdict: true, rejectedMedium: true });
-    assert.match(out.error, /^base_stale_integrate_first:/);
-    assert.deepEqual(out.mutations, []);
-    assert.equal(out.posted.length, 0);
-  }, { prefix: "dev-loops-base-freshness-judged-" });
-});
-
-test("a ready-PR draft_gate post with a partly judged ledger that has an open act item derives findings_present early and skips the stale-base check", async () => {
-  await withTempDir(async (tempDir) => {
-    const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY }), { isDraft: false, omitVerdict: true, partlyJudged: true });
-    assert.equal(out.calls.length, 0);
-  }, { prefix: "dev-loops-base-freshness-partly-judged-" });
-});
-
-test("a ready-PR draft_gate post with no --verdict whose --findings-json adds an act item is not refused early at a stale base", async () => {
-  await withTempDir(async (tempDir) => {
-    const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY }), { isDraft: false, omitVerdict: true, actInFindingsJson: true });
-    assert.doesNotMatch(out.error ?? "", /base_stale_integrate_first/);
-    assert.equal(out.calls.length, 0);
-    assert.ok(out.mutations.some((m) => m.includes("convertPullRequestToDraft")), `expected the findings_present post to reach the draft transition, got ${JSON.stringify(out.mutations)} / ${out.error}`);
-  }, { prefix: "dev-loops-base-freshness-findings-json-" });
 });
 
 const STALE = async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY });
@@ -196,20 +170,8 @@ test("a clean review-gate post skips the stale-base check", async () => {
   }, { prefix: "dev-loops-base-freshness-review-" });
 });
 
-test("a ready-PR draft_gate post whose --findings-json adds only rejected items refuses at a stale base after the draft conversion, posts nothing and restores ready", async () => {
-  await withTempDir(async (tempDir) => {
-    const out = await postClean(tempDir, STALE, { isDraft: false, omitVerdict: true, rejectedInFindingsJson: true });
-    assert.match(out.error, /^base_stale_integrate_first:/);
-    assert.equal(out.calls.length, 1);
-    assert.equal(out.posted.length, 0);
-    const convert = out.mutations.findIndex((m) => m.includes("convertPullRequestToDraft"));
-    const restore = out.mutations.findIndex((m) => m.includes("pr ready"));
-    assert.ok(convert >= 0 && restore > convert, `expected a ready restore after the draft conversion, got ${JSON.stringify(out.mutations)}`);
-  }, { prefix: "dev-loops-base-freshness-findings-json-rejected-" });
-});
-
 // Issue 3346: a base_current context at the head proves only the base moved during the round.
-for (const [gate, isDraft] of [["draft_gate", true], ["pre_approval_gate", false]]) {
+for (const [gate, isDraft] of [["pre_approval_gate", false]]) {
   test(`a clean ${gate} post at a stale base posts with a visible stale line when the round started at a current base`, async () => {
     const contextPath = path.join(repoRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate, headSha: HEAD }));
     await mkdir(path.dirname(contextPath), { recursive: true });
@@ -237,24 +199,13 @@ async function withContext(gate, baseFreshness, run) {
   }
 }
 
-test("a ready-PR draft_gate post with a base_current context posts the stale line between the draft conversion and the ready restore", async () => {
-  await withContext("draft_gate", { status: "base_current", base: "main" }, async (tempDir) => {
-    const out = await postClean(tempDir, STALE, { isDraft: false });
-    assert.equal(out.error, undefined);
-    assert.match(out.posted.join("\n"), /\*\*Base freshness:\*\* stale;/);
-    const convert = out.mutations.findIndex((m) => m.includes("convertPullRequestToDraft"));
-    const restore = out.mutations.findIndex((m) => m.includes("pr ready"));
-    assert.ok(convert >= 0 && restore > convert, `expected convert then restore, got ${JSON.stringify(out.mutations)}`);
-  });
-});
-
 // A context outside the reviewed worktree (here the ledger root) belongs to an earlier round and is no proof.
 test("a base_current context found only under the ledger root is no proof and the stale post still refuses", async () => {
   await withTempDir(async (tempDir) => {
-    const contextPath = buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, tmpRoot: tempDir });
+    const contextPath = buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: HEAD, tmpRoot: tempDir });
     await mkdir(path.dirname(contextPath), { recursive: true });
     await writeFile(contextPath, JSON.stringify({ baseFreshness: { status: "base_current", base: "main" } }), "utf8");
-    const out = await postClean(tempDir, STALE, { ledgerRootLayout: true });
+    const out = await postClean(tempDir, STALE, { gate: "pre_approval_gate", isDraft: false, ledgerRootLayout: true });
     assert.match(out.error, /^base_stale_integrate_first:/);
     assert.equal(out.posted.length, 0);
   }, { prefix: "dev-loops-base-freshness-ledger-root-" });
@@ -262,7 +213,7 @@ test("a base_current context found only under the ledger root is no proof and th
 
 test("a ledger-less clean post at a stale base refuses with the base_stale_integrate_first prefix", async () => {
   await withTempDir(async (tempDir) => {
-    const out = await postClean(tempDir, STALE, { noLedger: true });
+    const out = await postClean(tempDir, STALE, { gate: "pre_approval_gate", isDraft: false, noLedger: true });
     assert.match(out.error, /^base_stale_integrate_first:/);
     assert.equal(out.posted.length, 0);
   }, { prefix: "dev-loops-base-freshness-no-ledger-" });
@@ -270,8 +221,8 @@ test("a ledger-less clean post at a stale base refuses with the base_stale_integ
 
 for (const baseFreshness of [{ status: "base_stale_integrate_first" }, { status: "base_current", base: "release" }]) {
   test(`a context recording ${JSON.stringify(baseFreshness)} is no proof and the stale post still refuses`, async () => {
-    await withContext("draft_gate", baseFreshness, async (tempDir) => {
-      const out = await postClean(tempDir, STALE);
+    await withContext("pre_approval_gate", baseFreshness, async (tempDir) => {
+      const out = await postClean(tempDir, STALE, { gate: "pre_approval_gate", isDraft: false });
       assert.match(out.error, /^base_stale_integrate_first:/);
       assert.equal(out.posted.length, 0);
     });

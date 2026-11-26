@@ -189,7 +189,8 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     };
     const beforeProblem = currentTreeProblem();
     if (beforeProblem) return incomplete(beforeProblem.reason, beforeProblem);
-    const stale = await staleBaseReason({ head: options.headSha, cwd: repoRoot, env });
+    // A draft_gate round runs at a stale head; only pre_approval_gate needs the current base.
+    const stale = options.gate === "draft_gate" ? null : await staleBaseReason({ head: options.headSha, cwd: repoRoot, env });
     if (stale) return incomplete(stale);
     const checkout = readCheckoutValidation(repoRoot);
     if (checkout.reason) return incomplete(checkout.reason);

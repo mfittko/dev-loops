@@ -8713,14 +8713,14 @@ async function makeOriginFixture() {
 test("issue 2885: write-gate-context records baseFreshness on a current base and refuses once origin advanced", async () => {
   const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
   try {
-    const argv = ["--repo", "owner/repo", "--pr", "70", "--gate", "draft_gate", "--head-sha", headSha, "--base", "main", "--angles", '["correctness"]'];
+    const argv = ["--repo", "owner/repo", "--pr", "70", "--gate", "pre_approval_gate", "--head-sha", headSha, "--base", "main", "--angles", '["correctness"]'];
     await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
-    const artifact = await readGateContext({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha }, { repoRoot: clone });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 70, gate: "pre_approval_gate", headSha }, { repoRoot: clone });
     assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
     await advanceOrigin();
     // The caller never fetches: the preflight itself must see the advanced origin.
     // The earlier base_current context and an emit plan stay on disk: the refused retry must remove both.
-    const key = { repo: "owner/repo", pr: 70, gate: "draft_gate", headSha, tmpRoot: "tmp" };
+    const key = { repo: "owner/repo", pr: 70, gate: "pre_approval_gate", headSha, tmpRoot: "tmp" };
     const contextFile = path.join(clone, buildGateContextPath(key));
     const planFile = path.join(clone, buildGateEmitPlanPath(key));
     await writeFile(planFile, "{}\n", "utf8");
@@ -8783,7 +8783,22 @@ async function expectRefusal(argv, runtime, pattern, clone) {
   assert.equal(existsSync(path.join(clone, "tmp/gate-context")), false);
 }
 
-for (const gate of ["draft_gate", "pre_approval_gate"]) test(`issue 2885 AC6: a run without --base checks the PR base branch, records baseFreshness and refuses once origin advanced (${gate})`, async () => {
+test("a draft_gate run at a stale head records the non-current baseFreshness and continues", async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    await advanceOrigin();
+    const argv = ["--repo", "owner/repo", "--pr", "77", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["correctness"]'];
+    const before = process.exitCode;
+    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+    assert.equal(process.exitCode, before);
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 77, gate: "draft_gate", headSha }, { repoRoot: clone });
+    assert.deepEqual(artifact.baseFreshness, { status: "base_stale_integrate_first", base: "main" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+for (const gate of ["pre_approval_gate"]) test(`issue 2885 AC6: a run without --base checks the PR base branch, records baseFreshness and refuses once origin advanced (${gate})`, async () => {
   const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
   try {
     const argv = ["--repo", "owner/repo", "--pr", "74", "--gate", gate, "--head-sha", headSha, "--angles", '["correctness"]'];
@@ -8806,7 +8821,7 @@ test("issue 2885 AC6: the freshness verdict describes --head-sha, not the checko
     runGitFixture(clone, ["fetch", "-q", "origin"]);
     runGitFixture(clone, ["merge", "-q", "--no-edit", "origin/main"]);
     // The checkout HEAD contains origin/main, but the reviewed head (pre-merge) lacks it.
-    const argv = ["--repo", "owner/repo", "--pr", "75", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["correctness"]'];
+    const argv = ["--repo", "owner/repo", "--pr", "75", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["correctness"]'];
     await expectRefusal(argv, { repoRoot: clone, run: stubGhRun }, /base_stale_integrate_first/u, clone);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -8822,16 +8837,16 @@ test("issue 2885 AC6: a SHA, revision-expression or non-origin remote --base is 
     const bases = [sha, "HEAD~1", "upstream/main"];
     for (const base of bases) {
       await rm(path.join(clone, "tmp"), { recursive: true, force: true });
-      const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "draft_gate", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
+      const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "pre_approval_gate", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
       await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
-      const artifact = await readGateContext({ repo: "owner/repo", pr: 71, gate: "draft_gate", headSha }, { repoRoot: clone });
+      const artifact = await readGateContext({ repo: "owner/repo", pr: 71, gate: "pre_approval_gate", headSha }, { repoRoot: clone });
       assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
       assert.equal(artifact.scope.diffSource, "base");
     }
     await advanceOrigin();
     for (const base of bases) {
       await rm(path.join(clone, "tmp"), { recursive: true, force: true });
-      const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "draft_gate", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
+      const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "pre_approval_gate", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
       await expectRefusal(argv, { repoRoot: clone, run: stubGhRun }, /base_stale_integrate_first/u, clone);
     }
   } finally {
@@ -8878,7 +8893,7 @@ test("issue 2885: a failed preflight fetch exits 1 with base_fetch_failed, the P
   try {
     let received;
     const failing = async ({ base }) => { received = base; return { ok: false, error: "base_fetch_failed", base, message: "x" }; };
-    const argv = ["--repo", "owner/repo", "--pr", "72", "--gate", "draft_gate", "--head-sha", headSha, "--base", "origin/main", "--angles", '["correctness"]'];
+    const argv = ["--repo", "owner/repo", "--pr", "72", "--gate", "pre_approval_gate", "--head-sha", headSha, "--base", "origin/main", "--angles", '["correctness"]'];
     const before = process.exitCode;
     const realWrite = process.stderr.write.bind(process.stderr);
     let errText = "";

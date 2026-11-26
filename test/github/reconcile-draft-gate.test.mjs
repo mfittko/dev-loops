@@ -666,14 +666,13 @@ test("reconcile-draft-gate marks the PR ready again if gate-comment upsert throw
   }
 });
 
-// Entries for a clean reconcile run on a ready PR; `baseView` is the baseRefName lookup entry.
-function cleanReconcileEntries(baseView) {
+// Entries for a clean reconcile run on a ready PR.
+function cleanReconcileEntries() {
   return [
     { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc123456789"}\n' },
     { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
     { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
     { assertArgs: ["pr", "checks", "17", "--repo", "owner/repo", "--json", "bucket,state,name,workflow"], stdout: '[{"bucket":"pass","state":"SUCCESS","name":"verify","workflow":"CI"}]\n' },
-    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefName"], ...baseView },
     { assertArgs: ["api", "graphql", "-f", "-F"], assertArgContains: ["owner=owner", "name=repo", "number=17", "pullRequest(number: $number)"], stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":false}}}}\n' },
     { assertArgs: ["api", "graphql", "-f", "-F"], assertArgContains: ["pullRequestId=PR_kwDOScHU78000017", "convertPullRequestToDraft"], stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":true}}}}\n' },
     {
@@ -698,24 +697,18 @@ function cleanReconcileEntries(baseView) {
   ];
 }
 
-for (const [label, baseView, checkBaseFreshness] of [
-  ["a current base", { stdout: '{"baseRefName":"main"}\n' }, async () => ({ ok: true, status: "base_current" })],
-  ["a null exit-0 baseRefName payload", { stdout: "null\n" }, async () => { throw new Error("checker must not run without a base"); }],
-  ["a non-JSON exit-0 baseRefName payload", { stdout: "not json\n" }, async () => { throw new Error("checker must not run without a base"); }],
-]) {
-  test(`reconcile-draft-gate converts to draft and posts the clean verdict with ${label}`, async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-base-pass-"));
-    try {
-      await disableFanoutEvidence(tempDir);
-      const { runChild, calls } = makeGhMock(cleanReconcileEntries(baseView), { repeatLastOnOverflow: true });
-      const result = await reconcileDraftGate({ repo: "owner/repo", pr: 17 }, { env: runIdFreeEnv({}), repoRoot: tempDir, runChild, checkBaseFreshness });
-      assert.equal(result.action, "reconciled");
-      assert.equal(calls.some(({ args }) => args.some((arg) => arg.includes("convertPullRequestToDraft"))), true);
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
-  });
-}
+test("reconcile-draft-gate converts to draft and posts the clean verdict without a base lookup", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-base-pass-"));
+  try {
+    await disableFanoutEvidence(tempDir);
+    const { runChild, calls } = makeGhMock(cleanReconcileEntries(), { repeatLastOnOverflow: true });
+    const result = await reconcileDraftGate({ repo: "owner/repo", pr: 17 }, { env: runIdFreeEnv({}), repoRoot: tempDir, runChild });
+    assert.equal(result.action, "reconciled");
+    assert.equal(calls.some(({ args }) => args.some((arg) => arg.includes("convertPullRequestToDraft"))), true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
 
 test("reconcile-draft-gate converts to draft, posts clean evidence, and marks ready when CI is green", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-success-"));
@@ -1079,26 +1072,3 @@ test("reconcile-draft-gate succeeds for a light-mode under-threshold PR under ac
   }
 });
 
-test("reconcile-draft-gate refuses a stale base before converting a ready PR to draft", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-stale-base-"));
-
-  try {
-    await disableFanoutEvidence(tempDir);
-    const { runChild, calls } = makeGhMock([
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc123456789"}\n' },
-      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
-      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
-      { assertArgs: ["pr", "checks", "17", "--repo", "owner/repo", "--json", "bucket,state,name,workflow"], stdout: '[{"bucket":"pass","state":"SUCCESS","name":"verify","workflow":"CI"}]\n' },
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefName"], stdout: '{"baseRefName":"main"}\n' },
-    ]);
-    const checkBaseFreshness = async () => ({ error: "base_stale_integrate_first", newerCommits: ["deadbee newer base commit"], remedy: "Integrate origin/main first." });
-
-    await assert.rejects(
-      reconcileDraftGate({ repo: "owner/repo", pr: 17 }, { env: runIdFreeEnv({}), repoRoot: tempDir, runChild, checkBaseFreshness }),
-      /base_stale_integrate_first.*Integrate origin\/main first\./s,
-    );
-    assert.equal(calls.some(({ args }) => args.some((arg) => arg.includes("convertPullRequestToDraft"))), false);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
