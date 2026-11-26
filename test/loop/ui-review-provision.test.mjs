@@ -227,7 +227,7 @@ test("ready-url-in-use: a readyUrl that already answers stops before migrations 
   assert.equal(result.findings[0].kind, "ready-url-in-use");
   assert.equal(result.findings[0].severity, "must-fix");
   assert.match(result.findings[0].recovery, /loop ui-review-teardown --repo-root <p> --provision-result <earlier provision --out file>/);
-  assert.match(result.findings[0].recovery, /re-run/);
+  assert.match(result.findings[0].recovery, /re-run provision with a new --out path/);
   assert.equal(result.recovery, result.findings[0].recovery);
   assert.equal(result.boot, undefined);
   assert.equal(migrated, 0);
@@ -772,4 +772,19 @@ test("boot-exited: an exit during the interval wait stops at once and clears the
   const r = await provisionAndBoot({ repoRoot: "/main", pr: 1 }, seams);
   assert.ok(r.findings.some((x) => x.kind === "boot-exited" && x.exitCode === 2));
   assert.equal(cleared, true);
+});
+
+test("ready-url-in-use: the pre-boot probe is bounded by readyTimeoutMs, not readyIntervalMs", async () => {
+  const root = makeFixture(RECIPE_YAML);
+  const budgets = [];
+  const { seams } = baseSeams(root, {
+    probeTimeout: (ms) => { budgets.push(ms); return new Promise(() => {}); },
+  });
+  // Slow earlier app: answers true after more than readyIntervalMs (1000), less than readyTimeoutMs (5000).
+  seams.probe = () => new Promise((resolve) => setTimeout(() => resolve(true), 20));
+
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 9 }, seams);
+
+  assert.equal(budgets[0], 5000);
+  assert.equal(result.findings[0].kind, "ready-url-in-use");
 });

@@ -53,7 +53,8 @@ with exit code and log tail), a `readyUrl` that already answers before boot
 (`ready-url-in-use`, an earlier app still holds it), or a readiness probe timeout. Every bounded cap is
 logged. The `ready-url-in-use` stop carries a `recovery`: run
 `loop ui-review-teardown --repo-root <p> --provision-result <earlier provision --out file>`, then re-run
-provision; with no earlier result file, stop the process that serves `<readyUrl>`.
+provision with a new `--out` path, because a re-run on the same path overwrites the earlier result, which holds the
+boot pid; with no earlier result file, stop the process that serves `<readyUrl>`.
 
 Every stage (provision, drive, diagnose, report, teardown) accepts `--out <p>`. It writes the full result JSON
 to `<p>` (creating the parent directory, overwriting an existing file) whatever `--jq` or `--silent` do. Run a stage with

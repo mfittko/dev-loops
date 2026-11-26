@@ -208,7 +208,7 @@ export async function provisionAndBoot(
   // 4c. An app from an earlier run may still hold readyUrl. It would answer the
   //     ready poll before the new process exits on the busy port and give a false
   //     ready, so refuse. A false, thrown or timed-out probe continues.
-  const preTimeout = probeTimeout(recipe.readyIntervalMs);
+  const preTimeout = probeTimeout(recipe.readyTimeoutMs);
   let inUse = false;
   try {
     inUse = (await Promise.race([Promise.resolve(probe(recipe.readyUrl)), preTimeout])) === true;
@@ -218,7 +218,7 @@ export async function provisionAndBoot(
     preTimeout.clear?.();
   }
   if (inUse) {
-    const recovery = `run loop ui-review-teardown --repo-root <p> --provision-result <earlier provision --out file>, then re-run provision; with no earlier result file, stop the process that serves ${recipe.readyUrl}`;
+    const recovery = `run loop ui-review-teardown --repo-root <p> --provision-result <earlier provision --out file>, then re-run provision with a new --out path (a re-run on the same path overwrites the earlier result, which holds the pid); with no earlier result file, stop the process that serves ${recipe.readyUrl}`;
     return stop(
       `readyUrl ${recipe.readyUrl} already answers; an earlier app still holds it`,
       {

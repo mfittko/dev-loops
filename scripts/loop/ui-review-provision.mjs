@@ -45,7 +45,8 @@ Optional:
 Output (stdout, JSON):
   { "ok": bool, "stopped": bool, "stopReason": string|null,
     "worktreePath": <p>, "headSha": <sha|null>, "depInstall": {...}, "migrations": {...},
-    "boot": { "ready": bool, "attempts": n, ... }, "findings": [...], "logs": [...] }
+    "boot": { "ready": bool, "attempts": n, ... }, "findings": [...], "logs": [...],
+    "recovery": string (ready-url-in-use stop only) }
 
 ${JQ_OUTPUT_USAGE}`.trim();
 
