@@ -359,6 +359,12 @@ test("CLI: parses required args, submit-authorized and dry-run default off", () 
   assert.throws(() => parseUiReviewReportCliArgs(["--diagnose-result", "d.json", "--html-output", "o.html"]), /Missing required --pr/);
 });
 
+test("CLI: --out takes a value and rejects a missing one", () => {
+  const base = ["--pr", "42", "--diagnose-result", "d.json", "--html-output", "o.html"];
+  assert.equal(parseUiReviewReportCliArgs([...base, "--out", "/o.json"]).out, "/o.json");
+  assert.throws(() => parseUiReviewReportCliArgs([...base, "--out"]), /--out/);
+});
+
 test("named states: 0-finding HTML has one labeled img per state; unreadable and oversize states get a stated cap (#2855)", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "ui-review-states-"));
   const prefixLen = "data:image/png;base64,".length;

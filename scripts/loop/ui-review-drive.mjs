@@ -43,6 +43,7 @@ Required:
   --output-dir <p>     Directory for the ordered step screenshots + state.json + snapshot.json + axe.json + console.json artifacts.
 Optional:
   --changed-path <p>   A changed file path (repeatable); drives the changed-flow selection heuristic.
+  --out <p>            Also write the result JSON to <p> (pass it to the next stage; no shell redirect).
   -h, --help           Show this help.
 Output (stdout, JSON):
   { "ok": bool, "stopped": bool, "stopReason": string|null,
@@ -67,6 +68,7 @@ export function parseUiReviewDriveCliArgs(argv) {
       "app-url": { type: "string" },
       "output-dir": { type: "string" },
       "changed-path": { type: "string", multiple: true },
+      out: { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -96,6 +98,7 @@ export function parseUiReviewDriveCliArgs(argv) {
       options.changedPaths.push(requireTokenValue(token, parseError, { flagPattern: /^-/u }));
       continue;
     }
+    if (token.name === "out") { options.out = requireTokenValue(token, parseError); continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -390,7 +393,7 @@ export async function runCli(argv = process.argv.slice(2), {
       rowManifest: [],
       logs: [],
     };
-    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, out: options.out });
     return;
   }
 
@@ -427,7 +430,7 @@ export async function runCli(argv = process.argv.slice(2), {
       rowManifest: [],
       logs: [],
     };
-    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, out: options.out });
     return;
   }
   try {
@@ -454,7 +457,7 @@ export async function runCli(argv = process.argv.slice(2), {
         log: (msg) => stderr.write(`[ui-review-drive] ${msg}\n`),
       },
     );
-    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, out: options.out });
   } finally {
     await browser.close();
   }

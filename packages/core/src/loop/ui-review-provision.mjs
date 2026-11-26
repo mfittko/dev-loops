@@ -205,6 +205,31 @@ export async function provisionAndBoot(
     runCwd = resolvedCwd;
   }
 
+  // 4c. An app from an earlier run may still hold readyUrl. It would answer the
+  //     ready poll before the new process exits on the busy port and give a false
+  //     ready, so refuse. A false, thrown or timed-out probe continues.
+  const preTimeout = probeTimeout(recipe.readyIntervalMs);
+  let inUse = false;
+  try {
+    inUse = (await Promise.race([Promise.resolve(probe(recipe.readyUrl)), preTimeout])) === true;
+  } catch {
+    inUse = false;
+  } finally {
+    preTimeout.clear?.();
+  }
+  if (inUse) {
+    return stop(
+      `readyUrl ${recipe.readyUrl} already answers; an earlier app still holds it`,
+      {
+        kind: "ready-url-in-use",
+        severity: MUST_FIX,
+        message: `${recipe.readyUrl} already answers before boot; a new app would fail with EADDRINUSE while the probe reports ready`,
+        recovery: `run loop ui-review-teardown --repo-root <p> --provision-result <earlier provision --out file>, then re-run provision; with no earlier result file, stop the process that serves ${recipe.readyUrl}`,
+      },
+      { worktreePath, depInstall },
+    );
+  }
+
   // 5. Dev-DB migrations. A destructive/blocked migration fails closed to a
   //    finding requiring explicit ack; nothing is applied until acknowledged.
   let migrations = { pending: 0, applied: 0, destructive: [], detail: "no migrate recipe" };

@@ -110,8 +110,7 @@ uiReview:
 function baseSeams(root, overrides = {}) {
   const clock = fakeClock();
   const logs = [];
-  return {
-    seams: {
+  const merged = {
       ensureWorktree: async () => ({ path: root, created: true, reused: false }),
       assertNotPrimary: () => ({ ok: true, mainWorktreePath: "/some/main" }),
       detectDepDelta: async () => ({ changed: false, detail: "identical" }),
@@ -128,9 +127,15 @@ function baseSeams(root, overrides = {}) {
       delay: clock.delay,
       log: (m) => logs.push(m),
       ...overrides,
-    },
-    logs,
   };
+  // The pre-boot "is readyUrl already answering" probe reads false; the override
+  // probe applies only once bootApp has run. Tests of the pre-boot probe reassign
+  // seams.probe after this helper returns.
+  const { probe, bootApp } = merged;
+  let booted = false;
+  merged.bootApp = async (...args) => { booted = true; return bootApp(...args); };
+  merged.probe = (...args) => (booted ? probe(...args) : false);
+  return { seams: merged, logs };
 }
 
 // ensureWorktree's `branch` is a branch to CREATE off the default base when no
@@ -197,6 +202,51 @@ test("parseUiReviewProvisionCliArgs: parses pr, branch, ack flag", () => {
   assert.equal(o.pr, 12);
   assert.equal(o.branch, "b");
   assert.equal(o.ackDestructiveMigration, true);
+});
+
+test("parseUiReviewProvisionCliArgs: --out takes a value and rejects a missing one", () => {
+  const base = ["--repo-root", "/r", "--pr", "12"];
+  assert.equal(parseUiReviewProvisionCliArgs([...base, "--out", "/o/p.json"]).out, "/o/p.json");
+  assert.throws(() => parseUiReviewProvisionCliArgs([...base, "--out"]), /--out/);
+});
+
+test("ready-url-in-use: a readyUrl that already answers stops before migrations and boot", async () => {
+  const root = makeFixture(RECIPE_YAML);
+  let migrated = 0;
+  let booted = 0;
+  const { seams } = baseSeams(root, {
+    inspectMigrations: async () => { migrated += 1; return { pending: [], destructive: [], detail: "none" }; },
+    bootApp: async () => { booted += 1; return { pid: 1, detail: "spawned" }; },
+  });
+  seams.probe = async () => true;
+
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 9 }, seams);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stopped, true);
+  assert.equal(result.findings[0].kind, "ready-url-in-use");
+  assert.equal(result.findings[0].severity, "must-fix");
+  assert.match(result.findings[0].recovery, /loop ui-review-teardown --repo-root <p> --provision-result <earlier provision --out file>/);
+  assert.match(result.findings[0].recovery, /re-run/);
+  assert.equal(result.boot, undefined);
+  assert.equal(migrated, 0);
+  assert.equal(booted, 0);
+});
+
+test("ready-url-in-use: a throwing pre-boot probe continues to boot", async () => {
+  const root = makeFixture(RECIPE_YAML);
+  let calls = 0;
+  const { seams } = baseSeams(root, { probe: async () => true });
+  seams.probe = async () => {
+    calls += 1;
+    if (calls === 1) throw new Error("connection refused");
+    return true;
+  };
+
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 9 }, seams);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.boot.ready, true);
 });
 
 test("parseUiReviewProvisionCliArgs: --ack-destructive-migration=false does NOT ack (fail closed)", () => {
