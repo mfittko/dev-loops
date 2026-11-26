@@ -672,7 +672,7 @@ test("--report-path parses as an absolute path and is refused without --check", 
 
 const repeatedDiffScenarios = ["myers", "histogram", "patience"].flatMap((algorithm) =>
   ["true", "false"].flatMap((heuristic) => ["miss", "touch"].map((change) => `${change}-repeated-${algorithm}-${heuristic}`)));
-for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-diff-opts", "miss-inter-hunk", "touch", "touch-diff-opts", "touch-inter-hunk", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source", ...repeatedDiffScenarios]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
+for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-diff-opts", "miss-inter-hunk", "touch", "touch-diff-opts", "touch-inter-hunk", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source", "base-merge", ...repeatedDiffScenarios]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
   await withRepoRoot(async (root) => {
     root = await realpath(root);
     const repeated = scenario.includes("-repeated-");
@@ -694,8 +694,15 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
     const text = scenario.startsWith("touch") ? "one\ntwo\nchanged\nfour\nfive\n" : "one\ntwo\nthree\nfour\nelsewhere\n";
     // Myers maps the original line 6 to 7; touching line 6 must pass and line 7 must refuse.
     const repeatedText = scenario.startsWith("touch") ? "start\na\nb\nc\nend\na\nchanged\nc\n" : "start\na\nb\nc\nend\nelsewhere\nb\nc\n";
-    await writeFile(path.join(root, "site.txt"), repeated ? repeatedText : interHunk ? text.replace("one", "before").replace("five", "after") : text);
-    git("add", "site.txt"); git("commit", "-qm", "developer");
+    if (scenario === "base-merge") {
+      // Real fixerEmitCarryAccepts: H is a base-only merge on top of the candidate X; origin/base-line is the PR base.
+      git("checkout", "-qb", "base-line", git("rev-list", "--max-parents=0", "HEAD")); await writeFile(path.join(root, "other.txt"), "base change\n");
+      git("add", "other.txt"); git("commit", "-qm", "base change");
+      git("update-ref", "refs/remotes/origin/base-line", "HEAD"); git("checkout", "-q", "-");
+      git("merge", "--no-ff", "base-line", "-m", "merge base");    } else {
+      await writeFile(path.join(root, "site.txt"), repeated ? repeatedText : interHunk ? text.replace("one", "before").replace("five", "after") : text);
+      git("add", "site.txt"); git("commit", "-qm", "developer");
+    }
     if (scenario.startsWith("touch-color")) git("config", scenario === "touch-color-diff" ? "color.diff" : "color.ui", "always");
     let head = git("rev-parse", "HEAD");
     const ids = route === "THREAD" ? ["PRRT_T1"] : ["PRRT_MERGED", "PRRT_SHARED"];
@@ -706,7 +713,7 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
     let resolved = false, reads = 0; const posts = [];
     const deps = { env: runIdFreeEnv(scenario.endsWith("diff-opts") ? { GIT_DIFF_OPTS: "-u100" } : {}), ghCommand: "gh", repoRoot: root, runChild: async (cmd, args, env, stdin) => {
       if (cmd === "git") { const r = spawnSync(cmd, args, { cwd: root, env, encoding: "utf8" }); return { code: r.status, stdout: r.stdout, stderr: r.stderr }; }
-      if (args[0] === "pr") return { code: 0, stdout: JSON.stringify({ headRefOid: scenario === "head-race" && reads++ ? candidate : head, statusCheckRollup: ["red", "pending"].includes(scenario) ? [{ name: "unit" }] : [] }) };
+      if (args[0] === "pr") return { code: 0, stdout: JSON.stringify({ headRefOid: scenario === "head-race" && reads++ ? candidate : head, statusCheckRollup: ["red", "pending"].includes(scenario) ? [{ name: "unit" }] : [], baseRefName: scenario === "base-merge" ? "base-line" : "main" }) };
       if (args[1] === "user") return { code: 0, stdout: JSON.stringify({ login: "gate" }) };
       if (args[1]?.includes("/compare/")) return { code: 0, stdout: JSON.stringify({ status: ["behind", "diverged"].includes(scenario) && args[1].endsWith(`${candidate}...${head}`) ? scenario : "ahead" }) };
       if (args[1]?.includes("/pulls/comments/")) {
@@ -724,7 +731,7 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
       throw new Error(`unexpected call ${cmd} ${args.join(" ")}`);
     } };
     const options = { repo: REPO, pr: PR, headSha: head, fixerPlan };
-    if (scenario !== "miss" && !scenario.startsWith("miss-")) {
+    if (scenario !== "miss" && scenario !== "base-merge" && !scenario.startsWith("miss-")) {
       const expected = repeated ? /thread_site_changed/ : { touch: /thread_site_changed/, "touch-diff-opts": /thread_site_changed/, "touch-inter-hunk": /thread_site_changed/, "touch-color-diff": /thread_site_changed/, "touch-color-ui": /thread_site_changed/, left: /thread_site_unverifiable/, behind: /not contained/, diverged: /not contained/, red: /ci_failed/, pending: /ci_pending/, "head-race": /live head changed/, "missing-report": /result_missing/, "forged-source": /differ|Invalid fixer review baseline/ }[scenario];
       await assert.rejects(verifyFixerDisposition(options, deps), expected); assert.deepEqual(posts, []);
       assert.equal(resolved, false);
@@ -752,6 +759,8 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
       const count = posts.length;
       assert.equal((await verifyFixerDisposition({ ...options, check: true }, deps)).complete, true);
       assert.equal(posts.length, count);
+      // A PR-own commit after the merge is not base-only, so the re-entry below does not apply.
+      if (scenario === "base-merge") return;
       await writeFile(path.join(root, "later.txt"), "another developer change\n");
       git("add", "later.txt"); git("commit", "-qm", "later developer");
       head = git("rev-parse", "HEAD");
