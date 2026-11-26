@@ -2286,8 +2286,8 @@ export async function operatorDecidedLatestRound(options, { repoRoot, latest, la
 }
 
 /**
- * The operator clear of a pre_approval_gate round past the scoped round (GATE-EXEC-CAP-BRAKES). The latest closed round's act items count as cleared when the issued
- * fixer plan (bound to that round's head, to pre_approval_gate and to its digest) holds an operator focus decision for each fingerprint. A set already held by an
+ * The operator clear of a pre_approval_gate round past the scoped round (GATE-EXEC-CAP-BRAKES). The latest closed round's act items count as cleared when the direct
+ * operator focus file or the issued fixer plan (bound to that round's head, to pre_approval_gate and to its digest) holds an operator focus decision for each fingerprint. A set already held by an
  * earlier round from the round after the effective cap round on was re-opened once: it stays with the operator.
  * Returns the scoped round input `{ fromHead, priorActItems }`, or null.
  */
