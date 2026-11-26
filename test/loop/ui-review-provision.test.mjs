@@ -228,9 +228,31 @@ test("ready-url-in-use: a readyUrl that already answers stops before migrations 
   assert.equal(result.findings[0].severity, "must-fix");
   assert.match(result.findings[0].recovery, /loop ui-review-teardown --repo-root <p> --provision-result <earlier provision --out file>/);
   assert.match(result.findings[0].recovery, /re-run/);
+  assert.equal(result.recovery, result.findings[0].recovery);
   assert.equal(result.boot, undefined);
   assert.equal(migrated, 0);
   assert.equal(booted, 0);
+});
+
+test("ready-url-in-use: a timed-out pre-boot probe continues to migrations and boot", async () => {
+  const root = makeFixture(RECIPE_WITH_MIGRATE_YAML);
+  let migrated = 0;
+  let timeouts = 0;
+  const { seams } = baseSeams(root, {
+    inspectMigrations: async () => { migrated += 1; return { pending: [], destructive: [], detail: "none" }; },
+    probe: async () => true,
+    // Only the pre-boot probe's cap fires; the pre-boot probe itself never resolves.
+    probeTimeout: () => { timeouts += 1; return timeouts === 1 ? Promise.resolve(false) : new Promise(() => {}); },
+  });
+  const bootProbe = seams.probe;
+  let calls = 0;
+  seams.probe = (...args) => (calls++ === 0 ? new Promise(() => {}) : bootProbe(...args));
+
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 9 }, seams);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.boot.ready, true);
+  assert.equal(migrated, 1);
 });
 
 test("ready-url-in-use: a throwing pre-boot probe continues to boot", async () => {

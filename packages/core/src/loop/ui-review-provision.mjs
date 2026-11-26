@@ -218,15 +218,16 @@ export async function provisionAndBoot(
     preTimeout.clear?.();
   }
   if (inUse) {
+    const recovery = `run loop ui-review-teardown --repo-root <p> --provision-result <earlier provision --out file>, then re-run provision; with no earlier result file, stop the process that serves ${recipe.readyUrl}`;
     return stop(
       `readyUrl ${recipe.readyUrl} already answers; an earlier app still holds it`,
       {
         kind: "ready-url-in-use",
         severity: MUST_FIX,
         message: `${recipe.readyUrl} already answers before boot; a new app would fail with EADDRINUSE while the probe reports ready`,
-        recovery: `run loop ui-review-teardown --repo-root <p> --provision-result <earlier provision --out file>, then re-run provision; with no earlier result file, stop the process that serves ${recipe.readyUrl}`,
+        recovery,
       },
-      { worktreePath, depInstall },
+      { worktreePath, depInstall, recovery },
     );
   }
 
