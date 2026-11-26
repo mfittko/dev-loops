@@ -257,7 +257,7 @@ flowchart TD
 
 Type: `sequenceDiagram`
 
-The fixed order at a gate-round end or a fix-pass end. The insight is that the coordinator joins every worker, validates the typed packet, and releases its runner claim before the one `SubagentHandback`, and the replacement re-derives all gate state from detectors instead of from the predecessor's text. Derived from `COORDINATOR-ROUND-BOUNDARY-HANDBACK` and `COORDINATOR-HANDBACK-ONE-REPORT` in `skills/docs/main-agent-contract.md`, the `loop validate-handback` route in `cli/index.mjs`, `scripts/loop/validate-coordinator-handback.mjs`, `scripts/loop/_coordinator-handback.mjs`, and `scripts/loop/emit-coordinator-work-order.mjs`.
+The fixed order at a stop: a gate-round end or a fix-pass end whose `nextAction` is not routine, or the routine-boundary cap. A routine `nextAction` continues in the same run. The insight is that the coordinator joins every worker, validates the typed packet, and releases its runner claim before the one `SubagentHandback`, and the replacement re-derives all gate state from detectors instead of from the predecessor's text. Derived from `COORDINATOR-ROUND-BOUNDARY-HANDBACK` and `COORDINATOR-HANDBACK-ONE-REPORT` in `skills/docs/main-agent-contract.md`, the `loop validate-handback` route in `cli/index.mjs`, `scripts/loop/validate-coordinator-handback.mjs`, `scripts/loop/_coordinator-handback.mjs`, and `scripts/loop/emit-coordinator-work-order.mjs`.
 
 ```mermaid
 sequenceDiagram
@@ -270,10 +270,11 @@ sequenceDiagram
   participant C2 as Coordinator (run N+1)
   participant GC as loop gate-coordination
   C1->>GC: read nextAction after the verdict
+  Note over C1,GC: routine nextAction below the cap: run it in this run, no hand-back
   C1->>W: join every dispatched worker
   W-->>C1: done
   C1->>V: --packet with pr, head, nextAction, workerRunning
-  alt refused (missing_fields, worker_running or verdict_refusal_route)
+  alt refused (missing_fields, worker_running, verdict_refusal_route or routine_boundary)
     V-->>C1: exit 1
     C1->>C1: fix cause and re-run the check
   else valid
@@ -317,7 +318,7 @@ flowchart TD
 
 Type: `timeline`
 
-The chain of fresh coordinators that one issue passes through on one path. The insight is that each run ends at the first gate-round end or fix-pass end, and the `draft_pr_opened` report point never ends a run. In this path one draft\_gate round has findings and Copilot raises none, so the PR passes through five coordinator runs. This is an illustrative sequence of run-ending cases, not measured data. Derived from `UNIT_BOUNDARY` and `deriveUnitBoundaries` in `packages/core/src/loop/handoff-envelope.mjs` and the run-ending case list in `skills/docs/main-agent-contract.md`.
+The chain of fresh coordinators that one issue passes through on one path. The insight is that before ADR 0325 each run ended at the first gate-round end or fix-pass end (a run now continues at routine boundaries up to the cap), and the `draft_pr_opened` report point never ends a run. In this path one draft\_gate round has findings and Copilot raises none, so the PR passes through five coordinator runs. This is an illustrative sequence of run-ending cases, not measured data. Derived from `UNIT_BOUNDARY` and `deriveUnitBoundaries` in `packages/core/src/loop/handoff-envelope.mjs` and the run-ending case list in `skills/docs/main-agent-contract.md`.
 
 ```mermaid
 timeline

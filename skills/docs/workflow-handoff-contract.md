@@ -79,9 +79,9 @@ every mapped wrapper exists on disk and fails closed if one is renamed/removed.
 ## Unit coordinator boundaries (issue 2532, amended by issues 2955 and 3069)
 
 A coordinator continues past the `draft_pr_opened` report point. The end of a gate round and the
-end of a fix pass are run-ending cases under `COORDINATOR-ROUND-BOUNDARY-HANDBACK` in the
-[main-agent contract](main-agent-contract.md), so the coordinator hands back there and does not
-continue. `unitBoundaries` tells the coordinator where to report, so no orchestrator brief has to
+end of a fix pass are boundaries under `COORDINATOR-ROUND-BOUNDARY-HANDBACK` in the
+[main-agent contract](main-agent-contract.md): the coordinator continues at a routine
+`nextAction` and hands back at a stop. `unitBoundaries` tells the coordinator where to report, so no orchestrator brief has to
 restate the boundary:
 
 - `reportAfter` lists the deterministic report points for this route, in order, from the closed
@@ -236,7 +236,7 @@ interface HandoffEnvelope {
   worktreeRequired: boolean;
 
   // issue 2532: the deterministic points at which THIS unit coordinator reports status and continues at draft_pr_opened;
-  // it hands back at gate_verdict_posted under COORDINATOR-ROUND-BOUNDARY-HANDBACK. Target+strategy derived, so it is
+  // at gate_verdict_posted it continues at a routine nextAction and hands back at a stop under COORDINATOR-ROUND-BOUNDARY-HANDBACK. Target+strategy derived, so it is
   // byte-stable; absent on a terminal reconciliation envelope (its stopRules are terminal).
   unitBoundaries?: {
     reportAfter: Array<"draft_pr_opened" | "gate_verdict_posted">;
