@@ -1962,6 +1962,14 @@ const SHELL_WRITE_CASES = [
   ["[[ \"$a\" > \"$b\" ]]", []],
   ["for f in a b; do (( i > n )) && break; done", []],
   ["((i>n)) && echo y > src/a.mjs", [w("src/a.mjs")]],
+  // a group opens only at command position: a `[[` argument is a plain word, and an escaped `))` closes no `((` group
+  ["echo [[ > src/a.mjs ]]", [w("src/a.mjs")]],
+  ["((echo hi) > src/a.mjs 2>x\\))", [w("src/a.mjs"), w("x")]],
+  ["if [[ \"$a\" > \"$b\" ]]; then echo y; fi", []],
+  // quoted and escaped parens in `<(...)` do not count toward its depth
+  ["cat <(echo '(') > src/a.mjs", [w("src/a.mjs")]],
+  ["cat <(echo \\() > src/a.mjs", [w("src/a.mjs")]],
+  ["cat <(echo \"(\") > src/a.mjs", [w("src/a.mjs")]],
   ["((echo hi) > src/a.mjs)", [w("src/a.mjs")]],
   ["{ a; b; } > src/a.mjs", [w("src/a.mjs")]],
   ["( a ) >> src/a.mjs", [w("src/a.mjs")]],

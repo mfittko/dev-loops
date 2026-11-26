@@ -1091,15 +1091,25 @@ function segmentWriteTargets(seg, place) {
   const out = [];
   const operands = [];
   const unparen = (v) => v.replace(/^\(+|\)+$/g, "");
-  const parenDelta = (raw) => raw.split("(").length - raw.split(")").length;
-  // A `(( ... ))` or `[[ ... ]]` group that closes in this segment holds comparisons, so its `>` is no redirect. An unclosed `((` stays visible (it may be a subshell).
+  // Quoted and escaped characters are data, so they never count as parens.
+  const parenDelta = (raw) => {
+    const bare = raw.replace(/'[^']*'|"(?:\\.|[^"\\])*"|\\./g, "");
+    return bare.split("(").length - bare.split(")").length;
+  };
+  // `close` ends the raw word with unescaped characters (an even run of backslashes before it).
+  const closes = (raw, close) => raw.endsWith(close) && (raw.slice(0, -close.length).match(/\\*$/)[0].length % 2 === 0);
+  // A `(( ... ))` or `[[ ... ]]` group that opens at command position and closes in this segment holds comparisons, so its `>` is no redirect. An unclosed `((` stays visible (it may be a subshell).
   const noTests = [];
+  let atCommand = true;
   for (let i = 0; i < seg.words.length; i++) {
     const w = seg.words[i];
-    const close = w.op ? null : w.raw.startsWith("((") ? "))" : w.raw === "[[" ? "]]" : null;
-    const end = !close ? -1 : w.raw.length > 2 && w.raw.endsWith(close) ? i : seg.words.findIndex((x, j) => j > i && !x.op && x.raw.endsWith(close));
+    const close = !atCommand || w.op ? null : w.raw.startsWith("((") ? "))" : w.raw === "[[" ? "]]" : null;
+    const end = !close ? -1 : w.raw.length > 2 && closes(w.raw, close) ? i : seg.words.findIndex((x, j) => j > i && !x.op && closes(x.raw, close));
     if (end >= 0) i = end;
-    else noTests.push(w);
+    else {
+      noTests.push(w);
+      atCommand &&= !w.op && (ENV_ASSIGNMENT_WORD_RE.test(w.raw) || /^(?:!|if|elif|while|until|do|then|else)$/.test(w.raw));
+    }
   }
   // The words of a `>(cmd args)` / `<(cmd args)` process substitution after its opening word are a command, not operands.
   let substDepth = 0;
