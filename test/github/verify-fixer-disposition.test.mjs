@@ -688,6 +688,15 @@ test("a check-less pushed head refuses ci_pending when the order head ran CI, na
   });
 });
 
+test("a check-less pushed head refuses ci_unknown when the order head is unreadable", async () => {
+  await withRepoRoot(async (root) => {
+    const { options, mockFor, ahead, threads, empty, order, pushed } = await pushedHeadFixture(root);
+    const mock = mockFor([ahead, liveHeadEntry(pushed), threads(false), ...ciEntries(pushed, empty), ...ciEntries(order, { checkRunsExit: 1 })]);
+    await assert.rejects(verifyFixerDisposition(options, mock.deps), /ci_unknown: /);
+    assert.equal(hasPost(mock.calls), false);
+  });
+});
+
 test("a check-less pushed head passes when the order head also ran no CI, and when the pushed head is the order head", async () => {
   await withRepoRoot(async (root) => {
     const { pushed, options, mockFor, ahead, threads, empty, order } = await pushedHeadFixture(root);

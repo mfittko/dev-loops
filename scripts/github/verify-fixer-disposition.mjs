@@ -39,6 +39,7 @@ import { revalidateLegacyCompletion } from "./_legacy-fixer-revalidation.mjs";
 import { authenticateOriginalPlan } from "./_fixer-emission-evidence.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
 import { operatorFocusDigestEntry } from "../loop/_operator-focus.mjs";
+import { scriptCommand } from "../lib/timeout-flag.mjs";
 import { observeHeadCiSignals } from "./observe-head-ci.mjs";
 import { normalizeHeadScopedCiContract } from "@dev-loops/core/loop/copilot-ci-status";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
@@ -111,8 +112,10 @@ Optional:
                                settled green: ci_failed (red), ci_pending (pending),
                                ci_unknown (unreadable or unsupported). The guard judges only
                                check runs listed in the PR statusCheckRollup, the set
-                               wait-pr-checks uses. A settled head with no checks at all
-                               passes. Hand back the code and resolve no thread. Normal mode
+                               wait-pr-checks uses. A pushed head with no checks is judged
+                               against the order head: ci_pending when the order head ran CI,
+                               otherwise it passes. A ci_pending refusal publishes no report.
+                               Hand back the code and resolve no thread. Normal mode
                                also posts one residual-status reply on each deferred thread
                                whose delta status is not_resolved or cannot_verify and leaves
                                it open. A residual reply that
@@ -125,7 +128,7 @@ Optional:
                                plan's outputRef). The verifier publishes its final result
                                there once per successful run, last and atomically (temp file, then hard link; an existing report is never
                                replaced and a later run with the same path refuses): the result with outcome
-                               "complete" or "incomplete", or on a refusal
+                               "complete" or "incomplete", or on a refusal other than ci_pending
                                { ok: false, outcome: "refused", error }. A full-phase order
                                derives it as <outputRef>.report (joinRef).
   --tmp-root <path>            Root tmp directory for the checkpoint and the pull
@@ -969,20 +972,20 @@ async function verifyFixerDispositionCore(
       }).overallStatus;
     const emptyHead = state === "none" && ci.checkRuns.nonLoopDerivedCount === 0 && ci.statuses.nonLoopDerivedCount === 0;
     // A pushed head can look check-less before its checks register: the order head shows whether the PR runs CI at all.
-    let ordersCiUnregistered = false, orderCiUnreadable = false;
+    let orderHeadRunsCi = false, orderCiUnreadable = false;
     if (emptyHead && orderHeadSha !== options.headSha) {
       const orderCi = await observeHeadCiSignals({ repo: options.repo, headSha: orderHeadSha, prVisibleCheckNames }, runtime);
       orderCiUnreadable = !orderCi.checkRuns.ok || !orderCi.statuses.ok;
-      ordersCiUnregistered = !orderCiUnreadable && (orderCi.checkRuns.nonLoopDerivedCount > 0 || orderCi.statuses.nonLoopDerivedCount > 0);
+      orderHeadRunsCi = !orderCiUnreadable && (orderCi.checkRuns.nonLoopDerivedCount > 0 || orderCi.statuses.nonLoopDerivedCount > 0);
     }
     // A head with no check runs and no statuses besides the loop-derived gate-evidence is settled (wait-pr-checks settles it); anything else must be green.
-    const checkless = emptyHead && !ordersCiUnregistered && !orderCiUnreadable
+    const checkless = emptyHead && !orderHeadRunsCi && !orderCiUnreadable
       && prVisibleCheckNames.every((name) => LOOP_DERIVED_CI_CHECK_NAMES.includes(name));
     if (state !== "success" && !checkless) {
-      const code = ordersCiUnregistered || state === "pending" ? "ci_pending" : "ci_unknown";
+      const code = orderHeadRunsCi || state === "pending" ? "ci_pending" : "ci_unknown";
       const shown = code === "ci_pending" ? "pending" : state;
       const recovery = code === "ci_pending"
-        ? `; recovery: run wait-pr-checks.mjs --repo ${options.repo} --pr ${options.pr} (re-issue it while it prints pending), then rerun this verifier command unchanged; a ci_pending refusal publishes no report`
+        ? `; recovery: run ${scriptCommand(new URL("./wait-pr-checks.mjs", import.meta.url))} --repo ${options.repo} --pr ${options.pr} --timeout 540 (re-issue it while it prints pending), then rerun this verifier command unchanged; a ci_pending refusal publishes no report`
         : "";
       throw Object.assign(new Error(`${code}: checks at ${options.headSha} are ${shown}, not settled green; resolve no thread, hand back ${code}${recovery}`), code === "ci_pending" ? { ciPending: true } : {});
     }
