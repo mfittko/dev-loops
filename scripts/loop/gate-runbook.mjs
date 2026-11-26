@@ -50,7 +50,7 @@ export const CONTRACT_PINS = [
 
 const renderRunbook = (docsDir) => String.raw`# Gate round runbook
 
-You run one \`draft_gate\`, \`pre_approval_gate\` or \`review\` round for one PR at one head (GATE-EXEC-GATE-COORDINATOR). Read only this runbook. For a rule ID named here run \`grep -n 'rule: <rule ID>' "$D"/*.md\`, then read a bounded range. The contract \`$CONTRACT\` is canonical. This runbook is a pinned projection of it and loosens none of its rules.
+You run one \`draft_gate\`, \`pre_approval_gate\` or \`review\` round for one PR at one head (GATE-EXEC-GATE-COORDINATOR). Read only this runbook. For a rule ID named here run \`grep -n 'rule: <rule ID>' "$D"/*.md\`, then read a bounded range. The contract \`$CONTRACT\` is canonical; this runbook loosens none of its rules.
 
 On the \`review\` gate (the \`--review\` route) run no judge and no lifecycle step: skip steps 2b, 4, 5, 6 and 11 to 13, omit \`--ci-file\` (step 7), \`--spec-authority\` (steps 10 and 14) and every judge flag, and write the log from \`$F/ledger.json\` (step 14). Omit \`actList\`, \`specAuthorityIdentity\` and \`judgeSummary\` from the result.
 
@@ -79,8 +79,9 @@ Operator focus (GATE-EXEC-OPERATOR-FOCUS). When the round arguments carry operat
    On \`mode: "full_fanout"\` continue. On the inline mode run no fan-out and no judge: do steps 3 and 4, review the diff in one pass, write the findings (severity, disposition, angle, summary) as a JSON array to \`$F/inline-findings.json\` and set \`VERDICT\` to \`clean\` or \`findings_present\`. A blocking-severity finding escalates first: rerun this step with \`--inline-severities <csv>\` and continue at step 3 on \`full_fanout\`. Otherwise write the log:
    \`dev-loops-run --repo-root "$W" cli/index.mjs gate write-findings-log --repo "$R" --pr "$N" --gate "$GATE" --head-sha "$H" --verdict "$VERDICT" --execution-mode inline_single_agent --findings-file "$F/inline-findings.json" --spec-authority "$G/$GATE-$H.spec-identity.json" > "$F/findings-log.json"\`
    Return \`executionMode: inline_single_agent\`, the resolver's \`reason\` and the findings summary (the writer takes no reason flag).
-3. Context (Phase 1; GATE-EXEC-BUILD-ONCE-SEED). Build ONE bundle and reuse it for every reviewer. Add \`--available-reviewers <n>\` with your harness's remaining reviewer budget, or omit it. Read \`jq -c '{ok, path}' "$F/wgc.json"\`, then \`jq -c '.artifact.fanout.preflight' <path>\` (GATE-EXEC-REVIEWER-BUDGET-PREFLIGHT). On \`dispatch: false\` spawn zero reviewers, record no verdict and stop with \`budget_shortfall\`, never \`inline_single_agent\`. Resume at the same head with a refreshed budget.
+3. Context (Phase 1; GATE-EXEC-BUILD-ONCE-SEED). Build ONE bundle for every reviewer. Add \`--available-reviewers <n>\` (remaining reviewer budget) or omit it. Read \`jq -c '{ok, path}' "$F/wgc.json"\`, then \`jq -c '.artifact.fanout.preflight' <path>\` (GATE-EXEC-REVIEWER-BUDGET-PREFLIGHT). On \`dispatch: false\` spawn zero reviewers, record no verdict and stop with \`budget_shortfall\`, never \`inline_single_agent\`. Resume at this head with a new budget.
    \`dev-loops-run --repo-root "$W" scripts/github/write-gate-context.mjs --repo "$R" --pr "$N" --gate "$GATE" --head-sha "$H" --harness "$HARNESS" --base "$BASE" --validation-results "$G/$GATE-$H.validation.json" > "$F/wgc.json"\`
+   With a decision file (focus \`items\`) add \`--operator-focus-file "<that file>"\`.
 4. Spec identity, before the resolver and dispatch (GATE-EXEC-JUDGE-PHASE). Skip on \`review\`. Take the spec source from the routed authority, \`--issue <n>\` for the single issue the gate context links, \`--pr "$N"\` only for \`pr_body\` authority. With no source or several issues, stop and hand back the ambiguity. Keep the printed \`sha256:...\` as \`DIGEST\`.
    \`dev-loops-run --repo-root "$W" scripts/loop/spec-context.mjs --repo "$R" --issue <n> --content-file "$G/$GATE-$H.diff" --head-sha "$H" --spec-out "$G/$GATE-$H.spec.json" --identity-out "$G/$GATE-$H.spec-identity.json" --jq .contentDigest\`
 5. Carry-forward (Phase 1.2). Skip on \`review\` and on the gate's first round (no prior head). Otherwise run the resolver for the latest prior head \`$PREV\`; a re-gate never skips it (GATE-EXEC-ANGLE-CARRY-FORWARD, GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED). Add \`--rerun-angle <angle>\` per GATE-EXEC-RERUN-ANGLE.
@@ -122,11 +123,11 @@ Return the typed observation, not the result, when: step 0 finds no dispatch too
 
 ## Boundary
 
-No verdict comment, no ready flip, no push, no merge, no fixer dispatch, no tracked-file edit. Write only under \`$W/tmp/\` and the ledger root. Telemetry (GATE-EXEC-EXECUTION-RECORD) is optional.
+No verdict comment, no ready flip, no push, no merge, no fixer dispatch, no tracked-file edit. Write only under \`$W/tmp/\` and the ledger root. Telemetry (GATE-EXEC-EXECUTION-RECORD): optional.
 
 ## Typed round result
 
-Return this once, after step 14, or at a stop condition. Never hand back an interim result while a dispatched unit is pending (GATE-EXEC-HARNESS-JOIN).
+Return once, after step 14 or at a stop condition. Never hand back an interim result while a dispatched unit is pending (GATE-EXEC-HARNESS-JOIN).
 
 \`\`\`
 verdict: <persisted verdict from the log in step 14>
