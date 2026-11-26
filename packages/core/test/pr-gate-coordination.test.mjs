@@ -5197,7 +5197,8 @@ test("cap brakes: operatorCleared routes past each operator stop; without it the
   const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
   const verdict = { visible: true, headSha: head, verdict: "blocked", contractComplete: true };
   const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", maxCopilotRounds: 0, draftGate: clean, draftGateMarker: clean, preApprovalGate: verdict, preApprovalGateMarker: verdict };
-  const items = ["abcdef0123456789 [medium] body wording (new_act)"];
+  // Body-only act items (pr_body remedies) sit next to a code item, as the dod:0 fixture names them.
+  const items = ["abcdef0123456789 [medium] body wording (new_act)", "0123456789abcdef [low] PR description validation evidence (pr_body)"];
   const cases = {
     growth_past_forecast: { gate: "pre_approval_gate", round: 3, cap: 2, actCounts: [3], wholeLogicLoc: 810, forecastWloc: 380, items },
     non_convergence: { gate: "pre_approval_gate", round: 3, cap: 2, actCounts: [3, 3], items },
@@ -5207,9 +5208,10 @@ test("cap brakes: operatorCleared routes past each operator stop; without it the
     const stopped = evaluatePrGateCoordination({ ...base, capBrakes: brakes });
     assert.deepEqual({ next: stopped.nextAction, on: stopped.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION }, reason);
     assert.match(stopped.reason, new RegExp(reason));
-    assert.ok(stopped.reason.includes(items[0]), reason);
+    for (const item of items) assert.ok(stopped.reason.includes(item), reason);
     assert.match(stopped.reason, /--operator-focus-file <path> on loop gate-coordination/, reason);
     const cleared = evaluatePrGateCoordination({ ...base, capBrakes: { ...brakes, operatorCleared: true } });
+    assert.equal(cleared.nextAction, evaluatePrGateCoordination(base).nextAction, `${reason}: a cleared stop routes as if no brake applied`);
     assert.notEqual(cleared.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, `${reason}: ${cleared.reason}`);
   }
 });

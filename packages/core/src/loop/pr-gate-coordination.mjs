@@ -1324,8 +1324,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  // GATE-EXEC-CAP-BRAKES: `capBrakes` is `{ gate, round, cap, actCounts, items }` for the gate whose round is posted at this head. The one policy
-  // (decideCapRound) stops the lane before another fixer pass; only an operator focus decision that names the items clears the stop.
+  // GATE-EXEC-CAP-BRAKES: `capBrakes` is `{ gate, round, cap, actCounts, items, operatorCleared? }` for the gate whose round is posted at this head. The one policy
+  // (decideCapRound) stops the lane before another fixer pass; only an operator focus decision that names the items clears the stop (`operatorCleared: true` routes past it).
   const capStop = input.capBrakes ? decideCapRound({ ...input.capBrakes, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 } }) : null;
   if (capStop?.action === "operator" && input.capBrakes.operatorCleared !== true) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);

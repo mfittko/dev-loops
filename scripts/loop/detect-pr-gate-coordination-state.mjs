@@ -1457,14 +1457,17 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnly
  */
 async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round, cap }) {
   const last = logs.at(-1), fingerprints = actFingerprintSet(last);
-  if (cap > 0 && round > cap + 1 && (await effectiveRounds(logs, { prBase: context.prData?.baseRefName, repoRoot })).slice(cap).some((log) => log !== last && actFingerprintSet(log).join() === fingerprints.join())) return false;
-  return operatorDecidedLatestRound({ repo: context.repo, pr: context.pr, gate, operatorFocusFile }, { repoRoot, latest: last, last: fingerprints });
+  const effective = await effectiveRounds(logs, { prBase: context.prData?.baseRefName, repoRoot });
+  if (cap > 0 && round > cap + 1 && effective.slice(cap).some((log) => log !== last && actFingerprintSet(log).join() === fingerprints.join())) return false;
+  // A base-merge-forced latest round is decided from the issued fixer plan only, as refuseNonConvergence does (the direct file decides the effective latest round).
+  return operatorDecidedLatestRound({ repo: context.repo, pr: context.pr, gate, operatorFocusFile: effective.at(-1) === last ? operatorFocusFile : undefined }, { repoRoot, latest: last, last: fingerprints });
 }
 
 /**
  * GATE-EXEC-CAP-BRAKES: the facts of the gate whose judged round is posted at the current head (draft_gate while the PR is draft, else pre_approval_gate),
  * or null when that head holds no judged round with an open act item. The evaluator applies the one policy (decideCapRound) to them.
  * The draft round cap keeps its own routing until its exit moves to the scoped final round, so draft_gate carries cap 0 and only the cap-less brakes apply.
+ * It adds `operatorCleared: true` when an operator focus decision covers every act fingerprint of that round (see operatorClearsCapStop), which routes past the stop.
  */
 export async function resolveCapBrakes(context, { repoRoot, config, operatorFocusFile }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
