@@ -352,7 +352,7 @@ function decideShellWriteDeny({ role = null, enforceCoordinator = false, shellWr
   const literal = target.unresolvable ? " The target is not a literal path, so rerun with a literal path." : "";
   return coordinator
     ? { ruleId: null, reason: withHookMarker("COORDINATOR_DELEGATION_BOUNDARY", `Coordinator write boundary: this command ${what}.${literal} Delegate this edit to a fresh developer worker instead of writing it directly. See skills/docs/main-agent-contract.md.`) }
-    : { ruleId: "OPS-EDITOR-TOOL-WRITES", reason: `OPS-EDITOR-TOOL-WRITES: a developer or fixer writes repository files only with the Edit and Write tools, and this command ${what}.${literal} Write the file with the Edit or Write tool.` };
+    : { ruleId: "OPS-EDITOR-TOOL-WRITES", reason: `OPS-EDITOR-TOOL-WRITES denied: a developer or fixer writes repository files only with the Edit and Write tools, and this command ${what}.${literal} Write the file with the Edit or Write tool.` };
 }
 
 function decideBashGateDenyUnmarked(facts) {

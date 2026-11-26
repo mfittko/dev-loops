@@ -181,12 +181,12 @@ const RULE_FIXTURES = [
     // OPS-EDITOR-TOOL-WRITES (issue 2683): the worker variant. The coordinator variant is an inline deny below.
     id: "OPS-EDITOR-TOOL-WRITES",
     facts: { ...BASE, role: "developer", command: "echo x > src/a.mjs", shellWrites: [SHELL_WRITE] },
-    reason: "OPS-EDITOR-TOOL-WRITES: a developer or fixer writes repository files only with the Edit and Write tools, and this command writes \"src/a.mjs\" from the shell. Write the file with the Edit or Write tool.",
+    reason: "OPS-EDITOR-TOOL-WRITES denied: a developer or fixer writes repository files only with the Edit and Write tools, and this command writes \"src/a.mjs\" from the shell. Write the file with the Edit or Write tool.",
   },
   {
     id: "OPS-EDITOR-TOOL-WRITES",
     facts: { ...BASE, role: "fixer", command: "echo x > $out", shellWrites: [{ path: "$out", op: "write", unresolvable: true }] },
-    reason: "OPS-EDITOR-TOOL-WRITES: a developer or fixer writes repository files only with the Edit and Write tools, and this command writes \"$out\" from the shell. The target is not a literal path, so rerun with a literal path. Write the file with the Edit or Write tool.",
+    reason: "OPS-EDITOR-TOOL-WRITES denied: a developer or fixer writes repository files only with the Edit and Write tools, and this command writes \"$out\" from the shell. The target is not a literal path, so rerun with a literal path. Write the file with the Edit or Write tool.",
   },
 ];
 
