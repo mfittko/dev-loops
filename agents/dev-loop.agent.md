@@ -90,11 +90,11 @@ If local facts, GitHub facts, and helper/state-machine output do not agree well 
 
 ## Unit coordinator report points (issue 2532, amended by issues 2955 and 3069)
 
-You run one step: up to your first gate-round end, fix-pass end or other run-ending case. The envelope's `unitBoundaries` names your report points,
+You run one step: across routine gate-round and fix-pass ends, up to the routine-boundary cap or your first stop (any other run-ending case). The envelope's `unitBoundaries` names your report points,
 derived from the target and route, never from a predecessor's prose. `reportAfter` is an
 ordered list. At the `draft_pr_opened` report point, record status through existing
 evidence (PR comment or gate ledger), re-resolve authoritative state with `unitBoundaries.resume`
-and **continue**. At `gate_verdict_posted`, hand back under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`.
+and **continue**. At `gate_verdict_posted`, re-run `loop gate-coordination` and continue with a routine `nextAction`; hand back at a stop under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`.
 Re-resolving is a read of current state through the resume identity. A
 pull-dispatched coordinator keeps the pulled work order as its digest-pinned authority and builds no
 new envelope. After draft PR creation, it adopts the new PR identity for state reads
@@ -106,7 +106,7 @@ omits the field entirely rather than sending an empty list, and the validator re
 `reportAfter`. One entry is a **recorded naming approximation**: `final_approval` runs a gate round but posts
 no verdict of its own, and still carries `gate_verdict_posted`
 (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`). An `issue_intake` unit reports at
-`draft_pr_opened`, continues on the PR route, and then hands back at `gate_verdict_posted` under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`.
+`draft_pr_opened`, continues on the PR route, and then continues at routine boundaries and hands back at a stop under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`.
 
 Hand back only at the run-ending cases in Unit coordinator boundaries of the
 [Main-agent contract](../skills/docs/main-agent-contract.md): `final_approval_ready`, the end of a

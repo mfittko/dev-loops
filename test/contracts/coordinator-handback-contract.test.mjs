@@ -40,7 +40,12 @@ test("AC1 the run-ending list names the gate-round end and the fix-pass end", as
   assert.match(text, /`COORDINATOR-CONTINUITY-SOFT-CAP` stays advisory/);
   assert.match(text, /compact relay packet, which still carries `status` and the startup-output path/);
   assert.match(text, /runs `loop startup --pr <n>` before the hand-back and names that output/);
-  assert.match(text, /runs the fix pass on that act list before it takes `nextAction`/);
+  assert.match(text, /the coordinator, fresh or continuing, runs the fix pass on that act list before it takes `nextAction`/);
+  assert.match(text, /runs its fix pass before that `nextAction`/);
+  const agent = await readRepo("agents/dev-loop.agent.md");
+  assert.doesNotMatch(agent, /hands? back at `gate_verdict_posted`/);
+  assert.doesNotMatch(agent, /At `gate_verdict_posted`, hand back/);
+  assert.doesNotMatch(agent, /up to your first gate-round end/);
 });
 
 test("AC1 the rule is registered and ADR 0181 carries the amendment note", async () => {
