@@ -280,8 +280,10 @@ Optional:
                                             refuses body_item_locatable,
                                             body_unchanged, own_commit_in_range,
                                             body_read_unrecorded (no round
-                                            pr-body read: fix with a commit and
-                                            check-pre-push-delta.mjs --reviewer-only),
+                                            pr-body read: fix with a commit, then
+                                            at the cap run check-pre-push-delta.mjs
+                                            --reviewer-only, below it the next
+                                            draft_gate round),
                                             or blocked_item. A bodyOnly input
                                             with a deltaResult is refused. Requires --gate draft_gate and
                                             --findings-ledger, with

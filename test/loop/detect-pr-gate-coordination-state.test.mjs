@@ -4745,7 +4745,7 @@ test("3105 AC15: a legacy ledger with verdict clean and an open act item goes to
   } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
 });
 
-test("3105 AC15 / 3611: an all-PR-body act list is a body-only list below the cap and at cap 0, null past the cap; a mixed list goes to the fixer", async () => {
+test("3105 AC15 / 3611: an all-PR-body act list is a body-only list below the cap and at cap 0; a mixed list goes to the fixer", async () => {
   const body = await actListFixture({ "": { findings: [BODY_ACT] } });
   try {
     const context = { repo: "owner/repo", pr: 10, currentHeadSha: body.headSha };
@@ -4786,6 +4786,18 @@ test("3309: a base-only merge head keeps the cap-round body-only list of the cap
     assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
     assert.match(result.agentRemedy.command, new RegExp(`--head-sha ${fixture.headSha} .*fixerCommit \\(${fixture.headSha}\\)`));
     assert.equal(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 1, baseOnlyMerge: merge(false) }), null);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
+test("3611: a base-only merge head carries the body-only list below the cap (round 2 of cap 4)", async () => {
+  const fixture = await actListFixture({ "": { findings: [BODY_ACT] } });
+  try {
+    const prior = "1".repeat(40);
+    await writeSealed(path.join(fixture.findingsDir, `draft_gate-${prior}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: prior, verdict: "findings_present", loggedAt: "2026-11-15T00:00:00.000Z", findings: [] }));
+    const merged = "fe".repeat(20);
+    const context = { repo: "owner/repo", pr: 10, currentHeadSha: merged, prData: { baseRefName: "main" } };
+    const list = await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 4, baseOnlyMerge: async () => true });
+    assert.deepEqual(list, { headSha: fixture.headSha, carriedToHead: merged, openActCount: 1, blockers: [], bodyOnly: true });
   } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
 });
 
@@ -4861,7 +4873,7 @@ test("3105 AC15: a hand-edited sealed ledger at the current head throws OUT_OF_B
 
 // Issue 3105 AC15: at the cap round, a high act item without a judgeFix is a named human decision, so the act list keeps report_blocked.
 // `priorRounds` closed ledgers precede the current head's ledger, so the current head's round is priorRounds + 1.
-async function detectCapFixture({ cap, priorRounds, finding }) {
+async function detectCapFixture({ cap, priorRounds, finding, extraFindings = [], twice = false }) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-act-list-cap-"));
   try {
     initGitFixture(tempDir, { branch: "main" });
@@ -4870,11 +4882,14 @@ async function detectCapFixture({ cap, priorRounds, finding }) {
     const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
     await mkdir(findings, { recursive: true });
     const ledger = (head, loggedAt, list) => writeFile(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt, findings: list }), "utf8");
-    for (let i = 1; i <= priorRounds; i += 1) await ledger(String(i).repeat(40), `2026-11-15T00:0${i}:00.000Z`, [{ severity: "medium", summary: `round ${i}`, file: "src/a.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix a" }, { severity: "medium", summary: `round ${i} other`, file: "src/b.mjs", line: 2, judgeDisposition: "act", judgeFix: "fix b" }]);
-    await ledger(headSha, "2026-11-16T00:00:00.000Z", [{ file: "src/x.mjs", line: 3, judgeDisposition: "act", ...finding }]);
+    for (let i = 1; i <= priorRounds; i += 1) await ledger(String(i).repeat(40), `2026-11-15T00:0${i}:00.000Z`, [{ severity: "medium", summary: `round ${i}`, file: "src/a.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix a" }, { severity: "medium", summary: `round ${i} other`, file: "src/b.mjs", line: 2, judgeDisposition: "act", judgeFix: "fix b" }, { severity: "medium", summary: `round ${i} third`, file: "src/c.mjs", line: 3, judgeDisposition: "act", judgeFix: "fix c" }]);
+    await ledger(headSha, "2026-11-16T00:00:00.000Z", [{ file: "src/x.mjs", line: 3, judgeDisposition: "act", ...finding }, ...extraFindings]);
     const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
     const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
-    return await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+    const detect = () => detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+    const first = await detect();
+    // `twice` reruns the detector on the same fixture directory, so the second run sees any state the first wrote.
+    return twice ? [first, await detect()] : first;
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -4919,11 +4934,10 @@ test("3309: a cap-round act list of PR-body items only names the body-only conve
 test("3611: a below-cap and a cap-0 all-PR-body act list routes to the body-only post, never run_draft_gate", async () => {
   const finding = { file: undefined, severity: "medium", summary: "PR body lacks non-goals" };
   for (const { cap, priorRounds } of [{ cap: 4, priorRounds: 1 }, { cap: 0, priorRounds: 0 }]) {
-    const first = await detectCapFixture({ cap, priorRounds, finding });
-    const second = await detectCapFixture({ cap, priorRounds, finding });
+    const [first, second] = await detectCapFixture({ cap, priorRounds, finding, extraFindings: [{ severity: "low", judgeDisposition: "act", summary: "PR body lacks a validation section" }], twice: true });
     assert.equal(first.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, first.reason);
     assert.equal(second.nextAction, first.nextAction);
-    assert.ok(first.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+    assert.deepEqual(second.agentRemedy, first.agentRemedy);    assert.ok(first.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
     assert.ok(!first.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
     assert.match(first.agentRemedy?.command ?? "", /upsert-checkpoint-verdict\.mjs .*bodyOnly: true/);
     assert.match(first.agentRemedy?.summary ?? "", /edit-pr\.mjs/);

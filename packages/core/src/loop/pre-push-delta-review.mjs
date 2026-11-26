@@ -545,7 +545,12 @@ export function composeBodyOnlyConvergedDraftGate({ gate, headSha, round, cap, r
   if (locatable) throw new Error(locatable.angle === "review-thread"
     ? `body_item_locatable: act item ${JSON.stringify(locatable.summary)} is a review-thread item; a thread is never a PR-body item, so it needs a fix commit and a delta review, not a body-only exit`
     : `body_item_locatable: act item ${JSON.stringify(locatable.summary)} names a file and is not remedyKind pr_body; it needs a fix commit and a delta review, not a body-only exit`);
-  if (!reviewedBodySha) throw new Error(`body_read_unrecorded: no round context records a pr-body read at ${headSha}, so a body edit cannot be shown, and write-gate-context.mjs refuses a rerun at that head; fix the items with a commit and run the reviewer-only delta (check-pre-push-delta.mjs --reviewer-only)`);
+  if (!reviewedBodySha) {
+    const exit = cap > 0 && round >= cap
+      ? "fix the items with a commit and run the reviewer-only delta (check-pre-push-delta.mjs --reviewer-only)"
+      : "fix the items with a commit and push it; the next draft_gate round runs at the new head";
+    throw new Error(`body_read_unrecorded: no round context records a pr-body read at ${headSha}, so a body edit cannot be shown, and write-gate-context.mjs refuses a rerun at that head; ${exit}`);
+  }
   if (reviewedBodySha === liveBodySha) throw new Error("body_unchanged: the live PR body digest equals the reviewed pr-body read; edit the PR body first");
   if (ownCommits !== 0) throw new Error(`own_commit_in_range: ${headSha}..${converged.fixerCommit} holds ${ownCommits} PR-own commit(s); clear them with the reviewer-only delta review instead`);
   return { fixerCommit: converged.fixerCommit, deltaDigest: sha256Hex({ bodyOnly: true, reviewedBodySha, liveBodySha, actList: converged.actList }) };

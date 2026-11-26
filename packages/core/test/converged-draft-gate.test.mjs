@@ -187,6 +187,12 @@ describe("composeBodyOnlyConvergedDraftGate", () => {
     assert.throws(() => bodyOnly(items, { gate: "pre_approval_gate" }), /draft_gate only/);
   });
 
+  test("the body_read_unrecorded recovery names the next draft_gate round below the cap and --reviewer-only at the cap", () => {
+    const items = [bodyItem("medium", 1)];
+    assert.throws(() => bodyOnly(items, { round: 2, cap: 4, reviewedBodySha: null }), (err) => /next draft_gate round/.test(err.message) && !/--reviewer-only/.test(err.message));
+    assert.throws(() => bodyOnly(items, { round: 4, cap: 4, reviewedBodySha: null }), /--reviewer-only/);
+  });
+
   test("refuses an actList mismatch", () => {
     const items = [bodyItem("medium", 1)];
     assert.throws(() => bodyOnly(items, { converged: { fixerCommit: A, actList: [bodyItem("medium", 2)] } }), /actList/);

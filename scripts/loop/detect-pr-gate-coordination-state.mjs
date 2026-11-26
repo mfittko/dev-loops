@@ -1408,6 +1408,7 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
  * Issue 3105 AC15 (ADR 0288): the open act list of the current head's live draft_gate ledger, or null.
  * Null when the head has no live ledger with an open act item, past the cap (cap > 0 and round > cap), and when every open item is a nit outside draft round 1.
  * At every round up to the cap an all-PR-body list is `{ bodyOnly: true }`: its exit is the body-only converged post (GATE-EXEC-NO-DEAD-END, ADR 0332).
+ * A head with no live ledger that is a base-only merge of the reviewed head carries that list as `carriedToHead` at every round up to the cap (ADR 0294, ADR 0332 decision 4).
  * `blockers` are the GATE-EXEC-SOFT-CAP blockers: those past the round cap, plus the blocked items of a body-only list at any round; below the cap every other act item goes to the fixer.
  * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
  */
