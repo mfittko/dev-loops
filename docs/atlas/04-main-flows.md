@@ -8,7 +8,7 @@ source_commit: f6619004d3edc2caccc98edd96914a5706c5d59b
 
 ## Main flows from issue to merge
 
-This section follows one unit of work from a raw idea to a merged PR. An idea becomes a grilled issue through the intake procedure and the grill sub-loop. The main agent then dispatches a `dev-loop` coordinator. The coordinator runs `loop startup`, opens a draft PR, and runs the draft\_gate. At every gate-round end and fix-pass end it hands back a typed packet, and the orchestrator dispatches a fresh coordinator from an emitted work order. After a clean draft\_gate the PR goes ready, Copilot reviews it, the pre\_approval gate runs, and `merge-pr.mjs` merges it under a recorded human approval. The diagrams below are derived from the CLI route table in `cli/index.mjs`, the scripts it routes to, the pure state modules in `packages/core/src/loop/`, and the contracts under `skills/docs/`. No diagram shows measured counts.
+This section follows one unit of work from a raw idea to a merged PR. An idea becomes a grilled issue through the intake procedure and the grill sub-loop. The main agent then dispatches a `dev-loop` coordinator. The coordinator runs `loop startup`, opens a draft PR, and runs the draft\_gate. The coordinator continues at a routine `nextAction` and hands back a typed packet at a stop or at the routine-boundary cap, and the orchestrator dispatches a fresh coordinator from an emitted work order. After a clean draft\_gate the PR goes ready, Copilot reviews it, the pre\_approval gate runs, and `merge-pr.mjs` merges it under a recorded human approval. The diagrams below are derived from the CLI route table in `cli/index.mjs`, the scripts it routes to, the pure state modules in `packages/core/src/loop/`, and the contracts under `skills/docs/`. No diagram shows measured counts.
 
 <a id="d46"></a>
 
@@ -257,7 +257,7 @@ flowchart TD
 
 Type: `sequenceDiagram`
 
-The fixed order at a gate-round end or a fix-pass end. The insight is that the coordinator joins every worker, validates the typed packet, and releases its runner claim before the one `SubagentHandback`, and the replacement re-derives all gate state from detectors instead of from the predecessor's text. Derived from `COORDINATOR-ROUND-BOUNDARY-HANDBACK` and `COORDINATOR-HANDBACK-ONE-REPORT` in `skills/docs/main-agent-contract.md`, the `loop validate-handback` route in `cli/index.mjs`, `scripts/loop/validate-coordinator-handback.mjs`, `scripts/loop/_coordinator-handback.mjs`, and `scripts/loop/emit-coordinator-work-order.mjs`.
+The fixed order at a stop: a gate-round end or a fix-pass end whose `nextAction` is not routine, or the routine-boundary cap. A routine `nextAction` continues in the same run. The insight is that the coordinator joins every worker, validates the typed packet, and releases its runner claim before the one `SubagentHandback`, and the replacement re-derives all gate state from detectors instead of from the predecessor's text. Derived from `COORDINATOR-ROUND-BOUNDARY-HANDBACK` and `COORDINATOR-HANDBACK-ONE-REPORT` in `skills/docs/main-agent-contract.md`, the `loop validate-handback` route in `cli/index.mjs`, `scripts/loop/validate-coordinator-handback.mjs`, `scripts/loop/_coordinator-handback.mjs`, and `scripts/loop/emit-coordinator-work-order.mjs`.
 
 ```mermaid
 sequenceDiagram
@@ -270,10 +270,11 @@ sequenceDiagram
   participant C2 as Coordinator (run N+1)
   participant GC as loop gate-coordination
   C1->>GC: read nextAction after the verdict
+  Note over C1,GC: routine nextAction below the cap: run it in this run, no hand-back
   C1->>W: join every dispatched worker
   W-->>C1: done
   C1->>V: --packet with pr, head, nextAction, workerRunning
-  alt refused (missing_fields, worker_running or verdict_refusal_route)
+  alt refused (missing_fields, worker_running, verdict_refusal_route or routine_boundary)
     V-->>C1: exit 1
     C1->>C1: fix cause and re-run the check
   else valid
@@ -294,7 +295,7 @@ sequenceDiagram
 
 Type: `flowchart`
 
-The decision `validateCoordinatorHandback` makes on one packet. The insight is that a packet with a running worker is refused even when every field is valid, so a coordinator cannot hand back mid-round. A packet with a `verdictRefusal` is refused unless it carries `reason: "ci_red"`, a non-empty `actListPath` and `nextAction` `fix_ci_failure`. Derived from `FIELD_CHECKS` and `validateCoordinatorHandback` in `scripts/loop/_coordinator-handback.mjs` and the exit-code rule in `scripts/loop/validate-coordinator-handback.mjs`.
+The decision `validateCoordinatorHandback` makes on one packet. The insight is that a packet with a running worker is refused even when every field is valid, so a coordinator cannot hand back mid-round. A packet with a `verdictRefusal` is refused unless it carries `reason: "ci_red"`, a non-empty `actListPath` and `nextAction` `fix_ci_failure`. A packet with a round-boundary or missing `status`, a routine `nextAction` and `routineBoundaries` below the cap is refused as `routine_boundary`. Derived from `FIELD_CHECKS` and `validateCoordinatorHandback` in `scripts/loop/_coordinator-handback.mjs` and the exit-code rule in `scripts/loop/validate-coordinator-handback.mjs`.
 
 ```mermaid
 flowchart TD
@@ -303,12 +304,15 @@ flowchart TD
   F -->|all pass| W{"workerRunning true?"}
   W -->|yes| R2["refusal: worker_running"]
   W -->|no| VR{"verdictRefusal present?"}
-  VR -->|no| OK["ok: true, exit 0"]
+  VR -->|no| RB{"status gate_round_end, fix_pass_end or missing, routine nextAction, routineBoundaries below the cap?"}
+  RB -->|yes| R4["refusal: routine_boundary (with recovery)"]
+  RB -->|no| OK["ok: true, exit 0"]
   VR -->|"ci_red, actListPath and fix_ci_failure"| OK
   VR -->|any other form| R3["refusal: verdict_refusal_route (with recovery)"]
   R1 --> X["exit 1, fix and re-run"]
   R2 --> X
   R3 --> X
+  R4 --> X
 ```
 
 <a id="d55"></a>
@@ -317,11 +321,11 @@ flowchart TD
 
 Type: `timeline`
 
-The chain of fresh coordinators that one issue passes through on one path. The insight is that each run ends at the first gate-round end or fix-pass end, and the `draft_pr_opened` report point never ends a run. In this path one draft\_gate round has findings and Copilot raises none, so the PR passes through five coordinator runs. This is an illustrative sequence of run-ending cases, not measured data. Derived from `UNIT_BOUNDARY` and `deriveUnitBoundaries` in `packages/core/src/loop/handoff-envelope.mjs` and the run-ending case list in `skills/docs/main-agent-contract.md`.
+The chain of fresh coordinators that one issue passes through on one path. The insight is that before ADR 0325 each run ended at the first gate-round end or fix-pass end (a run now continues at routine boundaries up to the cap), and the `draft_pr_opened` report point never ends a run. In this path one draft\_gate round has findings and Copilot raises none, so the PR passed through five coordinator runs on the pre-ADR-0325 path. This is an illustrative sequence of run-ending cases, not measured data. Derived from `UNIT_BOUNDARY` and `deriveUnitBoundaries` in `packages/core/src/loop/handoff-envelope.mjs` and the run-ending case list in `skills/docs/main-agent-contract.md`.
 
 ```mermaid
 timeline
-  title Coordinator runs for one issue (illustrative)
+  title Coordinator runs for one issue (illustrative, pre-ADR-0325 path)
   Run 1 : loop startup --issue : implement and open draft PR : report point draft_pr_opened, continue : draft_gate verdict : hand-back gate_round_end
   Run 2 : loop startup --pr : fix pass on the act list : push and CI wait : hand-back fix_pass_end
   Run 3 : draft_gate re-round : clean verdict : hand-back gate_round_end

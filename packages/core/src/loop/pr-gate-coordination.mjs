@@ -1136,7 +1136,7 @@ function applyEarlySurfaceGuard(result, input) {
     allowedNextActions: [nextAction],
     forbiddenActions,
     ...(stuck ? stuckTyping(input, unknownOutcome && !operatorStop) : {}),
-    reason: `Clean current-head draft_gate evidence exists, but \`gh pr ready\` is refused (ADR-TRIPWIRE-EARLY-SURFACE): ${decisions.join(" ")}`,
+    reason: `Clean current-head draft_gate evidence exists, but \`dev-loops pr ready-for-review\` is refused (ADR-TRIPWIRE-EARLY-SURFACE): ${decisions.join(" ")}`,
   };
 }
 
@@ -1814,12 +1814,12 @@ function evaluatePrGateCoordinationCore(input = {}) {
       forbiddenActions,
       nextAction: capFixedReady ? CAP_ROUND_FIXED_NEXT_ACTION : (draftReady ? PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW : PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE),
       reason: capFixedReady
-        ? "The PR is still draft, the `draft_gate` cap round's fixer pass landed and its pre-push delta cleared (ADR 0208), so no further `draft_gate` round runs and `gh pr ready` is now legal. `pre_approval_gate` judges what remains."
+        ? "The PR is still draft, the `draft_gate` cap round's fixer pass landed and its pre-push delta cleared (ADR 0208), so no further `draft_gate` round runs and `dev-loops pr ready-for-review` is now legal. `pre_approval_gate` judges what remains."
         : draftGate.currentHeadClean
-        ? "The PR is still draft, and current-head clean `draft_gate` evidence exists, so `gh pr ready` is now legal."
+        ? "The PR is still draft, and current-head clean `draft_gate` evidence exists, so `dev-loops pr ready-for-review` is now legal."
         : (draftGateRequireCi
-          ? "The PR is still draft, current-head CI is green, and `draft_gate` is now the legal gate boundary before `gh pr ready`."
-          : "The PR is still draft, and this repo does not require CI before `draft_gate`, so the draft gate is the next legal boundary before `gh pr ready`."),
+          ? "The PR is still draft, current-head CI is green, and `draft_gate` is now the legal gate boundary before `dev-loops pr ready-for-review`."
+          : "The PR is still draft, and this repo does not require CI before `draft_gate`, so the draft gate is the next legal boundary before `dev-loops pr ready-for-review`."),
       mergeStateStatus,
       conflictFiles,
         refinementArtifact,
