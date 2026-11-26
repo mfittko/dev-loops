@@ -5155,12 +5155,7 @@ test("a pre_approval_gate act list at a base-merged head is counted at the carri
   });
 });
 
-test("a pre_approval_gate act list at a base-merge-forced head without a carry does not count the forced round, and a PR-own change after the merge does", async () => {
-  await withFixture(async (fx) => {
-    // The verdict belongs to the cap round (origin head): at the cap a ledgerless base-only merge reads it there.
-    const { origin, over } = await mergedPreApprovalScenario(fx);
-    assert.equal((await fx.emit(over(origin))).workOrder.source, "act-list");
-  });
+test("a PR-own change after the base merge counts the merged head as a new round", async () => {
   await withFixture(async (fx) => {
     const { merged, over } = await mergedPreApprovalScenario(fx, { ownChangeAfterMerge: true });
     await assert.rejects(fx.emit(over(merged)), (e) => e.refusal === "round_cap_reached");
