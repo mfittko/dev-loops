@@ -4848,7 +4848,7 @@ test("3309: a cap-round body-only act list routes to the converged post, never t
   const result = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 2, blockers: [], bodyOnly: true } });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
   assert.match(result.agentRemedy.command, /^dev-loops-run scripts\/github\/upsert-checkpoint-verdict\.mjs --repo o\/r --pr 9 .*--converged-json/);
-  assert.equal(result.agentRemedy.command, `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo o/r --pr 9 --gate draft_gate --verdict clean --head-sha ${head} --findings-ledger <cap-round ledger> --findings-summary <text> --next-action "mark ready for review" --execution-mode fanout_fanin --converged-json <path to a file holding { fixerCommit, actList, bodyOnly: true }>`);
+  assert.equal(result.agentRemedy.command, `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo o/r --pr 9 --gate draft_gate --verdict clean --head-sha ${head} --findings-ledger '<draft_gate ledger of the act list round>' --findings-summary '<text>' --next-action "mark ready for review" --execution-mode fanout_fanin --converged-json '<path to a file holding { fixerCommit, actList, bodyOnly: true }>'`);
   // The filled command parses: every flag the CLI requires on draft_gate is present and --converged-json takes a path.
   const { parseUpsertCheckpointVerdictCliArgs } = await import("../../../scripts/github/upsert-checkpoint-verdict.mjs");
   const parsed = parseUpsertCheckpointVerdictCliArgs(["--repo", "o/r", "--pr", "9", "--gate", "draft_gate", "--verdict", "clean", "--head-sha", head, "--findings-ledger", "ledger.json", "--findings-summary", "converged", "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin", "--converged-json", "converged.json"]);
@@ -5189,4 +5189,44 @@ test("cap brakes: at the draft cap round a non-shrinking act count stops the lan
   const stalled = evaluatePrGateCoordination({ ...base, capBrakes: brakes([3, 3]) });
   assert.deepEqual({ next: stalled.nextAction, on: stalled.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION });
   assert.match(stalled.reason, /non_convergence/);
+});
+
+// Issue 3589: an operator decision on every act item clears a cap brake stop where it is reported.
+test("cap brakes: operatorCleared routes past each operator stop; without it the stop names the items and --operator-focus-file", () => {
+  const head = "ab".repeat(20);
+  const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
+  const verdict = { visible: true, headSha: head, verdict: "blocked", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", maxCopilotRounds: 0, draftGate: clean, draftGateMarker: clean, preApprovalGate: verdict, preApprovalGateMarker: verdict };
+  // Body-only act items (pr_body remedies) sit next to a code item, as the dod:0 fixture names them.
+  const items = ["abcdef0123456789 [medium] body wording (new_act)", "0123456789abcdef [low] PR description validation evidence (pr_body)"];
+  const cases = {
+    growth_past_forecast: { gate: "pre_approval_gate", round: 3, cap: 2, actCounts: [3], wholeLogicLoc: 810, forecastWloc: 380, items },
+    non_convergence: { gate: "pre_approval_gate", round: 3, cap: 2, actCounts: [3, 3], items },
+    round_cap_reached: { gate: "pre_approval_gate", round: 4, cap: 2, actCounts: [3, 2, 1], items },
+  };
+  for (const [reason, brakes] of Object.entries(cases)) {
+    const stopped = evaluatePrGateCoordination({ ...base, capBrakes: brakes });
+    assert.deepEqual({ next: stopped.nextAction, on: stopped.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION }, reason);
+    assert.match(stopped.reason, new RegExp(reason));
+    for (const item of items) assert.ok(stopped.reason.includes(item), reason);
+    assert.match(stopped.reason, /--operator-focus-file <path> on loop gate-coordination/, reason);
+    const cleared = evaluatePrGateCoordination({ ...base, capBrakes: { ...brakes, operatorCleared: true } });
+    assert.equal(cleared.nextAction, evaluatePrGateCoordination(base).nextAction, `${reason}: a cleared stop routes as if no brake applied`);
+    assert.notEqual(cleared.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, `${reason}: ${cleared.reason}`);
+  }
+});
+
+// Issue 3597 (GATE-EXEC-NO-DEAD-END): a set that already had its one re-open names the operator-only step, never the focus file.
+test("cap brakes: notClearable keeps the Items list and says a focus file does not clear the set", () => {
+  const head = "ab".repeat(20);
+  const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
+  const verdict = { visible: true, headSha: head, verdict: "blocked", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", maxCopilotRounds: 0, draftGate: clean, draftGateMarker: clean, preApprovalGate: verdict, preApprovalGateMarker: verdict };
+  const item = "abcdef0123456789 [medium] repeated set";
+  const stopped = evaluatePrGateCoordination({ ...base, capBrakes: { gate: "pre_approval_gate", round: 4, cap: 2, actCounts: [3, 2, 1], items: [item], notClearable: true } });
+  assert.deepEqual({ next: stopped.nextAction, on: stopped.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION });
+  assert.ok(stopped.reason.includes(item));
+  assert.match(stopped.reason, /already had its one re-open, so a focus file does not clear it and the decision stays with the operator/);
+  assert.doesNotMatch(stopped.reason, /Clear it with --operator-focus-file/);
+  assert.doesNotMatch(stopped.reason, /clears it with an operator focus item/);
 });

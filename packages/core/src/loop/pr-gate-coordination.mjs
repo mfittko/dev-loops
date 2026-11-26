@@ -1324,10 +1324,29 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  // GATE-EXEC-CAP-BRAKES: `capBrakes` is `{ gate, round, cap, actCounts, items }` for the gate whose round is posted at this head. The one policy
-  // (decideCapRound) stops the lane before another fixer pass; only an operator focus decision that names the items clears the stop.
+  // GATE-EXEC-CAP-BRAKES: `capBrakes` is `{ gate, round, cap, actCounts, items, operatorCleared?, notClearable? }` for the gate whose round is posted at this head. The one policy
+  // (decideCapRound) stops the lane before another fixer pass; only an operator focus decision that names the items clears the stop (`operatorCleared: true` routes past it; `notClearable: true` marks a set that already had its one re-open, which no focus file clears).
   const capStop = input.capBrakes ? decideCapRound({ ...input.capBrakes, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 } }) : null;
-  if (capStop?.action === "operator") {
+  // Issue 3105 AC15 (ADR 0288): the open draft_gate act list at the current head; the fixer route below consumes it.
+  const actList = input.draftOpenActList;
+  // A carried list (a base-only merge of the cap head A) keeps its findings_present marker at A: findings_present markers never carry across a merge.
+  const carriedMarker = normalizeGateComment(input.draftGateMarker);
+  const markerAtCarriedList = trimmedOrNull(actList?.carriedToHead)?.toLowerCase() === currentHeadSha?.toLowerCase() && carriedMarker.visible && carriedMarker.contractComplete
+    && carriedMarker.verdict === "findings_present" && carriedMarker.headSha !== null && String(actList.headSha ?? "").toLowerCase().startsWith(carriedMarker.headSha.toLowerCase());
+  // The one head binding of the open act list: a full current head SHA that the list names as its head or its carried head.
+  const actListHeadBound = /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase());
+  // Issue 3460 AC5: at the cap exit the open act list loads before ready, also once the gate threads are resolved.
+  const headActList = (!draftReady || capRoundFixed) && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"))
+    && actListHeadBound
+    && Number.isInteger(actList.openActCount) && actList.openActCount > 0
+    // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.
+    && (input.draftRoundRefused !== true || input.draftCapRoundFailure === "no_clearing_record");
+  // ADR 0271: a round of PR-body items only has no fixer route; its exit is the body-only converged post, named in the cap refusal below.
+  const bodyOnlyList = headActList && actList.bodyOnly === true;
+  // GATE-EXEC-NO-DEAD-END: the non_convergence brake (which guards the next round) skips a blocker-free all-PR-body list only when the body-only route or the satisfied-gate route answers instead.
+  const bodyOnlyExempt = capStop?.reason === "non_convergence" && actList?.bodyOnly === true && actList.openActCount > 0
+    && (actList.blockers ?? []).length === 0 && (bodyOnlyList || draftReady) && actListHeadBound;
+  if (capStop?.action === "operator" && input.capBrakes.operatorCleared !== true && !bodyOnlyExempt) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
     pushUnique(forbiddenActions, [
       PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
@@ -1351,7 +1370,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       forbiddenActions,
       nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
       blockedOn: BLOCKED_ON.OPERATOR_DECISION,
-      reason: `${describeCapStop(capStop)} (${input.capBrakes.gate}).${named}`,
+      reason: `${describeCapStop(capStop, { clearable: input.capBrakes.notClearable !== true })} (${input.capBrakes.gate}).${named}${input.capBrakes.notClearable === true ? " This act set already had its one re-open, so a focus file does not clear it and the decision stays with the operator." : " Clear it with --operator-focus-file <path> on loop gate-coordination."}`,
       mergeStateStatus,
       conflictFiles,
       refinementArtifact,
@@ -1427,20 +1446,6 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  // Issue 3105 AC15 (ADR 0288): the open draft_gate act list at the current head; the fixer route below consumes it.
-  const actList = input.draftOpenActList;
-  // A carried list (a base-only merge of the cap head A) keeps its findings_present marker at A: findings_present markers never carry across a merge.
-  const carriedMarker = normalizeGateComment(input.draftGateMarker);
-  const markerAtCarriedList = trimmedOrNull(actList?.carriedToHead)?.toLowerCase() === currentHeadSha?.toLowerCase() && carriedMarker.visible && carriedMarker.contractComplete
-    && carriedMarker.verdict === "findings_present" && carriedMarker.headSha !== null && String(actList.headSha ?? "").toLowerCase().startsWith(carriedMarker.headSha.toLowerCase());
-  // Issue 3460 AC5: at the cap exit the open act list loads before ready, also once the gate threads are resolved.
-  const headActList = (!draftReady || capRoundFixed) && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"))
-    && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase())
-    && Number.isInteger(actList.openActCount) && actList.openActCount > 0
-    // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.
-    && (input.draftRoundRefused !== true || input.draftCapRoundFailure === "no_clearing_record");
-  // ADR 0271: a cap round of PR-body items only has no fixer route; its exit is the body-only converged post, named in the cap refusal below.
-  const bodyOnlyList = headActList && actList.bodyOnly === true;
   const actBlockers = headActList && Array.isArray(actList.blockers) ? actList.blockers : [];
   // An eligible draft act list wins over a BEHIND-only refresh; a real conflict (CONFLICTING, DIRTY, conflict files) still resolves first.
   const actListWinsOverBehind = mergeStateStatus === "BEHIND" && mergeable !== "CONFLICTING" && conflictFiles.length === 0
@@ -1762,7 +1767,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
     }
 
     // ADR 0208: the next draft_gate round is past the cap and the cap round is not proven fixed; the context writer refuses it, so never route to it.
-    if (input.draftRoundRefused === true && !draftReady) {
+    // ADR 0332: an all-PR-body act list takes this route at every round up to the cap, so run_draft_gate (refused at the same head) is never offered.
+    if ((input.draftRoundRefused === true || bodyOnlyList) && !draftReady) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
       pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, ...draftReviewForbidden]);
       return buildResult({
@@ -1779,13 +1785,13 @@ function evaluatePrGateCoordinationCore(input = {}) {
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
         ...(actBlockers.length > 0 ? { blockedOn: BLOCKED_ON.OPERATOR_DECISION } : bodyOnlyList ? remedyOrOperator(input, (r, n) => ({
-          command: `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo ${r} --pr ${n} --gate draft_gate --verdict clean --head-sha ${actList.headSha} --findings-ledger <cap-round ledger> --findings-summary <text> --next-action "mark ready for review" --execution-mode fanout_fanin --converged-json <path to a file holding { fixerCommit${actList.carriedToHead ? ` (${actList.headSha})` : ""}, actList, bodyOnly: true }>`,
-          summary: "Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (ADR 0271); that verdict is the cap-round proof for ready-for-review and the ADR waiver.",
+          command: `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo ${r} --pr ${n} --gate draft_gate --verdict clean --head-sha ${actList.headSha} --findings-ledger '<draft_gate ledger of the act list round>' --findings-summary '<text>' --next-action "mark ready for review" --execution-mode fanout_fanin --converged-json '<path to a file holding { fixerCommit${actList.carriedToHead ? ` (${actList.headSha})` : ""}, actList, bodyOnly: true }>'`,
+          summary: "Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (ADR 0271, ADR 0332); that verdict is the proof for ready-for-review and the ADR waiver.",
         })) : capRoundExit(input.draftCapRoundFailure, input)),
         reason: actBlockers.length > 0
-          ? `The PR is still draft at the round cap (\`round_cap_reached\`, ADR 0208) and the current head's act list names a human decision (GATE-EXEC-SOFT-CAP): ${actBlockers.map((b) => b?.item).join("; ")}. Round N+1 never runs.`
+          ? `The PR is still draft at or below the round cap (ADR 0208) and the current head's act list names a human decision (GATE-EXEC-SOFT-CAP): ${actBlockers.map((b) => b?.item).join("; ")}. No further draft_gate round runs for it.`
           : bodyOnlyList
-            ? `The PR is still draft at the round cap (\`round_cap_reached\`, ADR 0208) and every open act item of the current head is a PR-body item (ADR 0271). Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true). Round N+1 never runs.`
+            ? `The PR is still draft at or below the round cap and every open act item of the current head is a PR-body item (ADR 0271, ADR 0332). Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true). No further draft_gate round runs for it.`
           : `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but ${input.draftCapRoundFailure === "clean_cap_verdict_unposted" ? "the clean cap round's draft_gate verdict is not posted" : "the cap round's fixer pass is not proven landed with a cleared pre-push delta"}. ${capRoundRefusalText(input)} Round N+1 never runs.`,
         mergeStateStatus,
         conflictFiles,

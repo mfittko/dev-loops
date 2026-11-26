@@ -271,7 +271,7 @@ Optional:
   --converged-json <path>                   draft_gate low/nit convergence
                                             (GATE-EXEC-LOW-NIT-CONVERGENCE):
                                             { fixerCommit, actList, deltaResult }.
-                                            A cap round whose open act items are
+                                            A round whose open act items are
                                             all PR-body items (no file named, or
                                             remedyKind pr_body)
                                             clears with no commit through
@@ -279,9 +279,11 @@ Optional:
                                             and no deltaResult (ADR 0271); it
                                             refuses body_item_locatable,
                                             body_unchanged, own_commit_in_range,
-                                            body_read_unrecorded (no cap-round
-                                            pr-body read: fix with a commit and
-                                            check-pre-push-delta.mjs --reviewer-only),
+                                            body_read_unrecorded (no round
+                                            pr-body read: fix with a commit, then
+                                            at the cap run check-pre-push-delta.mjs
+                                            --reviewer-only, below it the next
+                                            draft_gate round),
                                             or blocked_item. A bodyOnly input
                                             with a deltaResult is refused. Requires --gate draft_gate and
                                             --findings-ledger, with
@@ -1906,7 +1908,9 @@ function resolveGateAction(gate) {
     : PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE;
 }
 function buildGateEntryRefusalError({ options, coordination }) {
-  return `Cannot enter ${options.gate} on ${options.repo}#${options.pr}: ${coordination.reason}`;
+  const error = new Error(`Cannot enter ${options.gate} on ${options.repo}#${options.pr}: ${coordination.reason}`);
+  error.recovery = `Run \`loop gate-coordination --repo ${options.repo} --pr ${options.pr}\` to re-read the boundary; the refused coordination nextAction is ${coordination.nextAction}.`;
+  return error;
 }
 function selectGateEvidence(evidence, gate) {
   if (gate === "draft_gate") {
@@ -2161,6 +2165,8 @@ export function buildCoordinationEvaluatorInput({
     // sameHeadCleanConverged, so an outstanding request on the current head refuses
     // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.
     copilotReviewRequestStatus: coordinationContext.snapshot?.copilotReviewRequestStatus ?? "none",
+    // Without it the evaluator refuses gate entry for an unavailable Copilot that the lifecycle state already reports.
+    copilotRequestNotObservable: coordinationContext.snapshot?.copilotRequestNotObservable === true,
     draftGateRequireCi: draftGateConfig.requireCi,
     preApprovalRequireCi: preApprovalGateConfig.requireCi,
     draftGate: coordinationContext.gateEvidence.draftGate,
@@ -2793,10 +2799,10 @@ export async function upsertCheckpointVerdict(options, runtime = {}) {
   }
 }
 
-async function postCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner, countPrOwnCommits = realCountPrOwnCommits, checkBaseFreshness, coordinationSnapshotRoot } = {}) {
+async function postCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner, countPrOwnCommits = realCountPrOwnCommits, checkBaseFreshness, coordinationSnapshotRoot, checkpointDir } = {}) {
   // One memo per invocation: the three baseRefOid,labels reads share one gh read; the write-guard re-reads stay live.
   const prViewMemo = new Map();
-  const gh = { env, ghCommand, repoRoot, runChild, coordinationSnapshotRoot, prViewMemo };
+  const gh = { env, ghCommand, repoRoot, runChild, coordinationSnapshotRoot, checkpointDir, prViewMemo };
   // Optional --spec-authority stamps the RETURNED result (this script's
   // durable verdict record — it posts no file of its own) with the pinned
   // revision identity, via the ONE shared stamp helper (ADR 0061). Read up
@@ -2941,12 +2947,12 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     const capacity = { gate: options.gate, headSha: canonicalHeadSha, round, cap: draftGateConfig?.maxReviewRounds ?? 0, roundActItems, converged: convergedInput };
     if (convergedInput.bodyOnly !== undefined && typeof convergedInput.bodyOnly !== "boolean") throw new Error(`--converged-json bodyOnly must be a boolean, got ${JSON.stringify(convergedInput.bodyOnly)}`);
     if (convergedInput.bodyOnly === true) {
-      // ADR 0271: the narrow facts the body-only exit checks; the pr-body digest is the one the cap round's context recorded at A.
+      // ADR 0271: the narrow facts the body-only exit checks; the pr-body digest is the one the round's context recorded at A.
       const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "body,baseRefName"], { env, ghCommand, runChild });
       // The same count check-pre-push-delta.mjs uses (fetches origin/<base>, base-only-merge test, resolution merges).
       const composeInput = {
         ...capacity,
-        // The ledger plus the passed findings, as for the act items: the cap-round blocking set reads the whole round.
+        // The ledger plus the passed findings, as for the act items: the blocking set reads the whole round.
         roundFindings: [...(preloadedFindingsLedger.findings ?? []), ...findings.filter((f) => !(preloadedFindingsLedger.findings ?? []).includes(f))],
         reviewedBodySha: await readReviewedBodySha256(options, canonicalHeadSha, repoRoot),
         liveBodySha: prBodySha256(live.body),
@@ -3203,7 +3209,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       prDraft: true,
     }), requestedGateAction);
     if (gateActionForbidden && !forbidOnlyByCapFixed && !capRoundWaiver) {
-      throw new Error(buildGateEntryRefusalError({ options, coordination }));
+      throw buildGateEntryRefusalError({ options, coordination });
     }
     // Post-time fan-out evidence enforcement: refuse an under-qualified inline
     // verdict here, before it is posted, for every verdict value. No override

@@ -1030,3 +1030,17 @@ export function resolvePrDescriptionSpec(body) {
   if (scope.length === 0) return { specSource: "none", reason: "no_usable_scope" };
   return { specSource: "pr_scope", spec: { ...extractSpecFromBody(body), specKind: PR_SCOPE_SPEC_KIND, scope } };
 }
+
+/**
+ * The one spec-source branch shared by spec-context.mjs and the gate context builder: a PR description resolves through
+ * {@link resolvePrDescriptionSpec} (which may report no spec), any other body must be a formal spec and throws otherwise.
+ */
+export function resolveSpecFromBody(body, { prDescription = false, specSource = "issue" } = {}) {
+  return prDescription ? resolvePrDescriptionSpec(body) : { specSource, spec: requireSpecFromBody(body) };
+}
+
+/** The digest of a body's spec, or null when it holds none. Throws on a non-formal issue body. */
+export function specDigestFromBody(body, options) {
+  const { spec } = resolveSpecFromBody(body, options);
+  return spec ? computeSpecDigest(spec) : null;
+}

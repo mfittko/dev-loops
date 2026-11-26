@@ -39,10 +39,10 @@ import path from "node:path";
 
 import { decideFixerWriteGuard, FIXER_AGENT_TYPE, decideJudgeWriteGuard, JUDGE_AGENT_TYPE, normalizeAgentType, decideWriteGuard, decideCoordinatorWriteGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "./_hook-decisions.mjs";
 import { withHookMarker } from "./_bash-gate-decisions.mjs";
-import { isMainCheckout, isUnderWorktreePath, parseMainWorktreePath, parseAllWorktreePaths, resolveContainingWorktreeRoot, realpathNearestExisting, resolveTrackedFromCheckIgnore } from "./_worktree-guard.mjs";
+import { isMainCheckout, isUnderWorktreePath, parseMainWorktreePath, parseAllWorktreePaths, resolveContainingWorktreeRoot, realpathNearestExisting, resolveTrackedFromCheckIgnore, classifyRepoMutation } from "./_worktree-guard.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
-import { gitEnv, loadFixerContext, nearestExistingDir } from "./_fixer-grants.mjs";
+import { loadFixerContext, nearestExistingDir } from "./_fixer-grants.mjs";
 
 const input = readHookInput();
 const filePath = input?.tool_input?.file_path ?? input?.tool_input?.notebook_path;
@@ -206,39 +206,8 @@ const agentType = typeof input?.agent_type === "string" ? input.agent_type : nul
 // Repo mutation = inside the working tree of the repository that CONTAINS the target
 // (not the hook's cwd) AND not gitignored there. A linked worktree under a gitignored
 // directory of the main checkout is its own repository, so its tracked files count.
-let isRepoMutation = false;
-let inLinkedWorktree = false;
-const targetReal = realpathNearestExisting(abs);
-try {
-  const gitOpts = { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] };
-  const repoRoot = execFileSync("git", ["-C", nearestExistingDir(targetReal), "rev-parse", "--show-toplevel"], gitOpts).trim();
-  if (targetReal === repoRoot || targetReal.startsWith(repoRoot + "/")) {
-    let ignored = false;
-    try {
-      // `git check-ignore -q` exits 0 when ignored, 1 when not ignored.
-      execFileSync("git", ["check-ignore", "-q", "--", targetReal], { ...gitOpts, cwd: repoRoot });
-      ignored = true;
-    } catch {
-      ignored = false;
-    }
-    isRepoMutation = !ignored;
-    // A linked worktree's git dir differs from the shared common dir; the main checkout's are equal.
-    // A lookup failure leaves inLinkedWorktree false and isRepoMutation true (fail closed).
-    try {
-      const gitDirs = ["--git-dir", "--git-common-dir"].map((flag) =>
-        path.resolve(repoRoot, execFileSync("git", ["-C", repoRoot, "rev-parse", flag], gitOpts).trim()));
-      inLinkedWorktree = gitDirs[0] !== gitDirs[1];
-    } catch {
-      inLinkedWorktree = false;
-    }
-  }
-} catch {
-  // Outside every repo: allow (the `.git` rule below still applies).
-}
-// A target under a git directory (.git/hooks, .git/worktrees/<n>, .git/modules/<n>) fails closed on a `.git`
-// path segment (a hook write is code execution). rev-parse can fail there, or succeed with a toplevel
-// that does not contain the target (a submodule git dir has core.worktree set).
-if (targetReal.split("/").includes(".git")) isRepoMutation = true;
+// The shared function (also the Bash gate's shell-write test) holds the `.git` segment rule and the fail-closed lookups.
+const { isRepoMutation, inLinkedWorktree } = classifyRepoMutation(abs);
 
 const decision = decideWriteGuard({ filePath, isRepoMutation, enforce, env: process.env, agentType, inLinkedWorktree });
 if (decision.decision === "deny") {

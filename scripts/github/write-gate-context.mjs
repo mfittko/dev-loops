@@ -45,7 +45,7 @@ import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
-import { requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
+import { requireSpecFromBody, specDigestFromBody } from "@dev-loops/core/loop/spec-authority";
 import { resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
@@ -328,7 +328,7 @@ Optional:
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, and a carried angle in a mixed group is stripped from it (recorded membership stays whole), so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). A carried body-reading angle is dropped (it re-runs) when the PR body digest differs from the head's sticky baseline (\`prBodyBaselineSha256\`, kept in \`<gate>-<headSha>.pr-body-baseline\` beside the context so a failed write keeps it). Omit for today's full-count behavior (nothing excluded).
   --known-findings <path>        Default \`capture-review-threads.mjs --repo --pr\` output (every open or resolved thread, full bodies). Rendered to the digest-keyed round-bound <gate>-<headSha>.known-findings-<digest12>.json and hash-bound as a required \`known-findings\` read (volatile tail and every work order; never the prefix) when at least one thread exists. Fails closed (exit 1) if unreadable or not that shape.
-  --operator-focus-file <path>   GATE-EXEC-OPERATOR-FOCUS JSON with a fingerprint item carrying a decision for each act fingerprint of the latest effective closed round (draft_gate and pre_approval_gate only). Clears a non_convergence stop and records operatorClear.
+  --operator-focus-file <path>   GATE-EXEC-OPERATOR-FOCUS JSON with a fingerprint item carrying a decision for each act fingerprint of the latest effective closed round (draft_gate and pre_approval_gate only). Clears a non_convergence stop and records operatorClear. Also clears a round_cap_reached stop of the pre_approval_gate scoped final round for a set opened the first time.
   --tmp-root <path>              Root tmp directory. Omitted, the worktree-local gate-context
                                  bundle is written under the worktree's tmp/ while the prior-round
                                  findings-log ledgers are read from the MAIN worktree's tmp/ (the stable
@@ -2255,7 +2255,7 @@ export async function capFixBudgetFacts({ fromHead, headSha, prBase, repoRoot, r
 }
 
 /** Sorted fingerprints of the acted clusters of one round ledger: the act list's unit (capRoundActList), the only fingerprints the emitter binds a focus item to. */
-const actFingerprintSet = (log) => capRoundActList(log.findings, log.headSha).map((a) => a.fingerprint).sort();
+export const actFingerprintSet = (log) => capRoundActList(log.findings, log.headSha).map((a) => a.fingerprint).sort();
 
 /** Whether `options.headSha` follows the clean closed round at `fromHead` by a base-only merge, so a clean verdict can post at the merged head (the empty PR-own delta stays refused otherwise). */
 async function isCleanBaseMerge(options, { repoRoot, prBase, fromHead }) {
@@ -2272,20 +2272,22 @@ export async function effectiveRounds(closed, { prBase, repoRoot }) {
   return closed.filter((_, i) => keep[i]);
 }
 
-/** Whether the issued fixer plan (bound to the latest closed round's head, to the gate and to its digest) holds an operator focus decision for each act fingerprint `last` of that round. */
-async function operatorDecidedLatestRound(options, { repoRoot, latest, last }) {
+/** Whether the direct operator focus file (`options.operatorFocusFile`) or the issued fixer plan (bound to the latest closed round's head, to the gate and to its digest) holds an operator focus decision for each act fingerprint `last` of that round. */
+export async function operatorDecidedLatestRound(options, { repoRoot, latest, last }) {
+  const decided = new Set(((await readOperatorFocusFile(options.operatorFocusFile ? path.resolve(repoRoot, options.operatorFocusFile) : undefined, { allowItems: true }))?.items ?? []).filter((item) => item.decision !== undefined).map((item) => item.fingerprint));
   const planPath = path.join(resolveGateArtifactTmpRoot(repoRoot), "gate-fixer", repoSlugFor(options.repo), `pr-${options.pr}`, "fixer-emit-plan.json");
-  let plan;
-  try { plan = JSON.parse(await readFile(planPath, "utf8")); } catch { return false; }
-  const issued = plan?.workOrder;
-  if (!issued || issued.gate !== options.gate || String(issued.headSha).trim().toLowerCase() !== String(latest.headSha).trim().toLowerCase() || workOrderDigest(issued) !== plan.workOrderDigest) return false;
-  const decided = new Set((issued.operatorFocus?.items ?? []).filter((item) => item.decision !== undefined).map((item) => item.fingerprint));
+  try {
+    const plan = JSON.parse(await readFile(planPath, "utf8")), issued = plan?.workOrder;
+    if (issued && issued.gate === options.gate && String(issued.headSha).trim().toLowerCase() === String(latest.headSha).trim().toLowerCase() && workOrderDigest(issued) === plan.workOrderDigest) {
+      for (const item of issued.operatorFocus?.items ?? []) if (item.decision !== undefined) decided.add(item.fingerprint);
+    }
+  } catch { /* no issued plan: only the direct file decides */ }
   return last.length > 0 && last.every((fp) => decided.has(fp));
 }
 
 /**
- * The operator clear of a pre_approval_gate round past the scoped round (GATE-EXEC-CAP-BRAKES). The latest closed round's act items count as cleared when the issued
- * fixer plan (bound to that round's head, to pre_approval_gate and to its digest) holds an operator focus decision for each fingerprint. A set already held by an
+ * The operator clear of a pre_approval_gate round past the scoped round (GATE-EXEC-CAP-BRAKES). The latest closed round's act items count as cleared when the direct
+ * operator focus file or the issued fixer plan (bound to that round's head, to pre_approval_gate and to its digest) holds an operator focus decision for each fingerprint. A set already held by an
  * earlier round from the round after the effective cap round on was re-opened once: it stays with the operator.
  * Returns the scoped round input `{ fromHead, priorActItems }`, or null.
  */
@@ -2325,7 +2327,8 @@ export async function refuseNonConvergence(options, { repoRoot, prBase }) {
   const decided = new Set((focus?.items ?? []).filter((item) => item.fingerprint !== undefined && item.decision !== undefined).map((item) => item.fingerprint));
   const undecided = last.filter((fp) => !decided.has(fp));
   if (last.length > 0 && undecided.length === 0) return { reason: decision.reason, fingerprints: last };
-  if (await operatorDecidedLatestRound(options, { repoRoot, latest: closed.at(-1), last: actFingerprintSet(closed.at(-1)) })) return undefined;
+  // Plan-only (issue 3586): the direct focus file decides above for a round past the base merge; the fallback for a base-merge-forced latest round reads only the issued plan.
+  if (await operatorDecidedLatestRound({ ...options, operatorFocusFile: undefined }, { repoRoot, latest: closed.at(-1), last: actFingerprintSet(closed.at(-1)) })) return undefined;
   throw Object.assign(new Error(`${describeCapStop(decision)}. Undecided act fingerprints: ${undecided.join(", ") || "none"}. Report blocked with blockedOn operator_decision, or clear it with --operator-focus-file <path>.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); the operator clears it with --operator-focus-file <path>, a focus file with a decision item for each act fingerprint of the latest round (${last.join(", ")}) (GATE-EXEC-CAP-BRAKES)` });
 }
 
@@ -3788,6 +3791,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
       ? buildRetireCommand({ ...retire, reason: `the ${options.gate} round at ${head} was in flight when the briefing prefix changed` })
       : buildLiveRoundRecovery(retire);
   };
+  const staleRoundArgs = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: scanRoot, findingsTmpRoot: findingsRoot, verdictRoots: [findingsRoot, scanRoot, resolveGateArtifactTmpRoot(repoRoot)], liveOnly: true };
   let rebuildWarning = null;
   let retiredRound = null;
   if (readError !== null) {
@@ -3807,7 +3811,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
     } else {
       // Issue 3416: retire the undispatched or partial round at this head automatically, so the fresh round starts clean.
       // A live round has sentinels or dispatch records; a round with a posted verdict is never retired: the refusal stands, with its recovery.
-      const stale = await retireStaleRound({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: scanRoot, findingsTmpRoot: findingsRoot, verdictRoots: [findingsRoot, scanRoot, resolveGateArtifactTmpRoot(repoRoot)], liveOnly: true });
+      const stale = await retireStaleRound({ ...staleRoundArgs, ...loadedSpecDigests(options) });
       if (stale.refusal) throw Object.assign(new Error(`${stale.refusal.error} recovery: ${stale.refusal.recovery}`), { recovery: stale.refusal.recovery });
       retiredRound = stale.retiredRound;
       state.retiredRound = retiredRound;
@@ -3820,6 +3824,16 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
     }
     // No live round remains (already retired, undispatched or never fanned out). AC3: a rebuild after the round has
     // completed is unaffected — proceed to overwrite the frozen artifact.
+  } else if (existingBytes !== null) {
+    // Same prefix bytes: only a round that stopped for a spec decision and whose spec changed retires; any other round is untouched.
+    const digests = loadedSpecDigests(options);
+    if (digests.currentSpecDigest !== null) {
+      // retireStaleRound swallows only probe errors here; once the stop is known a failed move or a live-sentinel refusal surfaces.
+      const stale = await retireStaleRound({ ...staleRoundArgs, ...digests, specDecisionOnly: true });
+      if (stale.refusal) throw Object.assign(new Error(`${stale.refusal.error} recovery: ${stale.refusal.recovery}`), { recovery: stale.refusal.recovery });
+      retiredRound = stale.retiredRound;
+      state.retiredRound = retiredRound;
+    }
   }
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
   // The caller computed the fan-out plan from the findings the retirement just moved away, so it plans again over what remains.
@@ -4261,6 +4275,25 @@ function passesRequireSpecFromBody(body) {
   } catch {
     return false;
   }
+}
+
+// The spec digest of the one spec source the builder loaded: the single linked issue body, else the PR description.
+// Null when there is no single source or it holds no spec, so the stopped-round retirement never fires on a guess.
+// The plan pins the digest of whichever source the conductor gave spec-context (issue body, or the PR body under pr_body), so the
+// retirement gets every digest the builder can compute: the loaded one (issue body first) and the other candidate.
+function loadedSpecDigests(options) {
+  const digestOf = (compute) => {
+    try {
+      return compute();
+    } catch {
+      return null;
+    }
+  };
+  if (options.issueSections) return { currentSpecDigest: null, otherSpecDigests: [] };
+  const issueDigest = typeof options.issueBody === "string" && options.issueBody !== ISSUE_BODY_ABSENT_SENTINEL ? digestOf(() => specDigestFromBody(options.issueBody)) : null;
+  const prDigest = typeof options.prBody === "string" ? digestOf(() => specDigestFromBody(options.prBody, { prDescription: true })) : null;
+  const [currentSpecDigest = null, ...otherSpecDigests] = [issueDigest, prDigest].filter((d) => d !== null);
+  return { currentSpecDigest, otherSpecDigests };
 }
 
 function detectRefinementHasAcChecklist(prBody) {
