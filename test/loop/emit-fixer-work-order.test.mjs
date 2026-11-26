@@ -5194,16 +5194,14 @@ test("a pre_approval_gate act list at a base-only merge of a past-cap round head
 });
 
 // Issue 3589: at the cap exactly (one earlier round plus the cap-round head, cap 2) the fallback applies, so a `>= cap` to `> cap` change fails here.
-test("a pre_approval_gate act list at a base-only merge exactly at the cap reads the verdict at the cap-round head and the focus file decides the emit", async () => {
+test("a pre_approval_gate act list at a base-only merge exactly at the cap reads the verdict and ledger at the cap-round head", async () => {
   await withFixture(async (fx) => {
     const { origin, over } = await mergedPreApprovalScenario(fx, { mainEditsPrFile: true, earlierRounds: ["d".repeat(40)] });
-    const act = JSON.parse(await readFile(fx.files.actList, "utf8"))[0];
-    const focusFile = path.join(fx.root, "tmp", "focus.json");
-    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: act.fingerprint, decision: "Fix it in this PR" }] }));
     const probed = [];
     const base = over(origin);
     const fetchVerdictMarkers = (a) => { probed.push(a.headSha); return base.fetchVerdictMarkers(a); };
-    assert.equal((await fx.emit({ ...base, fetchVerdictMarkers, operatorFocusFile: focusFile })).workOrder.source, "act-list");
+    // At exactly the cap no focus decision is read, so the emit needs no focus file.
+    assert.equal((await fx.emit({ ...base, fetchVerdictMarkers })).workOrder.source, "act-list");
     assert.equal(probed[1], origin, "the cap guard reads the verdict at the cap-round head");
     assert.ok(probed.slice(1).every((h) => h === origin), "every verdict read after the carry seam is at the cap-round head");
   });

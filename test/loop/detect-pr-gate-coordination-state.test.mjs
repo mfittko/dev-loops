@@ -5651,8 +5651,30 @@ for (const [gate, expected, config] of [["pre_approval_gate", undefined, { versi
       assert.equal(fingerprints.length, 3, "the forced round and the effective latest round are listed, a shared fingerprint once");
       await writeFile(focus, JSON.stringify({ items: fingerprints.map((fingerprint) => ({ fingerprint, decision: "fix it" })) }), "utf8");
       assert.equal((await brakes(focus)).operatorCleared, true);
+      // The issued fixer plan clears the forced set alone, with no focus file (GATE-EXEC-CAP-BRAKES).
+      const workOrder = { gate, headSha: mergedHead, operatorFocus: { items: fingerprints.slice(0, 2).map((fingerprint) => ({ fingerprint, decision: "fix it" })) } };
+      const plan = path.join(dir, "tmp", "gate-fixer", "owner-repo", "pr-10", "fixer-emit-plan.json");
+      await mkdir(path.dirname(plan), { recursive: true });
+      await writeFile(plan, JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder) }), "utf8");
+      assert.equal((await brakes()).operatorCleared, true, "a plan that decides only the forced set clears");
     }
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("loop gate-coordination resolves a relative --operator-focus-file against cwd, as the emitter does", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-relative-"));
+  const origCwd = process.cwd();
+  try {
+    await mkdir(path.join(dir, "sub"));
+    await writeFile(path.join(dir, "sub", "focus.json"), JSON.stringify({ items: [{ fingerprint: "a".repeat(16), decision: "fix it" }] }), "utf8");
+    process.chdir(path.join(dir, "sub"));
+    const runChild = async () => { throw new Error("GitHub was read"); };
+    // The file exists only under the subdirectory cwd: validation passes and the run reaches the first GitHub read.
+    await assert.rejects(detectPrGateCoordinationState({ repo: "o/r", pr: 1, operatorFocusFile: "focus.json" }, { repoRoot: dir, runChild }), /GitHub was read/);
+  } finally {
+    process.chdir(origCwd);
     await rm(dir, { recursive: true, force: true });
   }
 });

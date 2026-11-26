@@ -1458,12 +1458,9 @@ function setAlreadyHeld({ logs, effective, round, cap }) {
 
 /**
  * GATE-EXEC-CAP-BRAKES: whether an operator decision (`--operator-focus-file` or the issued fixer plan) covers every act fingerprint of the latest judged round.
- * With the cap on and the round past the scoped final round, a set an earlier effective round from the round after the cap on already held stays with the operator
- * (the once-per-set rule of resolveOperatorClearedRound in write-gate-context.mjs).
  */
-async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round, cap, effective }) {
+async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, effective }) {
   const last = logs.at(-1), fingerprints = actFingerprintSet(last);
-  if (setAlreadyHeld({ logs, effective, round, cap })) return false;
   const base = { repo: context.repo, pr: context.pr, gate };
   if (effective.at(-1) === last) return operatorDecidedLatestRound({ ...base, operatorFocusFile }, { repoRoot, latest: last, last: fingerprints });
   // A base-merge-forced latest round clears from the issued fixer plan, or from the direct file when it decides the forced set and the effective latest set (refuseNonConvergence and resolveOperatorClearedRound read the same file).
@@ -1505,7 +1502,7 @@ export async function resolveCapBrakes(context, { repoRoot, config, operatorFocu
   // A set that already had its one re-open is not clearable by any focus file: the reason names the operator-only step (GATE-EXEC-NO-DEAD-END).
   if (setAlreadyHeld({ logs, effective, round, cap })) return { ...facts, notClearable: true };
   // Fail closed: a focus file that fails to read here clears nothing, and the cap stop stays.
-  return await operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round, cap, effective }).catch(() => false) ? { ...facts, operatorCleared: true } : facts;
+  return await operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, effective }).catch(() => false) ? { ...facts, operatorCleared: true } : facts;
 }
 
 // Builds the exact input object passed to evaluatePrGateCoordination.
@@ -1605,7 +1602,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // The config loads first: a config load error refuses before any gh read.
   const config = (await loadDevLoopConfigStrict({ repoRoot })).config ?? {};
   // A malformed operator focus file refuses here (GATE-EXEC-OPERATOR-FOCUS), before any gh read.
-  await readOperatorFocusFile(options.operatorFocusFile ? path.resolve(repoRoot, options.operatorFocusFile) : undefined, { allowItems: true });
+  // Resolved against cwd once, as emit-fixer-work-order.mjs does, so both readers name the same file.
+  const operatorFocusFile = options.operatorFocusFile ? path.resolve(process.cwd(), options.operatorFocusFile) : undefined;
+  await readOperatorFocusFile(operatorFocusFile, { allowItems: true });
   // ADR 0117 (issue 3139): an open self-hosting PR is answered by its own head's toolchain; another checkout refuses inside the loader, before any shared gate state is written.
   const fetchedAtMs = Date.now();
   const context = await loadPrGateCoordinationContext(options, { ...runtime, guardToolchain: true });
@@ -1685,7 +1684,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0 }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
     : null;
   let capBrakesError = null;
-  const capBrakes = await resolveCapBrakes(context, { repoRoot, config, operatorFocusFile: options.operatorFocusFile }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; capBrakesError = error; return null; });
+  const capBrakes = await resolveCapBrakes(context, { repoRoot, config, operatorFocusFile }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; capBrakesError = error; return null; });
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,
