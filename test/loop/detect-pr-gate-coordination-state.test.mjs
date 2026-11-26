@@ -5611,7 +5611,8 @@ test("resolveCapBrakes: the once-per-set rule holds past the cap on pre_approval
   }
 });
 
-test("resolveCapBrakes: a focus file that decides only a base-merge-forced current-head round does not clear the stop", async () => {
+// pre_approval_gate drops the base-merge round from the effective rounds; draft_gate has no such filter, so the direct file decides it.
+for (const [gate, expected] of [["pre_approval_gate", undefined], ["draft_gate", true]]) test(`resolveCapBrakes: a focus file that decides only a base-merge current-head round ${expected ? "clears" : "does not clear"} the ${gate} stop`, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-forced-"));
   try {
     initGitFixture(dir, { branch: "main", commit: null });
@@ -5635,14 +5636,14 @@ test("resolveCapBrakes: a focus file that decides only a base-merge-forced curre
     const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-10");
     await mkdir(ledgerDir, { recursive: true });
     for (const [i, [head, keys]] of [[baseSha, ["a", "b"]], [prHead, ["a", "b"]], [mergedHead, ["c"]]].entries()) {
-      await writeFile(path.join(ledgerDir, `pre_approval_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "pre_approval_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: keys.map(act) }), "utf8");
+      await writeFile(path.join(ledgerDir, `${gate}-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: keys.map(act) }), "utf8");
     }
-    const ctx = { repo: "owner/repo", pr: 10, currentHeadSha: mergedHead, prData: { isDraft: false, baseRefName: "main" } };
+    const ctx = { repo: "owner/repo", pr: 10, currentHeadSha: mergedHead, prData: { isDraft: gate === "draft_gate", baseRefName: "main" } };
     const brakes = (operatorFocusFile) => resolveCapBrakes(ctx, { repoRoot: dir, config: { version: 1 }, operatorFocusFile });
     const [forced] = (await brakes()).items.map((item) => item.slice(0, 16));
     const focus = path.join(dir, "focus.json");
     await writeFile(focus, JSON.stringify({ items: [{ fingerprint: forced, decision: "fix it" }] }), "utf8");
-    assert.equal((await brakes(focus)).operatorCleared, undefined);
+    assert.equal((await brakes(focus)).operatorCleared, expected);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
