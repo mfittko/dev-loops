@@ -4,7 +4,7 @@
 
 Proposed. Becomes Accepted on operator approval ([issue 3571](https://github.com/mfittko/dev-loops/issues/3571)).
 
-Amends [0096](./0096-integrate-base-before-every-gate-round.md) (as amended by [0296](./0296-narrow-base-merge-carry-gate-tooling-rule.md), whose carry classifier is unchanged), [0194](./0194-stale-base-preflight-on-lifecycle-gates.md) and [0284](./0284-stale-base-preflight-in-validation-and-verdict-seams.md) (as amended by [0299](./0299-stale-base-round-post-and-coordination-guard.md)) for the `draft_gate` scope. Those records stay unedited.
+Amends [0096](./0096-integrate-base-before-every-gate-round.md) (as amended by [0296](./0296-narrow-base-merge-carry-gate-tooling-rule.md), whose carry classifier is unchanged), [0194](./0194-stale-base-preflight-on-lifecycle-gates.md), [0260](./0260-gate-coordination-reroutes-stale-base.md) and [0284](./0284-stale-base-preflight-in-validation-and-verdict-seams.md) (as amended by [0299](./0299-stale-base-round-post-and-coordination-guard.md)) for the `draft_gate` scope. Those records stay unedited.
 
 ## Context
 

@@ -198,7 +198,11 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     if (base.reason) return incomplete(base.reason);
     // A PR that edits its own validation block never runs what it declared.
     const refusal = validationDifferenceRefusal(checkout.validation, base.validation);
-    if (refusal) return incomplete(refusal);
+    if (refusal) {
+      // A stale draft_gate head differs from the base block only because the base moved on; the PR changed nothing.
+      const staleDraft = options.gate === "draft_gate" ? await staleBaseReason({ head: options.headSha, cwd: repoRoot, env }) : null;
+      return incomplete(staleDraft ? `the base branch changed its validation config after this head branched; merge origin/main into the branch to validate (${staleDraft})` : refusal);
+    }
     const { mode, fullCommand } = base.validation;
     // ADR 0192: an admitted paths-only difference must not let checkout `paths` choose the suites.
     // The base paths select the suites for the PR's changed paths. When they select full-repository validation or no gate suite,

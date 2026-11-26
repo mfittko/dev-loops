@@ -677,6 +677,25 @@ test("a PR head that changes the validation block runs nothing and resolves inco
   }
 });
 
+test("a draft_gate run at a stale head names the base merge when the base changed its validation block", async () => {
+  const base = "version: 1\nvalidation:\n  mode: local\n  fullCommand: echo base-ran\n";
+  const { repoRoot, headSha } = await bareFixture(base);
+  try {
+    const git = (...a) => execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...a], { cwd: repoRoot });
+    await writeFile(path.join(repoRoot, ".devloops"), base.replace("echo base-ran", "echo base-changed"));
+    git("commit", "-qam", "base changes its validation block");
+    git("push", "-q", "origin", "HEAD:refs/heads/main");
+    git("reset", "-q", "--hard", "HEAD~1");
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /base branch changed its validation config.*merge origin\/main/i);
+    assert.doesNotMatch(result.reason, /config-source change/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(`${repoRoot}-origin.git`, { recursive: true, force: true });
+  }
+});
+
 // ADR 0192: a paths-only difference resolves as if there were no difference and runs the BASE command.
 test("a paths-only validation block difference is admitted in local and ci-only modes", async () => {
   const rules = (n) => Array.from({ length: n }, (_, i) => `    - match: dir${i}/**\n      surface: s${i}\n      commands: [echo c${i}]\n`).join("");
