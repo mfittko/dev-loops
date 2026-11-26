@@ -564,7 +564,7 @@
     {
       "id": "GATE-EXEC-CAP-BRAKES",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by decideCapRound in packages/core/src/loop/review-round-cap.mjs, called by resolveScopedFinalRound in write-gate-context.mjs (refuses the scoped final round context) and by evaluatePrGateCoordination (the non_convergence stop, facts from resolveCapBrakes in detect-pr-gate-coordination-state.mjs); upsert-checkpoint-verdict.mjs composes the scoped round blockers via pastCapBlockers and emit-fixer-work-order.mjs refuses an act list past the cap without an operator focus decision; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+      "enforcementNote": "Enforced by decideCapRound in packages/core/src/loop/review-round-cap.mjs, called by resolveScopedFinalRound in write-gate-context.mjs (refuses the scoped final round context) and by evaluatePrGateCoordination (the round_cap_reached and growth stops, facts from resolveCapBrakes in detect-pr-gate-coordination-state.mjs); upsert-checkpoint-verdict.mjs composes the scoped round blockers via pastCapBlockers and emit-fixer-work-order.mjs refuses an act list past the cap without an operator focus decision; the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-ROUND-CAP",

@@ -4873,7 +4873,7 @@ test("3105 AC15: a hand-edited sealed ledger at the current head throws OUT_OF_B
 
 // Issue 3105 AC15: at the cap round, a high act item without a judgeFix is a named human decision, so the act list keeps report_blocked.
 // `priorRounds` closed ledgers precede the current head's ledger, so the current head's round is priorRounds + 1.
-async function detectCapFixture({ cap, priorRounds, finding, extraFindings = [], twice = false, priorActs = 3, unposted = false }) {
+async function detectCapFixture({ cap, priorRounds, finding, extraFindings = [], twice = false, priorActs = 3 }) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-act-list-cap-"));
   try {
     initGitFixture(tempDir, { branch: "main" });
@@ -4882,10 +4882,10 @@ async function detectCapFixture({ cap, priorRounds, finding, extraFindings = [],
     const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
     await mkdir(findings, { recursive: true });
     const ledger = (head, loggedAt, list) => writeFile(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt, findings: list }), "utf8");
-    for (let i = 1; i <= priorRounds; i += 1) await ledger(String(i).repeat(40), `2026-11-15T00:0${i}:00.000Z`, [{ severity: "medium", summary: `round ${i}`, file: "src/a.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix a" }, { severity: "medium", summary: `round ${i} other`, file: "src/b.mjs", line: 2, judgeDisposition: "act", judgeFix: "fix b" }, { severity: "medium", summary: `round ${i} third`, file: "src/c.mjs", line: 3, judgeDisposition: "act", judgeFix: "fix c" }].slice(0, priorActs)); // the third item keeps the act count shrinking against the 2-item body-only rounds; `priorActs: 2` makes the counts equal and trips non_convergence
+    for (let i = 1; i <= priorRounds; i += 1) await ledger(String(i).repeat(40), `2026-11-15T00:0${i}:00.000Z`, [{ severity: "medium", summary: `round ${i}`, file: "src/a.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix a" }, { severity: "medium", summary: `round ${i} other`, file: "src/b.mjs", line: 2, judgeDisposition: "act", judgeFix: "fix b" }, { severity: "medium", summary: `round ${i} third`, file: "src/c.mjs", line: 3, judgeDisposition: "act", judgeFix: "fix c" }].slice(0, priorActs)); // `priorActs` sets the act count of each prior round
     await ledger(headSha, "2026-11-16T00:00:00.000Z", [{ file: "src/x.mjs", line: 3, judgeDisposition: "act", ...finding }, ...extraFindings]);
     const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
-    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: unposted ? "no verdict posted" : body });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
     const detect = () => detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
     const first = await detect();
     // `twice` reruns the detector on the same fixture directory, so the second run sees any state the first wrote.
@@ -4945,27 +4945,13 @@ test("3611: a below-cap and a cap-0 all-PR-body act list routes to the body-only
   }
 });
 
-// Issue 3611 (ADR 0332): equal prior and current act counts trip non_convergence, which a blocker-free all-PR-body list skips.
+// Issue 3611 (ADR 0332): equal prior and current act counts trip no brake, so a blocker-free all-PR-body list gets the body-only route.
 test("3611: equal act counts with an all-PR-body act list still return the body-only agentRemedy", async () => {
   const finding = { file: undefined, severity: "medium", summary: "PR body lacks non-goals" };
   const result = await detectCapFixture({ cap: 4, priorRounds: 1, priorActs: 2, finding, extraFindings: [{ severity: "low", judgeDisposition: "act", summary: "PR body lacks a validation section" }] });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
-  assert.doesNotMatch(result.reason, /non_convergence|did not shrink/);
+  assert.doesNotMatch(result.reason, /did not shrink|round_cap_reached/);
   assert.match(result.agentRemedy?.command ?? "", /upsert-checkpoint-verdict\.mjs .*bodyOnly: true/);
-});
-
-// The brake exemption holds only when the body-only route answers: without a posted findings_present verdict the non_convergence stop stays.
-test("3611: equal act counts with an all-PR-body act list and no posted verdict keep the non_convergence stop", async () => {
-  const finding = { file: undefined, severity: "medium", summary: "PR body lacks non-goals" };
-  const result = await detectCapFixture({ cap: 4, priorRounds: 1, priorActs: 2, unposted: true, finding, extraFindings: [{ severity: "low", judgeDisposition: "act", summary: "PR body lacks a validation section" }] });
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
-  assert.match(result.reason, /non_convergence/);
-});
-
-test("3611: one prior act and one high all-PR-body item name the non_convergence stop", async () => {
-  const result = await detectCapFixture({ cap: 4, priorRounds: 1, priorActs: 1, finding: { file: undefined, severity: "high", summary: "decide the auth model" } });
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
-  assert.match(result.reason, /non_convergence/);
 });
 
 test("3611: a below-cap all-PR-body act list with a high item reports blocked on an operator decision", async () => {
@@ -5478,7 +5464,7 @@ describe("pull-request coordination snapshot", () => {
 });
 
 // GATE-EXEC-CAP-BRAKES: the detector hands the evaluator the round facts of the gate posted at the current head.
-test("resolveCapBrakes returns the act counts of the closed rounds and the named items of the head's round, per gate", async () => {
+test("resolveCapBrakes returns the round facts and the named items of the head's round, per gate", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-"));
   try {
     const acts = (n) => Array.from({ length: n }, (_, i) => ({ severity: "medium", angle: "correctness", summary: `defect ${i}`, files: [`src/f${i}.mjs`], line: i + 1, judgeDisposition: "act", judgeTitle: `defect ${i}`, judgeFix: "fix it" }));
@@ -5495,10 +5481,10 @@ test("resolveCapBrakes returns the act counts of the closed rounds and the named
     await write("draft_gate", heads[1], 4, 2);
     const ctx = (head, isDraft) => ({ repo: "owner/repo", pr: 10, currentHeadSha: head, prData: { isDraft } });
     const pre = await resolveCapBrakes(ctx(heads[2], false), { repoRoot: tempDir, config: { version: 1 } });
-    assert.deepEqual({ gate: pre.gate, round: pre.round, cap: pre.cap, actCounts: pre.actCounts, items: pre.items.length }, { gate: "pre_approval_gate", round: 4, cap: 2, actCounts: [3, 3, 2], items: 2 });
+    assert.deepEqual({ gate: pre.gate, round: pre.round, cap: pre.cap, items: pre.items.length }, { gate: "pre_approval_gate", round: 4, cap: 2, items: 2 });
     assert.match(pre.items[0], /^[0-9a-f]{16} \[medium\] defect \d$/);
     const draft = await resolveCapBrakes(ctx(heads[1], true), { repoRoot: tempDir, config: { version: 1 } });
-    assert.deepEqual({ gate: draft.gate, round: draft.round, cap: draft.cap, actCounts: draft.actCounts }, { gate: "draft_gate", round: 3, cap: 0, actCounts: [4, 4] });
+    assert.deepEqual({ gate: draft.gate, round: draft.round, cap: draft.cap }, { gate: "draft_gate", round: 3, cap: 0 });
     // A head with no judged round of its own carries no facts.
     assert.equal(await resolveCapBrakes(ctx("9".repeat(40), false), { repoRoot: tempDir, config: { version: 1 } }), null);
   } finally {
@@ -5515,7 +5501,6 @@ test("resolveCapBrakes names one item per acted cluster: a two-member cluster yi
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 11, gate: "pre_approval_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-11-01T00:00:00.000Z", findings: [act("a"), act("b")] }), "utf8");
     const facts = await resolveCapBrakes({ repo: "owner/repo", pr: 11, currentHeadSha: head, prData: { isDraft: false } }, { repoRoot: tempDir, config: { version: 1 } });
-    assert.deepEqual(facts.actCounts, [1]);
     assert.equal(facts.items.length, 1);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -5546,8 +5531,6 @@ test("resolveCapBrakes does not count a pre_approval_gate round forced by a base
     const ctx = (baseRefName) => ({ repo: "owner/repo", pr: 10, currentHeadSha: merged, prData: { isDraft: false, baseRefName } });
     const forced = await resolveCapBrakes(ctx("main"), { repoRoot: dir, config: { version: 1 } });
     assert.equal(forced.round, 2, "the merge-forced round does not count");
-    assert.deepEqual(forced.actCounts, [1], "the merge-forced round repeating the same act items adds no non-convergence act count");
-    assert.deepEqual((await resolveCapBrakes(ctx(undefined), { repoRoot: dir, config: { version: 1 } })).actCounts, [1, 1]);
     assert.equal((await resolveCapBrakes(ctx(undefined), { repoRoot: dir, config: { version: 1 } })).round, 3, "without the PR base the raw count stands");
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -5555,7 +5538,7 @@ test("resolveCapBrakes does not count a pre_approval_gate round forced by a base
 });
 
 // GATE-EXEC-CAP-BRAKES (AC7): an unreadable cap-brakes ledger read is advisory; a sealed-ledger tamper still propagates.
-async function detectWithPriorLedger(headSummary, { tamper = false, corrupt = false, repeatPrior = false, withFocusFile = false } = {}) {
+async function detectWithPriorLedger(headSummary, { tamper = false, corrupt = false, pastCap = false, withFocusFile = false } = {}) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-cap-brakes-warning-"));
   try {
     initGitFixture(tempDir, { branch: "main" });
@@ -5563,14 +5546,16 @@ async function detectWithPriorLedger(headSummary, { tamper = false, corrupt = fa
     const headSha = "abc1234567".repeat(4);
     const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
     await mkdir(findings, { recursive: true });
-    const ledger = (head, loggedAt, list) => writeSealed(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt, findings: list }));
+    const gate = pastCap ? "pre_approval_gate" : "draft_gate";
+    const ledger = (head, loggedAt, list) => writeSealed(path.join(findings, `${gate}-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate, headSha: head, verdict: "findings_present", loggedAt, findings: list }));
     const act = { severity: "medium", summary: headSummary, file: "src/x.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix x" };
     if (corrupt) await writeFile(path.join(findings, `draft_gate-${"1".repeat(40)}.json`), "{ not json");
-    else await ledger("1".repeat(40), "2026-11-15T00:01:00.000Z", repeatPrior ? [act] : []);
+    // Past the pre_approval_gate cap (2): three prior rounds with distinct act summaries, then the current head.
+    else for (const [i, c] of (pastCap ? ["1", "2", "3"] : ["1"]).entries()) await ledger(c.repeat(40), `2026-11-15T00:0${i + 1}:00.000Z`, pastCap ? [{ ...act, summary: `prior ${i}` }] : []);
     await ledger(headSha, "2026-11-16T00:00:00.000Z", [act]);
     let operatorFocusFile;
     if (withFocusFile) {
-      const { items } = await resolveCapBrakes({ repo: "owner/repo", pr: 10, currentHeadSha: headSha, prData: { isDraft: true } }, { repoRoot: tempDir, config: { version: 1 } });
+      const { items } = await resolveCapBrakes({ repo: "owner/repo", pr: 10, currentHeadSha: headSha, prData: { isDraft: !pastCap } }, { repoRoot: tempDir, config: { version: 1 } });
       operatorFocusFile = path.join(tempDir, "focus.json");
       await writeFile(operatorFocusFile, JSON.stringify({ items: items.map((item) => ({ fingerprint: item.slice(0, 16), decision: "fix it" })) }), "utf8");
     }
@@ -5578,19 +5563,20 @@ async function detectWithPriorLedger(headSummary, { tamper = false, corrupt = fa
       const file = path.join(findings, `draft_gate-${"1".repeat(40)}.json`);
       await writeFile(file, (await readFile(file, "utf8")).replace("2026-11-15", "2026-11-14"));
     }
-    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
-    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    const body = renderGateReviewCommentBody({ gate, headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: !pastCap, headSha, draftGateBody: body });
     return await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10, operatorFocusFile }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 }
 
-test("detectPrGateCoordinationState forwards --operator-focus-file into the cap brakes: a full file clears the non_convergence stop", async () => {
-  const stopped = await detectWithPriorLedger("x", { repeatPrior: true });
+test("detectPrGateCoordinationState forwards --operator-focus-file into the cap brakes: a full file clears the round_cap_reached stop", async () => {
+  const stopped = await detectWithPriorLedger("x", { pastCap: true });
   assert.equal(stopped.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
-  const cleared = await detectWithPriorLedger("x", { repeatPrior: true, withFocusFile: true });
-  assert.notEqual(cleared.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(stopped.reason, /round_cap_reached/);
+  const cleared = await detectWithPriorLedger("x", { pastCap: true, withFocusFile: true });
+  assert.doesNotMatch(cleared.reason, /round_cap_reached/, cleared.reason);
 });
 
 test("a cap-brakes read that throws a non-tamper error sets capBrakesWarning and keeps the route", async () => {

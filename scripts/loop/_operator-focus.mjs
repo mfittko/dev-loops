@@ -28,7 +28,7 @@ function cleanNote(value, label) {
 }
 
 /** Validate and sanitize a raw focus object. Returns null for an absent or empty focus. */
-export function normalizeOperatorFocus(raw, { allowItems = false } = {}) {
+export function normalizeOperatorFocus(raw) {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== "object" || Array.isArray(raw)) throw new OperatorFocusRefusal("GATE-EXEC-OPERATOR-FOCUS: operator focus must be a JSON object");
   const unknown = Object.keys(raw).filter((key) => key !== "round" && key !== "items");
@@ -36,7 +36,6 @@ export function normalizeOperatorFocus(raw, { allowItems = false } = {}) {
   const focus = {};
   if (raw.round !== undefined) focus.round = clean(raw.round, "round");
   if (raw.items !== undefined) {
-    if (!allowItems) throw new OperatorFocusRefusal("GATE-EXEC-OPERATOR-FOCUS: operator focus items are accepted for the fixer only");
     if (!Array.isArray(raw.items) || raw.items.length > MAX_ITEMS) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus items must be an array of at most ${MAX_ITEMS} entries`);
     const seen = new Set();
     const items = raw.items.map((item, index) => {
@@ -70,12 +69,12 @@ export function normalizeOperatorFocus(raw, { allowItems = false } = {}) {
 }
 
 /** Read a focus JSON file. Returns null when no path is given. */
-export async function readOperatorFocusFile(file, opts = {}) {
+export async function readOperatorFocusFile(file) {
   if (!file) return null;
   const bytes = await readFile(file, "utf8").catch(() => { throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus file is missing or unreadable: ${file}`); });
   let raw;
   try { raw = JSON.parse(bytes); } catch { throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus file is not JSON: ${file}`); }
-  return normalizeOperatorFocus(raw, opts);
+  return normalizeOperatorFocus(raw);
 }
 
 /**

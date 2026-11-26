@@ -102,9 +102,9 @@ Optional:
                                <gate>-<headSha>.carry-forward-plan.json). Keeps
                                finding text off the command line. Passing both
                                plan flags is refused.
-  --operator-focus-file <path> A JSON file { round?: string } rendered as a bounded, sanitized
+  --operator-focus-file <path> A JSON file { round?: string, items?: [...] }. Its round is rendered as a bounded, sanitized
                                "Operator focus" section in every unit's prompt and pinned by the
-                               unit work-order digest (GATE-EXEC-OPERATOR-FOCUS). Items are refused.
+                               unit work-order digest (GATE-EXEC-OPERATOR-FOCUS). Items are validated and not used.
   --ci-file <path>             The CI wait result JSON the coordinator read immediately before this fan-out (GATE-EXEC-GATE-COORDINATOR).
                                Required for --gate draft_gate unless gates.draft.requireCi is false: without it the run refuses
                                with { ok: false, refusal: "ci_file_required", error, recovery } and emits no units.
@@ -809,7 +809,8 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const configSha256 = createHash("sha256").update(JSON.stringify(config ?? {})).digest("hex");
   let operatorFocus = null;
   try {
-    operatorFocus = await readOperatorFocusFile(operatorFocusArg ? path.resolve(process.cwd(), operatorFocusArg) : undefined);
+    const focusFile = await readOperatorFocusFile(operatorFocusArg ? path.resolve(process.cwd(), operatorFocusArg) : undefined);
+    if (focusFile?.round !== undefined) operatorFocus = { round: focusFile.round };
   } catch (err) {
     if (!(err instanceof OperatorFocusRefusal)) throw err;
     return finish({ ok: false, error: err.message }, false);

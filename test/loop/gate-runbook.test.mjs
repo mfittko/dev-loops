@@ -365,8 +365,10 @@ test("AC6: the USAGE, CLI description and changelog call the output a pinned pro
   }
 });
 
-test("issue 3588: step 3 passes the operator decision file to write-gate-context, steps 7 and 11 keep the round-text file", () => {
-  const step3 = runbook.slice(runbook.indexOf("\n3. Context"), runbook.indexOf("\n4. Spec identity"));
-  assert.match(step3, /decision file \(focus `items`\) add[^\n]*`--operator-focus-file "<that file>"`/);
-  assert.match(runbook, /pass `--operator-focus-file "\$F\/focus.json"` to steps 7 and 11/);
+test("issue 3590: one FOCUS file feeds steps 3, 7 and 11", () => {
+  for (const [from, to] of [["\n3. Context", "\n4. Spec identity"], ["\n7. Emit", "\n8. Waves"], ["\n11. Judge work order", "\n12. Dispatch the judge"]]) {
+    assert.match(runbook.slice(runbook.indexOf(from), runbook.indexOf(to)), /--operator-focus-file "\$FOCUS"/, from);
+  }
+  assert.doesNotMatch(runbook, /decision file/);
+  assert.match(runbook, /`\$F\/focus.json` holding `\{ "round": "<text>" \}`/);
 });

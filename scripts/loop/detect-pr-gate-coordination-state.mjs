@@ -1464,7 +1464,7 @@ async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoo
   const last = logs.at(-1), fingerprints = actFingerprintSet(last);
   const base = { repo: context.repo, pr: context.pr, gate };
   if (effective.at(-1) === last) return operatorDecidedLatestRound({ ...base, operatorFocusFile }, { repoRoot, latest: last, last: fingerprints });
-  // A base-merge-forced latest round clears from the issued fixer plan, or from the direct file when it decides the forced set and the effective latest set (refuseNonConvergence and resolveOperatorClearedRound read the same file).
+  // A base-merge-forced latest round clears from the issued fixer plan, or from the direct file when it decides the forced set and the effective latest set (resolveOperatorClearedRound reads the same file).
   if (await operatorDecidedLatestRound(base, { repoRoot, latest: last, last: fingerprints })) return true;
   return operatorDecidedLatestRound({ ...base, operatorFocusFile }, { repoRoot, latest: last, last: [...new Set([...fingerprints, ...actFingerprintSet(effective.at(-1))])] });
 }
@@ -1472,7 +1472,7 @@ async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoo
 /**
  * GATE-EXEC-CAP-BRAKES: the facts of the gate whose judged round is posted at the current head (draft_gate while the PR is draft, else pre_approval_gate),
  * or null when that head holds no judged round with an open act item. The evaluator applies the one policy (decideCapRound) to them.
- * The draft round cap keeps its own routing until its exit moves to the scoped final round, so draft_gate carries cap 0 and only the cap-less brakes apply.
+ * The draft round cap keeps its own routing until its exit moves to the scoped final round, so draft_gate carries cap 0 and only the growth brake applies.
  * It adds `operatorCleared: true` when an operator focus decision covers every act fingerprint of that round (see operatorClearsCapStop), which routes past the stop.
  */
 export async function resolveCapBrakes(context, { repoRoot, config, operatorFocusFile }) {
@@ -1494,7 +1494,6 @@ export async function resolveCapBrakes(context, { repoRoot, config, operatorFocu
     // A base-merge-forced round never counts (countCapRounds), as in the poster and the emitter.
     round,
     cap,
-    actCounts: effective.map((log) => capRoundActList(log.findings, log.headSha).length),
     // One item per acted cluster: the emitter binds an operator focus item only to an act-list fingerprint (GATE-EXEC-CAP-BRAKES).
     // A base-merge-forced latest round also lists the effective latest round's items: the direct file must decide both sets.
     // Both rounds can hold one fingerprint (it is head-independent) and a focus file refuses a repeated item, so the list keeps the first of each.
@@ -1605,7 +1604,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // A malformed operator focus file refuses here (GATE-EXEC-OPERATOR-FOCUS), before any gh read.
   // Resolved against cwd once, as emit-fixer-work-order.mjs does, so both readers name the same file.
   const operatorFocusFile = options.operatorFocusFile ? path.resolve(process.cwd(), options.operatorFocusFile) : undefined;
-  await readOperatorFocusFile(operatorFocusFile, { allowItems: true });
+  await readOperatorFocusFile(operatorFocusFile);
   // ADR 0117 (issue 3139): an open self-hosting PR is answered by its own head's toolchain; another checkout refuses inside the loader, before any shared gate state is written.
   const fetchedAtMs = Date.now();
   const context = await loadPrGateCoordinationContext(options, { ...runtime, guardToolchain: true });
