@@ -728,6 +728,9 @@ test("--report-path: a ci_pending refusal publishes no report, the rerun publish
     const check = { ...options, check: true, reportPath };
     await assert.rejects(verifyFixerDisposition(check, mockFor([ahead, liveHeadEntry(pushed), threads(false), ...ciEntries(pushed, empty), ...ciEntries(order)]).deps), /ci_pending: /);
     assert.equal(existsSync(reportPath), false);
+    const pendingRuns = { runs: [{ name: "build", status: "in_progress" }] };
+    await assert.rejects(verifyFixerDisposition(check, mockFor([ahead, liveHeadEntry(pushed), threads(false), ...ciEntries(pushed, pendingRuns)]).deps), /ci_pending: .*recovery: run /);
+    assert.equal(existsSync(reportPath), false);
     const green = () => mockFor([ahead, liveHeadEntry(pushed), threads(true), ...ciEntries(pushed), compareEntry(pushed, "identical", pushed)]);
     assert.equal((await verifyFixerDisposition(check, green().deps)).complete, true);
     assert.equal(JSON.parse(await readFile(reportPath, "utf8")).outcome, "complete");

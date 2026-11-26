@@ -55,6 +55,7 @@ test("COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK is registered, follows
 test("the fallback sends a ci_pending hand-back without a report to the verifier's recovery, and ADR 0334 amends ADR 0223 item 1", () => {
   const contract = read("skills/docs/gate-review-sub-loop-contract.md");
   assert.match(contract, /After a `ci_pending` hand-back with no report that carries the verifier's `ci_pending` refusal text \(a step 5 or 6 refusal\), the coordinator follows the recovery in that text with the order's emitted `--check` step \(it restates no command; ADR 0334\)\. When that `--check` run refuses `ci_pending` again, the coordinator hands back `ci_pending` with the refusal text\. A step 3 `ci_pending` hand-back carries no refusal text: the coordinator acts on the typed code and never runs the `--check` step\./);
+  assert.match(contract, /a step 5 refusal or `ok:false`, a step 6 `ci_pending` refusal, or a crash\)/);
   assert.match(contract, /on a thrown refusal other than `ci_pending`, `refused` with the error text; ADR 0223, ADR 0334/);
   assert.match(contract, /A `ci_pending` refusal publishes no report under `--report-path`; every other outcome publishes once\./);
   const adr = read("docs/decisions/0334-fixer-verifier-ci-pending-publishes-no-report.md");
