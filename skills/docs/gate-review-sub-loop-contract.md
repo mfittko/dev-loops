@@ -684,7 +684,7 @@ full head: no findings log in any verdict root; the round's judge plan names a
 `spec-authority-verdict.json` that holds a `spec_cannot_decide` decision; and the plan-pinned
 `specDigest` differs from the digest of the spec the builder loaded (the issue body digest and the PR body digest both differ from it). The judge plan must be newer than every sentinel and dispatch record of the round. The builder then retires
 the round automatically on every rebuild at that head, also with unchanged prefix bytes, and the
-retirement reason names `SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT` and both digests. No single
+retirement reason names `SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT` and the pinned digest plus each current spec digest (12 characters each, up to three). No single
 spec source, a missing or unreadable judge file or an unchanged digest keeps the refusal. A rewrite of a prior-dispositions
 or scoped-variant file under any sentinel at that head, finished or not, still refuses until the round is retired explicitly.
 The automatic retirement refuses while a reviewer may still be writing into the round: a sentinel
