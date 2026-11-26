@@ -17,6 +17,8 @@ A `draft_gate` round below the cap whose open act items are all PR-body items ha
 3. The refusal `delta_body_only_act_set` names only the body-only converged post as its recovery. The clause "run the next gate round below the cap" is deleted.
 4. Below the cap, gate coordination routes a same-head all-PR-body `findings_present` round to the body-only post and never to `run_draft_gate`. It returns `report_blocked` with the runnable `agentRemedy` of ADR 0271 (the PR-body edit and the post), or `blockedOn: operator_decision` when the act list carries a blocker. At the cap the route is unchanged from ADR 0271. A base-only merge of the reviewed head carries the body-only route at every round up to the cap (ADR 0294): coordination at the merged head names the carried post and forbids `run_draft_gate`. Coordination reads no PR-body digest: an unedited body makes the poster refuse `body_unchanged` with "edit the PR body first", which is a runnable exit.
 
+5. `loop gate-coordination` skips the `GATE-EXEC-CAP-BRAKES` `non_convergence` stop when the current-head act list is a blocker-free all-PR-body list. The brake guards the next review round and the body-only post runs none, so equal act counts across two rounds no longer hide the `agentRemedy`. `round_cap_reached`, `growth_past_forecast` and a list with blockers keep the stop.
+
 ## Consequences
 
 A PR-body round below the cap clears with no commit, no operator step and no extra full round. The `pre_approval_gate` body-only exit (issue 3604) and the automatic retirement of a round with no posted verdict (issue 3612) stay out of scope. The round cap and the fix budget are unchanged.

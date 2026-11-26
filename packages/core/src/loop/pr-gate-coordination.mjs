@@ -1327,7 +1327,12 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // GATE-EXEC-CAP-BRAKES: `capBrakes` is `{ gate, round, cap, actCounts, items, operatorCleared?, notClearable? }` for the gate whose round is posted at this head. The one policy
   // (decideCapRound) stops the lane before another fixer pass; only an operator focus decision that names the items clears the stop (`operatorCleared: true` routes past it; `notClearable: true` marks a set that already had its one re-open, which no focus file clears).
   const capStop = input.capBrakes ? decideCapRound({ ...input.capBrakes, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 } }) : null;
-  if (capStop?.action === "operator" && input.capBrakes.operatorCleared !== true) {
+  // GATE-EXEC-NO-DEAD-END: a blocker-free all-PR-body act list at this head posts no review round, so the non_convergence brake (which guards the next round) skips it and the body-only route below answers.
+  const openList = input.draftOpenActList;
+  const bodyOnlyExempt = capStop?.reason === "non_convergence" && openList?.bodyOnly === true && openList.openActCount > 0
+    && (openList.blockers ?? []).length === 0
+    && [openList.headSha, openList.carriedToHead].some((h) => String(h ?? "").toLowerCase() === String(currentHeadSha ?? "").toLowerCase());
+  if (capStop?.action === "operator" && input.capBrakes.operatorCleared !== true && !bodyOnlyExempt) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
     pushUnique(forbiddenActions, [
       PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
