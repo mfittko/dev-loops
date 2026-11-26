@@ -5612,7 +5612,8 @@ test("resolveCapBrakes: the once-per-set rule holds past the cap on pre_approval
 });
 
 // pre_approval_gate drops the base-merge round from the effective rounds; draft_gate has no such filter, so the direct file decides it.
-for (const [gate, expected] of [["pre_approval_gate", undefined], ["draft_gate", true]]) test(`resolveCapBrakes: a focus file that decides only a base-merge current-head round ${expected ? "clears" : "does not clear"} the ${gate} stop`, async () => {
+// The third case runs at cap 1 (round_cap_reached): the forced latest round clears from the full file there too.
+for (const [gate, expected, config] of [["pre_approval_gate", undefined, { version: 1 }], ["draft_gate", true, { version: 1 }], ["pre_approval_gate", undefined, { version: 1, gates: { preApproval: { maxReviewRounds: 1 } } }]]) test(`resolveCapBrakes: a focus file that decides only a base-merge current-head round ${expected ? "clears" : "does not clear"} the ${gate} stop at cap ${config.gates?.preApproval?.maxReviewRounds ?? "default"}`, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-forced-"));
   try {
     initGitFixture(dir, { branch: "main", commit: null });
@@ -5639,7 +5640,7 @@ for (const [gate, expected] of [["pre_approval_gate", undefined], ["draft_gate",
       await writeFile(path.join(ledgerDir, `${gate}-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: keys.map(act) }), "utf8");
     }
     const ctx = { repo: "owner/repo", pr: 10, currentHeadSha: mergedHead, prData: { isDraft: gate === "draft_gate", baseRefName: "main" } };
-    const brakes = (operatorFocusFile) => resolveCapBrakes(ctx, { repoRoot: dir, config: { version: 1 }, operatorFocusFile });
+    const brakes = (operatorFocusFile) => resolveCapBrakes(ctx, { repoRoot: dir, config, operatorFocusFile });
     const fingerprints = (await brakes()).items.map((item) => item.slice(0, 16));
     const [forced] = fingerprints;
     const focus = path.join(dir, "focus.json");
