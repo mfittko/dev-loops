@@ -1040,12 +1040,17 @@ function writeTargets(seg) {
 }
 
 export const UNRESOLVABLE_WORD_RE =/[$`*?[{]|^~/;
-const LAUNCHER_RE = /^(?:command|env|exec|sudo|nohup|nice|builtin|time|stdbuf|timeout|xargs)$/;
+/** Wrapper binaries whose first argument is the real command to classify. */
+const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command", "nohup", "exec", "stdbuf", "setsid", "ionice", "busybox"]);
+// One list owns wrapper heads: WRAPPER_BINARIES plus the timeouts and `builtin`.
+const LAUNCHER_NAMES = new Set([...WRAPPER_BINARIES, "timeout", "gtimeout", "builtin"]);
+const LAUNCHER_RE = { test: (name) => LAUNCHER_NAMES.has(name) };
 /** Launcher flags that take the next word as their value. */
 const LAUNCHER_VALUE_FLAG_RE = {
   env: /^(?:-[uCS]|--(?:unset|chdir|split-string))$/,
   sudo: /^-[ughpCDRTU]$/,
   timeout: /^-[sk]$/,
+  gtimeout: /^-[sk]$/,
   xargs: /^(?:-[InPLsdEa]|--(?:max-args|max-procs|delimiter|arg-file))$/,
   nice: /^-n$/,
 };
@@ -1199,7 +1204,7 @@ function segmentWriteTargets(seg, place) {
     } else if (LAUNCHER_RE.test(name)) {
       launched ||= name === "xargs";
       for (i++; operands[i]?.value.startsWith("-") || ENV_ASSIGNMENT_WORD_RE.test(operands[i]?.raw ?? ""); i++) if (LAUNCHER_VALUE_FLAG_RE[name]?.test(operands[i].value)) i++;
-      if (name === "timeout") i++;
+      if (name === "timeout" || name === "gtimeout") i++;
     } else break;
   }
   const head = base(operands[i]);
@@ -1812,8 +1817,6 @@ export function commandContainsTimeoutWrappedSanctionedTool(command) {
   });
 }
 
-/** Wrapper binaries whose first argument is the real command to classify. */
-const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command", "nohup", "exec", "stdbuf", "setsid", "ionice", "busybox"]);
 // A bare wrapper flag (`-n`, `--user`) takes the next word as its argument, unless that word is itself the command.
 const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS, "timeout", "gtimeout", "sleep"]);
 // The decision-recorder scan also keeps a launcher word after a bare wrapper flag (`sudo -n node ...`). The shared set leaves it out so `sudo -u node node -e` still shifts the user name.
