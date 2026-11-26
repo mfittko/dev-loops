@@ -5,7 +5,8 @@ import { retireGateRound } from "./retire-gate-round.mjs";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 import { gateScopePrefix } from "./_gate-names.mjs";
 import { sanitizeScopeSegment } from "./_dispatch-units.mjs";
-import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
+import { HUMAN_SPEC_DECISION_OUTCOME } from "@dev-loops/core/loop/spec-authority";
+import { buildGateArtifactPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
 
 // Only a missing path is absent. Any other error (EACCES, ENOTDIR, EIO) could hide a verdict or a live round, so it propagates and the caller fails closed.
 const exists = (file) => access(file).then(() => true, (err) => {
@@ -56,9 +57,12 @@ export function buildRetireCommand({ gate, headSha, tmpRoot, findingsDir = null,
  * `findingsTmpRoot` (default `tmpRoot`) is the root the round's findings directory and emit plan live under;
  * `recordsTmpRoot` (default `tmpRoot`) is the root the emitter wrote the dispatch records under (--tmp-root). `liveOnly` counts a
  * round as live only when it has sentinels or dispatch records, so a findings directory alone is left in place.
+ * `currentSpecDigest` is the digest of the spec the builder just loaded (null when no single spec source exists): with it, a
+ * round that stopped for a human spec decision (see findSpecDecisionStop) retires past its fan-in ledger. `specDecisionOnly`
+ * returns `{ retiredRound: null }` for every other round, so an unchanged rebuild never refuses on an ordinary posted verdict.
  * Returns `{ retiredRound }` (null when nothing was live) or `{ refusal: { error, recovery } }`.
  */
-export async function retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdictRoots = [tmpRoot], findingsTmpRoot = tmpRoot, recordsTmpRoot = tmpRoot, liveOnly = false }) {
+export async function retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdictRoots = [tmpRoot], findingsTmpRoot = tmpRoot, recordsTmpRoot = tmpRoot, liveOnly = false, currentSpecDigest = null, specDecisionOnly = false }) {
   const head = String(headSha).trim().toLowerCase();
   if (!FULL_SHA_RE.test(head)) return { retiredRound: null };
   const findingsDir = buildGateReviewsDir({ repo, pr, gate, headSha: head, tmpRoot: findingsTmpRoot });
@@ -78,9 +82,13 @@ export async function retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdi
   const hasRecords = names.some((n) => n.endsWith(suffix) && n.startsWith(sentinelPrefix))
     || recordNames.some((n) => n.endsWith(suffix) && n.startsWith(recordPrefix));
   if (!hasRecords && (liveOnly || !hasFindings)) return { retiredRound: null };
+  const stopped = currentSpecDigest ? await findSpecDecisionStop({ repo, pr, gate, head, verdictRoots, currentSpecDigest }) : null;
+  if (specDecisionOnly && !stopped) return { retiredRound: null };
   for (const root of verdictRoots) {
     const key = { repo, pr, gate, headSha: head, tmpRoot: root };
     for (const marker of [buildGateFaninLedgerPath(key), buildLogPath(key)]) {
+      // A fan-in ledger without a findings log posted no verdict when the round stopped for a spec decision that has since changed the spec.
+      if (stopped && marker === buildGateFaninLedgerPath(key)) continue;
       if (await exists(marker)) {
         return {
           refusal: {
@@ -102,7 +110,9 @@ export async function retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdi
       },
     };
   }
-  const reason = "automatic: the gate context was rebuilt or the round re-emitted at the same head before any verdict was recorded";
+  const reason = stopped
+    ? `automatic: SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT stopped the round and the spec changed (specDigest ${stopped.pinnedDigest.slice(0, 12)} to ${currentSpecDigest.slice(0, 12)}); no verdict was posted`
+    : "automatic: the gate context was rebuilt or the round re-emitted at the same head before any verdict was recorded";
   const distinctRecords = recordsTmpRoot !== tmpRoot && recordNames.some((n) => n.endsWith(suffix) && n.startsWith(recordPrefix));
   const findingsOpt = hasFindings ? { findingsDir } : { noFindingsArtifacts: true };
   let result = { noop: true };
@@ -120,6 +130,30 @@ export async function retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdi
   if (result.noop && !recordsResult) return { retiredRound: null };
   const base = result.noop ? recordsResult : result;
   return { retiredRound: { retirementDir: path.resolve(base.retirementDir), retired: result.retired, sentinels: result.sentinels, dispatchPromptRecords: [...result.dispatchPromptRecords, ...(recordsResult?.dispatchPromptRecords ?? [])], findingsDirRetired: result.findingsDirRetired } };
+}
+
+/**
+ * The round stopped at the human-spec-decision state and the spec has changed since: no findings log in any verdict root
+ * (the verdict comment renders only from it), a judge plan whose spec-authority verdict holds a `spec_cannot_decide`
+ * decision, and a plan-pinned spec digest that differs from `currentSpecDigest`. Returns `{ pinnedDigest }` or null; any
+ * missing or unreadable file is null, so the check never fails open.
+ */
+async function findSpecDecisionStop({ repo, pr, gate, head, verdictRoots, currentSpecDigest }) {
+  for (const root of verdictRoots) {
+    if (await exists(buildLogPath({ repo, pr, gate, headSha: head, tmpRoot: root }))) return null;
+  }
+  for (const root of verdictRoots) {
+    try {
+      const dir = buildGateArtifactPath({ repo, pr, gate, headSha: head, tmpRoot: root, dir: "gate-judge" });
+      const plan = JSON.parse(await readFile(path.join(dir, "judge-emit-plan.json"), "utf8"));
+      const pinnedDigest = plan?.workOrder?.authority?.specDigest;
+      const outputRef = plan?.workOrder?.outputRefs?.find((ref) => path.basename(String(ref)) === "spec-authority-verdict.json");
+      if (typeof pinnedDigest !== "string" || pinnedDigest === currentSpecDigest || typeof outputRef !== "string") continue;
+      const verdict = JSON.parse(await readFile(outputRef, "utf8"));
+      if (verdict.decisions.some((d) => d?.outcome === HUMAN_SPEC_DECISION_OUTCOME)) return { pinnedDigest };
+    } catch { /* a missing or unreadable plan or verdict in this root proves nothing */ }
+  }
+  return null;
 }
 
 // The persisted emit plan, or the sidecar that survives its removal at the start of an emission; null when neither parses.

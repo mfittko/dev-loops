@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { buildRetireCommand, retireStaleRound } from "../../scripts/github/_stale-round-retirement.mjs";
-import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { buildGateArtifactPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 
 const HEAD = "d".repeat(40);
 const KEY = { repo: "owner/repo", pr: 7, gate: "draft_gate", headSha: HEAD };
@@ -291,4 +291,101 @@ test("a missing sentinel root with dispatch records and a findings dir under ano
   } finally {
     await rm(base, { recursive: true, force: true });
   }
+});
+
+const OLD_DIGEST = "a".repeat(64);
+const NEW_DIGEST = "b".repeat(64);
+const SENTINEL_FILE = `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`;
+const STOPPED = { decisions: [{ index: 0, outcome: "spec_cannot_decide" }] };
+
+// A round that stopped at the human-spec-decision state: ledger, sentinel and record, a judge plan and verdict, no findings log.
+async function writeStoppedFiles(tmpRoot, { verdict = STOPPED, plan = true } = {}) {
+  await writeFile(path.join(tmpRoot, SENTINEL_FILE), "{}");
+  await writeFile(path.join(tmpRoot, `checkpoint-dispatch-prompt-draft-gate-coverage-${HEAD}.json`), "{}");
+  const findingsDir = buildGateReviewsDir({ ...KEY, tmpRoot });
+  await mkdir(findingsDir, { recursive: true });
+  await writeFile(path.join(findingsDir, "coverage.json"), FINISHED);
+  const ledger = buildGateFaninLedgerPath({ ...KEY, tmpRoot });
+  await mkdir(path.dirname(ledger), { recursive: true });
+  await writeFile(ledger, "{}");
+  const dir = buildGateArtifactPath({ ...KEY, tmpRoot, dir: "gate-judge" });
+  await mkdir(dir, { recursive: true });
+  const verdictFile = path.join(dir, "spec-authority-verdict.json");
+  if (verdict !== null) await writeFile(verdictFile, typeof verdict === "string" ? verdict : JSON.stringify(verdict));
+  if (plan) await writeFile(path.join(dir, "judge-emit-plan.json"), typeof plan === "string" ? plan : JSON.stringify({ workOrder: { authority: { specDigest: OLD_DIGEST }, outputRefs: [path.join(dir, "judge-verdict.json"), verdictFile] } }));
+}
+
+async function withStoppedRound(fn, setup) {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "stale-round-"));
+  try {
+    await writeStoppedFiles(tmpRoot, setup);
+    return await fn(tmpRoot);
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+}
+const decided = { currentSpecDigest: NEW_DIGEST, liveOnly: true };
+
+test("a stopped spec-decision round with a changed spec digest retires past its fan-in ledger and names both digests", async () => {
+  await withStoppedRound(async (tmpRoot) => {
+    const { retiredRound, refusal } = await retireStaleRound({ ...KEY, tmpRoot, ...decided });
+    assert.equal(refusal, undefined);
+    assert.equal(retiredRound.retired, 1);
+    assert.equal(existsSync(path.join(tmpRoot, SENTINEL_FILE)), false);
+    const record = JSON.parse(await readFile(path.join(retiredRound.retirementDir, "retirement.json"), "utf8"));
+    assert.match(record.reason, /SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT/);
+    assert.ok(record.reason.includes(OLD_DIGEST.slice(0, 12)) && record.reason.includes(NEW_DIGEST.slice(0, 12)), record.reason);
+    // A second rebuild finds no live round and never refuses on the ledger left in place.
+    assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot, ...decided }), { retiredRound: null });
+    // A second stop at the same head retires again.
+    await writeStoppedFiles(tmpRoot);
+    assert.equal((await retireStaleRound({ ...KEY, tmpRoot, ...decided })).retiredRound.retired, 1);
+    // A findings log from the new round is a posted verdict.
+    await writeStoppedFiles(tmpRoot);
+    const log = buildLogPath({ ...KEY, tmpRoot });
+    await mkdir(path.dirname(log), { recursive: true });
+    await writeFile(log, "{}");
+    assert.match((await retireStaleRound({ ...KEY, tmpRoot, ...decided })).refusal.recovery, /^operator: /);
+  });
+});
+
+test("specDecisionOnly leaves an ordinary posted-verdict round alone instead of refusing", async () => {
+  await withRound(async (tmpRoot) => {
+    const ledger = buildGateFaninLedgerPath({ ...KEY, tmpRoot });
+    await mkdir(path.dirname(ledger), { recursive: true });
+    await writeFile(ledger, "{}");
+    assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot, currentSpecDigest: NEW_DIGEST, specDecisionOnly: true }), { retiredRound: null });
+    assert.equal(existsSync(path.join(tmpRoot, SENTINEL_FILE)), true);
+  });
+});
+
+test("an unchanged or missing digest, a missing or unparsable plan or verdict, or no spec_cannot_decide keeps the refusal", async () => {
+  const cases = [
+    { name: "unchanged digest", opts: { currentSpecDigest: OLD_DIGEST } },
+    { name: "no digest", opts: { currentSpecDigest: null } },
+    { name: "missing plan", setup: { plan: false } },
+    { name: "unparsable plan", setup: { plan: "{not json" } },
+    { name: "missing verdict", setup: { verdict: null } },
+    { name: "unparsable verdict", setup: { verdict: "{not json" } },
+    { name: "no spec_cannot_decide", setup: { verdict: { decisions: [{ index: 0, outcome: "valid_compliant" }] } } },
+  ];
+  for (const { name, setup, opts } of cases) {
+    await withStoppedRound(async (tmpRoot) => {
+      const result = await retireStaleRound({ ...KEY, tmpRoot, ...decided, ...opts });
+      assert.match(result.refusal?.error ?? "", /a verdict is already recorded/, name);
+      assert.match(result.refusal.recovery, /^operator: /, name);
+      assert.equal(existsSync(path.join(tmpRoot, SENTINEL_FILE)), true, name);
+    }, setup);
+  }
+});
+
+test("a findings log at the head keeps the refusal even when the spec decision facts hold", async () => {
+  await withStoppedRound(async (tmpRoot) => {
+    const log = buildLogPath({ ...KEY, tmpRoot });
+    await mkdir(path.dirname(log), { recursive: true });
+    await writeFile(log, "{}");
+    const result = await retireStaleRound({ ...KEY, tmpRoot, ...decided });
+    assert.match(result.refusal.error, /a verdict is already recorded/);
+    assert.match(result.refusal.recovery, /^operator: /);
+  });
 });
