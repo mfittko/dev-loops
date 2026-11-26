@@ -1457,7 +1457,7 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnly
  */
 async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round, cap }) {
   const last = logs.at(-1), fingerprints = actFingerprintSet(last);
-  const effective = await effectiveRounds(logs, { prBase: context.prData?.baseRefName, repoRoot });
+  const effective = await effectiveRounds(logs, { prBase: gate === "pre_approval_gate" ? context.prData?.baseRefName : undefined, repoRoot });
   if (cap > 0 && round > cap + 1 && effective.slice(cap).some((log) => log !== last && actFingerprintSet(log).join() === fingerprints.join())) return false;
   // A base-merge-forced latest round is decided from the issued fixer plan only, as refuseNonConvergence does (the direct file decides the effective latest round).
   return operatorDecidedLatestRound({ repo: context.repo, pr: context.pr, gate, operatorFocusFile: effective.at(-1) === last ? operatorFocusFile : undefined }, { repoRoot, latest: last, last: fingerprints });
