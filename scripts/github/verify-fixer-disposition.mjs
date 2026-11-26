@@ -34,6 +34,7 @@ import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { LOOP_DERIVED_CI_CHECK_NAMES } from "@dev-loops/core/loop/copilot-ci-status";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
+import { fixerEmitCarryAccepts } from "./_carried-verdict.mjs";
 import { revalidateLegacyCompletion } from "./_legacy-fixer-revalidation.mjs";
 import { authenticateOriginalPlan } from "./_fixer-emission-evidence.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
@@ -96,8 +97,10 @@ Required:
                         The handoff counts only with a matching fixer pull receipt,
                         when written at or after that pull. Its candidate head X
                         may precede live --head-sha H only after containment and
-                        per-commit historical thread-site checks; uncertainty
-                        names the thread for pre_approval_gate --known-findings.
+                        per-commit historical thread-site checks; a proven
+                        base-only merge passes; other uncertainty names
+                        pre_approval_gate (ready PR) or gate close-sequence plus the
+                        next draft_gate round (draft PR) with --known-findings.
 Optional:
   --construct                 Construct the full worker's canonical report (ACT: from
                                authenticated completion input; THREAD: from the threads
@@ -757,11 +760,25 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, delta
 }
 
 // Historical coordinates belong to the authenticated root, never the live (possibly shifted) line.
-export async function assertDescendantThreadSites({ repo, pr, candidateHead, headSha, handoff, parsed, repoRoot }, { env, ghCommand, runChild }) {
+// ADR 0330: X to H holding only a proven base-only merge leaves a thread site unchanged; the check runs at most once per call.
+export async function assertDescendantThreadSites({ repo, pr, candidateHead, headSha, handoff, parsed, repoRoot, baseRef, baseOnlyMergeCarries = fixerEmitCarryAccepts }, { env, ghCommand, runChild }) {
   const gitEnv = { ...env };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_DIFF_OPTS"]) delete gitEnv[key];
+  const quietGit = (...args) => runChild("git", ["-C", repoRoot, "--literal-pathspecs", ...args], gitEnv).catch(() => ({ code: 1, stdout: "" }));
+  let carry = null;
+  const carried = () => carry ??= (async () => {
+    if (!baseRef || candidateHead === headSha) return false;
+    try {
+      if (!await baseOnlyMergeCarries({ originHead: candidateHead, headSha, baseRef, repoRoot })) return false;
+      const mergeBase = await quietGit("merge-base", headSha, baseRef);
+      if (mergeBase.code !== 0) return false;
+      // The predicate compares endpoints only: a PR-own touch and revert must still refuse.
+      const own = await quietGit("rev-list", "--no-merges", "--count", `${candidateHead}..${headSha}`, `^${mergeBase.stdout.trim()}`);
+      return own.code === 0 && own.stdout.trim() === "0";
+    } catch { return false; }
+  })();
   for (const entry of handoff.dispositions.filter((entry) => entry.threadId && FIXER_COMMIT_CLAIM_KINDS.includes(entry.disposition))) {
-    const refuse = (reason, changed = false) => { throw new Error(`thread_site_${changed ? "changed" : "unverifiable"}: ${entry.threadId} (${candidateHead} -> ${headSha}): ${reason}; run pre_approval_gate with this open thread in --known-findings`); };
+    const refuse = (reason, changed = false) => { throw new Error(`thread_site_${changed ? "changed" : "unverifiable"}: ${entry.threadId} (${candidateHead} -> ${headSha}): ${reason}; on a ready PR run pre_approval_gate with this open thread in --known-findings; on a draft PR run gate close-sequence for the plan's reviewed baseline, then the next draft_gate round with this thread in --known-findings`); };
     const git = async (...args) => {
       const result = await runChild("git", ["-C", repoRoot, "--literal-pathspecs", ...args], gitEnv).catch(() => refuse("history unavailable"));
       if (result.code !== 0) refuse("history unavailable");
@@ -809,6 +826,7 @@ export async function assertDescendantThreadSites({ repo, pr, candidateHead, hea
     };
     await git("cat-file", "-e", `${site.original_commit_id}:${site.path}`);
     await walk(site.original_commit_id, candidateHead, false);
+    if (await carried() && (await quietGit("diff", "--quiet", "--no-ext-diff", "--no-textconv", candidateHead, headSha, "--", site.path)).code === 0) continue;
     await walk(candidateHead, headSha, true);
   }
 }
@@ -868,9 +886,10 @@ async function verifyFixerDispositionCore(
   const runtime = { env, ghCommand, runChild };
   const { handoff, actList, deltaStatuses, completion, constructedReport, operatorFocus, operatorFocusDigest, reviewId, reviewBodySha256, reviewCommitId, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
-  const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,statusCheckRollup"], env);
+  const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,statusCheckRollup,baseRefName"], env);
   const livePayload = live.code === 0 ? (() => { try { return JSON.parse(live.stdout); } catch { return null; } })() : null;
   const liveHead = livePayload?.headRefOid ?? null;
+  const baseRef = typeof livePayload?.baseRefName === "string" && livePayload.baseRefName ? `origin/${livePayload.baseRefName}` : undefined;
   // Same PR-visible filter as wait-pr-checks (probe-ci-status.mjs): runs outside the rollup never block step 5.
   const prVisibleCheckNames = (Array.isArray(livePayload?.statusCheckRollup) ? livePayload.statusCheckRollup : [])
     .map((entry) => entry?.name || entry?.context).filter((name) => typeof name === "string" && name.length > 0);
@@ -891,10 +910,10 @@ async function verifyFixerDispositionCore(
     assertActItemThreadsDisposed(actList, handoff, initialSnapshot, gateLogin, deltaStatuses, completion, operatorFocus);
   }
   if (handoff.headSha !== options.headSha) {
-    if (source === "act-list" && !completion) throw new Error("thread_site_unverifiable: descendant ACT delivery needs authenticated completion input; run pre_approval_gate with the open threads in --known-findings");
+    if (source === "act-list" && !completion) throw new Error("thread_site_unverifiable: descendant ACT delivery needs authenticated completion input; on a ready PR run pre_approval_gate with the open threads in --known-findings; on a draft PR run gate close-sequence for the plan's reviewed baseline, then the next draft_gate round with the threads in --known-findings");
     const contained = await isCommitContainedByHead({ repo: options.repo, commitSha: handoff.headSha, headSha: options.headSha }, runtime);
     if (!contained.contained) throw new Error(`candidate is not contained by the observed head: ${contained.reason}; run a full gate round`);
-    await assertDescendantThreadSites({ ...options, candidateHead: handoff.headSha, handoff, parsed: initialSnapshot, repoRoot }, runtime);
+    await assertDescendantThreadSites({ ...options, baseRef, candidateHead: handoff.headSha, handoff, parsed: initialSnapshot, repoRoot }, runtime);
     // Catch movement during the historical proof before construction, checkpoints or GitHub writes.
     const current = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
     if (current.code !== 0 || JSON.parse(current.stdout).headRefOid !== options.headSha) throw new Error("live head changed during thread-site proof; refresh and run a full gate round");
