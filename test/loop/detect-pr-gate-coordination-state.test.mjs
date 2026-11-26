@@ -5290,6 +5290,15 @@ test("loadPrGateCoordinationContext carries the unobservable-request record acro
     assert.equal(carried[0].originHead, "a".repeat(40));
     assert.equal(carried[0].headSha, headSha);
     assert.match(carried[0].baseRef, /^origin\/.+/);
+    // Base current, CI green, zero unresolved threads, clean draft_gate at head B: coordination runs pre_approval_gate.
+    const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
+      context,
+      maxCopilotRounds: 2,
+      draftGateConfig: { requireCi: true },
+      preApprovalGateConfig: { requireCi: true },
+      postConvergenceSignificantChange: false,
+    }));
+    assert.equal(result.nextAction, "run_pre_approval_gate");
   } finally {
     await rm(checkpointDir, { recursive: true, force: true });
   }
