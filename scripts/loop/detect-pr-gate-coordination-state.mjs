@@ -1492,7 +1492,8 @@ export async function resolveCapBrakes(context, { repoRoot, config, operatorFocu
     actCounts: effective.map((log) => capRoundActList(log.findings, log.headSha).length),
     // One item per acted cluster: the emitter binds an operator focus item only to an act-list fingerprint (GATE-EXEC-CAP-BRAKES).
     // A base-merge-forced latest round also lists the effective latest round's items: the direct file must decide both sets.
-    items: [...capRoundActList(last.findings, last.headSha), ...(effectiveLatest && effectiveLatest !== last ? capRoundActList(effectiveLatest.findings, effectiveLatest.headSha) : [])].map((a) => `${a.fingerprint} [${normalizeSeverity(a.severity)}] ${String(a.summary ?? "").trim()}`),
+    // Both rounds can hold one fingerprint (it is head-independent) and a focus file refuses a repeated item, so the list keeps the first of each.
+    items: [...new Map([...capRoundActList(last.findings, last.headSha), ...(effectiveLatest && effectiveLatest !== last ? capRoundActList(effectiveLatest.findings, effectiveLatest.headSha) : [])].map((a) => [a.fingerprint, a])).values()].map((a) => `${a.fingerprint} [${normalizeSeverity(a.severity)}] ${String(a.summary ?? "").trim()}`),
   };
   // Fail closed: a focus file that fails to read here clears nothing, and the cap stop stays.
   return await operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round: facts.round, cap: facts.cap }).catch(() => false) ? { ...facts, operatorCleared: true } : facts;

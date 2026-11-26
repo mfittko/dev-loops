@@ -5634,7 +5634,7 @@ for (const [gate, expected, config] of [["pre_approval_gate", undefined, { versi
     const act = (k) => ({ severity: "medium", angle: "correctness", summary: `defect ${k}`, files: [`src/${k}.mjs`], line: 1, judgeDisposition: "act", judgeTitle: `defect ${k}`, judgeFix: "fix it" });
     const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-10");
     await mkdir(ledgerDir, { recursive: true });
-    for (const [i, [head, keys]] of [[baseSha, ["a", "b"]], [prHead, ["a", "b"]], [mergedHead, ["c"]]].entries()) {
+    for (const [i, [head, keys]] of [[baseSha, ["a", "b"]], [prHead, ["a", "b"]], [mergedHead, gate === "pre_approval_gate" ? ["c", "a"] : ["c"]]].entries()) {
       await writeFile(path.join(ledgerDir, `${gate}-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: keys.map(act) }), "utf8");
     }
     const ctx = { repo: "owner/repo", pr: 10, currentHeadSha: mergedHead, prData: { isDraft: gate === "draft_gate", baseRefName: "main" } };
@@ -5646,7 +5646,7 @@ for (const [gate, expected, config] of [["pre_approval_gate", undefined, { versi
     assert.equal((await brakes(focus)).operatorCleared, expected);
     // pre_approval_gate lists the forced round and the effective latest round, and the direct file clears only when it decides both sets.
     if (gate === "pre_approval_gate") {
-      assert.equal(fingerprints.length, 3, "the forced round and the effective latest round are listed");
+      assert.equal(fingerprints.length, 3, "the forced round and the effective latest round are listed, a shared fingerprint once");
       await writeFile(focus, JSON.stringify({ items: fingerprints.map((fingerprint) => ({ fingerprint, decision: "fix it" })) }), "utf8");
       assert.equal((await brakes(focus)).operatorCleared, true);
     }
