@@ -266,10 +266,12 @@ export function decideUnresolveOwnerDeny({ command, role }) {
   return null;
 }
 
-// Bash drops empty quote pairs and backslashes (`merge-""pr`, `merge\-pr`), so strip those; an escaped quote goes with its backslash so it never pairs. Quote characters otherwise stay, so a quoted run path still matches.
+// Bash drops empty quote pairs and backslashes (`merge-""pr`, `merge\-pr`), so strip those. One left-to-right pass resolves backslash pairs in order: an escaped quote or backslash is dropped, so it never pairs, and a single-quoted string keeps its literal backslash (`'a\'`). Quote characters otherwise stay, so a quoted run path still matches.
 // A separator inside a quoted pattern (`rg "foo|name"`) is data, so neutralize it unless a launcher word follows (`"$(node <path>)"`).
+const unescapeBackslash = (_, c) => (/["'\\]/.test(c) ? "" : c);
 const normalizeForMergeMatch = (command) => command
-  .replace(/\\["']|\$?(?:""|'')|\\/g, "")
+  .replace(/\\(.)|'[^']*'|"(?:\\.|[^"\\])*"/gs, (t, c) => (c !== undefined ? unescapeBackslash(t, c) : t[0] === '"' ? t.replace(/\\(.)/gs, unescapeBackslash) : t))
+  .replace(/\$?(?:""|'')/g, "")
   .replace(/["'](?=(?:node|bun|dev-loops-run)\s)/g, " ")
   .replace(/"[^"]*"|'[^']*'/g, (q) => q.replace(/[;&|(`](?!\s*(?:\S*\/)?(?:node|bun|dev-loops-run)\s)/g, "_"));
 

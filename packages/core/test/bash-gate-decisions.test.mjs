@@ -759,6 +759,9 @@ const MERGE_RUN_FORMS = [
   // An escaped quote never takes part in quote pairing.
   `echo "a\\"b"; ${MERGE_PATH} --check; echo "c"`,
   `echo it\\'s; ${MERGE_PATH} --check; echo x\\'`,
+  // An escaped backslash or a literal backslash before a closing quote leaves the quote closing.
+  `echo "a\\\\"; ${MERGE_PATH} --check; echo "b"`,
+  `echo 'a\\'; ${MERGE_PATH} --check; echo 'b'`,
 ];
 const MERGE_READ_ONLY_FORMS = [
   `git grep -n ${MERGE_SCRIPT} cli/`,
