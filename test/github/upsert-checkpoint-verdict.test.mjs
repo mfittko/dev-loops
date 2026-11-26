@@ -25,7 +25,7 @@ import {
   upsertCheckpointVerdict as upsertWithCap,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { formatCliError } from "../../scripts/lib/format-cli-error.mjs";
-import { recordPath,recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
+import { recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../../scripts/loop/_stale-runner-detection.mjs";
 import { writeRunContext } from "@dev-loops/core/loop/run-context";
@@ -204,6 +204,7 @@ const runNode = async (args = [], options = {}) => {
       // derived fields without a real git diff.
       ...(options.evaluatePrSizeBudget ? { evaluatePrSizeBudget: options.evaluatePrSizeBudget } : {}),
       ...(options.coordinationSnapshotRoot ? { coordinationSnapshotRoot: options.coordinationSnapshotRoot } : {}),
+      ...(options.checkpointDir ? { checkpointDir: options.checkpointDir } : {}),
     });
     process.stderr.write = originalWrite;
     const inlineWarning = buildInlineExecutionWarning(options_.executionMode, options_.inlineReason);
@@ -2350,11 +2351,12 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
 test("upsert-checkpoint-verdict posts a clean pre_approval_gate verdict with the request_not_observable note when Copilot is unavailable (issue 3615)", async () => {
   const headSha = "abc1234000000000000000000000000000000000";
   const key = { repo: "owner/repo", pr: 17, headSha };
-  const recordFile = recordPath(key.repo, key.pr);
+  // An isolated checkpointDir keeps the record off the shared main-checkout path that sibling tests read.
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-unobservable-"));
   try {
     for (let i = 0; i < 2; i += 1) {
-      await recordUnobservableRequest(key);
-      await recordTimedOutProbe(key);
+      await recordUnobservableRequest(key, { checkpointDir });
+      await recordTimedOutProbe(key, { checkpointDir });
     }
     await withTempDir(async (tempDir) => {
       const env = await writeGhStub(tempDir, [
@@ -2387,12 +2389,12 @@ test("upsert-checkpoint-verdict posts a clean pre_approval_gate verdict with the
         "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
         "--findings-summary", "no issues found",
         "--next-action", "await final human approval",
-      ], { env });
+      ], { env, checkpointDir });
       assert.equal(result.code, 0, result.stderr);
       assert.equal(JSON.parse(result.stdout).action, "created");
     }, { prefix: "dev-loops-upsert-gate-review-copilot-unavailable-" });
   } finally {
-    await rm(recordFile, { force: true });
+    await rm(checkpointDir, { recursive: true, force: true });
   }
 });
 
@@ -2440,7 +2442,8 @@ test("a gate-entry refusal carries a recovery naming gate-coordination and the r
     const payload = JSON.parse(result.stderr);
     assert.match(payload.error, /Cannot enter pre_approval_gate on owner\/repo#17/);
     assert.match(payload.recovery, /loop gate-coordination --repo owner\/repo --pr 17/);
-    assert.match(payload.recovery, /nextAction/i);
+    assert.match(payload.recovery, /the refused coordination nextAction is reconcile_draft_gate\./);
+    assert.doesNotMatch(payload.recovery, /undefined/);
   }, { prefix: "dev-loops-upsert-gate-review-refusal-recovery-" });
 });
 

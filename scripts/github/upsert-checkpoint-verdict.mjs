@@ -2797,10 +2797,10 @@ export async function upsertCheckpointVerdict(options, runtime = {}) {
   }
 }
 
-async function postCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner, countPrOwnCommits = realCountPrOwnCommits, checkBaseFreshness, coordinationSnapshotRoot } = {}) {
+async function postCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner, countPrOwnCommits = realCountPrOwnCommits, checkBaseFreshness, coordinationSnapshotRoot, checkpointDir } = {}) {
   // One memo per invocation: the three baseRefOid,labels reads share one gh read; the write-guard re-reads stay live.
   const prViewMemo = new Map();
-  const gh = { env, ghCommand, repoRoot, runChild, coordinationSnapshotRoot, prViewMemo };
+  const gh = { env, ghCommand, repoRoot, runChild, coordinationSnapshotRoot, checkpointDir, prViewMemo };
   // Optional --spec-authority stamps the RETURNED result (this script's
   // durable verdict record — it posts no file of its own) with the pinned
   // revision identity, via the ONE shared stamp helper (ADR 0061). Read up
