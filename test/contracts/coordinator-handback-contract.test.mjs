@@ -195,12 +195,19 @@ test("issue 3097 ac:1 a routine nextAction at a round boundary below the cap is 
       { nextAction, status: "fix_pass_end", routineBoundaries: 0 },
       { nextAction, status: "gate_round_end", routineBoundaries: ROUTINE_BOUNDARY_CAP - 1 },
       { nextAction },
+      { nextAction, status: null },
+      { nextAction, status: "" },
+      { nextAction, status: "   " },
+      { nextAction, status: 7 },
+      { nextAction, status: "gate_round_end", routineBoundaries: "3" },
+      { nextAction, status: "gate_round_end", routineBoundaries: 3.5 },
+      { nextAction, status: "gate_round_end", routineBoundaries: -1 },
     ];
     for (const packet of packets) {
       const result = validateCoordinatorHandback({ ...base, ...packet });
       assert.equal(result.refusal, "routine_boundary", JSON.stringify(packet));
       assert.match(result.message, new RegExp(ID));
-      assert.ok(result.recovery.includes("loop gate-coordination --pr 7"), "names the driver");
+      assert.ok(result.recovery.includes("loop gate-coordination --pr 7 --repo <owner/name>"), "names the driver with its required --repo");
       assert.ok(result.recovery.includes(`"${nextAction}"`), "names the routine action");
     }
   }
@@ -213,7 +220,9 @@ test("issue 3097 ac:2 a stop action, the cap and another run-ending status are a
   }
   for (const nextAction of ROUTINE_NEXT_ACTIONS) {
     assert.deepEqual(validateCoordinatorHandback({ ...base, nextAction, status: "gate_round_end", routineBoundaries: ROUTINE_BOUNDARY_CAP }), { ok: true }, nextAction);
-    assert.deepEqual(validateCoordinatorHandback({ ...base, nextAction, status: "operator_direction" }), { ok: true }, nextAction);
+    for (const status of ["operator_direction", "lockout", "final_approval_ready", "gate_round_ended"]) {
+      assert.deepEqual(validateCoordinatorHandback({ ...base, nextAction, status }), { ok: true }, `${nextAction} ${status}`);
+    }
   }
   assert.equal(validateCoordinatorHandback({ ...base, nextAction: "run_draft_gate", workerRunning: true }).refusal, "worker_running");
   assert.equal(validateCoordinatorHandback({ ...base, nextAction: "" }).refusal, "missing_fields");
