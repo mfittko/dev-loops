@@ -5203,3 +5203,22 @@ test("a pre_approval_gate act list at a base-only merge below the cap does not r
     await assert.rejects(fx.emit({ ...base, fetchVerdictMarkers }), (e) => e.refusal === "verdict_not_posted");
   });
 });
+
+// Issue 3589: a retained current-head round written after the base-merge cap-head check returned is caught by the publish-time recheck.
+test("a retained current-head ledger written after the base-merge cap-head check refuses the emit with ledger_appeared", async () => {
+  await withFixture(async (fx) => {
+    const { origin, merged, over } = await mergedPreApprovalScenario(fx, { earlierRounds: ["d".repeat(40), "e".repeat(40)] });
+    const act = JSON.parse(await readFile(fx.files.actList, "utf8"))[0];
+    const focusFile = path.join(fx.root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: act.fingerprint, decision: "Fix it in this PR" }] }));
+    const base = over(origin);
+    let reads = 0;
+    // The first verdict read is the carry seam's (refused here); the second is the cap guard's, after baseMergeCapHead returned. A retained ledger is not pinned by the capture.
+    const fetchVerdictMarkers = async (a) => {
+      const result = await base.fetchVerdictMarkers(++reads === 1 ? { ...a, headSha: "0".repeat(40) } : a);
+      if (reads === 2) await writeFile(path.join(fx.root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `pre_approval_gate-${merged}.round-1.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: merged, verdict: "blocked", loggedAt: "2026-11-03T00:00:00.000Z", findings: [] }));
+      return result;
+    };
+    await assert.rejects(fx.emit({ ...base, fetchVerdictMarkers, operatorFocusFile: focusFile }), (e) => e.refusal === "ledger_appeared");
+  });
+});
