@@ -4,11 +4,12 @@
 // `probe-copilot-review.mjs` counts each probe that timed out after one. The
 // loop readers report Copilot as unavailable (`request_not_observable`) once both
 // counts reach the threshold on the same head. A push changes the head, so the
-// record never outlives the head it was counted on.
+// record applies to another head only across a base-only merge.
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseJsonText } from "../_core-helpers.mjs";
+import { fixerEmitCarryAccepts } from "../github/_carried-verdict.mjs";
 import { buildDefaultCheckpointDir } from "./_checkpoint-paths.mjs";
 import { resolveMainWorktreeRoot } from "./_repo-root-resolver.mjs";
 
@@ -96,13 +97,20 @@ export async function readProbeStartedAt({ repo, pr, headSha }, opts = {}) {
 }
 
 // True when the record for the current head reaches the threshold on both counts.
-export async function readRequestNotObservable({ repo, pr, headSha }, opts = {}) {
+// A record at another head carries over when the current head only integrates `baseRef`
+// into it (Copilot availability does not depend on the merged base content).
+export async function readRequestNotObservable({ repo, pr, headSha, baseRef, repoRoot }, { baseOnlyMerge = fixerEmitCarryAccepts, ...opts } = {}) {
   const record = await readRaw(recordPath(repo, pr, opts));
   const reached = (n) => Number.isInteger(n) && n >= REQUEST_NOT_OBSERVABLE_THRESHOLD;
-  return Boolean(record)
-    && isHead(headSha)
-    && record.headSha === headSha
-    && reached(record.unobservableRequests)
-    && reached(record.timedOutProbes)
-    && count(record.probesSinceLastRequest) >= 1;
+  if (!record || !isHead(headSha)
+    || !reached(record.unobservableRequests)
+    || !reached(record.timedOutProbes)
+    || count(record.probesSinceLastRequest) < 1) return false;
+  if (record.headSha === headSha) return true;
+  if (!isHead(record.headSha) || !baseRef) return false;
+  try {
+    return (await baseOnlyMerge({ originHead: record.headSha, headSha, baseRef, repoRoot })) === true;
+  } catch {
+    return false;
+  }
 }

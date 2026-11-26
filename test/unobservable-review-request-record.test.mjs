@@ -40,6 +40,36 @@ test("a new head resets the count and the record never applies to another head",
   assert.equal(await readRequestNotObservable({ ...pr, headSha: "a" }, { checkpointDir }), false);
 });
 
+test("a threshold record at head a carries to head b only when the base-only-merge check accepts a to b", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
+  for (let i = 0; i < 2; i += 1) {
+    await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
+    await recordTimedOutProbe({ ...pr, headSha: "a" }, { checkpointDir });
+  }
+  const read = (accepts, extra = { baseRef: "origin/main", repoRoot: "/r" }) => {
+    const calls = [];
+    const baseOnlyMerge = async (args) => { calls.push(args); return accepts; };
+    return readRequestNotObservable({ ...pr, headSha: "b", ...extra }, { checkpointDir, baseOnlyMerge }).then((value) => ({ value, calls }));
+  };
+  const accepted = await read(true);
+  assert.equal(accepted.value, true);
+  assert.deepEqual(accepted.calls, [{ originHead: "a", headSha: "b", baseRef: "origin/main", repoRoot: "/r" }]);
+  assert.equal((await read(false)).value, false);
+  assert.equal((await read(true, {})).value, false);
+  const throwing = async () => { throw new Error("git failed"); };
+  assert.equal(await readRequestNotObservable({ ...pr, headSha: "b", baseRef: "origin/main", repoRoot: "/r" }, { checkpointDir, baseOnlyMerge: throwing }), false);
+});
+
+test("a below-threshold record never calls the base-only-merge check on another head", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
+  await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
+  await recordTimedOutProbe({ ...pr, headSha: "a" }, { checkpointDir });
+  let calls = 0;
+  const baseOnlyMerge = async () => { calls += 1; return true; };
+  assert.equal(await readRequestNotObservable({ ...pr, headSha: "b", baseRef: "origin/main", repoRoot: "/r" }, { checkpointDir, baseOnlyMerge }), false);
+  assert.equal(calls, 0);
+});
+
 test("a probe of another head, and a null head, never count", async () => {
   const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
   assert.equal(await recordUnobservableRequest({ ...pr, headSha: null }, { checkpointDir }), null);

@@ -243,7 +243,7 @@ export function startDeltaSequence({ reviewBaselineHead, actList, reviewerOnly =
   const codeItems = all ? all.filter((_, i) => !isDeltaBodyItem(actList[i])) : [];
   // reviewerOnly reviews the PR-own commit range and accepts an empty act set, so an all-body list yields the empty code set instead of refusing.
   if (bodyItems.length > 0 && codeItems.length === 0 && !reviewerOnly) {
-    throw new Error(`delta_body_only_act_set: every act item is a PR-body item (no file, or remedyKind pr_body; items: ${bodyItems.join(", ")}), so no delta review runs. Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true) at the cap round, or run the next gate round below the cap.`);
+    throw new Error(`delta_body_only_act_set: every act item is a PR-body item (no file, or remedyKind pr_body; items: ${bodyItems.join(", ")}), so no delta review runs. Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true) at any draft_gate round (ADR 0332).`);
   }
   const actItems = all ? codeItems : reviewerOnly && Array.isArray(actList) && actList.length === 0 ? [] : toDeltaActItems(actList);
   const actSetId = createHash("sha256")
@@ -499,7 +499,7 @@ export function composeConvergedDraftGate({ gate, headSha, round, cap, roundActI
   const sequence = startDeltaSequence({ reviewBaselineHead: headSha, actList: converged.actList });
   // The delta reviewer never sees a PR-body item, so a mixed list needs the narrow body-change fact of the body-only route.
   if (sequence.bodyItems.length > 0) {
-    if (!reviewedBodySha) throw new Error(`body_read_unrecorded: the round act list holds PR-body items (${sequence.bodyItems.join(", ")}) and no cap-round context records a pr-body read at ${headSha}, so a body edit cannot be shown`);
+    if (!reviewedBodySha) throw new Error(`body_read_unrecorded: the round act list holds PR-body items (${sequence.bodyItems.join(", ")}) and no round context records a pr-body read at ${headSha}, so a body edit cannot be shown`);
     if (reviewedBodySha === liveBodySha) throw new Error(`body_unchanged: the live PR body digest equals the reviewed pr-body read; edit the PR body for the PR-body items (${sequence.bodyItems.join(", ")}) first`);
   }
   const errors = validateDeltaResult(result, { sequence, membershipOnly: true });
@@ -521,7 +521,7 @@ export const isBlockedActItem = (item) => !["medium", "low", "nit"].includes(Str
 function isSecurityAngle(angle) { return /(^|-)security(-|$)/.test(baseAngleName(String(angle ?? ""))); }
 
 /**
- * Body-only cap round (ADR 0271, GATE-EXEC-NO-DEAD-END): a cap round whose open act items are all PR-body items clears with no commit.
+ * Body-only round (ADR 0271 as amended by ADR 0332, GATE-EXEC-NO-DEAD-END): a draft_gate round at any round, below the cap or at it, whose open act items are all PR-body items clears with no commit.
  * Hard checks cover narrow facts only: every item is a PR-body item (no file, or remedyKind pr_body), the live PR body digest differs from the
  * reviewed `pr-body` read, the reviewed head..fixerCommit range holds no PR-own commit, and no item blocks (high, question, fail-open, security, missing or unknown severity).
  * Whether the edit resolves an item stays with pre_approval_gate. `fixerCommit` may equal the reviewed head.
@@ -531,7 +531,6 @@ function isSecurityAngle(angle) { return /(^|-)security(-|$)/.test(baseAngleName
  */
 export function composeBodyOnlyConvergedDraftGate({ gate, headSha, round, cap, roundActItems, roundFindings, converged, reviewedBodySha, liveBodySha, ownCommits } = {}) {
   if (gate !== "draft_gate") throw new Error(`body-only converged verdict applies to draft_gate only, got ${JSON.stringify(gate)}`);
-  if (!(cap > 0) || !isPastRoundCap(round, cap)) throw new Error(`body-only converged verdict applies only at the cap round or later (round ${round}, cap ${cap})`);
   if (!FULL_SHA_RE.test(headSha ?? "") || !FULL_SHA_RE.test(converged?.fixerCommit ?? "")) throw new Error("body-only converged verdict requires the full reviewed head sha and fixerCommit");
   const items = roundActItems ?? [];
   const keys = (list) => JSON.stringify(list.map(convergedActItemKey).sort());
@@ -539,14 +538,19 @@ export function composeBodyOnlyConvergedDraftGate({ gate, headSha, round, cap, r
   if (converged?.deltaResult !== undefined) throw new Error("body-only converged verdict takes no converged.deltaResult; drop bodyOnly to post a delta-reviewed convergence");
   // The cap-round blocking set (deferred high, fail-open, missing disposition, severity disagreement) holds for the whole round, not only its act items.
   const capBlockers = pastCapBlockers(roundFindings ?? items, { round, cap });
-  if (capBlockers.length > 0) throw new Error(`blocked_item: the cap round holds ${capBlockers.length} blocker(s) (${capBlockers.map((b) => b.item).join("; ")}); they need a fix commit or an operator decision, not a body-only exit`);
+  if (capBlockers.length > 0) throw new Error(`blocked_item: the round holds ${capBlockers.length} blocker(s) (${capBlockers.map((b) => b.item).join("; ")}); they need a fix commit or an operator decision, not a body-only exit`);
   const blocked = items.find(isBlockedActItem);
   if (blocked) throw new Error(`blocked_item: act item ${JSON.stringify(blocked.summary)} is not medium, low or nit, is fail-open or is from a security angle; it needs a fix commit or an operator decision, not a body-only exit (GATE-EXEC-NO-DEAD-END)`);
   const locatable = items.find((item) => !isDeltaBodyItem(item));
   if (locatable) throw new Error(locatable.angle === "review-thread"
     ? `body_item_locatable: act item ${JSON.stringify(locatable.summary)} is a review-thread item; a thread is never a PR-body item, so it needs a fix commit and a delta review, not a body-only exit`
     : `body_item_locatable: act item ${JSON.stringify(locatable.summary)} names a file and is not remedyKind pr_body; it needs a fix commit and a delta review, not a body-only exit`);
-  if (!reviewedBodySha) throw new Error(`body_read_unrecorded: no cap-round context records a pr-body read at ${headSha}, so a body edit cannot be shown, and write-gate-context.mjs refuses a rerun at the cap head; fix the items with a commit and run the reviewer-only delta (check-pre-push-delta.mjs --reviewer-only)`);
+  if (!reviewedBodySha) {
+    const exit = cap > 0 && round >= cap
+      ? "fix the items with a commit and run the reviewer-only delta (check-pre-push-delta.mjs --reviewer-only)"
+      : "fix the items with a commit and push it; the next draft_gate round runs at the new head";
+    throw new Error(`body_read_unrecorded: no round context records a pr-body read at ${headSha}, so a body edit cannot be shown, and write-gate-context.mjs refuses a rerun at that head; ${exit}`);
+  }
   if (reviewedBodySha === liveBodySha) throw new Error("body_unchanged: the live PR body digest equals the reviewed pr-body read; edit the PR body first");
   if (ownCommits !== 0) throw new Error(`own_commit_in_range: ${headSha}..${converged.fixerCommit} holds ${ownCommits} PR-own commit(s); clear them with the reviewer-only delta review instead`);
   return { fixerCommit: converged.fixerCommit, deltaDigest: sha256Hex({ bodyOnly: true, reviewedBodySha, liveBodySha, actList: converged.actList }) };

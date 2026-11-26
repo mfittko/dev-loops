@@ -700,7 +700,7 @@ test("every non-canonical recorder spelling is denied, with and without a subage
   }
 });
 
-// Issue 2500: a subagent Bash command whose raw text contains `merge-pr` is denied, `--check` included.
+// Issue 2500: a subagent Bash command that runs the merge script is denied, `--check` included (the match is the run position, ADR 0331).
 const MERGE_DENY_FORMS = [
   "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 2630 --human-approved-by mfittko",
   "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5 --check",
@@ -719,7 +719,7 @@ const MERGE_DENY_FORMS = [
   'node scripts/github/merge-$""pr.mjs --pr 5',
 ];
 
-test("any subagent role is denied a command naming merge-pr, --check included (issue 2500)", () => {
+test("any subagent role is denied a command that runs the merge script, --check included (issue 2500)", () => {
   for (const role of ["dev-loop", "dev-loops:dev-loop", "gate-coordinator", "fixer"]) {
     for (const command of MERGE_DENY_FORMS) {
       const d = decideBashGateDeny({ ...BASE, role, command });
@@ -729,6 +729,84 @@ test("any subagent role is denied a command naming merge-pr, --check included (i
       assert.match(d.reason, /orchestrator/);
     }
   }
+});
+
+// Issue 3605 (ADR 0331): the deny matches the run position.
+const MERGE_SCRIPT = ["merge", "pr.mjs"].join("-");
+const MERGE_PATH = `scripts/github/${MERGE_SCRIPT}`;
+const MERGE_RUN_FORMS = [
+  `node ${MERGE_PATH} --pr 5`,
+  `bun ${MERGE_PATH} --pr 5`,
+  `dev-loops-run ${MERGE_PATH} --pr 5`,
+  `dev-loops-run --repo-root /w ${MERGE_PATH} --pr 5`,
+  `${MERGE_PATH} --pr 5`,
+  `./${MERGE_PATH} --pr 5`,
+  ...[";", "&&", "||", "|", "(", "`"].map((sep) => `echo x ${sep} node ${MERGE_PATH} --pr 5`),
+  ...[";", "&&", "||", "|", "(", "`"].map((sep) => `echo x ${sep} ${MERGE_PATH} --pr 5`),
+  `node ${MERGE_PATH} --check --pr 5`,
+  `dev-loops-run ${MERGE_PATH} --pr 5 --check`,
+  `${MERGE_PATH} --check`,
+  `echo x && dev-loops-run --repo-root /w ${MERGE_PATH} --check`,
+  `bun ${MERGE_PATH.replace(".mjs", "")} --pr 5`,
+  `dev-loops-run ${MERGE_PATH.replace(".mjs", "")} --pr 5`,
+  `${MERGE_PATH.replace(".mjs", "")} --pr 5`,
+  `bun "${MERGE_PATH}" --pr 5`,
+  `bun ${MERGE_SCRIPT.replace("-", `-""`)} --pr 5`,
+  `bun ${MERGE_SCRIPT.replace("-", "\\-")} --pr 5`,
+  // A launcher word after a separator inside quotes stays denied.
+  `echo "$(node ${MERGE_PATH} --pr 5)"`,
+  `bash -c "echo x; node ${MERGE_PATH}"`,
+  // Every quote and backslash is stripped, so no escaped-quote shape can flip quote pairing.
+  `echo "a\\"b"; ${MERGE_PATH} --check; echo "c"`,
+  `echo it\\'s; ${MERGE_PATH} --check; echo x\\'`,
+  `echo "a\\\\"; ${MERGE_PATH} --check; echo "b"`,
+  `echo 'a\\'; ${MERGE_PATH} --check; echo 'b'`,
+  `echo $'a\\'b'; ${MERGE_PATH} --check; echo 'c'`,
+  `'node' ${MERGE_PATH} --check`,
+  `bun test ${MERGE_SCRIPT.replace(".mjs", "")}`,
+  // A quoted pattern with a separator and the name is a fail-closed over-deny (ADR 0331).
+  `rg "foo|${MERGE_SCRIPT}" cli/`,
+  `grep -nE "(${MERGE_SCRIPT}|x)" cli/`,
+  // Fail-closed over-denies and run forms across a newline, pinned as today's behavior (ADR 0331).
+  `node\n${MERGE_PATH}`,
+  `node \\\n  ${MERGE_PATH}`,
+  `node scripts/x.mjs\ngrep -n ${MERGE_SCRIPT} cli/`,
+  `bun test foo.test.mjs\nrg ${MERGE_SCRIPT.replace(".mjs", "")} cli/`,
+  `sed -n 1,20p \\\n  ${MERGE_PATH}`,
+  `grep -n foo \\\n  ${MERGE_PATH}`,
+];
+const MERGE_READ_ONLY_FORMS = [
+  `git grep -n ${MERGE_SCRIPT} cli/`,
+  `git grep ${MERGE_SCRIPT.replace(".mjs", "")} -- cli/`,
+  `git show origin/main:docs/decisions/0297-subagent-may-run-merge-test-files.md`,
+  `git show origin/main:docs/decisions/0249-subagent-${MERGE_SCRIPT.replace(".mjs", "")}-deny.md`,
+  `git show origin/main:${MERGE_PATH}`,
+  `git diff origin/main -- ${MERGE_PATH}`,
+  `sed -n '1,40p' ${MERGE_PATH}`,
+  `grep -n x ${MERGE_PATH}`,
+  `rg ${MERGE_SCRIPT} cli/`,
+  `cat ${MERGE_PATH}`,
+  `head -20 ${MERGE_PATH}`,
+  `bun test test/github/${MERGE_SCRIPT.replace(".mjs", ".test.mjs")}`,
+  `node --test test/github/${MERGE_SCRIPT.replace(".mjs", ".test.mjs")}`,
+];
+
+test("every run form of the merge script is denied for a subagent (issue 3605)", () => {
+  for (const command of MERGE_RUN_FORMS) {
+    const d = decideMergePrOwnerDeny({ command, role: "developer" });
+    assert.ok(d, command);
+    assert.match(d.reason, /MERGE_PR_OWNER/);
+  }
+});
+
+test("a read-only mention of the merge script and its test files are allowed for a subagent (issue 3605)", () => {
+  for (const command of MERGE_READ_ONLY_FORMS) {
+    assert.equal(decideMergePrOwnerDeny({ command, role: "developer" }), null, command);
+  }
+});
+
+test("the main agent keeps every run form of the merge script (issue 3605)", () => {
+  for (const command of MERGE_RUN_FORMS) assert.equal(decideMergePrOwnerDeny({ command, role: null }), null, command);
 });
 
 test("the canonical spelling passes for the main agent and is denied for a subagent", () => {
