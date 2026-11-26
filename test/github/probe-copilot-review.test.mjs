@@ -558,7 +558,7 @@ test.skipIf(process.getuid?.() === 0)("probe-copilot-review warns when the timed
   assert.equal(record.timedOutProbes, 0);
 });
 
-test("probe-copilot-review counts a timed-out probe for each call that waits the full cap", async () => {
+test("probe-copilot-review counts a full-cap timeout on the head of an earlier unobservable request", async () => {
   const { result, record } = await runFinalChunkTimeout({ headCall: `echo '{"headRefOid":"abc"}'; exit 0` });
   assert.equal(result.status, "timeout");
   assert.equal(result.warning, undefined);
