@@ -45,7 +45,7 @@ import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
-import { requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
+import { requireSpecFromBody, specDigestFromBody } from "@dev-loops/core/loop/spec-authority";
 import { resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
@@ -3791,6 +3791,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
       ? buildRetireCommand({ ...retire, reason: `the ${options.gate} round at ${head} was in flight when the briefing prefix changed` })
       : buildLiveRoundRecovery(retire);
   };
+  const staleRoundArgs = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: scanRoot, findingsTmpRoot: findingsRoot, verdictRoots: [findingsRoot, scanRoot, resolveGateArtifactTmpRoot(repoRoot)], liveOnly: true };
   let rebuildWarning = null;
   let retiredRound = null;
   if (readError !== null) {
@@ -3810,7 +3811,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
     } else {
       // Issue 3416: retire the undispatched or partial round at this head automatically, so the fresh round starts clean.
       // A live round has sentinels or dispatch records; a round with a posted verdict is never retired: the refusal stands, with its recovery.
-      const stale = await retireStaleRound({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: scanRoot, findingsTmpRoot: findingsRoot, verdictRoots: [findingsRoot, scanRoot, resolveGateArtifactTmpRoot(repoRoot)], liveOnly: true });
+      const stale = await retireStaleRound({ ...staleRoundArgs, ...loadedSpecDigests(options) });
       if (stale.refusal) throw Object.assign(new Error(`${stale.refusal.error} recovery: ${stale.refusal.recovery}`), { recovery: stale.refusal.recovery });
       retiredRound = stale.retiredRound;
       state.retiredRound = retiredRound;
@@ -3823,6 +3824,16 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
     }
     // No live round remains (already retired, undispatched or never fanned out). AC3: a rebuild after the round has
     // completed is unaffected — proceed to overwrite the frozen artifact.
+  } else if (existingBytes !== null) {
+    // Same prefix bytes: only a round that stopped for a spec decision and whose spec changed retires; any other round is untouched.
+    const digests = loadedSpecDigests(options);
+    if (digests.currentSpecDigest !== null) {
+      // retireStaleRound swallows only probe errors here; once the stop is known a failed move or a live-sentinel refusal surfaces.
+      const stale = await retireStaleRound({ ...staleRoundArgs, ...digests, specDecisionOnly: true });
+      if (stale.refusal) throw Object.assign(new Error(`${stale.refusal.error} recovery: ${stale.refusal.recovery}`), { recovery: stale.refusal.recovery });
+      retiredRound = stale.retiredRound;
+      state.retiredRound = retiredRound;
+    }
   }
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
   // The caller computed the fan-out plan from the findings the retirement just moved away, so it plans again over what remains.
@@ -4264,6 +4275,25 @@ function passesRequireSpecFromBody(body) {
   } catch {
     return false;
   }
+}
+
+// The spec digest of the one spec source the builder loaded: the single linked issue body, else the PR description.
+// Null when there is no single source or it holds no spec, so the stopped-round retirement never fires on a guess.
+// The plan pins the digest of whichever source the conductor gave spec-context (issue body, or the PR body under pr_body), so the
+// retirement gets every digest the builder can compute: the loaded one (issue body first) and the other candidate.
+function loadedSpecDigests(options) {
+  const digestOf = (compute) => {
+    try {
+      return compute();
+    } catch {
+      return null;
+    }
+  };
+  if (options.issueSections) return { currentSpecDigest: null, otherSpecDigests: [] };
+  const issueDigest = typeof options.issueBody === "string" && options.issueBody !== ISSUE_BODY_ABSENT_SENTINEL ? digestOf(() => specDigestFromBody(options.issueBody)) : null;
+  const prDigest = typeof options.prBody === "string" ? digestOf(() => specDigestFromBody(options.prBody, { prDescription: true })) : null;
+  const [currentSpecDigest = null, ...otherSpecDigests] = [issueDigest, prDigest].filter((d) => d !== null);
+  return { currentSpecDigest, otherSpecDigests };
 }
 
 function detectRefinementHasAcChecklist(prBody) {
