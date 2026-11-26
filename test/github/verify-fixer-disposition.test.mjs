@@ -691,14 +691,18 @@ test("a check-less pushed head refuses ci_pending when the order head ran CI, na
 
 test("a check-less pushed head refuses ci_unknown when the order head is unreadable", async () => {
   await withRepoRoot(async (root) => {
-    const { options, mockFor, ahead, threads, empty, order, pushed } = await pushedHeadFixture(root);
+    const { f, options, mockFor, ahead, threads, empty, order, pushed } = await pushedHeadFixture(root);
+    const reportPath = fixerReportPath(f.output);
     const mock = mockFor([ahead, liveHeadEntry(pushed), threads(false), ...ciEntries(pushed, empty), ...ciEntries(order, { checkRunsExit: 1 })]);
-    await assert.rejects(verifyFixerDisposition(options, mock.deps), (error) => {
+    await assert.rejects(verifyFixerDisposition({ ...options, check: true, reportPath }, mock.deps), (error) => {
       assert.match(error.message, /^ci_unknown: /);
       assert.ok(error.message.includes(`the CI of order head ${order} could not be read`));
       return true;
     });
     assert.equal(hasPost(mock.calls), false);
+    const report = JSON.parse(await readFile(reportPath, "utf8"));
+    assert.equal(report.outcome, "refused");
+    assert.match(report.error, /^ci_unknown/);
   });
 });
 
