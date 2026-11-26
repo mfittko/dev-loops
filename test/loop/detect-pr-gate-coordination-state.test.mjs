@@ -4760,6 +4760,16 @@ test("3105 AC15 / 3611: an all-PR-body act list is a body-only list below the ca
   } finally { await rm(mixed.tempDir, { recursive: true, force: true }); }
 });
 
+test("3611: an all-PR-body act list past the cap is null", async () => {
+  const fixture = await actListFixture({ "": { findings: [BODY_ACT] } });
+  try {
+    const prior = "1".repeat(40);
+    await writeSealed(path.join(fixture.findingsDir, `draft_gate-${prior}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: prior, verdict: "findings_present", loggedAt: "2026-11-15T00:00:00.000Z", findings: [{ ...ACT, summary: "earlier" }] }));
+    const context = { repo: "owner/repo", pr: 10, currentHeadSha: fixture.headSha };
+    assert.equal(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 1 }), null);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
 test("3309: a base-only merge head keeps the cap-round body-only list of the cap head, a code merge does not", async () => {
   const fixture = await actListFixture({ "": { findings: [BODY_ACT] } });
   try {
@@ -4897,7 +4907,7 @@ test("3105 AC15: a past-cap current-head round keeps the cap-round refusal", asy
   assert.doesNotMatch(result.agentRemedy?.command ?? "", /emit-fixer-work-order/);
 });
 
-// Issue 3309: a cap round of PR-body items only has no fixer route; the cap refusal names the ADR 0271 body-only converged post, and a round below the cap keeps the earlier routing.
+// A round of PR-body items only has no fixer route; the refusal names the ADR 0271 body-only converged post.
 test("3309: a cap-round act list of PR-body items only names the body-only converged post", async () => {
   const result = await detectCapFixture({ cap: 2, priorRounds: 1, finding: { file: undefined, severity: "low", summary: "PR body lacks non-goals" } });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
@@ -4926,6 +4936,8 @@ test("3611: a below-cap all-PR-body act list with a high item reports blocked on
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
   assert.equal(result.blockedOn, "operator_decision");
   assert.equal(result.agentRemedy, undefined);
+  assert.match(result.reason, /at or below the round cap/);
+  assert.doesNotMatch(result.reason, /Round N\+1 never runs/);
 });
 
 // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so no fixer route follows it.

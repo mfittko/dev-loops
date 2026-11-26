@@ -271,7 +271,7 @@ Optional:
   --converged-json <path>                   draft_gate low/nit convergence
                                             (GATE-EXEC-LOW-NIT-CONVERGENCE):
                                             { fixerCommit, actList, deltaResult }.
-                                            A cap round whose open act items are
+                                            A round whose open act items are
                                             all PR-body items (no file named, or
                                             remedyKind pr_body)
                                             clears with no commit through
@@ -279,7 +279,7 @@ Optional:
                                             and no deltaResult (ADR 0271); it
                                             refuses body_item_locatable,
                                             body_unchanged, own_commit_in_range,
-                                            body_read_unrecorded (no cap-round
+                                            body_read_unrecorded (no round
                                             pr-body read: fix with a commit and
                                             check-pre-push-delta.mjs --reviewer-only),
                                             or blocked_item. A bodyOnly input
@@ -2941,12 +2941,12 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     const capacity = { gate: options.gate, headSha: canonicalHeadSha, round, cap: draftGateConfig?.maxReviewRounds ?? 0, roundActItems, converged: convergedInput };
     if (convergedInput.bodyOnly !== undefined && typeof convergedInput.bodyOnly !== "boolean") throw new Error(`--converged-json bodyOnly must be a boolean, got ${JSON.stringify(convergedInput.bodyOnly)}`);
     if (convergedInput.bodyOnly === true) {
-      // ADR 0271: the narrow facts the body-only exit checks; the pr-body digest is the one the cap round's context recorded at A.
+      // ADR 0271: the narrow facts the body-only exit checks; the pr-body digest is the one the round's context recorded at A.
       const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "body,baseRefName"], { env, ghCommand, runChild });
       // The same count check-pre-push-delta.mjs uses (fetches origin/<base>, base-only-merge test, resolution merges).
       const composeInput = {
         ...capacity,
-        // The ledger plus the passed findings, as for the act items: the cap-round blocking set reads the whole round.
+        // The ledger plus the passed findings, as for the act items: the blocking set reads the whole round.
         roundFindings: [...(preloadedFindingsLedger.findings ?? []), ...findings.filter((f) => !(preloadedFindingsLedger.findings ?? []).includes(f))],
         reviewedBodySha: await readReviewedBodySha256(options, canonicalHeadSha, repoRoot),
         liveBodySha: prBodySha256(live.body),

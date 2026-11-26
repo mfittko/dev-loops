@@ -1408,7 +1408,7 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
  * Issue 3105 AC15 (ADR 0288): the open act list of the current head's live draft_gate ledger, or null.
  * Null when the head has no live ledger with an open act item, past the cap (cap > 0 and round > cap), and when every open item is a nit outside draft round 1.
  * At every round up to the cap an all-PR-body list is `{ bodyOnly: true }`: its exit is the body-only converged post (GATE-EXEC-NO-DEAD-END, ADR 0332).
- * `blockers` are the GATE-EXEC-SOFT-CAP blockers of the cap round; below the cap every act item goes to the fixer.
+ * `blockers` are the GATE-EXEC-SOFT-CAP blockers: those past the round cap, plus the blocked items of a body-only list at any round; below the cap every other act item goes to the fixer.
  * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
  */
 export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnlyMerge = ({ fromHead, head, mainRef, repoRoot: root }) => convergedCarryAccepts({ originHead: fromHead, headSha: head, baseRef: mainRef, repoRoot: root }) }) {
@@ -1421,7 +1421,7 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnly
   // The posted verdict is findings_present (the evaluator checks it); a legacy ledger may persist `clean` beside open act items.
   let open = log ? listOpenActItems(log.findings) : [];
   let ledgerHead = head;
-  // GATE-EXEC-NO-DEAD-END: a head with no live ledger that is a base-only merge of the cap-round head A keeps A's body-only list, so the post stays reachable after the base merge.
+  // GATE-EXEC-NO-DEAD-END: a head with no live ledger that is a base-only merge of the reviewed head A keeps A's body-only list, so the post stays reachable after the base merge.
   const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
   if (open.length === 0 && baseRefName) {
     // Only a head's live ledger (its latest round) counts: it sorts after its retained `.round-N` siblings, so the last entry per head wins.
@@ -1440,7 +1440,7 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnly
   const round = await countCompletedRounds({ ...options, headSha: ledgerHead }, { repoRoot, includeLiveCurrentHead: true }) - 1;
   // The emitter refuses an all-PR-body act list (delta_body_only_act_set): its only exit is the ADR 0271 body-only converged post at every round up to the cap (ADR 0332); past the cap the earlier routing holds.
   if (open.every(isDeltaBodyItem)) return !(cap > 0 && round > cap) ? { headSha: ledgerHead, ...(ledgerHead !== head ? { carriedToHead: head } : {}), openActCount: open.length, blockers: [...pastCapBlockers(log.findings, { round, cap }), ...open.filter(isBlockedActItem).map((f) => ({ kind: "round_cap_reached", reason: f.resurfaces ? "resurfaced" : "new_act", item: `[${normalizeSeverity(f.severity)}] ${String(f.summary ?? "").trim()} (blocked_item)` }))], bodyOnly: true } : null;
-  // A carried list (a base-only merge of the cap head) is body-only or nothing.
+  // A carried list (a base-only merge of the reviewed head) is body-only or nothing.
   if (ledgerHead !== head) return null;
   // Past the cap the emitter refuses every act list (round_cap_reached), so that round keeps the earlier routing.
   if (cap > 0 && round > cap) return null;

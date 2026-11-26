@@ -1439,7 +1439,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     && Number.isInteger(actList.openActCount) && actList.openActCount > 0
     // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.
     && (input.draftRoundRefused !== true || input.draftCapRoundFailure === "no_clearing_record");
-  // ADR 0271: a cap round of PR-body items only has no fixer route; its exit is the body-only converged post, named in the cap refusal below.
+  // ADR 0271: a round of PR-body items only has no fixer route; its exit is the body-only converged post, named in the cap refusal below.
   const bodyOnlyList = headActList && actList.bodyOnly === true;
   const actBlockers = headActList && Array.isArray(actList.blockers) ? actList.blockers : [];
   // An eligible draft act list wins over a BEHIND-only refresh; a real conflict (CONFLICTING, DIRTY, conflict files) still resolves first.
@@ -1780,11 +1780,11 @@ function evaluatePrGateCoordinationCore(input = {}) {
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
         ...(actBlockers.length > 0 ? { blockedOn: BLOCKED_ON.OPERATOR_DECISION } : bodyOnlyList ? remedyOrOperator(input, (r, n) => ({
-          command: `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo ${r} --pr ${n} --gate draft_gate --verdict clean --head-sha ${actList.headSha} --findings-ledger <cap-round ledger> --findings-summary <text> --next-action "mark ready for review" --execution-mode fanout_fanin --converged-json <path to a file holding { fixerCommit${actList.carriedToHead ? ` (${actList.headSha})` : ""}, actList, bodyOnly: true }>`,
-          summary: "Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (ADR 0271, ADR 0332); that verdict is the cap-round proof for ready-for-review and the ADR waiver.",
+          command: `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo ${r} --pr ${n} --gate draft_gate --verdict clean --head-sha ${actList.headSha} --findings-ledger <draft_gate ledger of the act list's round> --findings-summary <text> --next-action "mark ready for review" --execution-mode fanout_fanin --converged-json <path to a file holding { fixerCommit${actList.carriedToHead ? ` (${actList.headSha})` : ""}, actList, bodyOnly: true }>`,
+          summary: "Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (ADR 0271, ADR 0332); that verdict is the proof for ready-for-review and the ADR waiver.",
         })) : capRoundExit(input.draftCapRoundFailure, input)),
         reason: actBlockers.length > 0
-          ? `The PR is still draft at the round cap (\`round_cap_reached\`, ADR 0208) and the current head's act list names a human decision (GATE-EXEC-SOFT-CAP): ${actBlockers.map((b) => b?.item).join("; ")}. Round N+1 never runs.`
+          ? `The PR is still draft at or below the round cap (ADR 0208) and the current head's act list names a human decision (GATE-EXEC-SOFT-CAP): ${actBlockers.map((b) => b?.item).join("; ")}. No further draft_gate round runs for it.`
           : bodyOnlyList
             ? `The PR is still draft at or below the round cap and every open act item of the current head is a PR-body item (ADR 0271, ADR 0332). Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true). No further draft_gate round runs for it.`
           : `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but ${input.draftCapRoundFailure === "clean_cap_verdict_unposted" ? "the clean cap round's draft_gate verdict is not posted" : "the cap round's fixer pass is not proven landed with a cleared pre-push delta"}. ${capRoundRefusalText(input)} Round N+1 never runs.`,

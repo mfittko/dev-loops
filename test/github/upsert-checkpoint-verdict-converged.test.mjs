@@ -568,7 +568,7 @@ test("a converged post on a cap-fixed PR is still refused when coordination forb
   }, { prefix: "dev-loops-converged-capfixed-closed-" });
 });
 
-// ADR 0271 (GATE-EXEC-NO-DEAD-END): a cap round whose act items are all PR-body items clears with no commit.
+// ADR 0271 (GATE-EXEC-NO-DEAD-END): a round whose act items are all PR-body items clears with no commit.
 const EDITED_BODY = `${DEFAULT_TEST_PR_BODY}\nEdited for the cap round.`;
 // ledgerTmpRoot puts the findings ledger and the prior rounds under another tmp root than the cap-round context (the main checkout versus the reviewed worktree).
 async function bodyOnlyPost(tempDir, { findings, actList = findings, fixer = A, input = {}, reviewedBody = DEFAULT_TEST_PR_BODY, runChildOptions = {}, ledgerTmpRoot, priorRounds = 3 }) {
