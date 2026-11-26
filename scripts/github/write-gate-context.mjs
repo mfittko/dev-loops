@@ -3811,7 +3811,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
     } else {
       // Issue 3416: retire the undispatched or partial round at this head automatically, so the fresh round starts clean.
       // A live round has sentinels or dispatch records; a round with a posted verdict is never retired: the refusal stands, with its recovery.
-      const stale = await retireStaleRound({ ...staleRoundArgs, currentSpecDigest: loadedSpecDigest(options) });
+      const stale = await retireStaleRound({ ...staleRoundArgs, ...loadedSpecDigests(options) });
       if (stale.refusal) throw Object.assign(new Error(`${stale.refusal.error} recovery: ${stale.refusal.recovery}`), { recovery: stale.refusal.recovery });
       retiredRound = stale.retiredRound;
       state.retiredRound = retiredRound;
@@ -3826,10 +3826,10 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
     // completed is unaffected — proceed to overwrite the frozen artifact.
   } else if (existingBytes !== null) {
     // Same prefix bytes: only a round that stopped for a spec decision and whose spec changed retires; any other round is untouched.
-    const specDigest = loadedSpecDigest(options);
-    if (specDigest !== null) {
-      // A probe error proves nothing here, and an unchanged-byte rebuild never needed the scan, so it keeps today's behavior (no retirement).
-      const stale = await retireStaleRound({ ...staleRoundArgs, currentSpecDigest: specDigest, specDecisionOnly: true }).catch(() => ({ retiredRound: null }));
+    const digests = loadedSpecDigests(options);
+    if (digests.currentSpecDigest !== null) {
+      // retireStaleRound swallows only probe errors here; once the stop is known a failed move or a live-sentinel refusal surfaces.
+      const stale = await retireStaleRound({ ...staleRoundArgs, ...digests, specDecisionOnly: true });
       if (stale.refusal) throw Object.assign(new Error(`${stale.refusal.error} recovery: ${stale.refusal.recovery}`), { recovery: stale.refusal.recovery });
       retiredRound = stale.retiredRound;
       state.retiredRound = retiredRound;
@@ -4279,16 +4279,21 @@ function passesRequireSpecFromBody(body) {
 
 // The spec digest of the one spec source the builder loaded: the single linked issue body, else the PR description.
 // Null when there is no single source or it holds no spec, so the stopped-round retirement never fires on a guess.
-function loadedSpecDigest(options) {
-  try {
-    if (options.issueSections) return null;
-    const issueBody = typeof options.issueBody === "string" && options.issueBody !== ISSUE_BODY_ABSENT_SENTINEL ? options.issueBody : null;
-    return issueBody !== null
-      ? specDigestFromBody(issueBody)
-      : typeof options.prBody === "string" ? specDigestFromBody(options.prBody, { prDescription: true }) : null;
-  } catch {
-    return null;
-  }
+// The plan pins the digest of whichever source the conductor gave spec-context (issue body, or the PR body under pr_body), so the
+// retirement gets every digest the builder can compute: the loaded one (issue body first) and the other candidate.
+function loadedSpecDigests(options) {
+  const digestOf = (compute) => {
+    try {
+      return compute();
+    } catch {
+      return null;
+    }
+  };
+  if (options.issueSections) return { currentSpecDigest: null, otherSpecDigests: [] };
+  const issueDigest = typeof options.issueBody === "string" && options.issueBody !== ISSUE_BODY_ABSENT_SENTINEL ? digestOf(() => specDigestFromBody(options.issueBody)) : null;
+  const prDigest = typeof options.prBody === "string" ? digestOf(() => specDigestFromBody(options.prBody, { prDescription: true })) : null;
+  const [currentSpecDigest = null, ...otherSpecDigests] = [issueDigest, prDigest].filter((d) => d !== null);
+  return { currentSpecDigest, otherSpecDigests };
 }
 
 function detectRefinementHasAcChecklist(prBody) {

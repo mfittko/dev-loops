@@ -34,6 +34,9 @@ export async function isFinishedArtifact({ file, sentinelFile, wantHead, sameAng
   }
 }
 
+// The first 12 hex chars of a `sha256:<hex>` digest.
+const shortDigest = (digest) => String(digest).replace(/^sha256:/, "").slice(0, 12);
+
 // POSIX single quotes keep $, backticks and ! literal; an embedded single quote closes, escapes and reopens the quoting.
 const shellQuote = (value) => `'${String(value).replaceAll("'", `'\\''`)}'`;
 
@@ -62,7 +65,20 @@ export function buildRetireCommand({ gate, headSha, tmpRoot, findingsDir = null,
  * returns `{ retiredRound: null }` for every other round, so an unchanged rebuild never refuses on an ordinary posted verdict.
  * Returns `{ retiredRound }` (null when nothing was live) or `{ refusal: { error, recovery } }`.
  */
-export async function retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdictRoots = [tmpRoot], findingsTmpRoot = tmpRoot, recordsTmpRoot = tmpRoot, liveOnly = false, currentSpecDigest = null, specDecisionOnly = false }) {
+export async function retireStaleRound(args) {
+  // A probe error proves nothing for a specDecisionOnly caller (an unchanged-byte rebuild never needed the scan), so it means no retirement.
+  // Once the stop is known every error propagates, so a failed move surfaces and the next rebuild finishes it.
+  const state = { stopped: false };
+  try {
+    return await retireStaleRoundProbed(args, state);
+  } catch (err) {
+    if (args.specDecisionOnly && !state.stopped) return { retiredRound: null };
+    throw err;
+  }
+}
+
+// `otherSpecDigests` are further digests the spec source could have; the stop needs the pinned digest to differ from all of them and from `currentSpecDigest`.
+async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdictRoots = [tmpRoot], findingsTmpRoot = tmpRoot, recordsTmpRoot = tmpRoot, liveOnly = false, currentSpecDigest = null, otherSpecDigests = [], specDecisionOnly = false }, state) {
   const head = String(headSha).trim().toLowerCase();
   if (!FULL_SHA_RE.test(head)) return { retiredRound: null };
   const findingsDir = buildGateReviewsDir({ repo, pr, gate, headSha: head, tmpRoot: findingsTmpRoot });
@@ -86,8 +102,9 @@ export async function retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdi
     ...names.filter((n) => n.endsWith(suffix) && n.startsWith(sentinelPrefix)).map((n) => path.join(tmpRoot, n)),
     ...recordNames.filter((n) => n.endsWith(suffix) && n.startsWith(recordPrefix)).map((n) => path.join(recordsTmpRoot, n)),
   ];
-  const stopped = currentSpecDigest ? await findSpecDecisionStop({ repo, pr, gate, head, verdictRoots, currentSpecDigest, roundFiles }) : null;
+  const stopped = currentSpecDigest ? await findSpecDecisionStop({ repo, pr, gate, head, verdictRoots, specDigests: [currentSpecDigest, ...otherSpecDigests], roundFiles }) : null;
   if (specDecisionOnly && !stopped) return { retiredRound: null };
+  state.stopped = stopped !== null;
   for (const root of verdictRoots) {
     const key = { repo, pr, gate, headSha: head, tmpRoot: root };
     for (const marker of [buildGateFaninLedgerPath(key), buildLogPath(key)]) {
@@ -115,7 +132,7 @@ export async function retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdi
     };
   }
   const reason = stopped
-    ? `automatic: SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT stopped the round and the spec changed (specDigest ${stopped.pinnedDigest.slice(0, 12)} to ${currentSpecDigest.slice(0, 12)}); no verdict was posted`
+    ? `automatic: SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT stopped the round and the spec changed (specDigest ${shortDigest(stopped.pinnedDigest)} to ${shortDigest(currentSpecDigest)}); no verdict was posted`
     : "automatic: the gate context was rebuilt or the round re-emitted at the same head before any verdict was recorded";
   const distinctRecords = recordsTmpRoot !== tmpRoot && recordNames.some((n) => n.endsWith(suffix) && n.startsWith(recordPrefix));
   const findingsOpt = hasFindings ? { findingsDir } : { noFindingsArtifacts: true };
@@ -143,7 +160,7 @@ export async function retireStaleRound({ repo, pr, gate, headSha, tmpRoot, verdi
  * dispatch record in `roundFiles`: a newer fan-out that has not replaced the plan yet leaves the stopped round's plan stale. Returns `{ pinnedDigest }` or null; any
  * missing or unreadable file is null, so the check never fails open.
  */
-async function findSpecDecisionStop({ repo, pr, gate, head, verdictRoots, currentSpecDigest, roundFiles }) {
+async function findSpecDecisionStop({ repo, pr, gate, head, verdictRoots, specDigests, roundFiles }) {
   for (const root of verdictRoots) {
     if (await exists(buildLogPath({ repo, pr, gate, headSha: head, tmpRoot: root }))) return null;
   }
@@ -153,10 +170,10 @@ async function findSpecDecisionStop({ repo, pr, gate, head, verdictRoots, curren
       const planFile = path.join(dir, "judge-emit-plan.json");
       const plan = JSON.parse(await readFile(planFile, "utf8"));
       const planTime = (await stat(planFile)).mtimeMs;
-      for (const file of roundFiles) if ((await stat(file)).mtimeMs > planTime) return null;
+      for (const file of roundFiles) if ((await stat(file)).mtimeMs >= planTime) return null;
       const pinnedDigest = plan?.workOrder?.authority?.specDigest;
       const outputRef = plan?.workOrder?.outputRefs?.find((ref) => path.basename(String(ref)) === "spec-authority-verdict.json");
-      if (typeof pinnedDigest !== "string" || pinnedDigest === currentSpecDigest || typeof outputRef !== "string") continue;
+      if (typeof pinnedDigest !== "string" || specDigests.includes(pinnedDigest) || typeof outputRef !== "string") continue;
       const verdict = JSON.parse(await readFile(outputRef, "utf8"));
       if (verdict.decisions.some((d) => d?.outcome === HUMAN_SPEC_DECISION_OUTCOME)) return { pinnedDigest };
     } catch { /* a missing or unreadable plan or verdict in this root proves nothing */ }

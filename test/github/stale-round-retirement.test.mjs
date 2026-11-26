@@ -298,8 +298,8 @@ test("a missing sentinel root with dispatch records and a findings dir under ano
   }
 });
 
-const OLD_DIGEST = "a".repeat(64);
-const NEW_DIGEST = "b".repeat(64);
+const OLD_DIGEST = `sha256:${"a".repeat(64)}`;
+const NEW_DIGEST = `sha256:${"b".repeat(64)}`;
 const SENTINEL_FILE = `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`;
 const STOPPED = { decisions: [{ index: 0, outcome: "spec_cannot_decide" }] };
 
@@ -339,7 +339,7 @@ test("a stopped spec-decision round with a changed spec digest retires past its 
     assert.equal(existsSync(path.join(tmpRoot, SENTINEL_FILE)), false);
     const record = JSON.parse(await readFile(path.join(retiredRound.retirementDir, "retirement.json"), "utf8"));
     assert.match(record.reason, /SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT/);
-    assert.ok(record.reason.includes(OLD_DIGEST.slice(0, 12)) && record.reason.includes(NEW_DIGEST.slice(0, 12)), record.reason);
+    assert.ok(record.reason.includes(`${"a".repeat(12)} to ${"b".repeat(12)})`), record.reason);
     // A second rebuild finds no live round and never refuses on the ledger left in place.
     assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot, ...decided }), { retiredRound: null });
     // A second stop at the same head retires again.
@@ -351,6 +351,23 @@ test("a stopped spec-decision round with a changed spec digest retires past its 
     await mkdir(path.dirname(log), { recursive: true });
     await writeFile(log, "{}");
     assert.match((await retireStaleRound({ ...KEY, tmpRoot, ...decided })).refusal.recovery, /^operator: /);
+  });
+});
+
+test("a plan written at the same instant as a sentinel is stale: the tie counts as a newer fan-out", async () => {
+  await withStoppedRound(async (tmpRoot) => {
+    const t = new Date(Date.now() + 60_000);
+    await utimes(path.join(tmpRoot, SENTINEL_FILE), t, t);
+    await utimes(path.join(buildGateArtifactPath({ ...KEY, tmpRoot, dir: "gate-judge" }), "judge-emit-plan.json"), t, t);
+    assert.match((await retireStaleRound({ ...KEY, tmpRoot, ...decided })).refusal.error, /a verdict is already recorded/);
+  });
+});
+
+test("a stopped round with a live sentinel refuses with its recovery even for specDecisionOnly", async () => {
+  await withStoppedRound(async (tmpRoot) => {
+    await rm(path.join(buildGateReviewsDir({ ...KEY, tmpRoot }), "coverage.json"));
+    const result = await retireStaleRound({ ...KEY, tmpRoot, ...decided, specDecisionOnly: true });
+    assert.match(result.refusal.error, /may still be running/);
   });
 });
 
@@ -368,6 +385,8 @@ test("an unchanged or missing digest, a missing or unparsable plan or verdict, o
   const cases = [
     { name: "unchanged digest", opts: { currentSpecDigest: OLD_DIGEST } },
     { name: "no digest", opts: { currentSpecDigest: null } },
+    { name: "pinned digest equals another candidate digest", opts: { otherSpecDigests: [OLD_DIGEST] } },
+    { name: "decisions is not an array", setup: { verdict: { decisions: "spec_cannot_decide" } } },
     { name: "missing plan", setup: { plan: false } },
     { name: "unparsable plan", setup: { plan: "{not json" } },
     { name: "missing verdict", setup: { verdict: null } },
@@ -418,7 +437,7 @@ async function withLaneWorktree(fn) {
 const later = async (file, seconds) => { const t = new Date(Date.now() + seconds * 1000); await utimes(file, t, t); };
 
 // The stopped round's files at the builder's scan root: sentinel (made by the guard), record, finished artifact, ledger, plan and verdict.
-async function leaveStoppedRound({ key, head, body, guard, prefixHash }) {
+async function leaveStoppedRound({ key, head, body, guard, prefixHash, pinnedDigest = specDigestFromBody(SPEC_BODY(body)) }) {
   assert.equal(guard(prefixHash).fresh, true);
   await writeFile(path.join(key.tmpRoot, `checkpoint-dispatch-prompt-${BUILDER_SCOPE}-${head}.json`), "{}");
   const dir = buildGateReviewsDir(key);
@@ -433,7 +452,7 @@ async function leaveStoppedRound({ key, head, body, guard, prefixHash }) {
   const verdictFile = path.join(judgeDir, "spec-authority-verdict.json");
   await writeFile(verdictFile, JSON.stringify(STOPPED));
   const planFile = path.join(judgeDir, "judge-emit-plan.json");
-  await writeFile(planFile, JSON.stringify({ workOrder: { authority: { specDigest: specDigestFromBody(SPEC_BODY(body)) }, outputRefs: [verdictFile] } }));
+  await writeFile(planFile, JSON.stringify({ workOrder: { authority: { specDigest: pinnedDigest }, outputRefs: [verdictFile] } }));
   await later(planFile, 10);
 }
 
@@ -456,6 +475,18 @@ test("builder: identical prefix bytes after a spec-decision stop retire the roun
   });
 });
 
+test("builder: a pinned digest equal to the PR body digest keeps the refusal even when the issue body digest differs", async () => {
+  await withLaneWorktree(async ({ repoRoot, head, key, guard }) => {
+    const prBody = SPEC_BODY("pr body spec");
+    const build = (issueBody) => writeGateContext(parseWriteGateContextCliArgs(["--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate", "--head-sha", head, "--angles", '["scope"]', "--acceptance-criteria", "#9", "--prefix-file", "prefix.md", "--issue-body", issueBody, "--pr-body", prBody]), { repoRoot });
+    const first = await build(SPEC_BODY("issue body spec"));
+    await leaveStoppedRound({ key, head, body: "unused", guard, prefixHash: first.prefixHash, pinnedDigest: specDigestFromBody(prBody, { prDescription: true }) });
+    const sentinel = path.join(repoRoot, "tmp", `checkpoint-context-sentinel-${BUILDER_SCOPE}-${head}.json`);
+    assert.equal((await build(SPEC_BODY("issue body spec"))).retiredRound ?? null, null);
+    assert.equal(existsSync(sentinel), true, "no candidate digest differs from the pinned one, so the round stays");
+  });
+});
+
 test("builder: a crash during the retirement is finished by the next rebuild, a second stop retires again and a findings log refuses", async () => {
   await withLaneWorktree(async ({ repoRoot, head, key, build, guard }) => {
     const first = await build("a");
@@ -465,8 +496,8 @@ test("builder: a crash during the retirement is finished by the next rebuild, a 
     let calls = 0;
     mock.module("node:fs/promises", () => ({ ...fsp, default: fsp, rename: (...args) => (++calls === 2 ? Promise.reject(new Error("injected move failure")) : real(...args)) }));
     try {
-      await build("b");
-    } catch { /* a failed retirement may surface or be swallowed; the next rebuild decides */ } finally {
+      await assert.rejects(build("b"), /injected move failure/);
+    } finally {
       mock.module("node:fs/promises", () => ({ ...fsp, default: fsp, rename: real }));
     }
     assert.ok(calls >= 2, "the injected failure fired");
