@@ -5184,8 +5184,12 @@ test("a pre_approval_gate act list at a base-only merge of a past-cap round head
   });
   // A PR-own change after the merge is no base-only merge: the missing merged-head ledger refuses.
   await withFixture(async (fx) => {
-    const { origin, over } = await mergedPreApprovalScenario(fx, { ownChangeAfterMerge: true, earlierRounds: ["d".repeat(40), "e".repeat(40)] });
-    await assert.rejects(fx.emit(over(origin)), (e) => e.refusal === "round_cap_reached");
+    const { origin, merged, over } = await mergedPreApprovalScenario(fx, { ownChangeAfterMerge: true, earlierRounds: ["d".repeat(40), "e".repeat(40)] });
+    const act = JSON.parse(await readFile(fx.files.actList, "utf8"))[0];
+    const focusFile = path.join(fx.root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: act.fingerprint, decision: "Fix it in this PR" }] }));
+    // The focus file clears the CAP-BRAKES refusal, so only the missing merged-head ledger and verdict can refuse: at the merged head, not the cap-round head.
+    await assert.rejects(fx.emit({ ...over(origin), operatorFocusFile: focusFile }), (e) => e.refusal === "verdict_not_posted" && e.message.includes(merged) && !e.message.includes(origin));
   });
 });
 

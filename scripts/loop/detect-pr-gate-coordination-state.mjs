@@ -1459,8 +1459,11 @@ async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoo
   const last = logs.at(-1), fingerprints = actFingerprintSet(last);
   const effective = await effectiveRounds(logs, { prBase: gate === "pre_approval_gate" ? context.prData?.baseRefName : undefined, repoRoot });
   if (cap > 0 && round > cap + 1 && effective.slice(cap).some((log) => log !== last && actFingerprintSet(log).join() === fingerprints.join())) return false;
-  // A base-merge-forced latest round is decided from the issued fixer plan only, as refuseNonConvergence does (the direct file decides the effective latest round).
-  return operatorDecidedLatestRound({ repo: context.repo, pr: context.pr, gate, operatorFocusFile: effective.at(-1) === last ? operatorFocusFile : undefined }, { repoRoot, latest: last, last: fingerprints });
+  const base = { repo: context.repo, pr: context.pr, gate };
+  if (effective.at(-1) === last) return operatorDecidedLatestRound({ ...base, operatorFocusFile }, { repoRoot, latest: last, last: fingerprints });
+  // A base-merge-forced latest round clears from the issued fixer plan, or from the direct file when it decides the forced set and the effective latest set (refuseNonConvergence and resolveOperatorClearedRound read the same file).
+  if (await operatorDecidedLatestRound(base, { repoRoot, latest: last, last: fingerprints })) return true;
+  return operatorDecidedLatestRound({ ...base, operatorFocusFile }, { repoRoot, latest: last, last: [...new Set([...fingerprints, ...actFingerprintSet(effective.at(-1))])] });
 }
 
 /**
@@ -1479,14 +1482,17 @@ export async function resolveCapBrakes(context, { repoRoot, config, operatorFocu
   if (!last || String(last.headSha).trim().toLowerCase() !== head) return null;
   const open = listOpenActItems(last.findings);
   if (open.length === 0) return null;
+  const effective = await effectiveRounds(logs, { prBase: gate === "pre_approval_gate" ? context.prData?.baseRefName : undefined, repoRoot });
+  const effectiveLatest = effective.at(-1);
   const facts = {
     gate,
     // A base-merge-forced round never counts (countCapRounds), as in the poster and the emitter.
     round: await countCapRounds({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, prBase: context.prData?.baseRefName, includeLiveCurrentHead: true }),
     cap: gate === "pre_approval_gate" ? resolveGateConfig(config, "preApproval").maxReviewRounds : 0,
-    actCounts: (await effectiveRounds(logs, { prBase: gate === "pre_approval_gate" ? context.prData?.baseRefName : undefined, repoRoot })).map((log) => capRoundActList(log.findings, log.headSha).length),
+    actCounts: effective.map((log) => capRoundActList(log.findings, log.headSha).length),
     // One item per acted cluster: the emitter binds an operator focus item only to an act-list fingerprint (GATE-EXEC-CAP-BRAKES).
-    items: capRoundActList(last.findings, last.headSha).map((a) => `${a.fingerprint} [${normalizeSeverity(a.severity)}] ${String(a.summary ?? "").trim()}`),
+    // A base-merge-forced latest round also lists the effective latest round's items: the direct file must decide both sets.
+    items: [...capRoundActList(last.findings, last.headSha), ...(effectiveLatest && effectiveLatest !== last ? capRoundActList(effectiveLatest.findings, effectiveLatest.headSha) : [])].map((a) => `${a.fingerprint} [${normalizeSeverity(a.severity)}] ${String(a.summary ?? "").trim()}`),
   };
   // Fail closed: a focus file that fails to read here clears nothing, and the cap stop stays.
   return await operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round: facts.round, cap: facts.cap }).catch(() => false) ? { ...facts, operatorCleared: true } : facts;

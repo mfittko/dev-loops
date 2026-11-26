@@ -5640,10 +5640,17 @@ for (const [gate, expected] of [["pre_approval_gate", undefined], ["draft_gate",
     }
     const ctx = { repo: "owner/repo", pr: 10, currentHeadSha: mergedHead, prData: { isDraft: gate === "draft_gate", baseRefName: "main" } };
     const brakes = (operatorFocusFile) => resolveCapBrakes(ctx, { repoRoot: dir, config: { version: 1 }, operatorFocusFile });
-    const [forced] = (await brakes()).items.map((item) => item.slice(0, 16));
+    const fingerprints = (await brakes()).items.map((item) => item.slice(0, 16));
+    const [forced] = fingerprints;
     const focus = path.join(dir, "focus.json");
     await writeFile(focus, JSON.stringify({ items: [{ fingerprint: forced, decision: "fix it" }] }), "utf8");
     assert.equal((await brakes(focus)).operatorCleared, expected);
+    // pre_approval_gate lists the forced round and the effective latest round, and the direct file clears only when it decides both sets.
+    if (gate === "pre_approval_gate") {
+      assert.equal(fingerprints.length, 3, "the forced round and the effective latest round are listed");
+      await writeFile(focus, JSON.stringify({ items: fingerprints.map((fingerprint) => ({ fingerprint, decision: "fix it" })) }), "utf8");
+      assert.equal((await brakes(focus)).operatorCleared, true);
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
