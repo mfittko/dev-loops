@@ -5228,4 +5228,5 @@ test("cap brakes: notClearable keeps the Items list and says a focus file does n
   assert.ok(stopped.reason.includes(item));
   assert.match(stopped.reason, /already had its one re-open, so a focus file does not clear it and the decision stays with the operator/);
   assert.doesNotMatch(stopped.reason, /Clear it with --operator-focus-file/);
+  assert.doesNotMatch(stopped.reason, /clears it with an operator focus item/);
 });

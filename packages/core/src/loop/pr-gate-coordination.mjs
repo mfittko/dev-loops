@@ -1351,7 +1351,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       forbiddenActions,
       nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
       blockedOn: BLOCKED_ON.OPERATOR_DECISION,
-      reason: `${describeCapStop(capStop)} (${input.capBrakes.gate}).${named}${input.capBrakes.notClearable === true ? " This act set already had its one re-open, so a focus file does not clear it and the decision stays with the operator." : " Clear it with --operator-focus-file <path> on loop gate-coordination."}`,
+      reason: `${describeCapStop(capStop, { clearable: input.capBrakes.notClearable !== true })} (${input.capBrakes.gate}).${named}${input.capBrakes.notClearable === true ? " This act set already had its one re-open, so a focus file does not clear it and the decision stays with the operator." : " Clear it with --operator-focus-file <path> on loop gate-coordination."}`,
       mergeStateStatus,
       conflictFiles,
       refinementArtifact,
