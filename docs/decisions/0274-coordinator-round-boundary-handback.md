@@ -6,6 +6,8 @@ Accepted — 2026-11-15 ([issue 3069](https://github.com/mfittko/dev-loops/issue
 
 Supersedes in part [0220](0220-coordinator-report-points-replace-per-phase-handback.md): the decision that a coordinator continues at a report point such as `gate_verdict_posted`. Amends [0181](0181-unit-coordinator-handback-boundaries.md). Accepted records remain unchanged.
 
+Superseded in part by [0325](0325-coordinator-continues-at-routine-boundaries.md): the hand-back at every gate-round end and fix-pass end. The coordinator continues at a routine boundary, and the routine-boundary cap replaces the context bound.
+
 ## Context
 
 ADR 0220 let a unit coordinator continue past a report point. A long run then carried gate and fix-pass context into later rounds and grew without a bound.

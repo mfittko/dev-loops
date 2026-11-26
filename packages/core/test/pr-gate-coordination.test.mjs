@@ -323,7 +323,7 @@ test("draft PR rejects pre_approval_gate entry — must pass draft gate before p
   assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
   assert.match(
     result.reason,
-    /`draft_gate` is now the legal gate boundary before `gh pr ready`/i,
+    /`draft_gate` is now the legal gate boundary before `dev-loops pr ready-for-review`/i,
   );
   // Mark-ready is also forbidden (no current-head clean draft gate evidence yet).
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));

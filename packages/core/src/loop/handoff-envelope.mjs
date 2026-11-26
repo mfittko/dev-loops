@@ -613,7 +613,7 @@ function buildWorktreeSlug(artifact, kind) {
 
 /**
  * Deterministic report points for one unit coordinator. A unit reports status at
- * the draft_pr_opened point and continues, and it hands back at gate_verdict_posted under COORDINATOR-ROUND-BOUNDARY-HANDBACK; a replacement is dispatched at every run-ending case, the orchestrator only emits and dispatches
+ * the draft_pr_opened point and continues, and at gate_verdict_posted it continues at a routine nextAction and hands back at a stop or at the routine-boundary cap under COORDINATOR-ROUND-BOUNDARY-HANDBACK; a replacement is dispatched at every run-ending case, the orchestrator only emits and dispatches
  * its work order, and it re-resolves startup against
  * authoritative state (never a brief authored by the predecessor).
  * The vocabulary is closed so a fixture can assert the exact set.

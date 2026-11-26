@@ -116,7 +116,7 @@
     {
       "id": "COORDINATOR-ROUND-BOUNDARY-HANDBACK",
       "enforcement": "agent",
-      "enforcementNote": "The coordinator runs validate-coordinator-handback on a self-attested packet; no hook verifies the workerRunning flag or the claim release."
+      "enforcementNote": "The coordinator runs validate-coordinator-handback on a self-attested packet; no hook verifies the workerRunning flag, the claim release or the self-attested routineBoundaries count."
     },
     {
       "id": "COORDINATOR-SINGLE-CHILD-JOIN",

@@ -75,11 +75,11 @@ If local facts, GitHub facts, and helper/state-machine output do not agree well 
 
 ## Unit coordinator report points (issue 2532, amended by issues 2955 and 3069)
 
-You run one step: up to your first gate-round end, fix-pass end or other run-ending case. The envelope's `unitBoundaries` names your report points,
+You run until your first stop: across routine gate-round and fix-pass ends, up to the routine-boundary cap or your first stop (any other run-ending case). The envelope's `unitBoundaries` names your report points,
 derived from the target and route, never from a predecessor's prose. `reportAfter` is an
 ordered list. At the `draft_pr_opened` report point, record status through existing
 evidence (PR comment or gate ledger), re-resolve authoritative state with `unitBoundaries.resume`
-and **continue**. At `gate_verdict_posted`, hand back under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`.
+and **continue**. At `gate_verdict_posted`, re-run `loop gate-coordination` and continue with a routine `nextAction`; hand back at a stop under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`.
 Re-resolving is a read of current state through the resume identity. A
 pull-dispatched coordinator keeps the pulled work order as its digest-pinned authority and builds no
 new envelope. After draft PR creation, it adopts the new PR identity for state reads
@@ -91,13 +91,13 @@ omits the field entirely rather than sending an empty list, and the validator re
 `reportAfter`. One entry is a **recorded naming approximation**: `final_approval` runs a gate round but posts
 no verdict of its own, and still carries `gate_verdict_posted`
 (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`). An `issue_intake` unit reports at
-`draft_pr_opened`, continues on the PR route, and then hands back at `gate_verdict_posted` under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`.
+`draft_pr_opened`, continues on the PR route, and then continues at routine boundaries and hands back at a stop under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`.
 
 Hand back only at the run-ending cases in Unit coordinator boundaries of the
 [Main-agent contract](../skills/docs/main-agent-contract.md): `final_approval_ready`, the end of a
 gate round, the end of a fix pass, a stop that
 needs a decision, the route's own terminal completion, a changed route, a lockout, genuine
-recovery, an unavailable actor, a runtime constraint, or explicit operator direction. The issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route. At a gate-round end or a fix-pass end, join every worker you dispatched, run `validate-coordinator-handback.mjs`, release your runner claim only after exit 0 and hand back the typed packet (`pr`, `head`, `nextAction`, `workerRunning`) under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`; never continue into the next round. The orchestrator never runs `loop startup`: it only emits and dispatches a replacement's
+recovery, an unavailable actor, a runtime constraint, or explicit operator direction. The issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route. At a gate-round end or a fix-pass end, re-run `loop gate-coordination` and continue with a routine `nextAction` in the same run (up to the routine-boundary cap, counted in `routineBoundaries`). A gate-round-end or fix-pass-end packet sets `status` to `gate_round_end` or `fix_pass_end`, never the report point name `gate_verdict_posted`. At a stop, join every worker you dispatched, run `validate-coordinator-handback.mjs`, release your runner claim only after exit 0 and hand back the typed packet (`pr`, `head`, `nextAction`, `workerRunning`) under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`. The orchestrator never runs `loop startup`: it only emits and dispatches a replacement's
 work order from the startup-output path you name. The replacement re-resolves
 `unitBoundaries.resume` against authoritative state. That field carries the unit's own identities
 exactly as the producer emitted them, whichever of `issue`, `pr`, `branch` and `phase` the target
@@ -171,7 +171,7 @@ A worker, reviewer, judge or fixer dispatches no children and receives no join r
 
 ## Output
 
-When a script refuses with a `recovery` field (`RECOVERY-COMMAND-REQUIRED`), run the named command once, then re-run the refused step once. Hand back the refusal when the recovery fails, names `operator`, or the same refusal recurs after the re-run.
+When a script refuses with a `recovery` field (`RECOVERY-COMMAND-REQUIRED`), run the named command once, then re-run the refused step once. Hand back the refusal when the recovery fails, names `operator`, or the same refusal recurs after the re-run. A `routine_boundary` refusal at a later boundary with a higher `routineBoundaries` count is a new step, not a recurrence.
 
 Use the concise status format defined by the skill.
 
