@@ -747,6 +747,12 @@ const MERGE_RUN_FORMS = [
   `dev-loops-run ${MERGE_PATH} --pr 5 --check`,
   `${MERGE_PATH} --check`,
   `echo x && dev-loops-run --repo-root /w ${MERGE_PATH} --check`,
+  `bun ${MERGE_PATH.replace(".mjs", "")} --pr 5`,
+  `dev-loops-run ${MERGE_PATH.replace(".mjs", "")} --pr 5`,
+  `${MERGE_PATH.replace(".mjs", "")} --pr 5`,
+  `bun "${MERGE_PATH}" --pr 5`,
+  `bun ${MERGE_SCRIPT.replace("-", `-""`)} --pr 5`,
+  `bun ${MERGE_SCRIPT.replace("-", "\\-")} --pr 5`,
 ];
 const MERGE_READ_ONLY_FORMS = [
   `git grep -n ${MERGE_SCRIPT} cli/`,
@@ -758,6 +764,8 @@ const MERGE_READ_ONLY_FORMS = [
   `sed -n '1,40p' ${MERGE_PATH}`,
   `grep -n x ${MERGE_PATH}`,
   `rg ${MERGE_SCRIPT} cli/`,
+  `rg "foo|${MERGE_SCRIPT}" cli/`,
+  `grep -nE "(${MERGE_SCRIPT}|x)" cli/`,
   `cat ${MERGE_PATH}`,
   `head -20 ${MERGE_PATH}`,
   `bun test test/github/${MERGE_SCRIPT.replace(".mjs", ".test.mjs")}`,

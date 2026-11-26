@@ -94,9 +94,10 @@ export function normalizeAgentType(agentType) {
 
 // Intermediate tokens exclude shell separators so a compound command that only names the file is not an invocation.
 // The interpreter may carry a path prefix and follow a backtick; the script path itself also matches as a command head.
-const scriptInvocationRe = (basename) => new RegExp(String.raw`(?:(?:^|[\s;&|(\`])(?:[^\s;&|()\`]*\/)?(?:node\s+(?:(?!(?:--check|-c)\s)[^\s;&|()\`]+\s+)*?|(?:dev-loops-run|bun)\s+(?:[^\s;&|()\`]+\s+)*?)|(?:^|[\n;&|(\`])\s*)[^\s;&|()\`]*${basename.replace(/\./g, String.raw`\.`)}(?=$|[\s;&|)\`<>"'}])`);
-const UNRESOLVE_INVOCATION = scriptInvocationRe("unresolve-review-thread.mjs");
-const MERGE_INVOCATION = scriptInvocationRe("merge-pr.mjs");
+// `optionalExt` also matches the extensionless run form (`bun scripts/github/<stem>`); a `.test.mjs` path or a longer name still fails the end lookahead.
+const scriptInvocationRe = (stem, optionalExt = false) => new RegExp(String.raw`(?:(?:^|[\s;&|(\`])(?:[^\s;&|()\`]*\/)?(?:node\s+(?:(?!(?:--check|-c)\s)[^\s;&|()\`]+\s+)*?|(?:dev-loops-run|bun)\s+(?:[^\s;&|()\`]+\s+)*?)|(?:^|[\n;&|(\`])\s*)[^\s;&|()\`]*${stem}${optionalExt ? String.raw`(?:\.mjs)?` : String.raw`\.mjs`}(?=$|[\s;&|)\`<>"'}])`);
+const UNRESOLVE_INVOCATION = scriptInvocationRe("unresolve-review-thread");
+const MERGE_INVOCATION = scriptInvocationRe("merge-pr", true);
 /** True when the command runs scripts/github/unresolve-review-thread.mjs (issue 2577). */
 export const isUnresolveInvocation = (command) => typeof command === "string" && UNRESOLVE_INVOCATION.test(command);
 
@@ -264,9 +265,16 @@ export function decideUnresolveOwnerDeny({ command, role }) {
   return null;
 }
 
+// Bash drops empty quote pairs and backslashes (`merge-""pr`, `merge\-pr`), so strip those. Quote characters otherwise stay, so a quoted run path still matches.
+// A separator inside a quoted pattern (`rg "foo|name"`) is data, so neutralize it unless a launcher word follows (`"$(node <path>)"`).
+const normalizeForMergeMatch = (command) => command
+  .replace(/\$?(?:""|'')|\\/g, "")
+  .replace(/["'](?=(?:node|bun|dev-loops-run)\s)/g, " ")
+  .replace(/"[^"]*"|'[^']*'/g, (q) => q.replace(/[;&|(`](?!\s*(?:\S*\/)?(?:node|bun|dev-loops-run)\s)/g, "_"));
+
 /**
  * Merge ownership (issue 2500, ADR 0331): `merge-pr.mjs` is orchestrator-owned, so a subagent Bash command that RUNS it is denied, `--check` included.
- * The match is the run position (`scriptInvocationRe`) on the command with quote and backslash characters stripped (Bash drops them: `merge-""pr`, `merge\-pr`).
+ * The match is the run position (`scriptInvocationRe`) on the command with empty quote pairs and backslashes stripped (Bash drops them: `merge-""pr`, `merge\-pr`), with or without the `.mjs` extension.
  * A read-only mention (`grep`, `git show`, `sed -n`) and a `.test.mjs` path do not run the script and are allowed.
  * The top-level session (role null) keeps the script. Keys on the role name alone, like the unresolve allowlist.
  * ponytail: ceiling: a name assembled by variable or command substitution (`m=merge; ...$m-pr`) or by a shell glob or brace expansion of the file name (`merge-pr.m*`, `merge-pr.{mjs,}`) is not caught; the orchestrator is the only actor allowed to run the script.
@@ -274,7 +282,7 @@ export function decideUnresolveOwnerDeny({ command, role }) {
  * @returns {{ruleId: null, reason: string}|null}
  */
 export function decideMergePrOwnerDeny({ command, role }) {
-  if (typeof role !== "string" || typeof command !== "string" || !MERGE_INVOCATION.test(command.replace(/\$?["']|\\/g, ""))) return null;
+  if (typeof role !== "string" || typeof command !== "string" || !MERGE_INVOCATION.test(normalizeForMergeMatch(command))) return null;
   return {
     ruleId: null,
     reason: withHookMarker("MERGE_PR_OWNER",
