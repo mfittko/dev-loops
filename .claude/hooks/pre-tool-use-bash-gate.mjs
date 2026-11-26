@@ -295,10 +295,12 @@ const enforceCoordinator = process.env.DEVLOOPS_COORDINATOR_READONLY === "1";
 // OPS-EDITOR-TOOL-WRITES (issue 2683): resolve each shell write target against cwd and classify it with the Write guard's repo-mutation test.
 // Only the guarded roles pay the git calls. An unresolvable target stays unclassified (the decider denies it fail closed).
 // A `run` target counts only under the `tmp/` directory of the repository that holds the script (a worktree script is not a tmp script).
-const shellWrites = typeof command === "string" && /(?:^|:)(?:developer|fixer|dev-loop|gate-coordinator)$/.test(agentType ?? "")
+const shellWrites = typeof command === "string" && (/(?:^|:)(?:developer|fixer)$/.test(agentType ?? "") || (enforceCoordinator && /(?:^|:)(?:dev-loop|gate-coordinator)$/.test(agentType ?? "")))
   ? shellWriteTargets(command).flatMap((target) => {
     if (target.unresolvable) return [{ ...target, repoMutation: true, existingFile: false }];
     // A throw here (statSync on ENAMETOOLONG, ELOOP, EACCES) would crash the hook and let the command run, so it denies fail closed.
+    // A launcher `run` target (`dev-loops-run tmp/...`) resolves against a checkout root, not cwd, so it needs no classification.
+    if (target.launcher) return [{ ...target, repoMutation: true, existingFile: false }];
     try {
       const abs = path.resolve(cwd, target.path);
       const { isRepoMutation, targetReal, repoRoot } = classifyRepoMutation(abs);

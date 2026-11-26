@@ -143,6 +143,27 @@ test("the hook denies a coordinator script under the repo tmp root by absolute p
   });
 });
 
+test("the hook denies a coordinator dev-loops-run tmp script from any cwd or --repo-root, and allows other launcher scripts (issue 3395)", async () => {
+  await withRepo(async (root) => {
+    fs.mkdirSync(path.join(root, "packages"));
+    for (const command of ["dev-loops-run tmp/x.mjs", `dev-loops-run --repo-root ${root} tmp/x.mjs`, "cd packages && dev-loops-run tmp/x.mjs", `cd / && dev-loops-run --repo-root ${root} tmp/x.mjs`]) {
+      assert.equal(bash(root, command, "dev-loop", COORDINATOR).decision, "deny", command);
+    }
+    for (const command of ["dev-loops-run scripts/loop/x.mjs", "cd packages && dev-loops-run scripts/loop/x.mjs"]) {
+      assert.equal(bash(root, command, "dev-loop", COORDINATOR).decision, "allow", command);
+    }
+  });
+});
+
+test("the hook allows a tmp tee with a process substitution and a comparison inside (( )) or [[ ]]", async () => {
+  await withRepo(async (root) => {
+    for (const command of ["git status | tee >(grep -c fail) tmp/log", "for f in a b; do (( i > n )) && break; done", "[[ \"$a\" > \"$b\" ]]"]) {
+      assert.equal(bash(root, command, "developer").decision, "allow", command);
+      assert.equal(bash(root, command, "dev-loop", COORDINATOR).decision, "allow", command);
+    }
+  });
+});
+
 test("the hook denies a no-space redirect, xargs and find -exec shell writes", async () => {
   await withRepo(async (root) => {
     for (const command of ["echo x>src/a.mjs", "echo x 2>/dev/null>src/a.mjs", "git ls-files | xargs sed -i 's/a/b/'", "find src -exec sed -i 's/a/b/' {} +", "timeout 5 sed -i 's/a/b/' src/a.mjs"]) {

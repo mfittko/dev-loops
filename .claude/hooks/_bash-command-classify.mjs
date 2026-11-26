@@ -1091,7 +1091,21 @@ function segmentWriteTargets(seg, place) {
   const out = [];
   const operands = [];
   const unparen = (v) => v.replace(/^\(+|\)+$/g, "");
-  const words = seg.words.flatMap((w) => {
+  const parenDelta = (raw) => raw.split("(").length - raw.split(")").length;
+  // A `(( ... ))` or `[[ ... ]]` group that closes in this segment holds comparisons, so its `>` is no redirect. An unclosed `((` stays visible (it may be a subshell).
+  const noTests = [];
+  for (let i = 0; i < seg.words.length; i++) {
+    const w = seg.words[i];
+    const close = w.op ? null : w.raw.startsWith("((") ? "))" : w.raw === "[[" ? "]]" : null;
+    const end = !close ? -1 : w.raw.length > 2 && w.raw.endsWith(close) ? i : seg.words.findIndex((x, j) => j > i && !x.op && x.raw.endsWith(close));
+    if (end >= 0) i = end;
+    else noTests.push(w);
+  }
+  // The words of a `>(cmd args)` / `<(cmd args)` process substitution after its opening word are a command, not operands.
+  let substDepth = 0;
+  const words = noTests.flatMap((w) => {
+    if (substDepth > 0) { substDepth += parenDelta(w.raw); return []; }
+    if (!w.op && /^\d*[<>]\(/.test(w.raw)) substDepth = Math.max(0, parenDelta(w.raw));
     if (w.op) return [w];
     const pieces = splitAtRedirects(w.raw);
     return pieces.length === 1 ? [w] : pieces.map((raw) => ({ raw, value: tokenizeShellCommand(raw).segments[0]?.words[0]?.value ?? raw }));
@@ -1111,9 +1125,10 @@ function segmentWriteTargets(seg, place) {
     if (w.op || /^\d*<$/.test(w.raw)) { if (!w.op || w.op.startsWith("<")) k++; continue; }
     const m = REDIRECT_RE.exec(w.raw);
     if (!m) { operands.push({ ...w, value: unparen(w.value) }); continue; }
-    const target = m[1] ? unparen(REDIRECT_RE.exec(w.value)?.[1] ?? "") : words[++k]?.value && unparen(words[k].value);
-    // `>(cmd)` / `<(cmd)` is a process substitution, not a file.
-    if (target && !/^\d+$|^-$|^\(|^[<>]\(/.test(target)) out.push({ ...at(target), op: "write" });
+    const named = m[1] ? REDIRECT_RE.exec(w.value)?.[1] ?? "" : words[++k]?.value ?? "";
+    const target = unparen(named);
+    // `>(cmd)` / `<(cmd)` is a process substitution, not a file (tested before `unparen` strips its paren).
+    if (target && !/^\d+$|^-$/.test(target) && !/^\(|^[<>]\(/.test(named)) out.push({ ...at(target), op: "write" });
   }
   let i = 0;
   let launched = false;
@@ -1163,7 +1178,9 @@ function segmentWriteTargets(seg, place) {
     // The script word: skip flags, their values and `run`; a placed path with a `tmp/` segment is a candidate for the hook to confirm.
     const script = args.find((a, j) => !a.startsWith("-") && a !== "run" && !SCRIPT_VALUE_FLAG_RE.test(args[j - 1] ?? ""));
     const placed = script && at(script);
-    if (placed && TMP_SCRIPT_RE.test(placed.path)) out.push({ ...placed, op: "run" });
+    // `dev-loops-run` resolves a relative script against a checkout root, never the shell cwd, so a `tmp/` script word needs no `cd` join or cwd check (`launcher`).
+    if (head === "dev-loops-run" && script && /^(?:\.\/)?tmp\//.test(script)) out.push({ path: script.replace(/^\.\//, ""), unresolvable: false, op: "run", launcher: true });
+    else if (placed && TMP_SCRIPT_RE.test(placed.path)) out.push({ ...placed, op: "run" });
   }
   return out;
 }

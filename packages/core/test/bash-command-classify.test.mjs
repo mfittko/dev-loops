@@ -1954,6 +1954,15 @@ const SHELL_WRITE_CASES = [
   // row 5
   ["cmd | tee src/a.mjs", [w("src/a.mjs")]],
   ["cmd | tee -a src/a.mjs", [w("src/a.mjs")]],
+  // a `tee` operand inside `>(...)` is the substitution's command, not a file
+  ["bun test 2>&1 | tee >(grep -c fail) tmp/log", [w("tmp/log")]],
+  ["cmd | tee >(wc -l) /dev/null", [w("/dev/null")]],
+  // `>` inside `(( ))` and `[[ ]]` is a comparison, not a redirect
+  ["(( i > n )) && echo y", []],
+  ["[[ \"$a\" > \"$b\" ]]", []],
+  ["for f in a b; do (( i > n )) && break; done", []],
+  ["((i>n)) && echo y > src/a.mjs", [w("src/a.mjs")]],
+  ["((echo hi) > src/a.mjs)", [w("src/a.mjs")]],
   ["{ a; b; } > src/a.mjs", [w("src/a.mjs")]],
   ["( a ) >> src/a.mjs", [w("src/a.mjs")]],
   // row 6, 7, 8
@@ -2000,7 +2009,9 @@ const SHELL_WRITE_CASES = [
   ["node scripts/claude/generate-claude-assets.mjs", []],
   ["cd \"$W\" && dev-loops-run scripts/loop/x.mjs --construct", []],
   // row 18: a script under tmp/
-  ["dev-loops-run --repo-root /x/wt tmp/x.mjs", [w("tmp/x.mjs", "run")]],
+  ["dev-loops-run --repo-root /x/wt tmp/x.mjs", [{ ...w("tmp/x.mjs", "run"), launcher: true }]],
+  ["cd packages && dev-loops-run tmp/x.mjs", [{ ...w("tmp/x.mjs", "run"), launcher: true }]],
+  ["cd packages && dev-loops-run scripts/loop/x.mjs", []],
   ["node tmp/x.mjs", [w("tmp/x.mjs", "run")]],
   ["bun tmp/x.mjs", [w("tmp/x.mjs", "run")]],
   ["bun run tmp/x.mjs", [w("tmp/x.mjs", "run")]],

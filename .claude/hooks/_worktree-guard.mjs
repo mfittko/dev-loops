@@ -338,8 +338,9 @@ export function classifyRepoMutation(abs) {
         inLinkedWorktree = false;
       }
     }
-  } catch {
-    // Outside every repo: not a mutation (the `.git` rule below still applies).
+  } catch (err) {
+    // Outside every repo: not a mutation (the `.git` rule below still applies). A killed or timed-out git says nothing about the repo, so it fails closed.
+    if (err?.code === "ETIMEDOUT" || err?.signal) isRepoMutation = true;
   }
   if (targetReal.split("/").includes(".git")) isRepoMutation = true;
   return { isRepoMutation, inLinkedWorktree, targetReal, repoRoot };

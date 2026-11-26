@@ -578,6 +578,23 @@ test("resolveTrackedFromCheckIgnore maps check-ignore exit status to guarded/all
   assert.equal(resolveTrackedFromCheckIgnore(undefined), true);
 });
 
+test("classifyRepoMutation fails closed when git rev-parse is killed or times out (a slow git is not outside every repo)", () => {
+  const base = realpathSync(mkdtempSync(path.join(tmpdir(), "wg-crm-kill-")));
+  const stub = path.join(base, "bin");
+  const oldPath = process.env.PATH;
+  try {
+    mkdirSync(stub);
+    writeFileSync(path.join(stub, "git"), "#!/bin/sh\nkill -9 $$\n", { mode: 0o755 });
+    process.env.PATH = `${stub}:${oldPath}`;
+    const result = classifyRepoMutation(path.join(base, "src", "a.mjs"));
+    assert.equal(result.isRepoMutation, true);
+    assert.equal(result.repoRoot, null);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("classifyRepoMutation fails closed when git check-ignore errors (AC5, corrupt index) and reports the scrubbed repo root", () => {
   const base = realpathSync(mkdtempSync(path.join(tmpdir(), "wg-crm-")));
   try {
