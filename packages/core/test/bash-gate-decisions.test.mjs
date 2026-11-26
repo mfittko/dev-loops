@@ -700,7 +700,7 @@ test("every non-canonical recorder spelling is denied, with and without a subage
   }
 });
 
-// Issue 2500: a subagent Bash command whose raw text contains `merge-pr` is denied, `--check` included.
+// Issue 2500: a subagent Bash command that runs the merge script is denied, `--check` included (the match is the run position, ADR 0331).
 const MERGE_DENY_FORMS = [
   "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 2630 --human-approved-by mfittko",
   "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5 --check",
@@ -719,7 +719,7 @@ const MERGE_DENY_FORMS = [
   'node scripts/github/merge-$""pr.mjs --pr 5',
 ];
 
-test("any subagent role is denied a command naming merge-pr, --check included (issue 2500)", () => {
+test("any subagent role is denied a command that runs the merge script, --check included (issue 2500)", () => {
   for (const role of ["dev-loop", "dev-loops:dev-loop", "gate-coordinator", "fixer"]) {
     for (const command of MERGE_DENY_FORMS) {
       const d = decideBashGateDeny({ ...BASE, role, command });
@@ -752,6 +752,7 @@ const MERGE_READ_ONLY_FORMS = [
   `git grep -n ${MERGE_SCRIPT} cli/`,
   `git grep ${MERGE_SCRIPT.replace(".mjs", "")} -- cli/`,
   `git show origin/main:docs/decisions/0297-subagent-may-run-merge-test-files.md`,
+  `git show origin/main:docs/decisions/0249-subagent-${MERGE_SCRIPT.replace(".mjs", "")}-deny.md`,
   `git show origin/main:${MERGE_PATH}`,
   `git diff origin/main -- ${MERGE_PATH}`,
   `sed -n '1,40p' ${MERGE_PATH}`,
