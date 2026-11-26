@@ -126,11 +126,11 @@ for (const change of ["miss", "metadata-text", "mode", "offset", "offset-touch",
 });
 
 // ADR 0330: a proven base-only merge between X and H passes the descendant site check.
-for (const scenario of ["carried", "rejected", "touch-revert", "site-differs"]) test(`base-only merge thread site carry: ${scenario}`, async () => {
+for (const scenario of ["carried", "rejected", "touch-revert", "site-differs", "missing-base-ref"]) test(`base-only merge thread site carry: ${scenario}`, async () => {
   await withRepoRoot(async (root) => {
     await initPristineGitFixture(root);
     const git = (...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
-    const file = path.join(root, "site.txt"), original = "one\ntwo\nthree\nfour\nfive\n";
+    const original = "one\ntwo\nthree\nfour\nfive\n";
     const commit = async (name, text, message = "change") => { await writeFile(path.join(root, name), text); git("add", "-A"); git("commit", "-qm", message); return git("rev-parse", "HEAD"); };
     const origin = await commit("site.txt", original);
     const candidate = await commit("site.txt", original.replace("three", "fixed"));
@@ -150,14 +150,13 @@ for (const scenario of ["carried", "rejected", "touch-revert", "site-differs"]) 
       const result = spawnSync(cmd, args, { cwd: root, env: gitEnvNoDirOverrides(), encoding: "utf8" });
       return { code: result.status, stdout: result.stdout, stderr: result.stderr };
     } };
-    const proof = () => assertDescendantThreadSites({ repo: REPO, pr: PR, candidateHead: candidate, headSha: head, baseRef: "base-line",
+    const proof = () => assertDescendantThreadSites({ repo: REPO, pr: PR, candidateHead: candidate, headSha: head, baseRef: scenario === "missing-base-ref" ? "refs/heads/missing" : "base-line",
       baseOnlyMergeCarries: async () => scenario !== "rejected",
       handoff: { dispositions: [{ threadId: "t", disposition: "tackled" }] },
       parsed: { comments: [{ threadId: "t", id: "root", databaseId: "1" }] }, repoRoot: root }, deps);
     if (scenario === "carried") await proof();
     else await assert.rejects(proof, (error) => /thread_site_(unverifiable|changed): t/.test(error.message)
       && /pre_approval_gate/.test(error.message) && /gate close-sequence/.test(error.message) && /draft_gate/.test(error.message));
-    void file;
   });
 });
 
@@ -699,7 +698,8 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
       git("checkout", "-qb", "base-line", git("rev-list", "--max-parents=0", "HEAD")); await writeFile(path.join(root, "other.txt"), "base change\n");
       git("add", "other.txt"); git("commit", "-qm", "base change");
       git("update-ref", "refs/remotes/origin/base-line", "HEAD"); git("checkout", "-q", "-");
-      git("merge", "--no-ff", "base-line", "-m", "merge base");    } else {
+      git("merge", "--no-ff", "base-line", "-m", "merge base");
+    } else {
       await writeFile(path.join(root, "site.txt"), repeated ? repeatedText : interHunk ? text.replace("one", "before").replace("five", "after") : text);
       git("add", "site.txt"); git("commit", "-qm", "developer");
     }

@@ -908,7 +908,7 @@ async function verifyFixerDispositionCore(
     assertActItemThreadsDisposed(actList, handoff, initialSnapshot, gateLogin, deltaStatuses, completion, operatorFocus);
   }
   if (handoff.headSha !== options.headSha) {
-    if (source === "act-list" && !completion) throw new Error("thread_site_unverifiable: descendant ACT delivery needs authenticated completion input; run pre_approval_gate with the open threads in --known-findings");
+    if (source === "act-list" && !completion) throw new Error("thread_site_unverifiable: descendant ACT delivery needs authenticated completion input; on a ready PR run pre_approval_gate with the open threads in --known-findings; on a draft PR run gate close-sequence for the plan's reviewed baseline, then the next draft_gate round with the threads in --known-findings");
     const contained = await isCommitContainedByHead({ repo: options.repo, commitSha: handoff.headSha, headSha: options.headSha }, runtime);
     if (!contained.contained) throw new Error(`candidate is not contained by the observed head: ${contained.reason}; run a full gate round`);
     await assertDescendantThreadSites({ ...options, baseRef, candidateHead: handoff.headSha, handoff, parsed: initialSnapshot, repoRoot }, runtime);
