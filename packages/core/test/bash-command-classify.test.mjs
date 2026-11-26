@@ -1971,6 +1971,12 @@ const SHELL_WRITE_CASES = [
   ["cat <(echo \\() > src/a.mjs", [w("src/a.mjs")]],
   ["cat <(echo \"(\") > src/a.mjs", [w("src/a.mjs")]],
   ["((echo hi) > src/a.mjs)", [w("src/a.mjs")]],
+  // a `((` group is arithmetic only while its parens stay balanced up to the closing `))`; otherwise bash reads nested subshells
+  ["((cat) > src/a.mjs < <(echo))", [w("src/a.mjs")]],
+  ["((echo hi) > src/a.mjs 2> >(cat))", [w("src/a.mjs")]],
+  // a redirect glued after the `)` that closes a process substitution is still read
+  ["cat <(echo hi)>src/a.mjs", [w("src/a.mjs")]],
+  ["cmd | tee >(grep x)>src/a.mjs", [w("src/a.mjs")]],
   ["{ a; b; } > src/a.mjs", [w("src/a.mjs")]],
   ["( a ) >> src/a.mjs", [w("src/a.mjs")]],
   // row 6, 7, 8

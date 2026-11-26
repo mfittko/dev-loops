@@ -1099,12 +1099,34 @@ function segmentWriteTargets(seg, place) {
   // `close` ends the raw word with unescaped characters (an even run of backslashes before it).
   const closes = (raw, close) => raw.endsWith(close) && (raw.slice(0, -close.length).match(/\\*$/)[0].length % 2 === 0);
   // A `(( ... ))` or `[[ ... ]]` group that opens at command position and closes in this segment holds comparisons, so its `>` is no redirect. An unclosed `((` stays visible (it may be a subshell).
+  // A `((` group is arithmetic only when its unquoted parens never go below zero before a closing `))` at a word end; otherwise bash reads nested subshells (`((cat) > f < <(x))`).
+  const arithEnd = (from) => {
+    let depth = 0;
+    for (let j = from; j < seg.words.length; j++) {
+      const x = seg.words[j];
+      if (x.op) continue;
+      const raw = j === from ? x.raw.slice(2) : x.raw;
+      let q = null;
+      for (let k = 0; k < raw.length; k++) {
+        const c = raw[k];
+        if (q === "'") { if (c === "'") q = null; continue; }
+        if (c === "\\") { k++; continue; }
+        if (q === '"') { if (c === '"') q = null; continue; }
+        if (c === "'" || c === '"') q = c;
+        else if (c === "(") depth++;
+        else if (c === ")") {
+          if (depth > 0) depth--;
+          else return raw[k + 1] === ")" && k + 2 === raw.length ? j : -1;
+        }
+      }
+    }
+    return -1;
+  };
   const noTests = [];
   let atCommand = true;
   for (let i = 0; i < seg.words.length; i++) {
     const w = seg.words[i];
-    const close = !atCommand || w.op ? null : w.raw.startsWith("((") ? "))" : w.raw === "[[" ? "]]" : null;
-    const end = !close ? -1 : w.raw.length > 2 && closes(w.raw, close) ? i : seg.words.findIndex((x, j) => j > i && !x.op && closes(x.raw, close));
+    const end = !atCommand || w.op ? -1 : w.raw.startsWith("((") ? arithEnd(i) : w.raw === "[[" ? seg.words.findIndex((x, j) => j > i && !x.op && closes(x.raw, "]]")) : -1;
     if (end >= 0) i = end;
     else {
       noTests.push(w);
@@ -1112,13 +1134,34 @@ function segmentWriteTargets(seg, place) {
     }
   }
   // The words of a `>(cmd args)` / `<(cmd args)` process substitution after its opening word are a command, not operands.
+  // The text after the unquoted `)` that brings `depth` to zero is outside the substitution (`<(a)>f`), so a redirect there is still read.
+  const afterClose = (raw, depth) => {
+    let q = null;
+    for (let k = 0; k < raw.length; k++) {
+      const c = raw[k];
+      if (q === "'") { if (c === "'") q = null; continue; }
+      if (c === "\\") { k++; continue; }
+      if (q === '"') { if (c === '"') q = null; continue; }
+      if (c === "'" || c === '"') q = c;
+      else if (c === "(") depth++;
+      else if (c === ")" && --depth === 0) return { depth, rest: raw.slice(k + 1) };
+    }
+    return { depth, rest: null };
+  };
   let substDepth = 0;
-  const words = noTests.flatMap((w) => {
-    if (substDepth > 0) { substDepth += parenDelta(w.raw); return []; }
-    if (!w.op && /^\d*[<>]\(/.test(w.raw)) substDepth = Math.max(0, parenDelta(w.raw));
+  const emit = (w) => {
     if (w.op) return [w];
     const pieces = splitAtRedirects(w.raw);
     return pieces.length === 1 ? [w] : pieces.map((raw) => ({ raw, value: tokenizeShellCommand(raw).segments[0]?.words[0]?.value ?? raw }));
+  };
+  const words = noTests.flatMap((w) => {
+    if (substDepth > 0) {
+      const { depth, rest } = afterClose(w.raw, substDepth);
+      substDepth = depth;
+      return rest ? emit({ raw: rest, value: tokenizeShellCommand(rest).segments[0]?.words[0]?.value ?? rest }) : [];
+    }
+    if (!w.op && /^\d*[<>]\(/.test(w.raw)) substDepth = Math.max(0, parenDelta(w.raw));
+    return emit(w);
   });
   // A value is literal when every word that spells it is fully single-quoted, so `'tmp/a[1].md'` is no glob while `tmp/a[1].md` is.
   const literal = new Map();
