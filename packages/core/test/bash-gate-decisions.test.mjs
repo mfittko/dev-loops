@@ -753,15 +753,20 @@ const MERGE_RUN_FORMS = [
   `bun "${MERGE_PATH}" --pr 5`,
   `bun ${MERGE_SCRIPT.replace("-", `-""`)} --pr 5`,
   `bun ${MERGE_SCRIPT.replace("-", "\\-")} --pr 5`,
-  // A separator inside quotes before a launcher word stays denied (the launcher lookahead in normalizeForMergeMatch).
+  // A launcher word after a separator inside quotes stays denied.
   `echo "$(node ${MERGE_PATH} --pr 5)"`,
   `bash -c "echo x; node ${MERGE_PATH}"`,
-  // An escaped quote never takes part in quote pairing.
+  // Every quote and backslash is stripped, so no escaped-quote shape can flip quote pairing.
   `echo "a\\"b"; ${MERGE_PATH} --check; echo "c"`,
   `echo it\\'s; ${MERGE_PATH} --check; echo x\\'`,
-  // An escaped backslash or a literal backslash before a closing quote leaves the quote closing.
   `echo "a\\\\"; ${MERGE_PATH} --check; echo "b"`,
   `echo 'a\\'; ${MERGE_PATH} --check; echo 'b'`,
+  `echo $'a\\'b'; ${MERGE_PATH} --check; echo 'c'`,
+  `'node' ${MERGE_PATH} --check`,
+  `bun test ${MERGE_SCRIPT.replace(".mjs", "")}`,
+  // A quoted pattern with a separator and the name is a fail-closed over-deny (ADR 0331).
+  `rg "foo|${MERGE_SCRIPT}" cli/`,
+  `grep -nE "(${MERGE_SCRIPT}|x)" cli/`,
 ];
 const MERGE_READ_ONLY_FORMS = [
   `git grep -n ${MERGE_SCRIPT} cli/`,
@@ -773,9 +778,6 @@ const MERGE_READ_ONLY_FORMS = [
   `sed -n '1,40p' ${MERGE_PATH}`,
   `grep -n x ${MERGE_PATH}`,
   `rg ${MERGE_SCRIPT} cli/`,
-  `rg "foo|${MERGE_SCRIPT}" cli/`,
-  `grep -nE "(${MERGE_SCRIPT}|x)" cli/`,
-  `grep -n "a\\"b|${MERGE_SCRIPT}" cli/`,
   `cat ${MERGE_PATH}`,
   `head -20 ${MERGE_PATH}`,
   `bun test test/github/${MERGE_SCRIPT.replace(".mjs", ".test.mjs")}`,

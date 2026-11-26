@@ -265,21 +265,15 @@ export function decideUnresolveOwnerDeny({ command, role }) {
   return null;
 }
 
-// Bash drops empty quote pairs and backslashes (`merge-""pr`, `merge\-pr`), so strip those. One left-to-right pass resolves backslash pairs in order: an escaped quote or backslash is dropped, so it never pairs, and a single-quoted string keeps its literal backslash (`'a\'`). Quote characters otherwise stay, so a quoted run path still matches.
-// A separator inside a quoted pattern (`rg "foo|name"`) is data, so neutralize it unless a launcher word follows (`"$(node <path>)"`).
-const unescapeBackslash = (_, c) => (/["'\\]/.test(c) ? "" : c);
-const normalizeForMergeMatch = (command) => command
-  .replace(/\\(.)|'[^']*'|"(?:\\.|[^"\\])*"/gs, (t, c) => (c !== undefined ? unescapeBackslash(t, c) : t[0] === '"' ? t.replace(/\\(.)/gs, unescapeBackslash) : t))
-  .replace(/\$?(?:""|'')/g, "")
-  .replace(/["'](?=(?:node|bun|dev-loops-run)\s)/g, " ")
-  .replace(/"[^"]*"|'[^']*'/g, (q) => q.replace(/[;&|(`](?!\s*(?:\S*\/)?(?:node|bun|dev-loops-run)\s)/g, "_"));
+// Bash drops quotes and backslashes (`merge-""pr`, `merge\-pr`, `'node' <path>`), so strip them all before the run-position match. No quote pairing: an escaped quote cannot flip it.
+const normalizeForMergeMatch = (command) => command.replace(/\$(?=["'])|[\\"']/g, "");
 
 /**
  * Merge ownership (issue 2500, ADR 0331): `merge-pr.mjs` is orchestrator-owned, so a subagent Bash command that RUNS it is denied, `--check` included.
- * The match is the run position (`scriptInvocationRe`) on the command with empty quote pairs and backslashes stripped (Bash drops them: `merge-""pr`, `merge\-pr`), with or without the `.mjs` extension.
+ * The match is the run position (`scriptInvocationRe`) on the command with every quote and backslash stripped (Bash drops them: `merge-""pr`, `merge\-pr`, `merge-"pr".mjs`), with or without the `.mjs` extension.
  * A read-only mention (`grep`, `git show`, `sed -n`) and a `.test.mjs` path do not run the script and are allowed.
  * The top-level session (role null) keeps the script. Keys on the role name alone, like the unresolve allowlist.
- * ponytail: ceiling: only the listed run forms are denied and any other shell form that runs the script is uncaught, for example a quoted launcher word (`'node' <path>`) or a brace group (`{ <path>; }`). A name assembled by variable or command substitution (`m=merge; ...$m-pr`), by a shell glob or brace expansion of the file name (`merge-pr.m*`, `merge-pr.{mjs,}`) or by a non-empty quote split (`merge-"pr".mjs`, `'merge'-pr.mjs`) is not caught; the orchestrator is the only actor allowed to run the script.
+ * ponytail: ceiling: only the listed run forms are denied and any other shell form that runs the script is uncaught, for example a brace group (`{ <path>; }`). A quoted search pattern that holds a separator and the name (`rg "foo|<name>.mjs"`, `grep -nE "(<name>.mjs|x)"`) is a fail-closed over-deny. A name assembled by variable or command substitution (`m=merge; ...$m-pr`) or by a shell glob or brace expansion of the file name (`merge-pr.m*`, `merge-pr.{mjs,}`) is not caught; the orchestrator is the only actor allowed to run the script.
  * @param {{command: string, role: string|null|undefined}} params
  * @returns {{ruleId: null, reason: string}|null}
  */
