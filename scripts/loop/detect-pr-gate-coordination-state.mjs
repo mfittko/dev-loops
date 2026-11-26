@@ -32,7 +32,7 @@ import {
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { convergedCarryAccepts } from "../github/_carried-verdict.mjs";
-import { capRoundActList, countCapRounds, countCompletedRounds, effectiveRounds, operatorDecidedLatestRound, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { actFingerprintSet, capRoundActList, countCapRounds, countCompletedRounds, effectiveRounds, operatorDecidedLatestRound, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
 import { readOperatorFocusFile } from "./_operator-focus.mjs";
 import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
@@ -238,6 +238,7 @@ export function parseDetectPrGateCoordinationCliArgs(argv) {
     }
     if (token.name === "operator-focus-file") {
       options.operatorFocusFile = requireTokenValue(token, parseError).trim();
+      if (options.operatorFocusFile.length === 0) throw parseError("--operator-focus-file must not be empty/whitespace-only");
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -1455,9 +1456,8 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnly
  * (the once-per-set rule of resolveOperatorClearedRound in write-gate-context.mjs).
  */
 async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round, cap }) {
-  const sets = (log) => capRoundActList(log.findings, log.headSha).map((a) => a.fingerprint).sort();
-  const last = logs.at(-1), fingerprints = sets(last);
-  if (cap > 0 && round > cap + 1 && (await effectiveRounds(logs, { prBase: context.prData?.baseRefName, repoRoot })).slice(cap).some((log) => log !== last && sets(log).join() === fingerprints.join())) return false;
+  const last = logs.at(-1), fingerprints = actFingerprintSet(last);
+  if (cap > 0 && round > cap + 1 && (await effectiveRounds(logs, { prBase: context.prData?.baseRefName, repoRoot })).slice(cap).some((log) => log !== last && actFingerprintSet(log).join() === fingerprints.join())) return false;
   return operatorDecidedLatestRound({ repo: context.repo, pr: context.pr, gate, operatorFocusFile }, { repoRoot, latest: last, last: fingerprints });
 }
 

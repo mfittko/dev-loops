@@ -2255,7 +2255,7 @@ export async function capFixBudgetFacts({ fromHead, headSha, prBase, repoRoot, r
 }
 
 /** Sorted fingerprints of the acted clusters of one round ledger: the act list's unit (capRoundActList), the only fingerprints the emitter binds a focus item to. */
-const actFingerprintSet = (log) => capRoundActList(log.findings, log.headSha).map((a) => a.fingerprint).sort();
+export const actFingerprintSet = (log) => capRoundActList(log.findings, log.headSha).map((a) => a.fingerprint).sort();
 
 /** Whether `options.headSha` follows the clean closed round at `fromHead` by a base-only merge, so a clean verdict can post at the merged head (the empty PR-own delta stays refused otherwise). */
 async function isCleanBaseMerge(options, { repoRoot, prBase, fromHead }) {

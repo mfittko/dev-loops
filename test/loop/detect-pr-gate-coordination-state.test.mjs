@@ -5485,7 +5485,7 @@ test("resolveCapBrakes does not count a pre_approval_gate round forced by a base
 });
 
 // GATE-EXEC-CAP-BRAKES (AC7): an unreadable cap-brakes ledger read is advisory; a sealed-ledger tamper still propagates.
-async function detectWithPriorLedger(headSummary, { tamper = false, corrupt = false } = {}) {
+async function detectWithPriorLedger(headSummary, { tamper = false, corrupt = false, repeatPrior = false, withFocusFile = false } = {}) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-cap-brakes-warning-"));
   try {
     initGitFixture(tempDir, { branch: "main" });
@@ -5496,19 +5496,32 @@ async function detectWithPriorLedger(headSummary, { tamper = false, corrupt = fa
     const ledger = (head, loggedAt, list) => writeSealed(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt, findings: list }));
     const act = { severity: "medium", summary: headSummary, file: "src/x.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix x" };
     if (corrupt) await writeFile(path.join(findings, `draft_gate-${"1".repeat(40)}.json`), "{ not json");
-    else await ledger("1".repeat(40), "2026-11-15T00:01:00.000Z", []);
+    else await ledger("1".repeat(40), "2026-11-15T00:01:00.000Z", repeatPrior ? [act] : []);
     await ledger(headSha, "2026-11-16T00:00:00.000Z", [act]);
+    let operatorFocusFile;
+    if (withFocusFile) {
+      const { items } = await resolveCapBrakes({ repo: "owner/repo", pr: 10, currentHeadSha: headSha, prData: { isDraft: true } }, { repoRoot: tempDir, config: { version: 1 } });
+      operatorFocusFile = path.join(tempDir, "focus.json");
+      await writeFile(operatorFocusFile, JSON.stringify({ items: items.map((item) => ({ fingerprint: item.slice(0, 16), decision: "fix it" })) }), "utf8");
+    }
     if (tamper) {
       const file = path.join(findings, `draft_gate-${"1".repeat(40)}.json`);
       await writeFile(file, (await readFile(file, "utf8")).replace("2026-11-15", "2026-11-14"));
     }
     const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
     const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
-    return await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+    return await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10, operatorFocusFile }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 }
+
+test("detectPrGateCoordinationState forwards --operator-focus-file into the cap brakes: a full file clears the non_convergence stop", async () => {
+  const stopped = await detectWithPriorLedger("x", { repeatPrior: true });
+  assert.equal(stopped.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  const cleared = await detectWithPriorLedger("x", { repeatPrior: true, withFocusFile: true });
+  assert.notEqual(cleared.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+});
 
 test("a cap-brakes read that throws a non-tamper error sets capBrakesWarning and keeps the route", async () => {
   const healthy = await detectWithPriorLedger("x");
@@ -5577,6 +5590,15 @@ test("resolveCapBrakes keeps the cap stop (no operatorCleared) when the focus fi
   }
 });
 
+test("resolveCapBrakes: a repeat that sits only at the cap round is outside the once-per-set window and still clears", async () => {
+  const t = await capBrakesLedgers("pre_approval_gate", ["1", "2", "3", "4"].map((c) => c.repeat(40)), { sets: [["x"], ["a", "b"], ["c"], ["a", "b"]] });
+  try {
+    assert.equal((await t.brakes(await t.focus(t.fingerprints))).operatorCleared, true);
+  } finally {
+    await rm(t.dir, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapBrakes: the once-per-set rule holds past the cap on pre_approval_gate, while a repeated draft_gate set with cap 0 still clears", async () => {
   const pre = await capBrakesLedgers("pre_approval_gate", ["1", "2", "3", "4"].map((c) => c.repeat(40)));
   const draft = await capBrakesLedgers("draft_gate", ["1", "2", "3"].map((c) => c.repeat(40)));
@@ -5593,6 +5615,8 @@ test("loop gate-coordination refuses a malformed --operator-focus-file before an
   const dir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-malformed-"));
   try {
     assert.equal(parseDetectPrGateCoordinationCliArgs(["--repo", "o/r", "--pr", "1", "--operator-focus-file", "f.json"]).operatorFocusFile, "f.json");
+    assert.equal(parseDetectPrGateCoordinationCliArgs(["--repo", "o/r", "--pr", "1", "--operator-focus-file", "/abs/path/focus.json"]).operatorFocusFile, "/abs/path/focus.json");
+    for (const bad of ["", " ", "\t"]) assert.throws(() => parseDetectPrGateCoordinationCliArgs(["--repo", "o/r", "--pr", "1", "--operator-focus-file", bad]), /--operator-focus-file/);
     const file = path.join(dir, "focus.json");
     await writeFile(file, "{ not json", "utf8");
     const runChild = async () => { throw new Error("GitHub was read"); };

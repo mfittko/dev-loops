@@ -5157,8 +5157,9 @@ test("a pre_approval_gate act list at a base-merged head is counted at the carri
 
 test("a pre_approval_gate act list at a base-merge-forced head without a carry does not count the forced round, and a PR-own change after the merge does", async () => {
   await withFixture(async (fx) => {
-    const { merged, over } = await mergedPreApprovalScenario(fx);
-    assert.equal((await fx.emit(over(merged))).workOrder.source, "act-list");
+    // The verdict belongs to the cap round (origin head): at the cap a ledgerless base-only merge reads it there.
+    const { origin, over } = await mergedPreApprovalScenario(fx);
+    assert.equal((await fx.emit(over(origin))).workOrder.source, "act-list");
   });
   await withFixture(async (fx) => {
     const { merged, over } = await mergedPreApprovalScenario(fx, { ownChangeAfterMerge: true });
@@ -5188,5 +5189,17 @@ test("a pre_approval_gate act list at a base-only merge of a past-cap round head
   await withFixture(async (fx) => {
     const { origin, over } = await mergedPreApprovalScenario(fx, { ownChangeAfterMerge: true, earlierRounds: ["d".repeat(40), "e".repeat(40)] });
     await assert.rejects(fx.emit(over(origin)), (e) => e.refusal === "round_cap_reached");
+  });
+});
+
+// Issue 3589: the base-merge cap-head fallback applies only at the cap, so below it the carry seam stays the only acceptance path.
+test("a pre_approval_gate act list at a base-only merge below the cap does not read the cap-round head and refuses verdict_not_posted", async () => {
+  await withFixture(async (fx) => {
+    const { origin, over } = await mergedPreApprovalScenario(fx, { earlierRounds: [] });
+    const base = over(origin);
+    // The carry seam's verdict read finds nothing at the cap-round head and refuses the carry.
+    let first = true;
+    const fetchVerdictMarkers = (a) => { const probe = first ? { ...a, headSha: "0".repeat(40) } : a; first = false; return base.fetchVerdictMarkers(probe); };
+    await assert.rejects(fx.emit({ ...base, fetchVerdictMarkers }), (e) => e.refusal === "verdict_not_posted");
   });
 });

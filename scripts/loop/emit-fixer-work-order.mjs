@@ -732,8 +732,11 @@ async function emitPlan({
       const from = closureFromHeadOf(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), onUnreadable: () => { throw new Error("unreadable prior ledger"); } }));
       const baseRefName = (await memoFetchBase())?.baseRefName;
       if (!(from && from !== headSha && baseRefName && await isBaseOnlyMergeSince({ fromHead: from, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd }))) return null;
+      // Below the cap the carry seam stays the only acceptance path for a ledgerless merged head.
+      const cap = resolveGateConfig(config, "preApproval").maxReviewRounds;
+      if (!(cap > 0 && await countCapRounds({ repo, pr, gate, headSha: from, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: baseRefName }) >= cap)) return null;
       await capture.read(ledgerPath(from)); // pin the cap-round ledger like the carry seam
-      return from;
+      return currentHeadLedgerExists() ? null : from; // re-check after the pending reads, as carryOriginHead does
     } catch { return null; }
   };
   // One read of the operator focus file for the AC7 later-pass decision and the binding below: a shape error refuses here under GATE-EXEC-OPERATOR-FOCUS, never inside the swallowing cap-round catch.
@@ -994,8 +997,6 @@ async function emitPlan({
     try { markers = await fetchVerdictMarkers({ repo, pr, headSha: capRoundHead, gate, runtime: { env, ghCommand, runChild } }); } catch (error) {
       throw new Refusal(`verdict_not_posted: could not read the PR's posted verdicts (${error?.message ?? error}); post the ${gate} verdict review at ${capRoundHead} before fixing: ${upsert}`, "verdict_not_posted");
     }
-    // A cap-round head read (issue 3589) that finds no verdict still accepts one posted at the current head.
-    if (!verdictPosted(markers) && capRoundHead !== headSha) markers = await fetchVerdictMarkers({ repo, pr, headSha, gate, runtime: { env, ghCommand, runChild } }).catch(() => undefined);
     if (!verdictPosted(markers) && !(await carryOriginHead())) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${capRoundHead}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`, "verdict_not_posted", `${upsert}; when the post is refused for red current-head CI, run wait-pr-checks.mjs for the head, save its JSON, and emit with --ci-file <that file> --act-list-file ${actListFile} --gate ${gate} so the act items and the CI failure share one fixer order`);
   }
 
