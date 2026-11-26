@@ -15,7 +15,7 @@ gate evidence/ledgers under `tmp/gate-findings/`; tracked files of a loop worktr
 this boundary: opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open), fail-closed once
 enforced, it denies a tracked-file Write/Edit whose `agent_type` is `dev-loop` or `gate-coordinator`; a worker
 subagent's `agent_type` is unaffected. It is a targeted denylist, not an airtight sandbox:
-Bash-driven tracked mutations (`git commit`, `sed -i`, `> file`) stay convention-enforced, and
+Bash-driven tracked mutations (`git commit`, `git push`, branch creation) stay convention-enforced (a shell file write is denied by `OPS-EDITOR-TOOL-WRITES`), and
 the top-level/inline agent (`agent_type: null`) falls under the opt-in `DEVLOOPS_MAIN_AGENT_READONLY` hook described at the end of this section. On Pi, see
 "Guarded surface and deliberate ceilings" below for what it does and does not cover. **The coordinator also
 delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/

@@ -50,6 +50,9 @@
  *     records its agent_id as the binding the Write/Edit guard checks (ADR 0107); a modified
  *     fixer pull line (prefix, suffix, redirect, `cd`) is denied with the exact line to run.
  *     The fixer Bash commit/push boundary is owned by issue 2534.
+ *   - a shell write to a repository file (`OPS-EDITOR-TOOL-WRITES`, issue 2683): a redirect, `tee`, `sed -i`, `perl -i`, a `cp`/`mv`/`rm`
+ *     target, or a `tmp/` script run, from a coordinator (`DEVLOOPS_COORDINATOR_READONLY=1`) or a developer or fixer (always on).
+ *     `shellWriteTargets` reads the targets; the hook classifies each with `classifyRepoMutation`; `decideBashGate` applies the role table.
  *   - every command from the read-only `judge` subagent except its sanctioned work-order pull
  *     (`dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>`, ADR 0106, ADR 0115),
  *     its decision check (`check-judge-decision.mjs`) and its read-only search commands (ADR 0269).
@@ -67,8 +70,11 @@ import {
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   normalizeGitHubRepoSlug,
+  shellWriteTargets,
   tokenizeShellCommand,
+  UNRESOLVABLE_WORD_RE,
 } from "./_bash-command-classify.mjs";
+import { classifyRepoMutation } from "./_worktree-guard.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
 
@@ -286,8 +292,34 @@ if (inManagedContext) {
 // as boundary 3 of pre-tool-use-write-guard.mjs (decideCoordinatorWriteGuard).
 const enforceCoordinator = process.env.DEVLOOPS_COORDINATOR_READONLY === "1";
 
+// OPS-EDITOR-TOOL-WRITES (issue 2683): resolve each shell write target against cwd and classify it with the Write guard's repo-mutation test.
+// Only the guarded roles pay the git calls. An unresolvable target stays unclassified (the decider denies it fail closed).
+// A `run` target counts only under the `tmp/` directory of the repository that holds the script (a worktree script is not a tmp script).
+const shellWrites = typeof command === "string" && (/(?:^|:)(?:developer|fixer)$/.test(agentType ?? "") || (enforceCoordinator && /(?:^|:)(?:dev-loop|gate-coordinator)$/.test(agentType ?? "")))
+  ? shellWriteTargets(command).flatMap((target) => {
+    if (target.unresolvable) return [{ ...target, repoMutation: true, existingFile: false }];
+    // A throw here (statSync on ENAMETOOLONG, ELOOP, EACCES) would crash the hook and let the command run, so it denies fail closed.
+    // A launcher `run` target (`dev-loops-run tmp/...`) resolves against a checkout root, not cwd, so it needs no classification.
+    if (target.launcher) return [{ ...target, repoMutation: true, existingFile: false }];
+    try {
+      const abs = path.resolve(cwd, target.path);
+      const { isRepoMutation, targetReal, repoRoot } = classifyRepoMutation(abs);
+      if (target.op === "run") return repoRoot !== null && targetReal.startsWith(`${repoRoot}/tmp/`) ? [{ ...target, repoMutation: true, existingFile: false }] : [];
+      const stat = fs.statSync(abs, { throwIfNoEntry: false });
+      // A copy into an existing directory lands on `<dir>/<basename(source)>`; a glob or `$` source names no file, so it is unresolvable.
+      const into = target.op === "copy" && stat?.isDirectory() === true;
+      if (into && isRepoMutation && (target.sources ?? []).some((s) => UNRESOLVABLE_WORD_RE.test(s))) return [{ ...target, unresolvable: true, repoMutation: true, existingFile: false }];
+      const existingFile = isRepoMutation && (into ? (target.sources ?? []).some((s) => fs.existsSync(path.join(abs, path.basename(s)))) : stat !== undefined);
+      return [{ ...target, repoMutation: isRepoMutation, existingFile, gitDir: targetReal.split("/").includes(".git") }];
+    } catch {
+      return [{ ...target, unresolvable: true, repoMutation: true, existingFile: true }];
+    }
+  })
+  : [];
+
 const bashGateFacts = {
   command,
+  shellWrites,
   repoSlug,
   managedRepoSlug,
   inManagedContext,
