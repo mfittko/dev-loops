@@ -414,7 +414,7 @@ merge and re-check. Never rebase a pushed branch and never force-push it: merge 
 push the merge and re-check at the new head. The merge procedure is owned by `GATE-EXEC-BASE-REFRESH` in
 [Gate review sub-loop contract](gate-review-sub-loop-contract.md#base-refresh-before-a-gate-round).
 Run `dev-loops-run --repo-root <worktree> scripts/loop/pre-write-remote-freshness-guard.mjs --base <base>`
-before validation, before push and before every gate dispatch. It exits nonzero with
+before a `pre_approval_gate` validation and before a `pre_approval_gate` dispatch. A `draft_gate` round needs no base merge. It exits nonzero with
 `base_stale_integrate_first`, the newer commits and any `foreignFiles` (files that differ from
 `origin/<base>` only because the base moved), with `base_fetch_failed` when the fetch fails or times
 out, or with `base_not_origin_branch` for a SHA, revision expression or non-origin remote ref.

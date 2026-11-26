@@ -1,4 +1,4 @@
-# 0325. A draft_gate round runs at a stale base, and only the pre_approval_gate refreshes it
+# 0326. A draft_gate round runs at a stale base, and only the pre_approval_gate refreshes it
 
 ## Status
 

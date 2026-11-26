@@ -148,7 +148,7 @@ const REMOVED_FLAGS = new Set([
   "--force",
   "--force-reason",
 ]);
-// GATE-EXEC-BASE-REFRESH proof that only the base moved: every same-head round's write-gate-context refuses at a stale base, so a base_current context for this gate and head proves the head held the base when that context was written.
+// GATE-EXEC-BASE-REFRESH proof that only the base moved: every same-head pre_approval_gate round's write-gate-context refuses at a stale base, so a base_current context for this gate and head proves the head held the base when that context was written.
 // Only the reviewed worktree (the first checkout) counts: a context in another checkout belongs to an earlier same-head round (as in readReviewedBodySha256).
 // A missing or unreadable context, or one for another base, is no proof (fail closed).
 async function roundStartedAtCurrentBase(options, headSha, repoRoot, base) {
@@ -2978,10 +2978,10 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   // GATE-EXEC-BASE-REFRESH: a clean pre_approval_gate never records at a head that lacks origin/<base>; a draft_gate verdict records at a stale head.
   // An injected runChild test double skips the fetch unless the test injects the checker too.
   let staleBaseNote = null;
-  const refuseStaleBase = async (verdict = options.verdict) => {
+  const refuseStaleBase = async () => {
     const checkFreshness = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
     const prBase = coordinationContext?.prData?.baseRefName;
-    if (verdict === "clean" && options.gate === "pre_approval_gate" && checkFreshness && typeof prBase === "string" && prBase.trim()) {
+    if (options.verdict === "clean" && options.gate === "pre_approval_gate" && checkFreshness && typeof prBase === "string" && prBase.trim()) {
       let seen;
       const stale = await staleBaseReason({ base: prBase.trim(), head: canonicalHeadSha, cwd: repoRoot, env, check: async (input) => (seen = await checkFreshness(input)) });
       // Only the base moved during the round: post the verdict with a visible note; the base-merge carry decides whether it stands at the new head.
@@ -3035,7 +3035,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     if (convergedInput) {
       // A clean base merge after the fixer commit leaves the PR patch unchanged, so the fixer commit still stands for the PR head.
       const baseName = coordinationContext.prData?.baseRefName;
-      // Refresh origin/<base> first so the classifier reads the same base tip as the freshness check; the result is ignored here.
+      // Refresh origin/<base> first so the classifier reads the current base tip; the result is ignored here.
       const refreshBase = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
       if (convergedInput.fixerCommit !== evidence.currentHeadSha && refreshBase && typeof baseName === "string" && baseName.trim()) {
         await refreshBase({ base: baseName.trim(), head: evidence.currentHeadSha, cwd: repoRoot, env, trusted: true }).catch(() => null);
