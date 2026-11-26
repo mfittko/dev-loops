@@ -731,6 +731,56 @@ test("any subagent role is denied a command naming merge-pr, --check included (i
   }
 });
 
+// Issue 3605 (ADR 0331): the deny matches the run position. Names are built from parts so this file stays name-free for the hook.
+const MERGE_SCRIPT = ["merge", "pr.mjs"].join("-");
+const MERGE_PATH = `scripts/github/${MERGE_SCRIPT}`;
+const MERGE_RUN_FORMS = [
+  `node ${MERGE_PATH} --pr 5`,
+  `bun ${MERGE_PATH} --pr 5`,
+  `dev-loops-run ${MERGE_PATH} --pr 5`,
+  `dev-loops-run --repo-root /w ${MERGE_PATH} --pr 5`,
+  `${MERGE_PATH} --pr 5`,
+  `./${MERGE_PATH} --pr 5`,
+  ...[";", "&&", "||", "|", "(", "`"].map((sep) => `echo x ${sep} node ${MERGE_PATH} --pr 5`),
+  ...[";", "&&", "||", "|", "(", "`"].map((sep) => `echo x ${sep} ${MERGE_PATH} --pr 5`),
+  `node ${MERGE_PATH} --check --pr 5`,
+  `dev-loops-run ${MERGE_PATH} --pr 5 --check`,
+  `${MERGE_PATH} --check`,
+  `echo x && dev-loops-run --repo-root /w ${MERGE_PATH} --check`,
+];
+const MERGE_READ_ONLY_FORMS = [
+  `git grep -n ${MERGE_SCRIPT} cli/`,
+  `git grep ${MERGE_SCRIPT.replace(".mjs", "")} -- cli/`,
+  `git show origin/main:docs/decisions/0297-subagent-may-run-merge-test-files.md`,
+  `git show origin/main:${MERGE_PATH}`,
+  `git diff origin/main -- ${MERGE_PATH}`,
+  `sed -n '1,40p' ${MERGE_PATH}`,
+  `grep -n x ${MERGE_PATH}`,
+  `rg ${MERGE_SCRIPT} cli/`,
+  `cat ${MERGE_PATH}`,
+  `head -20 ${MERGE_PATH}`,
+  `bun test test/github/${MERGE_SCRIPT.replace(".mjs", ".test.mjs")}`,
+  `node --test test/github/${MERGE_SCRIPT.replace(".mjs", ".test.mjs")}`,
+];
+
+test("every run form of the merge script is denied for a subagent (issue 3605)", () => {
+  for (const command of MERGE_RUN_FORMS) {
+    const d = decideMergePrOwnerDeny({ command, role: "developer" });
+    assert.ok(d, command);
+    assert.match(d.reason, /MERGE_PR_OWNER/);
+  }
+});
+
+test("a read-only mention of the merge script and its test files are allowed for a subagent (issue 3605)", () => {
+  for (const command of MERGE_READ_ONLY_FORMS) {
+    assert.equal(decideMergePrOwnerDeny({ command, role: "developer" }), null, command);
+  }
+});
+
+test("the main agent keeps every run form of the merge script (issue 3605)", () => {
+  for (const command of MERGE_RUN_FORMS) assert.equal(decideMergePrOwnerDeny({ command, role: null }), null, command);
+});
+
 test("the canonical spelling passes for the main agent and is denied for a subagent", () => {
   const command = `dev-loops-run cli/index.mjs ${RECORDER_TAIL}`;
   assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null);

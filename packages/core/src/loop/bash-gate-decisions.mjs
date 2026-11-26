@@ -94,7 +94,9 @@ export function normalizeAgentType(agentType) {
 
 // Intermediate tokens exclude shell separators so a compound command that only names the file is not an invocation.
 // The interpreter may carry a path prefix and follow a backtick; the script path itself also matches as a command head.
-const UNRESOLVE_INVOCATION = /(?:(?:^|[\s;&|(`])(?:[^\s;&|()`]*\/)?(?:node\s+(?:(?!(?:--check|-c)\s)[^\s;&|()`]+\s+)*?|(?:dev-loops-run|bun)\s+(?:[^\s;&|()`]+\s+)*?)|(?:^|[\n;&|(`])\s*)[^\s;&|()`]*unresolve-review-thread\.mjs(?=$|[\s;&|)`<>"'}])/;
+const scriptInvocationRe = (basename) => new RegExp(String.raw`(?:(?:^|[\s;&|(\`])(?:[^\s;&|()\`]*\/)?(?:node\s+(?:(?!(?:--check|-c)\s)[^\s;&|()\`]+\s+)*?|(?:dev-loops-run|bun)\s+(?:[^\s;&|()\`]+\s+)*?)|(?:^|[\n;&|(\`])\s*)[^\s;&|()\`]*${basename.replace(/\./g, String.raw`\.`)}(?=$|[\s;&|)\`<>"'}])`);
+const UNRESOLVE_INVOCATION = scriptInvocationRe("unresolve-review-thread.mjs");
+const MERGE_INVOCATION = scriptInvocationRe("merge-pr.mjs");
 /** True when the command runs scripts/github/unresolve-review-thread.mjs (issue 2577). */
 export const isUnresolveInvocation = (command) => typeof command === "string" && UNRESOLVE_INVOCATION.test(command);
 
@@ -262,19 +264,17 @@ export function decideUnresolveOwnerDeny({ command, role }) {
   return null;
 }
 
-/** Whether the raw command text names `merge-pr`, in any form (`--check` included) except a merge-pr test-file path (`merge-pr<suffix>.test.mjs`), once quote and backslash characters are stripped (Bash drops them: `merge-""pr`, `merge\-pr`). */
-export const commandMentionsMergePr = (command) => typeof command === "string" && command.replace(/\$?["']|\\/g, "").search(/merge-pr\b(?![\w.-]*\.test\.mjs\b)/) !== -1;
-
 /**
- * Merge ownership (issue 2500): `merge-pr.mjs` is orchestrator-owned, so a subagent Bash command whose raw text contains `merge-pr` is denied, `--check` included.
- * A merge-pr test-file path (`merge-pr<suffix>.test.mjs`) is exempt, so every run of the merge script stays denied (docs/decisions/0297-subagent-may-run-merge-test-files.md).
+ * Merge ownership (issue 2500, ADR 0331): `merge-pr.mjs` is orchestrator-owned, so a subagent Bash command that RUNS it is denied, `--check` included.
+ * The match is the run position (`scriptInvocationRe`) on the command with quote and backslash characters stripped (Bash drops them: `merge-""pr`, `merge\-pr`).
+ * A read-only mention (`grep`, `git show`, `sed -n`) and a `.test.mjs` path do not run the script and are allowed.
  * The top-level session (role null) keeps the script. Keys on the role name alone, like the unresolve allowlist.
- * ponytail: ceiling: a name assembled by variable or command substitution (`m=merge; ...$m-pr`), or a substitution or expansion applied to an exempt test path (`f=.../merge-pr.test.mjs; node ${f/.test/}`), is not caught; the orchestrator is the only actor allowed to run the script.
+ * ponytail: ceiling: a name assembled by variable or command substitution (`m=merge; ...$m-pr`) is not caught; the orchestrator is the only actor allowed to run the script.
  * @param {{command: string, role: string|null|undefined}} params
  * @returns {{ruleId: null, reason: string}|null}
  */
 export function decideMergePrOwnerDeny({ command, role }) {
-  if (typeof role !== "string" || !commandMentionsMergePr(command)) return null;
+  if (typeof role !== "string" || typeof command !== "string" || !MERGE_INVOCATION.test(command.replace(/\$?["']|\\/g, ""))) return null;
   return {
     ruleId: null,
     reason: withHookMarker("MERGE_PR_OWNER",
