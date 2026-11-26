@@ -18,7 +18,7 @@ import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "
 import { captureParsedReviewThreads, findDeltaBlockedFixedReply, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
 import { planBatchReplyTargets } from "./reply-resolve-review-threads.mjs";
 import { buildContainmentMap, isCommitContainedByHead } from "./_commit-containment.mjs";
-import { EXECUTION_IDENTITY_RE, fixerReportPath, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
+import { DELIVERY_WAIT_SECONDS, EXECUTION_IDENTITY_RE, fixerReportPath, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
 import {
   evaluateFixerDisposition,
   composeFixerReplyBody,
@@ -39,6 +39,7 @@ import { revalidateLegacyCompletion } from "./_legacy-fixer-revalidation.mjs";
 import { authenticateOriginalPlan } from "./_fixer-emission-evidence.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
 import { operatorFocusDigestEntry } from "../loop/_operator-focus.mjs";
+import { scriptCommand } from "../lib/timeout-flag.mjs";
 import { observeHeadCiSignals } from "./observe-head-ci.mjs";
 import { normalizeHeadScopedCiContract } from "@dev-loops/core/loop/copilot-ci-status";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
@@ -111,8 +112,11 @@ Optional:
                                settled green: ci_failed (red), ci_pending (pending),
                                ci_unknown (unreadable or unsupported). The guard judges only
                                check runs listed in the PR statusCheckRollup, the set
-                               wait-pr-checks uses. A settled head with no checks at all
-                               passes. Hand back the code and resolve no thread. Normal mode
+                               wait-pr-checks uses. A pushed head with no checks is judged
+                               against the order head: ci_pending when the order head ran CI,
+                               otherwise it passes. A ci_pending refusal publishes no report.
+                               Resolve no thread and hand back the code; on a first
+                               ci_pending refusal follow its recovery once. Normal mode
                                also posts one residual-status reply on each deferred thread
                                whose delta status is not_resolved or cannot_verify and leaves
                                it open. A residual reply that
@@ -125,7 +129,7 @@ Optional:
                                plan's outputRef). The verifier publishes its final result
                                there once per successful run, last and atomically (temp file, then hard link; an existing report is never
                                replaced and a later run with the same path refuses): the result with outcome
-                               "complete" or "incomplete", or on a refusal
+                               "complete" or "incomplete", or on a refusal other than ci_pending
                                { ok: false, outcome: "refused", error }. A full-phase order
                                derives it as <outputRef>.report (joinRef).
   --tmp-root <path>            Root tmp directory for the checkpoint and the pull
@@ -635,6 +639,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   if (completion && (!actList || !deltaStatuses)) throw new Error("completion requires semantic ACT and Delta authorities");
   return {
     handoff,
+    orderHeadSha: order.headSha,
     actList,
     deltaStatuses,
     completion,
@@ -866,8 +871,8 @@ export async function verifyFixerDisposition(options, deps = {}) {
   try {
     result = await verifyFixerDispositionCore(options, deps);
   } catch (error) {
-    // The original refusal always propagates; a failed publish must not replace it.
-    await publishReport(options.reportPath, { ok: false, outcome: "refused", error: error instanceof Error ? error.message : String(error) }).catch(() => {});
+    // The original refusal always propagates; a failed publish must not replace it. A ci_pending refusal publishes nothing: the rerun after CI settles publishes the one final report.
+    if (!error?.ciPending) await publishReport(options.reportPath, { ok: false, outcome: "refused", error: error instanceof Error ? error.message : String(error) }).catch(() => {});
     throw error;
   }
   await publishReport(options.reportPath, { ...result, outcome: result.complete ? "complete" : "incomplete" });
@@ -884,7 +889,7 @@ async function verifyFixerDispositionCore(
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   const runtime = { env, ghCommand, runChild };
-  const { handoff, actList, deltaStatuses, completion, constructedReport, operatorFocus, operatorFocusDigest, reviewId, reviewBodySha256, reviewCommitId, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  const { handoff, orderHeadSha, actList, deltaStatuses, completion, constructedReport, operatorFocus, operatorFocusDigest, reviewId, reviewBodySha256, reviewCommitId, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
   const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,statusCheckRollup,baseRefName"], env);
   const livePayload = live.code === 0 ? (() => { try { return JSON.parse(live.stdout); } catch { return null; } })() : null;
@@ -966,12 +971,25 @@ async function verifyFixerDispositionCore(
         commitStatus: ci.statuses.commitStatus,
         checkRunsUnsupportedCompleted: ci.checkRuns.visibleSignal.unsupportedCompleted,
       }).overallStatus;
+    const emptyHead = state === "none" && ci.checkRuns.nonLoopDerivedCount === 0 && ci.statuses.nonLoopDerivedCount === 0;
+    // A pushed head can look check-less before its checks register: the order head shows whether the PR runs CI at all.
+    let orderHeadRunsCi = false, orderCiUnreadable = false;
+    if (emptyHead && orderHeadSha !== options.headSha) {
+      const orderCi = await observeHeadCiSignals({ repo: options.repo, headSha: orderHeadSha, prVisibleCheckNames }, runtime);
+      orderCiUnreadable = !orderCi.checkRuns.ok || !orderCi.statuses.ok;
+      orderHeadRunsCi = !orderCiUnreadable && (orderCi.checkRuns.nonLoopDerivedCount > 0 || orderCi.statuses.nonLoopDerivedCount > 0);
+    }
     // A head with no check runs and no statuses besides the loop-derived gate-evidence is settled (wait-pr-checks settles it); anything else must be green.
-    const checkless = state === "none" && ci.checkRuns.nonLoopDerivedCount === 0 && ci.statuses.nonLoopDerivedCount === 0
+    const checkless = emptyHead && !orderHeadRunsCi && !orderCiUnreadable
       && prVisibleCheckNames.every((name) => LOOP_DERIVED_CI_CHECK_NAMES.includes(name));
     if (state !== "success" && !checkless) {
-      const code = state === "pending" ? "ci_pending" : "ci_unknown";
-      throw new Error(`${code}: checks at ${options.headSha} are ${state}, not settled green; resolve no thread, hand back ${code}`);
+      const code = orderHeadRunsCi || state === "pending" ? "ci_pending" : "ci_unknown";
+      const shown = code === "ci_pending" ? "pending" : state;
+      const recovery = code === "ci_pending"
+        ? `; recovery: run ${scriptCommand(new URL("./wait-pr-checks.mjs", import.meta.url))} --repo ${options.repo} --pr ${options.pr} --timeout ${DELIVERY_WAIT_SECONDS} (re-issue it while it prints pending), then rerun this verifier command unchanged; a ci_pending refusal publishes no report`
+        : "";
+      const orderRead = orderCiUnreadable ? ` (the CI of order head ${orderHeadSha} could not be read)` : "";
+      throw Object.assign(new Error(`${code}: checks at ${options.headSha} are ${shown}${orderRead}, not settled green; resolve no thread, hand back ${code}${recovery}`), code === "ci_pending" ? { ciPending: true } : {});
     }
   }
   if (!options.check) {

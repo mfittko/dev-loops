@@ -21,7 +21,7 @@ import {
 } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { selectActThreadBinding } from "../../scripts/github/_fixer-act-thread-bindings.mjs";
-import { fixerReportPath, materializationHash, pullReceiptPath, pullWorkOrder, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { DELIVERY_WAIT_SECONDS, fixerReportPath, materializationHash, pullReceiptPath, pullWorkOrder, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitFixerWorkOrder, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -658,6 +658,86 @@ test("--report-path publishes an incomplete outcome and a refused outcome with t
     const incomplete = await verifyFixerDisposition({ ...f.options, check: true, reportPath }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]).deps);
     assert.equal(incomplete.complete, false);
     assert.equal(JSON.parse(await readFile(reportPath, "utf8")).outcome, "incomplete");
+  });
+});
+
+// A THREAD full order whose pushed head is a descendant of the order head.
+async function pushedHeadFixture(root) {
+  const f = await threadConstructFixture(root, undefined, false, true);
+  const pushed = f.candidate;
+  const options = { ...f.options, headSha: pushed };
+  const mockFor = (entries) => runtime(entries, f.root, { live: false });
+  const ahead = compareEntry(f.head, "ahead", pushed);
+  await verifyFixerDisposition({ ...options, construct: true }, mockFor([ahead, liveHeadEntry(pushed), threadsCallEntry([])]).deps);
+  const threads = (isResolved) => threadsCallEntry([{ id: "PRRT_T1", isResolved, comments: { nodes: [{ id: "c1", databaseId: 1, body: isResolved ? `Fixed in commit ${pushed}.` : "please fix", authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }]);
+  const empty = { runs: [] };
+  return { f, pushed, options, mockFor, ahead, threads, empty, order: f.head };
+}
+
+test("a check-less pushed head refuses ci_pending when the order head ran CI, naming the recovery, and posts no reply", async () => {
+  await withRepoRoot(async (root) => {
+    const { pushed, options, mockFor, ahead, threads, empty, order } = await pushedHeadFixture(root);
+    const mock = mockFor([ahead, liveHeadEntry(pushed), threads(false), ...ciEntries(pushed, empty), ...ciEntries(order)]);
+    await assert.rejects(verifyFixerDisposition(options, mock.deps), (error) => {
+      assert.match(error.message, /^ci_pending: /);
+      assert.ok(error.message.includes(`wait-pr-checks.mjs --repo ${REPO} --pr ${PR}`));
+      assert.match(error.message, /then rerun this verifier command unchanged/);
+      assert.ok(error.message.includes(`--timeout ${DELIVERY_WAIT_SECONDS} `));
+      return true;
+    });
+    assert.equal(hasPost(mock.calls), false);
+  });
+});
+
+test("a check-less pushed head refuses ci_unknown when the order head is unreadable", async () => {
+  await withRepoRoot(async (root) => {
+    const { f, options, mockFor, ahead, threads, empty, order, pushed } = await pushedHeadFixture(root);
+    const reportPath = fixerReportPath(f.output);
+    const mock = mockFor([ahead, liveHeadEntry(pushed), threads(false), ...ciEntries(pushed, empty), ...ciEntries(order, { checkRunsExit: 1 })]);
+    await assert.rejects(verifyFixerDisposition({ ...options, check: true, reportPath }, mock.deps), (error) => {
+      assert.match(error.message, /^ci_unknown: /);
+      assert.ok(error.message.includes(`the CI of order head ${order} could not be read`));
+      return true;
+    });
+    assert.equal(hasPost(mock.calls), false);
+    const report = JSON.parse(await readFile(reportPath, "utf8"));
+    assert.equal(report.outcome, "refused");
+    assert.match(report.error, /^ci_unknown/);
+  });
+});
+
+test("a check-less pushed head passes when the order head also ran no CI, and when the pushed head is the order head", async () => {
+  await withRepoRoot(async (root) => {
+    const { pushed, options, mockFor, ahead, threads, empty, order } = await pushedHeadFixture(root);
+    const noCi = mockFor([ahead, liveHeadEntry(pushed), threads(true), ...ciEntries(pushed, empty), ...ciEntries(order, empty), compareEntry(pushed, "identical", pushed)]);
+    assert.equal((await verifyFixerDisposition({ ...options, check: true }, noCi.deps)).complete, true);
+  });
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
+    const same = f.runtimeFor([threadsCallEntry(resolved), ...ciEntries(f.head, { runs: [] }), compareEntry(f.head, "identical", f.head)]);
+    assert.equal((await verifyFixerDisposition(f.options, same.deps)).complete, true);
+  });
+});
+
+test("--report-path: a ci_pending refusal publishes no report, the rerun publishes the final one, a ci_failed report is never replaced", async () => {
+  await withRepoRoot(async (root) => {
+    const { f, pushed, options, mockFor, ahead, threads, empty, order } = await pushedHeadFixture(root);
+    const reportPath = fixerReportPath(f.output);
+    const check = { ...options, check: true, reportPath };
+    await assert.rejects(verifyFixerDisposition(check, mockFor([ahead, liveHeadEntry(pushed), threads(false), ...ciEntries(pushed, empty), ...ciEntries(order)]).deps), /ci_pending: /);
+    assert.equal(existsSync(reportPath), false);
+    const pendingRuns = { runs: [{ name: "build", status: "in_progress" }] };
+    await assert.rejects(verifyFixerDisposition(check, mockFor([ahead, liveHeadEntry(pushed), threads(false), ...ciEntries(pushed, pendingRuns)]).deps), /ci_pending: .*recovery: run /);
+    assert.equal(existsSync(reportPath), false);
+    const green = () => mockFor([ahead, liveHeadEntry(pushed), threads(true), ...ciEntries(pushed), compareEntry(pushed, "identical", pushed)]);
+    assert.equal((await verifyFixerDisposition(check, green().deps)).complete, true);
+    assert.equal(JSON.parse(await readFile(reportPath, "utf8")).outcome, "complete");
+    await rm(reportPath);
+    await assert.rejects(verifyFixerDisposition(check, mockFor([ahead, liveHeadEntry(pushed), threads(false), ...ciEntries(pushed, { failing: "lint" })]).deps), /ci_failed/);
+    assert.equal(JSON.parse(await readFile(reportPath, "utf8")).outcome, "refused");
+    await assert.rejects(verifyFixerDisposition(check, green().deps), /already holds the final report/);
   });
 });
 
