@@ -1450,15 +1450,20 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnly
   return { headSha: head, openActCount: open.length, blockers: isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [] };
 }
 
+// The once-per-set rule: with the cap on and the round past the scoped final round, the latest act set already had its one re-open.
+function setAlreadyHeld({ logs, effective, round, cap }) {
+  const last = logs.at(-1), fingerprints = actFingerprintSet(last).join();
+  return cap > 0 && round > cap + 1 && effective.slice(cap).some((log) => log !== last && actFingerprintSet(log).join() === fingerprints);
+}
+
 /**
  * GATE-EXEC-CAP-BRAKES: whether an operator decision (`--operator-focus-file` or the issued fixer plan) covers every act fingerprint of the latest judged round.
  * With the cap on and the round past the scoped final round, a set an earlier effective round from the round after the cap on already held stays with the operator
  * (the once-per-set rule of resolveOperatorClearedRound in write-gate-context.mjs).
  */
-async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round, cap }) {
+async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round, cap, effective }) {
   const last = logs.at(-1), fingerprints = actFingerprintSet(last);
-  const effective = await effectiveRounds(logs, { prBase: gate === "pre_approval_gate" ? context.prData?.baseRefName : undefined, repoRoot });
-  if (cap > 0 && round > cap + 1 && effective.slice(cap).some((log) => log !== last && actFingerprintSet(log).join() === fingerprints.join())) return false;
+  if (setAlreadyHeld({ logs, effective, round, cap })) return false;
   const base = { repo: context.repo, pr: context.pr, gate };
   if (effective.at(-1) === last) return operatorDecidedLatestRound({ ...base, operatorFocusFile }, { repoRoot, latest: last, last: fingerprints });
   // A base-merge-forced latest round clears from the issued fixer plan, or from the direct file when it decides the forced set and the effective latest set (refuseNonConvergence and resolveOperatorClearedRound read the same file).
@@ -1484,19 +1489,23 @@ export async function resolveCapBrakes(context, { repoRoot, config, operatorFocu
   if (open.length === 0) return null;
   const effective = await effectiveRounds(logs, { prBase: gate === "pre_approval_gate" ? context.prData?.baseRefName : undefined, repoRoot });
   const effectiveLatest = effective.at(-1);
+  const round = await countCapRounds({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, prBase: context.prData?.baseRefName, includeLiveCurrentHead: true });
+  const cap = gate === "pre_approval_gate" ? resolveGateConfig(config, "preApproval").maxReviewRounds : 0;
   const facts = {
     gate,
     // A base-merge-forced round never counts (countCapRounds), as in the poster and the emitter.
-    round: await countCapRounds({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, prBase: context.prData?.baseRefName, includeLiveCurrentHead: true }),
-    cap: gate === "pre_approval_gate" ? resolveGateConfig(config, "preApproval").maxReviewRounds : 0,
+    round,
+    cap,
     actCounts: effective.map((log) => capRoundActList(log.findings, log.headSha).length),
     // One item per acted cluster: the emitter binds an operator focus item only to an act-list fingerprint (GATE-EXEC-CAP-BRAKES).
     // A base-merge-forced latest round also lists the effective latest round's items: the direct file must decide both sets.
     // Both rounds can hold one fingerprint (it is head-independent) and a focus file refuses a repeated item, so the list keeps the first of each.
     items: [...new Map([...capRoundActList(last.findings, last.headSha), ...(effectiveLatest && effectiveLatest !== last ? capRoundActList(effectiveLatest.findings, effectiveLatest.headSha) : [])].map((a) => [a.fingerprint, a])).values()].map((a) => `${a.fingerprint} [${normalizeSeverity(a.severity)}] ${String(a.summary ?? "").trim()}`),
   };
+  // A set that already had its one re-open is not clearable by any focus file: the reason names the operator-only step (GATE-EXEC-NO-DEAD-END).
+  if (setAlreadyHeld({ logs, effective, round, cap })) return { ...facts, notClearable: true };
   // Fail closed: a focus file that fails to read here clears nothing, and the cap stop stays.
-  return await operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round: facts.round, cap: facts.cap }).catch(() => false) ? { ...facts, operatorCleared: true } : facts;
+  return await operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round, cap, effective }).catch(() => false) ? { ...facts, operatorCleared: true } : facts;
 }
 
 // Builds the exact input object passed to evaluatePrGateCoordination.

@@ -1324,8 +1324,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  // GATE-EXEC-CAP-BRAKES: `capBrakes` is `{ gate, round, cap, actCounts, items, operatorCleared? }` for the gate whose round is posted at this head. The one policy
-  // (decideCapRound) stops the lane before another fixer pass; only an operator focus decision that names the items clears the stop (`operatorCleared: true` routes past it).
+  // GATE-EXEC-CAP-BRAKES: `capBrakes` is `{ gate, round, cap, actCounts, items, operatorCleared?, notClearable? }` for the gate whose round is posted at this head. The one policy
+  // (decideCapRound) stops the lane before another fixer pass; only an operator focus decision that names the items clears the stop (`operatorCleared: true` routes past it; `notClearable: true` marks a set that already had its one re-open, which no focus file clears).
   const capStop = input.capBrakes ? decideCapRound({ ...input.capBrakes, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 } }) : null;
   if (capStop?.action === "operator" && input.capBrakes.operatorCleared !== true) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
@@ -1351,7 +1351,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       forbiddenActions,
       nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
       blockedOn: BLOCKED_ON.OPERATOR_DECISION,
-      reason: `${describeCapStop(capStop)} (${input.capBrakes.gate}).${named} Clear it with --operator-focus-file <path> on loop gate-coordination.`,
+      reason: `${describeCapStop(capStop)} (${input.capBrakes.gate}).${named}${input.capBrakes.notClearable === true ? " This act set already had its one re-open, so a focus file does not clear it and the decision stays with the operator." : " Clear it with --operator-focus-file <path> on loop gate-coordination."}`,
       mergeStateStatus,
       conflictFiles,
       refinementArtifact,

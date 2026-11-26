@@ -5602,6 +5602,8 @@ test("resolveCapBrakes: the once-per-set rule holds past the cap on pre_approval
   const draft = await capBrakesLedgers("draft_gate", ["1", "2", "3"].map((c) => c.repeat(40)));
   try {
     assert.equal((await pre.brakes(await pre.focus(pre.fingerprints))).operatorCleared, undefined, "the set repeats past the scoped final round");
+    assert.equal((await pre.brakes(await pre.focus(pre.fingerprints))).notClearable, true, "the repeated set is marked not clearable");
+    assert.equal((await draft.brakes(await draft.focus(draft.fingerprints))).notClearable, undefined, "a clearable set carries no fact");
     assert.equal((await draft.brakes(await draft.focus(draft.fingerprints))).operatorCleared, true, "cap 0 never runs the once-per-set check");
   } finally {
     await rm(pre.dir, { recursive: true, force: true });

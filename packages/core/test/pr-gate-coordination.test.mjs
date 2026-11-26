@@ -5215,3 +5215,17 @@ test("cap brakes: operatorCleared routes past each operator stop; without it the
     assert.notEqual(cleared.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, `${reason}: ${cleared.reason}`);
   }
 });
+
+// Issue 3597 (GATE-EXEC-NO-DEAD-END): a set that already had its one re-open names the operator-only step, never the focus file.
+test("cap brakes: notClearable keeps the Items list and says a focus file does not clear the set", () => {
+  const head = "ab".repeat(20);
+  const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
+  const verdict = { visible: true, headSha: head, verdict: "blocked", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", maxCopilotRounds: 0, draftGate: clean, draftGateMarker: clean, preApprovalGate: verdict, preApprovalGateMarker: verdict };
+  const item = "abcdef0123456789 [medium] repeated set";
+  const stopped = evaluatePrGateCoordination({ ...base, capBrakes: { gate: "pre_approval_gate", round: 4, cap: 2, actCounts: [3, 2, 1], items: [item], notClearable: true } });
+  assert.deepEqual({ next: stopped.nextAction, on: stopped.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION });
+  assert.ok(stopped.reason.includes(item));
+  assert.match(stopped.reason, /already had its one re-open, so a focus file does not clear it and the decision stays with the operator/);
+  assert.doesNotMatch(stopped.reason, /Clear it with --operator-focus-file/);
+});
