@@ -4853,7 +4853,7 @@ test("3309: a cap-round body-only act list routes to the converged post, never t
   const { parseUpsertCheckpointVerdictCliArgs } = await import("../../../scripts/github/upsert-checkpoint-verdict.mjs");
   const parsed = parseUpsertCheckpointVerdictCliArgs(["--repo", "o/r", "--pr", "9", "--gate", "draft_gate", "--verdict", "clean", "--head-sha", head, "--findings-ledger", "ledger.json", "--findings-summary", "converged", "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin", "--converged-json", "converged.json"]);
   assert.equal(parsed.convergedJson, "converged.json");
-  // A BEHIND draft PR at the cap merges the base first: the body-only post refuses a stale base.
+  // A BEHIND draft PR at the cap merges the base first: the GitHub mergeStateStatus BEHIND route requires it.
   const behind = evaluatePrGateCoordination({ ...base, mergeStateStatus: "BEHIND", mergeable: "MERGEABLE", draftOpenActList: { headSha: head, openActCount: 2, blockers: [], bodyOnly: true } });
   assert.equal(behind.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS, behind.reason);
   // At the base-merge head the carried list (the cap head A) names the post with --head-sha A and fixerCommit A.

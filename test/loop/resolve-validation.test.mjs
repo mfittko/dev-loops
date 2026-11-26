@@ -56,7 +56,7 @@ function addOrigin(repoRoot) {
   execFileSync("git", ["remote", "set-head", "origin", "main"], { cwd: repoRoot });
 }
 
-const args = (headSha, profile = "full-repository") => ["--profile", profile, "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha];
+const args = (headSha, profile = "full-repository", gate = "draft_gate") => ["--profile", profile, "--repo", "owner/repo", "--pr", "1", "--gate", gate, "--head-sha", headSha];
 
 test("full validation resolves through gate CLI and preserves the legacy artifact", async () => {
   const { repoRoot, headSha } = await fixture();
@@ -481,10 +481,22 @@ function advanceOrigin(repoRoot) {
   git("reset", "-q", "--hard", "HEAD~1");
 }
 
-test("issue 2885: a stale-base head is incomplete and names the remedy; a current head runs", async () => {
+test("a draft_gate run at a stale-base head still runs validation", async () => {
   const { repoRoot, headSha } = await fixture();
   try {
+    advanceOrigin(repoRoot);
     const options = parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]);
+    assert.equal((await resolveValidation(options, { repoRoot })).status, "complete");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(`${repoRoot}-origin.git`, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885: a stale-base head is incomplete and names the remedy for a pre_approval_gate; a current head runs", async () => {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    const options = parseResolveValidationArgs([...args(headSha, "targeted", "pre_approval_gate"), "--suite", "test:scripts"]);
     assert.equal((await resolveValidation(options, { repoRoot })).status, "complete");
     advanceOrigin(repoRoot);
     const stale = await resolveValidation(options, { repoRoot });
@@ -662,6 +674,48 @@ test("a PR head that changes the validation block runs nothing and resolves inco
       assert.deepEqual(artifact.suites, [], name);
       await assert.rejects(readFile(marker), /ENOENT/, name);
     } finally { await rm(repoRoot, { recursive: true, force: true }); }
+  }
+});
+
+test("a draft_gate run at a stale head names the base merge when the base changed its validation block", async () => {
+  const base = "version: 1\nvalidation:\n  mode: local\n  fullCommand: echo base-ran\n";
+  const { repoRoot, headSha } = await bareFixture(base);
+  try {
+    const git = (...a) => execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...a], { cwd: repoRoot });
+    await writeFile(path.join(repoRoot, ".devloops"), base.replace("echo base-ran", "echo base-changed"));
+    git("commit", "-qam", "base changes its validation block");
+    git("push", "-q", "origin", "HEAD:refs/heads/main");
+    git("reset", "-q", "--hard", "HEAD~1");
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /config-source change.*The head is also stale: base_stale_integrate_first.*origin\/main/s);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(`${repoRoot}-origin.git`, { recursive: true, force: true });
+  }
+});
+
+test("a draft_gate run at a stale head keeps the config-source refusal when the PR edited its own validation block", async () => {
+  const base = "version: 1\nvalidation:\n  mode: local\n  fullCommand: echo base-ran\n";
+  const { repoRoot, headSha: baseSha } = await bareFixture(base);
+  try {
+    const git = (...a) => execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...a], { cwd: repoRoot });
+    await writeFile(path.join(repoRoot, "unrelated.txt"), "x");
+    git("add", "unrelated.txt");
+    git("commit", "-qm", "base moves on");
+    git("push", "-q", "origin", "HEAD:refs/heads/main");
+    git("reset", "-q", "--hard", baseSha);
+    await writeFile(path.join(repoRoot, ".devloops"), base.replace("echo base-ran", "echo pr-edit"));
+    git("commit", "-qam", "pr edit");
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /config-source change/);
+    assert.match(result.reason, /base_stale_integrate_first/);
+    assert.doesNotMatch(result.reason, /base branch changed its validation config/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(`${repoRoot}-origin.git`, { recursive: true, force: true });
   }
 });
 

@@ -4731,10 +4731,10 @@ test("3105 AC15: the detector derives the open act list from the current-head le
   }
 });
 
-test("3105 AC15: a head-matching marker without a next action keeps the base integration", async () => {
+test("3105 AC15: a head-matching marker without a next action reruns the draft gate at the stale head", async () => {
   const fixture = await actListFixture({ "": { findings: [ACT] } }, { nextAction: "" });
   try {
-    assert.equal((await fixture.detect()).nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS);
+    assert.equal((await fixture.detect()).nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
   } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
 });
 
@@ -4745,11 +4745,11 @@ test("3105 AC15: a legacy ledger with verdict clean and an open act item goes to
   } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
 });
 
-test("3105 AC15: an all-PR-body act list keeps the base integration; a mixed list goes to the fixer", async () => {
+test("3105 AC15: an all-PR-body act list reruns the draft gate at the stale head; a mixed list goes to the fixer", async () => {
   const body = await actListFixture({ "": { findings: [BODY_ACT] } });
   try {
     const result = await body.detect();
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS, result.reason);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, result.reason);
     assert.equal(await resolveDraftOpenActList({ repo: "owner/repo", pr: 10, currentHeadSha: body.headSha }, { repoRoot: body.tempDir, cap: 0 }), null);
   } finally { await rm(body.tempDir, { recursive: true, force: true }); }
   const mixed = await actListFixture({ "": { findings: [BODY_ACT, ACT] } });
@@ -4911,26 +4911,26 @@ test("3105 AC15: a nit-only act list in draft round 2 keeps the earlier routing"
   assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
 });
 
+const PRE_APPROVAL_FIXTURE = { isDraft: false, withCleanDraftGate: true, capReached: true };
+
 describe("GATE-EXEC-BASE-REFRESH coordination", () => {
-  it("stale head at run_draft_gate routes to resolve_merge_conflicts", async () => {
-    let args;
-    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async (a) => { args = a; return STALE; } });
-    assert.equal(args.head, "abc1234567");
-    assert.equal(args.base, "main");
-    assert.equal(args.trusted, true);
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS);
-    assert.match(result.reason, /base_stale_integrate_first/);
-    assert.match(result.reason, /REMEDY-TEXT/);
-    assert.deepEqual(result.allowedNextActions, [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS]);
-    assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
-    assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
-    assert.deepEqual(result.baseFreshness, { status: "base_stale_integrate_first", base: "main", newerCommits: ["abc1 newer"] });
-    assert.equal(result.gateBoundary, PR_CHECKPOINT.CONFLICT_RESOLUTION);
-    assert.equal(result.loopDisposition, "action_required");
+  it("stale head at run_draft_gate keeps the action and never calls the check", async () => {
+    let calls = 0;
+    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async () => { calls += 1; return STALE; } });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+    assert.equal(calls, 0);
+    assert.equal(result.baseFreshness, undefined);
   });
 
   it("stale head at run_pre_approval_gate routes to resolve_merge_conflicts", async () => {
-    const result = await runBaseFreshnessFixture({ isDraft: false, withCleanDraftGate: true, capReached: true, checkBaseFreshness: async () => STALE });
+    let args;
+    const result = await runBaseFreshnessFixture({ isDraft: false, withCleanDraftGate: true, capReached: true, checkBaseFreshness: async (a) => { args = a; return STALE; } });
+    assert.equal(args.head, "abc1234567");
+    assert.equal(args.base, "main");
+    assert.equal(args.trusted, true);
+    assert.match(result.reason, /base_stale_integrate_first/);
+    assert.deepEqual(result.allowedNextActions, [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS]);
+    assert.deepEqual(result.baseFreshness, { status: "base_stale_integrate_first", base: "main", newerCommits: ["abc1 newer"] });
     assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS);
     assert.match(result.reason, /REMEDY-TEXT/);
     assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
@@ -4942,26 +4942,26 @@ describe("GATE-EXEC-BASE-REFRESH coordination", () => {
   });
 
   it("base_current leaves the action unchanged", async () => {
-    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }) });
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+    const result = await runBaseFreshnessFixture({ ...PRE_APPROVAL_FIXTURE, checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }) });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
     assert.deepEqual(result.baseFreshness, { status: "base_current", base: "main" });
   });
 
   it("base_fetch_failed keeps the action and records the status", async () => {
-    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async () => ({ ok: false, error: "base_fetch_failed" }) });
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+    const result = await runBaseFreshnessFixture({ ...PRE_APPROVAL_FIXTURE, checkBaseFreshness: async () => ({ ok: false, error: "base_fetch_failed" }) });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
     assert.equal(result.baseFreshness.status, "base_fetch_failed");
   });
 
   it("base_head_unresolved keeps the action and records the status", async () => {
-    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async () => ({ ok: false, error: "base_head_unresolved" }) });
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+    const result = await runBaseFreshnessFixture({ ...PRE_APPROVAL_FIXTURE, checkBaseFreshness: async () => ({ ok: false, error: "base_head_unresolved" }) });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
     assert.equal(result.baseFreshness.status, "base_head_unresolved");
   });
 
   it("a thrown check keeps the action and records base_fetch_failed", async () => {
-    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async () => { throw new Error("boom"); } });
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+    const result = await runBaseFreshnessFixture({ ...PRE_APPROVAL_FIXTURE, checkBaseFreshness: async () => { throw new Error("boom"); } });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
     assert.equal(result.baseFreshness.status, "base_fetch_failed");
   });
 
@@ -4980,13 +4980,11 @@ describe("GATE-EXEC-BASE-REFRESH coordination", () => {
     assert.equal(calls, 0);
     assert.equal(result.baseFreshness, undefined);
   });
-  // ADR 0299: a clean draft_gate verdict posted with the stale-base line must not route to ready without a base merge.
-  it("stale head at mark_ready_for_review routes to resolve_merge_conflicts", async () => {
-    const baseline = await runBaseFreshnessFixture({ withCleanDraftGate: true, checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }) });
-    assert.equal(baseline.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
-    const result = await runBaseFreshnessFixture({ withCleanDraftGate: true, checkBaseFreshness: async () => STALE });
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS);
-    assert.match(result.reason, /base_stale_integrate_first/);
+  it("stale head at mark_ready_for_review keeps the action and never calls the check", async () => {
+    let calls = 0;
+    const result = await runBaseFreshnessFixture({ withCleanDraftGate: true, checkBaseFreshness: async () => { calls += 1; return STALE; } });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+    assert.equal(calls, 0);
   });
 });
 
