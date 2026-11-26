@@ -94,7 +94,7 @@ export function normalizeAgentType(agentType) {
 
 // Intermediate tokens exclude shell separators so a compound command that only names the file is not an invocation.
 // The interpreter may carry a path prefix and follow a backtick; the script path itself also matches as a command head.
-// `optionalExt` also matches the extensionless run form (`bun scripts/github/<stem>`); a `.test.mjs` path or a longer name still fails the end lookahead.
+// `optionalExt` also matches the extensionless run form (`bun scripts/github/<stem>`); a `.test.mjs` path or a name with a suffix after the stem still fails the end lookahead.
 const scriptInvocationRe = (stem, optionalExt = false) => new RegExp(String.raw`(?:(?:^|[\s;&|(\`])(?:[^\s;&|()\`]*\/)?(?:node\s+(?:(?!(?:--check|-c)\s)[^\s;&|()\`]+\s+)*?|(?:dev-loops-run|bun)\s+(?:[^\s;&|()\`]+\s+)*?)|(?:^|[\n;&|(\`])\s*)[^\s;&|()\`]*${stem}${optionalExt ? String.raw`(?:\.mjs)?` : String.raw`\.mjs`}(?=$|[\s;&|)\`<>"'}])`);
 const UNRESOLVE_INVOCATION = scriptInvocationRe("unresolve-review-thread");
 const MERGE_INVOCATION = scriptInvocationRe("merge-pr", true);
@@ -265,10 +265,10 @@ export function decideUnresolveOwnerDeny({ command, role }) {
   return null;
 }
 
-// Bash drops empty quote pairs and backslashes (`merge-""pr`, `merge\-pr`), so strip those. Quote characters otherwise stay, so a quoted run path still matches.
+// Bash drops empty quote pairs and backslashes (`merge-""pr`, `merge\-pr`), so strip those; an escaped quote goes with its backslash so it never pairs. Quote characters otherwise stay, so a quoted run path still matches.
 // A separator inside a quoted pattern (`rg "foo|name"`) is data, so neutralize it unless a launcher word follows (`"$(node <path>)"`).
 const normalizeForMergeMatch = (command) => command
-  .replace(/\$?(?:""|'')|\\/g, "")
+  .replace(/\\["']|\$?(?:""|'')|\\/g, "")
   .replace(/["'](?=(?:node|bun|dev-loops-run)\s)/g, " ")
   .replace(/"[^"]*"|'[^']*'/g, (q) => q.replace(/[;&|(`](?!\s*(?:\S*\/)?(?:node|bun|dev-loops-run)\s)/g, "_"));
 
@@ -277,7 +277,7 @@ const normalizeForMergeMatch = (command) => command
  * The match is the run position (`scriptInvocationRe`) on the command with empty quote pairs and backslashes stripped (Bash drops them: `merge-""pr`, `merge\-pr`), with or without the `.mjs` extension.
  * A read-only mention (`grep`, `git show`, `sed -n`) and a `.test.mjs` path do not run the script and are allowed.
  * The top-level session (role null) keeps the script. Keys on the role name alone, like the unresolve allowlist.
- * ponytail: ceiling: a name assembled by variable or command substitution (`m=merge; ...$m-pr`), by a shell glob or brace expansion of the file name (`merge-pr.m*`, `merge-pr.{mjs,}`) or by a non-empty quote split (`merge-"pr".mjs`, `'merge'-pr.mjs`) is not caught; the orchestrator is the only actor allowed to run the script.
+ * ponytail: ceiling: only the listed run forms are denied and any other shell form that runs the script is uncaught, for example a quoted launcher word (`'node' <path>`) or a brace group (`{ <path>; }`). A name assembled by variable or command substitution (`m=merge; ...$m-pr`), by a shell glob or brace expansion of the file name (`merge-pr.m*`, `merge-pr.{mjs,}`) or by a non-empty quote split (`merge-"pr".mjs`, `'merge'-pr.mjs`) is not caught; the orchestrator is the only actor allowed to run the script.
  * @param {{command: string, role: string|null|undefined}} params
  * @returns {{ruleId: null, reason: string}|null}
  */

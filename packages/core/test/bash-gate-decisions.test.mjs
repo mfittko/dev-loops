@@ -756,6 +756,9 @@ const MERGE_RUN_FORMS = [
   // A separator inside quotes before a launcher word stays denied (the launcher lookahead in normalizeForMergeMatch).
   `echo "$(node ${MERGE_PATH} --pr 5)"`,
   `bash -c "echo x; node ${MERGE_PATH}"`,
+  // An escaped quote never takes part in quote pairing.
+  `echo "a\\"b"; ${MERGE_PATH} --check; echo "c"`,
+  `echo it\\'s; ${MERGE_PATH} --check; echo x\\'`,
 ];
 const MERGE_READ_ONLY_FORMS = [
   `git grep -n ${MERGE_SCRIPT} cli/`,
@@ -769,6 +772,7 @@ const MERGE_READ_ONLY_FORMS = [
   `rg ${MERGE_SCRIPT} cli/`,
   `rg "foo|${MERGE_SCRIPT}" cli/`,
   `grep -nE "(${MERGE_SCRIPT}|x)" cli/`,
+  `grep -n "a\\"b|${MERGE_SCRIPT}" cli/`,
   `cat ${MERGE_PATH}`,
   `head -20 ${MERGE_PATH}`,
   `bun test test/github/${MERGE_SCRIPT.replace(".mjs", ".test.mjs")}`,
