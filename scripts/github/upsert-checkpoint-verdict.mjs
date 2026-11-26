@@ -1906,7 +1906,9 @@ function resolveGateAction(gate) {
     : PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE;
 }
 function buildGateEntryRefusalError({ options, coordination }) {
-  return `Cannot enter ${options.gate} on ${options.repo}#${options.pr}: ${coordination.reason}`;
+  const error = new Error(`Cannot enter ${options.gate} on ${options.repo}#${options.pr}: ${coordination.reason}`);
+  error.recovery = `Run \`loop gate-coordination --repo ${options.repo} --pr ${options.pr}\` to re-read the boundary; the refused coordination nextAction is ${coordination.nextAction}.`;
+  return error;
 }
 function selectGateEvidence(evidence, gate) {
   if (gate === "draft_gate") {
@@ -2161,6 +2163,8 @@ export function buildCoordinationEvaluatorInput({
     // sameHeadCleanConverged, so an outstanding request on the current head refuses
     // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.
     copilotReviewRequestStatus: coordinationContext.snapshot?.copilotReviewRequestStatus ?? "none",
+    // Without it the evaluator refuses gate entry for an unavailable Copilot that the lifecycle state already reports.
+    copilotRequestNotObservable: coordinationContext.snapshot?.copilotRequestNotObservable === true,
     draftGateRequireCi: draftGateConfig.requireCi,
     preApprovalRequireCi: preApprovalGateConfig.requireCi,
     draftGate: coordinationContext.gateEvidence.draftGate,
@@ -3203,7 +3207,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       prDraft: true,
     }), requestedGateAction);
     if (gateActionForbidden && !forbidOnlyByCapFixed && !capRoundWaiver) {
-      throw new Error(buildGateEntryRefusalError({ options, coordination }));
+      throw buildGateEntryRefusalError({ options, coordination });
     }
     // Post-time fan-out evidence enforcement: refuse an under-qualified inline
     // verdict here, before it is posted, for every verdict value. No override

@@ -24,6 +24,8 @@ import {
   summarizeExistingComment,
   upsertCheckpointVerdict as upsertWithCap,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
+import { formatCliError } from "../../scripts/lib/format-cli-error.mjs";
+import { recordPath,recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../../scripts/loop/_stale-runner-detection.mjs";
 import { writeRunContext } from "@dev-loops/core/loop/run-context";
@@ -214,7 +216,7 @@ const runNode = async (args = [], options = {}) => {
     return {
       code: 1,
       stdout: "",
-      stderr: `${stderrChunks.join("")}${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`,
+      stderr: `${stderrChunks.join("")}${formatCliError(error)}\n`,
       ghCallCount,
       calls,
     };
@@ -2342,6 +2344,104 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
       blockCleanOnFindingSeverities: ["high"],
     });
   }, { prefix: "dev-loops-upsert-gate-review-round-cap-" });
+});
+
+// Issue 3615: the post path feeds copilotRequestNotObservable to the evaluator, so a clean pre_approval_gate verdict posts when Copilot is unavailable.
+test("upsert-checkpoint-verdict posts a clean pre_approval_gate verdict with the request_not_observable note when Copilot is unavailable (issue 3615)", async () => {
+  const headSha = "abc1234000000000000000000000000000000000";
+  const key = { repo: "owner/repo", pr: 17, headSha };
+  const recordFile = recordPath(key.repo, key.pr);
+  try {
+    for (let i = 0; i < 2; i += 1) {
+      await recordUnobservableRequest(key);
+      await recordTimedOutProbe(key);
+    }
+    await withTempDir(async (tempDir) => {
+      const env = await writeGhStub(tempDir, [
+        ...buildGateCoordinationEntries({
+          isDraft: false,
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+          issueComments: [[{
+            id: 91,
+            body: ["### Gate review: `draft_gate`", "", `**Reviewed head SHA:** \`${headSha}\``, "**Verdict:** clean", "", "**Findings summary:** no issues found", "", "**Next action:** mark ready for review"].join("\n"),
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+            updated_at: "2026-05-31T19:55:00Z",
+          }]],
+        }).map((entry) => ({ ...entry, matchByClaims: true })),
+        {
+          assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"],
+          stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n',
+        },
+        {
+          assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+          assertStdinIncludes: ["### Gate review: `pre_approval_gate`", "**Gate evidence note:** Copilot was unavailable (request_not_observable)"],
+          stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+        },
+      ]);
+      const result = await runNode([
+        "--repo", "owner/repo",
+        "--pr", "17",
+        "--gate", "pre_approval_gate",
+        "--head-sha", headSha,
+        "--verdict", "clean",
+        "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+        "--findings-summary", "no issues found",
+        "--next-action", "await final human approval",
+      ], { env });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).action, "created");
+    }, { prefix: "dev-loops-upsert-gate-review-copilot-unavailable-" });
+  } finally {
+    await rm(recordFile, { force: true });
+  }
+});
+
+test("buildCoordinationEvaluatorInput threads copilotRequestNotObservable and defaults it to false (issue 3615)", () => {
+  const coordinationContext = {
+    repo: "owner/repo",
+    pr: 17,
+    currentHeadSha: "abc1234",
+    prData: { isDraft: false, state: "OPEN" },
+    interpretation: { state: "copilot_unavailable", sameHeadCleanConverged: false },
+    disposition: { loopDisposition: "continue" },
+    snapshot: { ciStatus: "success", copilotReviewRequestStatus: "none", copilotRequestNotObservable: true },
+    gateEvidence: { draftGate: { visible: false }, draftGateMarker: { visible: false }, preApprovalGate: { visible: false }, preApprovalGateMarker: { visible: false } },
+    refinementArtifact: null,
+  };
+  const build = (context) => buildCoordinationEvaluatorInput({
+    coordinationContext: context,
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: null,
+  });
+  assert.equal(build(coordinationContext).copilotRequestNotObservable, true);
+  const { copilotRequestNotObservable: _omit, ...snapshot } = coordinationContext.snapshot;
+  assert.equal(build({ ...coordinationContext, snapshot }).copilotRequestNotObservable, false);
+});
+
+test("a gate-entry refusal carries a recovery naming gate-coordination and the refused nextAction (issue 3615)", async () => {
+  await withTempDir(async (tempDir) => {
+    const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
+      isDraft: false,
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+    }));
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "pre_approval_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "await final human approval",
+    ], { env });
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.match(payload.error, /Cannot enter pre_approval_gate on owner\/repo#17/);
+    assert.match(payload.recovery, /loop gate-coordination --repo owner\/repo --pr 17/);
+    assert.match(payload.recovery, /nextAction/i);
+  }, { prefix: "dev-loops-upsert-gate-review-refusal-recovery-" });
 });
 
 test("upsert-checkpoint-verdict truncates verbose findings summary before comment creation", async () => {
