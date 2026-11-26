@@ -164,7 +164,7 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
   (the loop's carried convergence holds across a docs-only or integrate-only
   delta, and no Copilot review is outstanding on the current head), or
   copilot_unavailable (the loop's request_not_observable record for the current
-  head: Copilot accepted review requests that never became observable, and no
+  head, or carried to it across a base-only merge: Copilot accepted review requests that never became observable, and no
   Copilot review is outstanding on the current head). gate_evidence reuses
   detect-checkpoint-evidence (draft_gate + current-head pre_approval_gate with
   fan-out provenance, zero unresolved threads, a non-stale/non-foreign runner lock).
@@ -379,8 +379,9 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
     const docsOnly = await carriedDisposition(COPILOT_ABSENT_REVIEW_DISPOSITION.DOCS_ONLY_SUPPRESSION);
     if (docsOnly) return docsOnly;
   }
-  // Copilot accepted review requests on this head that never became observable
-  // (the loop's copilot_unavailable); no review can ever land on it. A request
+  // Copilot accepted review requests on this head, or on an earlier head carried
+  // to it across a base-only merge, that never became observable (the loop's
+  // copilot_unavailable); no review can ever land on it. A request
   // that became observable later is a normal round, so an outstanding review refuses.
   if (await readRequestNotObservable({ repo, pr, headSha: currentHeadSha, baseRef: baseRefName ? `origin/${baseRefName}` : null, repoRoot }, { checkpointDir: runtime.checkpointDir })
     && !(await isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews }, runtime))) {
