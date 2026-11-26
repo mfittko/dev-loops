@@ -1041,10 +1041,47 @@ function writeTargets(seg) {
 }
 
 const UNRESOLVABLE_WORD_RE = /[$`*?[{]|^~/;
-const LAUNCHER_RE = /^(?:command|env|exec|sudo|nohup|nice|builtin|time)$/;
+const LAUNCHER_RE = /^(?:command|env|exec|sudo|nohup|nice|builtin|time|stdbuf|timeout|xargs)$/;
+/** Launcher flags that take the next word as their value. */
+const LAUNCHER_VALUE_FLAG_RE = {
+  env: /^(?:-[uCS]|--(?:unset|chdir|split-string))$/,
+  sudo: /^-[ughpCDRTU]$/,
+  timeout: /^-[sk]$/,
+  xargs: /^(?:-[InPLsdEa]|--(?:max-args|max-procs|delimiter|arg-file))$/,
+  nice: /^-n$/,
+};
+const SCRIPT_VALUE_FLAG_RE = /^(?:--import|--require|-r|--loader|--experimental-loader|--cwd|--repo-root|--env-file|--conditions|-C)$/;
+const EXEC_FLAG_WORD_RE = /^-(?:exec|execdir|ok|okdir)$/;
+
+/**
+ * Splits an unquoted word at each embedded redirect operator (`x>f`, `x&>f`, `cat>f`, `2>/dev/null>f`); a quoted or substituted `>` stays data.
+ * A piece starts at its operator, with the fd digits when they make up the whole piece start. shortcut: `<` is not split (the tokenizer already splits `<<`).
+ */
+function splitAtRedirects(raw) {
+  const cuts = [];
+  let quote = null, depth = 0, last = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (quote === "'") { if (c === "'") quote = null; continue; }
+    if (c === "\\") { i++; continue; }
+    if (quote === '"') { if (c === '"') quote = null; continue; }
+    if (c === "'" || c === '"') quote = c;
+    else if (c === "$" && raw[i + 1] === "(") { depth++; i++; }
+    else if (c === ")" && depth > 0) depth--;
+    else if (c === ">" && depth === 0) {
+      let start = raw[i - 1] === "&" ? i - 1 : i;
+      let s = start;
+      while (s > last && /\d/.test(raw[s - 1])) s--;
+      if (raw.slice(last, start) === raw.slice(s, start)) start = s;
+      if (start > last) { cuts.push(start); last = start; }
+      while (/[>&|]/.test(raw[i + 1] ?? "")) i++;
+    }
+  }
+  return [0, ...cuts].map((from, j, all) => raw.slice(from, all[j + 1]));
+}
 const SED_IN_PLACE_RE = /^(?:-[a-zA-Z]*i|--in-place)/;
 const PERL_IN_PLACE_RE = /^-[0-9pnalswWtTuUSc]*i/;
-const TMP_SCRIPT_RE = /^(?:\.\/)?tmp\//;
+const TMP_SCRIPT_RE = /(?:^|\/)tmp\//;
 
 /**
  * Write targets of one segment: redirect words (an operator is read from the raw word, so a quoted `">"` is data) and the program's own operands.
@@ -1053,20 +1090,42 @@ const TMP_SCRIPT_RE = /^(?:\.\/)?tmp\//;
 function segmentWriteTargets(seg, place) {
   const out = [];
   const operands = [];
-  const { words } = seg;
+  const unparen = (v) => v.replace(/^\(+|\)+$/g, "");
+  const words = seg.words.flatMap((w) => {
+    if (w.op) return [w];
+    const pieces = splitAtRedirects(w.raw);
+    return pieces.length === 1 ? [w] : pieces.map((raw) => ({ raw, value: tokenizeShellCommand(raw).segments[0]?.words[0]?.value ?? raw }));
+  });
   for (let k = 0; k < words.length; k++) {
     const w = words[k];
-    if (w.op) continue;
+    // An input redirect (`<`, `<<`, `<<<`) consumes the next word, a file or a delimiter.
+    if (w.op || /^\d*<$/.test(w.raw)) { if (!w.op || w.op.startsWith("<")) k++; continue; }
     const m = REDIRECT_RE.exec(w.raw);
-    if (!m) { operands.push(w); continue; }
-    const attached = m[1];
-    const target = attached ? w.value.slice(w.raw.length - attached.length) : words[++k]?.value;
+    if (!m) { operands.push({ ...w, value: unparen(w.value) }); continue; }
+    const target = m[1] ? unparen(REDIRECT_RE.exec(w.value)?.[1] ?? "") : words[++k]?.value && unparen(words[k].value);
     if (target && !/^\d+$|^-$|^\(/.test(target)) out.push({ ...place(target), op: "write" });
   }
   let i = 0;
+  let launched = false;
+  const base = (o) => o?.value.split("/").pop() ?? "";
   while (operands[i] && ENV_ASSIGNMENT_WORD_RE.test(operands[i].raw)) i++;
-  while (LAUNCHER_RE.test(operands[i]?.value.split("/").pop() ?? "")) for (i++; operands[i]?.value.startsWith("-") || ENV_ASSIGNMENT_WORD_RE.test(operands[i]?.raw ?? ""); i++);
-  const head = operands[i]?.value.split("/").pop() ?? "";
+  for (;;) {
+    const name = base(operands[i]);
+    if (name === "find") {
+      // The command after `-exec`/`-execdir` runs up to its `;` or `+` terminator.
+      const e = operands.findIndex((o, j) => j > i && EXEC_FLAG_WORD_RE.test(o.value));
+      if (e < 0) break;
+      const end = operands.findIndex((o, j) => j > e && /^[;+]$/.test(o.value));
+      operands.splice(end < 0 ? operands.length : end);
+      i = e + 1;
+      launched = true;
+    } else if (LAUNCHER_RE.test(name)) {
+      launched ||= name === "xargs";
+      for (i++; operands[i]?.value.startsWith("-") || ENV_ASSIGNMENT_WORD_RE.test(operands[i]?.raw ?? ""); i++) if (LAUNCHER_VALUE_FLAG_RE[name]?.test(operands[i].value)) i++;
+      if (name === "timeout") i++;
+    } else break;
+  }
+  const head = base(operands[i]);
   const args = operands.slice(i + 1).map((o) => o.value);
   const flags = args.filter((a) => a.startsWith("-"));
   const dashes = args.indexOf("--");
@@ -1077,17 +1136,24 @@ function segmentWriteTargets(seg, place) {
   if (head === "tee") positional.forEach((p) => add(p, "write"));
   else if (head === "sed" || head === "perl") {
     // Without `-e`/`-f` the first positional is the script; with one, every positional is a file.
-    if (flags.some((f) => (head === "sed" ? SED_IN_PLACE_RE : PERL_IN_PLACE_RE).test(f))) positional.slice(flags.some((f) => takesScript(f) || /^--(?:expression|file)=/.test(f)) ? 0 : 1).forEach((p) => add(p, "write"));
+    if (flags.some((f) => (head === "sed" ? SED_IN_PLACE_RE : PERL_IN_PLACE_RE).test(f))) {
+      const files = positional.slice(flags.some((f) => takesScript(f) || /^--(?:expression|file)=/.test(f)) ? 0 : 1);
+      files.forEach((p) => add(p, "write"));
+      // An in-place edit behind `xargs` or `find -exec` takes its files from the pipe, so no literal file means an unresolvable target.
+      if (launched && !files.length) out.push({ path: "<stdin>", unresolvable: true, op: "write" });
+    }
   } else if (head === "cp" || head === "mv") {
-    if (positional.length >= 2) {
+    // shortcut: `-t DIR` / `--target-directory` puts the destination first and is not read.
+    if (positional.length >= 2 && !flags.some((f) => /^-[a-zA-Z]*t$|^--target-directory/.test(f))) {
       if (head === "mv") positional.slice(0, -1).forEach((p) => add(p, "remove"));
-      add(positional.at(-1), "copy");
+      out.push({ ...place(positional.at(-1)), op: "copy", sources: positional.slice(0, -1) });
     }
   } else if (head === "rm") positional.forEach((p) => add(p, "remove"));
   else if (/^(?:dev-loops-run|node|bun)$/.test(head)) {
-    // The script word: skip flags, the `--repo-root` value and `run`.
-    const script = args.find((a, j) => !a.startsWith("-") && a !== "run" && args[j - 1] !== "--repo-root");
-    if (script && TMP_SCRIPT_RE.test(script)) add(script, "run");
+    // The script word: skip flags, their values and `run`; a placed path with a `tmp/` segment is a candidate for the hook to confirm.
+    const script = args.find((a, j) => !a.startsWith("-") && a !== "run" && !SCRIPT_VALUE_FLAG_RE.test(args[j - 1] ?? ""));
+    const placed = script && place(script);
+    if (placed && TMP_SCRIPT_RE.test(placed.path)) out.push({ ...placed, op: "run" });
   }
   return out;
 }
@@ -1111,8 +1177,8 @@ export function shellWriteTargets(command) {
         if (state.cdBad) return { path: value, unresolvable: true };
         return { path: state.cd ? path.posix.join(state.cd, value) : value.replace(/^\.\//, ""), unresolvable };
       };
-      if (segmentHead(seg) === "cd") {
-        const arg = seg.words.slice(1).find((w) => !w.op && !w.value.startsWith("-"))?.value;
+      if (segmentHead(seg).replace(/^\(+/, "") === "cd") {
+        const arg = seg.words.slice(1).find((w) => !w.op && !w.value.startsWith("-"))?.value.replace(/\)+$/, "");
         if (!arg || arg === "-" || UNRESOLVABLE_WORD_RE.test(arg)) state.cdBad = true;
         else if (path.posix.isAbsolute(arg)) Object.assign(state, { cd: arg, cdBad: false });
         else state.cd = state.cd ? path.posix.join(state.cd, arg) : arg;

@@ -93,3 +93,43 @@ test("the hook lets a worker remove or rename to a new path and denies a copy ov
     assert.equal(bash(root, "rm -f src/a.mjs", "dev-loop", COORDINATOR).decision, "deny");
   });
 });
+
+test("the hook denies a worker copy or rename into an existing directory when the file exists there, and any copy under .git", async () => {
+  await withRepo(async (root) => {
+    fs.mkdirSync(path.join(root, "other"));
+    fs.writeFileSync(path.join(root, "other", "a.mjs"), "o\n", "utf8");
+    fs.writeFileSync(path.join(root, "other", "n.mjs"), "o\n", "utf8");
+    for (const command of ["cp other/a.mjs src/", "mv other/a.mjs src/", "cp other/n.mjs other/a.mjs src/", "cp x .git/hooks/pre-commit", "mv x .git/hooks/pre-commit", "cp x .git/"]) {
+      for (const role of ["developer", "fixer"]) assert.equal(bash(root, command, role).decision, "deny", `${role}: ${command}`);
+    }
+    for (const command of ["cp other/n.mjs src/", "mv other/n.mjs src/", "cp other/n.mjs tmp/"]) assert.equal(bash(root, command, "developer").decision, "allow", command);
+  });
+});
+
+test("the hook denies a coordinator remove or rename of an existing directory", async () => {
+  await withRepo(async (root) => {
+    for (const command of ["rm -rf src", "mv src other"]) assert.equal(bash(root, command, "dev-loop", COORDINATOR).decision, "deny", command);
+    for (const command of ["rm -rf nothing-here", "rm -rf tmp"]) assert.equal(bash(root, command, "dev-loop", COORDINATOR).decision, "allow", command);
+    assert.equal(bash(root, "rm -rf src", "developer").decision, "allow");
+  });
+});
+
+test("the hook denies a coordinator script under the repo tmp root by absolute path, behind flag values and after a cd, and allows other scripts", async () => {
+  await withRepo(async (root) => {
+    for (const command of [`node ${root}/tmp/x.mjs`, "node --import tsx tmp/x.mjs", "cd tmp && node x.mjs", `cd ${root}/tmp && node x.mjs`]) {
+      assert.equal(bash(root, command, "dev-loop", COORDINATOR).decision, "deny", command);
+    }
+    for (const command of ["node /private/tmp/x.mjs", "node scripts/x.mjs", `node ${root}/scripts/x.mjs`]) {
+      assert.equal(bash(root, command, "dev-loop", COORDINATOR).decision, "allow", command);
+    }
+  });
+});
+
+test("the hook denies a no-space redirect, xargs and find -exec shell writes", async () => {
+  await withRepo(async (root) => {
+    for (const command of ["echo x>src/a.mjs", "echo x 2>/dev/null>src/a.mjs", "git ls-files | xargs sed -i 's/a/b/'", "find src -exec sed -i 's/a/b/' {} +", "timeout 5 sed -i 's/a/b/' src/a.mjs"]) {
+      assert.equal(bash(root, command, "developer").decision, "deny", command);
+      assert.equal(bash(root, command, "dev-loop", COORDINATOR).decision, "deny", command);
+    }
+  });
+});

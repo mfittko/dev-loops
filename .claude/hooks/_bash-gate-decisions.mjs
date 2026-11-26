@@ -336,7 +336,7 @@ const SHELL_WRITE_VERB = { write: "writes", copy: "copies to", remove: "removes"
  * OPS-EDITOR-TOOL-WRITES (issue 2683), the last rule: a shell write by a coordinator (under `enforceCoordinator`) or a developer or fixer (always on).
  * The adapter supplies `shellWrites`, each target classified as `{ path, op, unresolvable, repoMutation, existingFile }` (absent means none, so an adapter without the fact, such as Pi, never denies).
  * A coordinator is denied a repo-mutating write or copy, the removal of an existing file and a script run under `tmp/`.
- * A worker is denied a repo-mutating write and a copy over an existing file; its rename to a new path and `rm` stay (WORKTREE-NONINTERACTIVE-FILE-OPS).
+ * A worker is denied a repo-mutating write, a copy over an existing file (the hook resolves a directory destination to `<dir>/<basename>`) and a copy under a `.git` segment (`gitDir`); its rename to a new path and `rm` stay (WORKTREE-NONINTERACTIVE-FILE-OPS).
  * An unresolvable target is denied for either role, except a worker `rm`. A coordinator deny keeps the COORDINATOR_DELEGATION_BOUNDARY marker, so its `ruleId` is null.
  */
 function decideShellWriteDeny({ role = null, enforceCoordinator = false, shellWrites = [] }) {
@@ -345,7 +345,7 @@ function decideShellWriteDeny({ role = null, enforceCoordinator = false, shellWr
   const denies = (t) => {
     if (t.op === "run") return coordinator;
     if (t.op === "remove") return coordinator ? t.unresolvable || t.existingFile : false;
-    return t.unresolvable || (coordinator || t.op === "write" ? t.repoMutation : t.existingFile);
+    return t.unresolvable || (coordinator || t.op === "write" ? t.repoMutation : t.existingFile || t.gitDir);
   };
   const target = Array.isArray(shellWrites) ? shellWrites.find(denies) : null;
   if (!target) return null;

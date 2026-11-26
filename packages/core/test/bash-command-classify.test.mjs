@@ -1930,7 +1930,7 @@ test("classifyDecisionRecorderCommand keeps a launcher word after a bare wrapper
 });
 
 // OPS-EDITOR-TOOL-WRITES (issue 2683): shellWriteTargets, one case per command form of the rows 1 to 18 table.
-const w = (path, op = "write", unresolvable = false) => ({ path, op, unresolvable });
+const w = (path, op = "write", unresolvable = false, sources) => ({ path, op, unresolvable, ...(sources && { sources }) });
 const SHELL_WRITE_CASES = [
   // row 1
   ["sed -i '' 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
@@ -1957,9 +1957,13 @@ const SHELL_WRITE_CASES = [
   ["{ a; b; } > src/a.mjs", [w("src/a.mjs")]],
   ["( a ) >> src/a.mjs", [w("src/a.mjs")]],
   // row 6, 7, 8
-  ["command cp -f x src/a.mjs", [w("src/a.mjs", "copy")]],
-  ["command cp -f x changes/x.md", [w("changes/x.md", "copy")]],
-  ["command mv -f src/a.mjs changes/x.md", [w("src/a.mjs", "remove"), w("changes/x.md", "copy")]],
+  ["command cp -f x src/a.mjs", [w("src/a.mjs", "copy", false, ["x"])]],
+  ["command cp -f x changes/x.md", [w("changes/x.md", "copy", false, ["x"])]],
+  ["command mv -f src/a.mjs changes/x.md", [w("src/a.mjs", "remove"), w("changes/x.md", "copy", false, ["src/a.mjs"])]],
+  ["cp x src/", [w("src/", "copy", false, ["x"])]],
+  ["cp a b src/", [w("src/", "copy", false, ["a", "b"])]],
+  ["cp -t dir src", []],
+  ["cp --target-directory=dir src", []],
   ["command rm -f src/a.mjs", [w("src/a.mjs", "remove")]],
   ["rm bun.lock && bun install", [w("bun.lock", "remove")]],
   // row 9: the target joins the last literal cd
@@ -1980,7 +1984,7 @@ const SHELL_WRITE_CASES = [
   ["printf x > tmp/x.md", [w("tmp/x.md")]],
   ["cmd > /dev/null 2>&1", [w("/dev/null")]],
   ["cmd 2>&1", []],
-  ["cp /dev/null /dev/null", [w("/dev/null", "copy")]],
+  ["cp /dev/null /dev/null", [w("/dev/null", "copy", false, ["/dev/null"])]],
   ["sed -n '1,5p' src/a.mjs", []],
   // row 13
   ["dev-loops-run --repo-root /x/wt scripts/loop/x.mjs --a b > tmp/out.json", [w("tmp/out.json")]],
@@ -2001,6 +2005,34 @@ const SHELL_WRITE_CASES = [
   ["bun tmp/x.mjs", [w("tmp/x.mjs", "run")]],
   ["bun run tmp/x.mjs", [w("tmp/x.mjs", "run")]],
   ["cd /x/wt && node tmp/x.mjs", [w("/x/wt/tmp/x.mjs", "run")]],
+  ["node --import tsx tmp/x.mjs", [w("tmp/x.mjs", "run")]],
+  ["cd tmp && node x.mjs", [w("tmp/x.mjs", "run")]],
+  ["node /x/wt/tmp/x.mjs", [w("/x/wt/tmp/x.mjs", "run")]],
+  ["node scripts/x.mjs", []],
+  // a redirect operator embedded in a word, with no space
+  ["printf x>changes/x.md", [w("changes/x.md")]],
+  ["echo x>src/a.mjs", [w("src/a.mjs")]],
+  ["echo x>>src/a.mjs", [w("src/a.mjs")]],
+  ["cat>src/a.mjs<<EOF\nline\nEOF", [w("src/a.mjs")]],
+  ["{ echo x; }>src/a.mjs", [w("src/a.mjs")]],
+  ["echo x&>src/a.mjs", [w("src/a.mjs")]],
+  ["echo x 2>/dev/null>src/a.mjs", [w("/dev/null"), w("src/a.mjs")]],
+  ["echo x 2>&1>src/a.mjs", [w("src/a.mjs")]],
+  ["echo \"a>b\" 'c>d' e\\>f", []],
+  // launchers: xargs, find -exec and value-taking flags
+  ["git ls-files | xargs sed -i 's/a/b/'", [w("<stdin>", "write", true)]],
+  ["xargs -0 perl -pi -e 's/a/b/'", [w("<stdin>", "write", true)]],
+  ["xargs -I{} sed -i 's/a/b/' {}", [w("{}", "write", true)]],
+  ["find src -exec sed -i 's/a/b/' {} +", [w("{}", "write", true)]],
+  ["find src -execdir sed -i 's/a/b/' {} \\;", [w("{}", "write", true)]],
+  ["find src -name x -exec echo {} \\;", []],
+  ["timeout 5 sed -i 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
+  ["env -u X cp x src/a.mjs", [w("src/a.mjs", "copy", false, ["x"])]],
+  ["sudo -u u cp x src/a.mjs", [w("src/a.mjs", "copy", false, ["x"])]],
+  // an input redirect and a subshell group
+  ["tee out < in", [w("out")]],
+  ["(cd a && echo x>c)", [w("a/c")]],
+  ["(cd a && echo x > c)", [w("a/c")]],
 ];
 
 test("shellWriteTargets returns each write target with its operation (issue 2683 rows 1 to 18)", () => {

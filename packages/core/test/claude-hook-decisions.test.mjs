@@ -2035,6 +2035,20 @@ const DENY_FOR_ALL = [
   "cd a && cd \"$W\" && echo x > b",
   "bash -c \"sed -i 's/a/b/' src/a.mjs\"",
   "eval \"echo x > src/a.mjs\"",
+  "printf x>changes/x.md", // no space before the operator
+  "echo x>src/a.mjs",
+  "echo x>>src/a.mjs",
+  "cat>src/a.mjs<<EOF\nline\nEOF",
+  "{ echo x; }>src/a.mjs",
+  "echo x&>src/a.mjs",
+  "echo x 2>/dev/null>src/a.mjs",
+  "git ls-files | xargs sed -i 's/a/b/'", // launchers
+  "xargs -0 perl -pi -e 's/a/b/'",
+  "find src -exec sed -i 's/a/b/' {} +",
+  "timeout 5 sed -i 's/a/b/' src/a.mjs",
+  "env -u X cp x src/a.mjs",
+  "sudo -u u cp x src/a.mjs",
+  "(cd /x/wt/src && echo x>a.mjs)",
 ];
 // D for a coordinator, A for a worker (rows 7, 8, 18).
 const DENY_FOR_COORDINATOR_ONLY = [
@@ -2045,6 +2059,8 @@ const DENY_FOR_COORDINATOR_ONLY = [
   "dev-loops-run --repo-root /x/wt tmp/x.mjs", // issue 3395
   "node tmp/x.mjs",
   "bun tmp/x.mjs",
+  "node --import tsx tmp/x.mjs",
+  "cd /x/wt/tmp && node x.mjs",
 ];
 // A for every role (rows 12 to 16).
 const ALLOW_FOR_ALL = [

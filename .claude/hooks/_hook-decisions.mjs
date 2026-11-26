@@ -145,7 +145,7 @@ export const isFixerPullAttempt = (command) => typeof command === "string" && co
  * @param {boolean} [params.enforceCoordinator] - Strict mode for the COORDINATOR-VERIFY-BOUNDARY
  *   boundary, derived by the hook from `DEVLOOPS_COORDINATOR_READONLY=1` — the SAME flag that
  *   gates `decideCoordinatorWriteGuard`. Default fail-open (mirrors that boundary).
- * @param {{path: string, op: string, unresolvable: boolean, repoMutation?: boolean, existingFile?: boolean}[]} [params.shellWrites] - The command's
+ * @param {{path: string, op: string, unresolvable: boolean, repoMutation?: boolean, existingFile?: boolean, gitDir?: boolean}[]} [params.shellWrites] - The command's
  *   shell write targets (`shellWriteTargets`), each classified by the hook against its cwd (OPS-EDITOR-TOOL-WRITES).
  * @returns {HookDecision}
  */
