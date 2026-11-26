@@ -21,8 +21,7 @@ import {
   buildRevisionIdentity,
   computeContentDigest,
   computeSpecDigest,
-  requireSpecFromBody,
-  resolvePrDescriptionSpec,
+  resolveSpecFromBody,
   specCriterionIds,
 } from "@dev-loops/core/loop/spec-authority";
 import { resolveTrackerAdapter } from "@dev-loops/core/tracker";
@@ -38,7 +37,6 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { resolveTrackerLocalSpec } from "../github/resolve-tracker-local-spec.mjs";
 import { viewPr } from "../github/view-pr.mjs";
 import { SLICE_LINKAGE_SENTENCE, hasReopenLine } from "./_slice-linkage.mjs";
-
 const USAGE = `Usage:
   spec-context.mjs --repo <owner/name> (--issue <number> | --pr <number> | --body-file <path>) --content-file <path> [--head-sha <sha>] [--spec-out <path>] [--identity-out <path>]
   spec-context.mjs changed-paths --base <ref> --head <ref> [--repo-root <path>]
@@ -274,15 +272,9 @@ export async function specContextExtract(
     if (error?.code !== "RATE_LIMITED") throw error;
     return rateLimitedResult(error);
   }
-  let spec;
-  let specSource = options.issue !== undefined ? "issue" : "pr_body";
-  if (options.bodyFile !== undefined) {
-    const prSpec = resolvePrDescriptionSpec(resolved.body);
-    if (prSpec.specSource === "none") return { ok: true, repo: resolved.repo, ...prSpec };
-    ({ spec, specSource } = prSpec);
-  } else {
-    spec = requireSpecFromBody(resolved.body);
-  }
+  const resolvedSpec = resolveSpecFromBody(resolved.body, { prDescription: options.bodyFile !== undefined, specSource: options.issue !== undefined ? "issue" : "pr_body" });
+  if (resolvedSpec.specSource === "none") return { ok: true, repo: resolved.repo, ...resolvedSpec };
+  const { spec, specSource } = resolvedSpec;
   let contentBytes;
   try {
     contentBytes = await readFile(path.resolve(repoRoot, options.contentFile), "utf8");
