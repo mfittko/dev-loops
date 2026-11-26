@@ -1207,14 +1207,18 @@ function segmentWriteTargets(seg, place) {
   const flags = args.filter((a) => a.startsWith("-"));
   const dashes = args.indexOf("--");
   // A `-e`/`-f` flag takes the next word as its script, not as a file.
-  const takesScript = (a) => (head === "sed" || head === "perl") && /^-[a-zA-Z]*[ef]$|^--(?:expression|file)$/.test(a);
+  // sed's letter run stops before `i` (the rest is a backup suffix); only perl reads `-E` as a script flag.
+  const scriptFlag = head === "perl" ? "[efE]" : "[ef]";
+  const flagRun = head === "sed" ? "[a-hj-zA-Z]*" : "[a-zA-Z]*";
+  const attachedScriptRe = new RegExp(`^-${flagRun}${scriptFlag}.`);
+  const takesScript = (a) => (head === "sed" || head === "perl") && (new RegExp(`^-${flagRun}${scriptFlag}$`).test(a) || /^--(?:expression|file)$/.test(a));
   const positional = args.filter((a, j) => a && (!a.startsWith("-") || (dashes >= 0 && j > dashes)) && !takesScript(args[j - 1] ?? ""));
   const add = (value, op) => out.push({ ...at(value), op });
   if (head === "tee") positional.forEach((p) => add(p, "write"));
   else if (head === "sed" || head === "perl") {
     // Without `-e`/`-f` the first positional is the script; with one, every positional is a file.
     if (flags.some((f) => (head === "sed" ? SED_IN_PLACE_RE : PERL_IN_PLACE_RE).test(f))) {
-      const files = positional.slice(flags.some((f) => takesScript(f) || /^--(?:expression|file)=|^-[a-zA-Z]*[ef]./.test(f)) ? 0 : 1);
+      const files = positional.slice(flags.some((f) => takesScript(f) || /^--(?:expression|file)=/.test(f) || attachedScriptRe.test(f)) ? 0 : 1);
       files.forEach((p) => add(p, "write"));
       // An in-place edit behind `xargs` or `find -exec` takes its files from the pipe, so no literal file means an unresolvable target.
       if (launched && !files.length) out.push({ path: "<stdin>", unresolvable: true, op: "write" });
