@@ -1937,7 +1937,7 @@ test("decideBashGate denies a timeout wrapper in front of a sanctioned command a
   assert.equal(decideBashGate({ command: "timeout 300 dev-loops-run scripts/github/merge-pr.mjs", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision, "allow");
 });
 
-test("decideBashGate denies a command naming merge-pr for any subagent, --check included, not for the main agent (issue 2500)", () => {
+test("decideBashGate denies a command that runs the merge script for any subagent, --check included, not for the main agent (issue 2500)", () => {
   const forms = [
     "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 2630 --human-approved-by mfittko",
     "dev-loops-run --repo-root /wt scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5 --check",
