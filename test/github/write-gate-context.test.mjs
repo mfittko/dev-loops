@@ -11752,7 +11752,9 @@ test("the context writer builds the next round on both gates when 3 then 3 acted
       } finally {
         process.stdout.write = realOut; process.stderr.write = realErr; process.exitCode = prior;
       }
-      assert.notEqual(exitCode, 1, `${gate}: ${out}`);
+      assert.equal(exitCode ?? 0, 0, `${gate}: ${out}`);
+      const artifact = JSON.parse(await readFile(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-69", `${gate}-${headSha}.json`), "utf8"));
+      assert.equal(artifact.gate, gate);
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }

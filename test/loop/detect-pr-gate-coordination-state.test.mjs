@@ -5577,6 +5577,7 @@ test("detectPrGateCoordinationState forwards --operator-focus-file into the cap 
   assert.match(stopped.reason, /round_cap_reached/);
   const cleared = await detectWithPriorLedger("x", { pastCap: true, withFocusFile: true });
   assert.doesNotMatch(cleared.reason, /round_cap_reached/, cleared.reason);
+  assert.notEqual(cleared.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, cleared.reason);
 });
 
 test("a cap-brakes read that throws a non-tamper error sets capBrakesWarning and keeps the route", async () => {
