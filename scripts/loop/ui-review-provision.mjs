@@ -40,11 +40,13 @@ Optional:
                                   DETACHED onto a local mirror of refs/pull/<n>/head regardless, so
                                   this no longer decides which code is reviewed.
   --ack-destructive-migration     Acknowledge + unblock a destructive migration.
+  --out <p>                       Also write the result JSON to <p> (pass it to the next stage; no shell redirect).
   -h, --help                      Show this help.
 Output (stdout, JSON):
   { "ok": bool, "stopped": bool, "stopReason": string|null,
     "worktreePath": <p>, "headSha": <sha|null>, "depInstall": {...}, "migrations": {...},
-    "boot": { "ready": bool, "attempts": n, ... }, "findings": [...], "logs": [...] }
+    "boot": { "ready": bool, "attempts": n, ... }, "findings": [...], "logs": [...],
+    "recovery": string (ready-url-in-use stop only) }
 
 ${JQ_OUTPUT_USAGE}`.trim();
 
@@ -66,6 +68,7 @@ export function parseUiReviewProvisionCliArgs(argv) {
       pr: { type: "string" },
       branch: { type: "string" },
       "ack-destructive-migration": { type: "boolean" },
+      out: { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -97,6 +100,7 @@ export function parseUiReviewProvisionCliArgs(argv) {
       options.ackDestructiveMigration = token.value === undefined || !/^(false|0|no)$/iu.test(token.value.trim());
       continue;
     }
+    if (token.name === "out") { options.out = requireTokenValue(token, parseError); continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -386,7 +390,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       log: (msg) => stderr.write(`[ui-review-provision] ${msg}\n`),
     },
   );
-  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, out: options.out });
 }
 
 if (isDirectCliRun(import.meta.url)) {

@@ -59,7 +59,7 @@ drive your app.
    HTTP readiness probe. Boot stdout and stderr go to
    `<tmpdir>/dev-loops-ui-review-pr-<n>-XXXXXX/boot.log`. If the boot process exits before
    the app is ready, the stage stops at once with a `boot-exited` finding that
-   carries the exit code and the last log lines.
+   carries the exit code and the last log lines. If `readyUrl` already answers 2xx or 3xx before boot, the stage stops with `ready-url-in-use` (recovery in `skills/ui-review/SKILL.md`).
 2. **Auth + drive** — launches one headless WebKit context, authenticates
    through your dev-login recipe, dismisses declared interstitials once, then
    walks the changed UI flows, capturing a screenshot + `state.json` + `snapshot.json` + `axe.json` + `console.json` per step.
@@ -122,8 +122,8 @@ worktree:
   the foreground. An exit before readiness, including exit code 0, stops the
   stage with `boot-exited`.
 - `uiReview.run.readyUrl` — an `http(s)` URL an HTTP probe polls until the app
-  answers (never a fixed sleep).
-- `uiReview.run.readyTimeoutMs` — probe budget in ms (default `60000`).
+  answers (never a fixed sleep). It must not answer before boot: provision probes it once before boot and stops with `ready-url-in-use` on a 2xx or 3xx.
+- `uiReview.run.readyTimeoutMs` — probe budget in ms (default `60000`). It also bounds the one pre-boot probe.
 - `uiReview.run.readyIntervalMs` — probe interval in ms (default `1000`).
 - `uiReview.run.cwd` — optional worktree-relative subdir to run `command` in.
 - `uiReview.run.migrate` — optional dev-DB migration sub-recipe:

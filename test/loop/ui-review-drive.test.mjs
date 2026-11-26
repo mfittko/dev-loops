@@ -116,6 +116,29 @@ test("parseUiReviewDriveCliArgs: collects repeatable --changed-path", () => {
   assert.deepEqual(o.changedPaths, ["app/a.rb", "app/b.rb"]);
 });
 
+test("parseUiReviewDriveCliArgs: --out takes a value and rejects a missing one", () => {
+  const base = ["--repo-root", "/r", "--app-url", "http://x", "--output-dir", "/o"];
+  assert.equal(parseUiReviewDriveCliArgs([...base, "--out", "/o.json"]).out, "/o.json");
+  assert.throws(() => parseUiReviewDriveCliArgs([...base, "--out"]), /--out/);
+});
+
+test("runCli: --out writes the same JSON the stdout line carries", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "drive-out-"));
+  after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(
+    path.join(dir, ".devloops.json"),
+    JSON.stringify({ version: 1, uiReview: { run: { command: "bin/app", readyUrl: "http://127.0.0.1:4000/healthz" } } }),
+  );
+  let out = "";
+  const stdout = { write: (s) => { out += s; return true; } };
+  const stderr = { write: () => true };
+  const outFile = path.join(dir, "nested", "drive.json");
+  await runCli(["--repo-root", dir, "--app-url", "http://127.0.0.1:4000", "--output-dir", path.join(dir, "out"), "--out", outFile], { stdout, stderr });
+  process.exitCode = 0;
+
+  assert.equal(readFileSync(outFile, "utf8"), out);
+});
+
 // ─ The AC test: a swallowed error response is captured by the listener AND log ─
 
 test("swallowed error response: the response listener AND the server-log tail both capture a hidden 500", async () => {

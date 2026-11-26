@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "bun:test";
 import {
   JqFilterError,
@@ -89,6 +92,30 @@ test("emitResult: no jq/silent prints verbatim JSON, exit follows ok", () => {
   assert.deepEqual(JSON.parse(out.get()), sample);
   const out2 = sink();
   assert.equal(emitResult({ ok: false, error: "x" }, { stdout: out2 }), 1);
+});
+
+test("emitResult: out writes the full result line in every mode, creating the parent and overwriting", () => {
+  const dir = mkdtempSync(join(tmpdir(), "emit-out-"));
+  const file = join(dir, "nested", "r.json");
+  const modes = [{}, { jq: ".ok" }, { silent: true }, { jq: ".ok", silent: true }];
+  for (const mode of modes) {
+    const stdout = sink();
+    emitResult(sample, { ...mode, stdout, out: file });
+    assert.equal(readFileSync(file, "utf8"), `${JSON.stringify(sample)}\n`);
+  }
+  const failed = { ok: false, error: "x" };
+  const stdout = sink();
+  emitResult(failed, { stdout, out: file });
+  assert.equal(readFileSync(file, "utf8"), stdout.get());
+});
+
+test("emitResult: an unwritable out path throws and leaves stdout empty", () => {
+  const dir = mkdtempSync(join(tmpdir(), "emit-out-"));
+  const blocker = join(dir, "file");
+  writeFileSync(blocker, "x");
+  const stdout = sink();
+  assert.throws(() => emitResult(sample, { stdout, out: join(blocker, "sub", "r.json") }));
+  assert.equal(stdout.get(), "");
 });
 
 test("emitResult: --jq prints filtered value", () => {

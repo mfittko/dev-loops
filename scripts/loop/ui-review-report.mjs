@@ -53,6 +53,7 @@ Optional:
   --submit-authorized   Record the severity->event decision as authorized (never auto-submits).
   --hosted-url <url>    A real hosted artifact URL to link in the review body (when known).
   --dry-run             Build + write the artifact and emit the directive, but do NOT post.
+  --out <p>             Also write the result JSON to <p> (pass it to the next stage; no shell redirect).
   -h, --help            Show this help.
 Output (stdout, JSON):
   { ok, pr, htmlPath, reviewFile, hosting:{hosting,publishable,...}, policy:{event,blocking,severity},
@@ -79,6 +80,7 @@ export function parseUiReviewReportCliArgs(argv) {
       "submit-authorized": { type: "boolean" },
       "hosted-url": { type: "string" },
       "dry-run": { type: "boolean" },
+      out: { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -97,6 +99,7 @@ export function parseUiReviewReportCliArgs(argv) {
     if (token.name === "submit-authorized") { options.submitAuthorized = true; continue; }
     if (token.name === "hosted-url") { options.hostedUrl = requireTokenValue(token, parseError); continue; }
     if (token.name === "dry-run") { options.dryRun = true; continue; }
+    if (token.name === "out") { options.out = requireTokenValue(token, parseError); continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -296,7 +299,7 @@ export async function runCli(
     review,
     caps,
   };
-  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.ok });
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.ok, out: options.out });
 }
 
 if (isDirectCliRun(import.meta.url)) {
