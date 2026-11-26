@@ -2055,6 +2055,7 @@ const DENY_FOR_COORDINATOR_ONLY = [
   "command cp -f x changes/x.md",
   "command mv -f src/a.mjs changes/x.md",
   "command rm -f src/a.mjs",
+  "rm -f \"$f\"", // an unresolvable remove: a coordinator fails closed, a worker keeps rm
   "rm bun.lock && bun install", // PR 2720
   "dev-loops-run --repo-root /x/wt tmp/x.mjs", // issue 3395
   "node tmp/x.mjs",
@@ -2069,6 +2070,8 @@ const ALLOW_FOR_ALL = [
   "cmd > /dev/null 2>&1",
   "cmd 2>&1",
   "cp /dev/null /dev/null", // 2026-11-26
+  "cmd 2> >(grep -v warn >&2)",
+  "printf x > 'tmp/run-$1.md'",
   "sed -n '1,5p' src/a.mjs",
   "dev-loops-run --repo-root /x/wt scripts/loop/x.mjs --a b > tmp/out.json",
   "grep -n \"sed -i\" src/a.mjs",

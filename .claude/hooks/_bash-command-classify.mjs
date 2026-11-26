@@ -1040,7 +1040,7 @@ function writeTargets(seg) {
   return targets.filter((t) => t && !/^\d+$|^-$/.test(t)).map((t) => t.replace(/^\.\//, ""));
 }
 
-const UNRESOLVABLE_WORD_RE = /[$`*?[{]|^~/;
+export const UNRESOLVABLE_WORD_RE =/[$`*?[{]|^~/;
 const LAUNCHER_RE = /^(?:command|env|exec|sudo|nohup|nice|builtin|time|stdbuf|timeout|xargs)$/;
 /** Launcher flags that take the next word as their value. */
 const LAUNCHER_VALUE_FLAG_RE = {
@@ -1096,6 +1096,15 @@ function segmentWriteTargets(seg, place) {
     const pieces = splitAtRedirects(w.raw);
     return pieces.length === 1 ? [w] : pieces.map((raw) => ({ raw, value: tokenizeShellCommand(raw).segments[0]?.words[0]?.value ?? raw }));
   });
+  // A value is literal when every word that spells it is fully single-quoted, so `'tmp/a[1].md'` is no glob while `tmp/a[1].md` is.
+  const literal = new Map();
+  for (const w of words) {
+    if (w.op) continue;
+    const m = REDIRECT_RE.exec(w.raw);
+    const [value, raw] = m?.[1] ? [REDIRECT_RE.exec(w.value)?.[1] ?? "", m[1]] : [unparen(w.value), w.raw];
+    literal.set(value, (literal.get(value) ?? true) && /^'[^']*'$/.test(raw));
+  }
+  const at = (value) => place(value, literal.get(value) === true);
   for (let k = 0; k < words.length; k++) {
     const w = words[k];
     // An input redirect (`<`, `<<`, `<<<`) consumes the next word, a file or a delimiter.
@@ -1103,7 +1112,8 @@ function segmentWriteTargets(seg, place) {
     const m = REDIRECT_RE.exec(w.raw);
     if (!m) { operands.push({ ...w, value: unparen(w.value) }); continue; }
     const target = m[1] ? unparen(REDIRECT_RE.exec(w.value)?.[1] ?? "") : words[++k]?.value && unparen(words[k].value);
-    if (target && !/^\d+$|^-$|^\(/.test(target)) out.push({ ...place(target), op: "write" });
+    // `>(cmd)` / `<(cmd)` is a process substitution, not a file.
+    if (target && !/^\d+$|^-$|^\(|^[<>]\(/.test(target)) out.push({ ...at(target), op: "write" });
   }
   let i = 0;
   let launched = false;
@@ -1132,7 +1142,7 @@ function segmentWriteTargets(seg, place) {
   // A `-e`/`-f` flag takes the next word as its script, not as a file.
   const takesScript = (a) => (head === "sed" || head === "perl") && /^-[a-zA-Z]*[ef]$|^--(?:expression|file)$/.test(a);
   const positional = args.filter((a, j) => a && (!a.startsWith("-") || (dashes >= 0 && j > dashes)) && !takesScript(args[j - 1] ?? ""));
-  const add = (value, op) => out.push({ ...place(value), op });
+  const add = (value, op) => out.push({ ...at(value), op });
   if (head === "tee") positional.forEach((p) => add(p, "write"));
   else if (head === "sed" || head === "perl") {
     // Without `-e`/`-f` the first positional is the script; with one, every positional is a file.
@@ -1146,13 +1156,13 @@ function segmentWriteTargets(seg, place) {
     // shortcut: `-t DIR` / `--target-directory` puts the destination first and is not read.
     if (positional.length >= 2 && !flags.some((f) => /^-[a-zA-Z]*t$|^--target-directory/.test(f))) {
       if (head === "mv") positional.slice(0, -1).forEach((p) => add(p, "remove"));
-      out.push({ ...place(positional.at(-1)), op: "copy", sources: positional.slice(0, -1) });
+      out.push({ ...at(positional.at(-1)), op: "copy", sources: positional.slice(0, -1) });
     }
   } else if (head === "rm") positional.forEach((p) => add(p, "remove"));
   else if (/^(?:dev-loops-run|node|bun)$/.test(head)) {
     // The script word: skip flags, their values and `run`; a placed path with a `tmp/` segment is a candidate for the hook to confirm.
     const script = args.find((a, j) => !a.startsWith("-") && a !== "run" && !SCRIPT_VALUE_FLAG_RE.test(args[j - 1] ?? ""));
-    const placed = script && place(script);
+    const placed = script && at(script);
     if (placed && TMP_SCRIPT_RE.test(placed.path)) out.push({ ...placed, op: "run" });
   }
   return out;
@@ -1162,17 +1172,18 @@ function segmentWriteTargets(seg, place) {
  * OPS-EDITOR-TOOL-WRITES: the files a shell command writes, as `{ path, op, unresolvable }` in command order.
  * `op` is `write` (redirect, `tee`, `sed -i`, `perl -i`), `copy` (a `cp`/`mv` destination), `remove` (an `rm`/`mv` source) or `run` (a `dev-loops-run`/`node`/`bun` script under `tmp/`).
  * Walks the tokenizer's segments, so heredoc bodies and quoted data yield no target, and recurses into payload words (`bash -c`, `eval`) and substitutions.
- * A relative path joins the last literal `cd` of the command. A word holding `$`, a backtick, a glob character or a leading `~`, or a relative path after a `cd` with a non-literal argument, is `unresolvable`.
+ * A relative path joins the last literal `cd` of the command. A word holding `$`, a backtick, a glob character or a leading `~` (unless the word is fully single-quoted), or a relative path after a `cd` with a non-literal argument, is `unresolvable`.
+ * A `copy` entry also carries `sources`, the `cp`/`mv` source words; the hook resolves a directory destination to `<dir>/<basename(source)>` with them.
  * The caller resolves the remaining relative paths against its cwd and judges them.
  * shortcut: a `cd` inside a `( ... )` group or a pipe stage leaks into later segments; the leak joins a path to the wrong directory, and extend the model when a lane shows one.
- * @param {string} command @returns {{ path: string, op: "write"|"copy"|"remove"|"run", unresolvable: boolean }[]}
+ * @param {string} command @returns {{ path: string, op: "write"|"copy"|"remove"|"run", unresolvable: boolean, sources?: string[] }[]} `sources` is present for `op: "copy"`.
  */
 export function shellWriteTargets(command) {
   const out = [];
   const walk = (segments, state) => {
     for (const seg of segments) {
-      const place = (value) => {
-        const unresolvable = UNRESOLVABLE_WORD_RE.test(value);
+      const place = (value, literal = false) => {
+        const unresolvable = !literal && UNRESOLVABLE_WORD_RE.test(value);
         if (path.posix.isAbsolute(value)) return { path: value, unresolvable };
         if (state.cdBad) return { path: value, unresolvable: true };
         return { path: state.cd ? path.posix.join(state.cd, value) : value.replace(/^\.\//, ""), unresolvable };

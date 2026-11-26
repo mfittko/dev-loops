@@ -72,6 +72,7 @@ import {
   normalizeGitHubRepoSlug,
   shellWriteTargets,
   tokenizeShellCommand,
+  UNRESOLVABLE_WORD_RE,
 } from "./_bash-command-classify.mjs";
 import { classifyRepoMutation } from "./_worktree-guard.mjs";
 
@@ -294,28 +295,23 @@ const enforceCoordinator = process.env.DEVLOOPS_COORDINATOR_READONLY === "1";
 // OPS-EDITOR-TOOL-WRITES (issue 2683): resolve each shell write target against cwd and classify it with the Write guard's repo-mutation test.
 // Only the guarded roles pay the git calls. An unresolvable target stays unclassified (the decider denies it fail closed).
 // A `run` target counts only under the `tmp/` directory of the repository that holds the script (a worktree script is not a tmp script).
-const isUnderRepoTmp = (abs) => {
-  const { targetReal } = classifyRepoMutation(abs);
-  try {
-    let dir = targetReal;
-    while (!fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory() && path.dirname(dir) !== dir) dir = path.dirname(dir);
-    const root = execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    return targetReal.startsWith(`${root}/tmp/`);
-  } catch {
-    return false;
-  }
-};
 const shellWrites = typeof command === "string" && /(?:^|:)(?:developer|fixer|dev-loop|gate-coordinator)$/.test(agentType ?? "")
   ? shellWriteTargets(command).flatMap((target) => {
     if (target.unresolvable) return [{ ...target, repoMutation: true, existingFile: false }];
-    const abs = path.resolve(cwd, target.path);
-    if (target.op === "run") return isUnderRepoTmp(abs) ? [{ ...target, repoMutation: true, existingFile: false }] : [];
-    const { isRepoMutation, targetReal } = classifyRepoMutation(abs);
-    const stat = fs.statSync(abs, { throwIfNoEntry: false });
-    // A copy into an existing directory lands on `<dir>/<basename(source)>`; any other existing path (a directory included) counts as existing.
-    const into = target.op === "copy" && stat?.isDirectory() === true;
-    const existingFile = isRepoMutation && (into ? (target.sources ?? []).some((s) => fs.existsSync(path.join(abs, path.basename(s)))) : stat !== undefined);
-    return [{ ...target, repoMutation: isRepoMutation, existingFile, gitDir: targetReal.split("/").includes(".git") }];
+    // A throw here (statSync on ENAMETOOLONG, ELOOP, EACCES) would crash the hook and let the command run, so it denies fail closed.
+    try {
+      const abs = path.resolve(cwd, target.path);
+      const { isRepoMutation, targetReal, repoRoot } = classifyRepoMutation(abs);
+      if (target.op === "run") return repoRoot !== null && targetReal.startsWith(`${repoRoot}/tmp/`) ? [{ ...target, repoMutation: true, existingFile: false }] : [];
+      const stat = fs.statSync(abs, { throwIfNoEntry: false });
+      // A copy into an existing directory lands on `<dir>/<basename(source)>`; a glob or `$` source names no file, so it is unresolvable.
+      const into = target.op === "copy" && stat?.isDirectory() === true;
+      if (into && isRepoMutation && (target.sources ?? []).some((s) => UNRESOLVABLE_WORD_RE.test(s))) return [{ ...target, unresolvable: true, repoMutation: true, existingFile: false }];
+      const existingFile = isRepoMutation && (into ? (target.sources ?? []).some((s) => fs.existsSync(path.join(abs, path.basename(s)))) : stat !== undefined);
+      return [{ ...target, repoMutation: isRepoMutation, existingFile, gitDir: targetReal.split("/").includes(".git") }];
+    } catch {
+      return [{ ...target, unresolvable: true, repoMutation: true, existingFile: true }];
+    }
   })
   : [];
 

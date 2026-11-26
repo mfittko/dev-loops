@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -15,6 +16,7 @@ import {
   classifyWorktreeIsolation,
   realpathNearestExisting,
   resolveTrackedFromCheckIgnore,
+  classifyRepoMutation,
   detectSubagentAvailability,
   DEVLOOPS_SUBAGENT_AVAILABLE_VAR,
 } from "../src/loop/worktree-guard.mjs";
@@ -574,4 +576,22 @@ test("resolveTrackedFromCheckIgnore maps check-ignore exit status to guarded/all
   assert.equal(resolveTrackedFromCheckIgnore(128), true);
   assert.equal(resolveTrackedFromCheckIgnore(null), true);
   assert.equal(resolveTrackedFromCheckIgnore(undefined), true);
+});
+
+test("classifyRepoMutation fails closed when git check-ignore errors (AC5, corrupt index) and reports the scrubbed repo root", () => {
+  const base = realpathSync(mkdtempSync(path.join(tmpdir(), "wg-crm-")));
+  try {
+    const gitEnv = { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+    execFileSync("git", ["init", "-q"], { cwd: base, env: gitEnv });
+    writeFileSync(path.join(base, ".gitignore"), "tmp/\n");
+    const ignored = classifyRepoMutation(path.join(base, "tmp", "x.md"));
+    assert.equal(ignored.isRepoMutation, false);
+    assert.equal(ignored.repoRoot, base);
+    writeFileSync(path.join(base, ".git", "index"), "corrupt");
+    const broken = classifyRepoMutation(path.join(base, "tmp", "x.md"));
+    assert.equal(broken.isRepoMutation, true);
+    assert.equal(classifyRepoMutation(path.join(tmpdir(), "wg-crm-none", "x")).repoRoot, null);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });

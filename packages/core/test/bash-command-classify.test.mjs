@@ -2029,6 +2029,16 @@ const SHELL_WRITE_CASES = [
   ["timeout 5 sed -i 's/a/b/' src/a.mjs", [w("src/a.mjs")]],
   ["env -u X cp x src/a.mjs", [w("src/a.mjs", "copy", false, ["x"])]],
   ["sudo -u u cp x src/a.mjs", [w("src/a.mjs", "copy", false, ["x"])]],
+  // a fully single-quoted path is literal; an unquoted or double-quoted metacharacter is not
+  ["echo x > 'tmp/a[1].md'", [w("tmp/a[1].md")]],
+  ["printf x > 'tmp/run-$1.md'", [w("tmp/run-$1.md")]],
+  ["echo x > \"$f\"", [w("$f", "write", true)]],
+  ["echo x > tmp/*.md", [w("tmp/*.md", "write", true)]],
+  ["echo x > \"tmp/$x.md\"", [w("tmp/$x.md", "write", true)]],
+  // a process substitution writes no file
+  ["cmd 2> >(grep x)", []],
+  ["cmd > >(tee f)", []],
+  ["bun test 2> >(grep -v warn >&2)", []],
   // an input redirect and a subshell group
   ["tee out < in", [w("out")]],
   ["(cd a && echo x>c)", [w("a/c")]],

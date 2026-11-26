@@ -106,6 +106,24 @@ test("the hook denies a worker copy or rename into an existing directory when th
   });
 });
 
+test("the hook denies a worker copy of a glob or dollar source into an existing directory (unresolvable source)", async () => {
+  await withRepo(async (root) => {
+    fs.mkdirSync(path.join(root, "other"));
+    fs.writeFileSync(path.join(root, "other", "a.mjs"), "o\n", "utf8");
+    for (const command of ["cp other/*.mjs src/", "cp \"$f\" src/"]) assert.equal(bash(root, command, "fixer").decision, "deny", command);
+    assert.equal(bash(root, "cp other/a.mjs changes-new.md", "fixer").decision, "allow");
+  });
+});
+
+test("the hook fails closed on a target name that makes statSync throw, and keeps the row 18 deny when GIT_DIR is exported", async () => {
+  await withRepo(async (root) => {
+    assert.equal(bash(root, `echo x > src/a.mjs; echo y > ${"a".repeat(300)}`, "developer").decision, "deny");
+    assert.equal(bash(root, `echo y > ${"a".repeat(300)}`, "dev-loop", COORDINATOR).decision, "deny");
+    const denied = bash(root, "node tmp/x.mjs", "dev-loop", { ...COORDINATOR, GIT_DIR: path.join(root, "nowhere") });
+    assert.equal(denied.decision, "deny");
+  });
+});
+
 test("the hook denies a coordinator remove or rename of an existing directory", async () => {
   await withRepo(async (root) => {
     for (const command of ["rm -rf src", "mv src other"]) assert.equal(bash(root, command, "dev-loop", COORDINATOR).decision, "deny", command);

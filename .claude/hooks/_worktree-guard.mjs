@@ -309,17 +309,19 @@ export function realpathNearestExisting(p, realpath = realpathSync.native) {
  * Fails closed: an unreadable ignore status leaves `isRepoMutation` true, a failed git-dir lookup leaves `inLinkedWorktree` false.
  *
  * @param {string} abs - Absolute or cwd-relative path (possibly not yet existing).
- * @returns {{ isRepoMutation: boolean, inLinkedWorktree: boolean, targetReal: string }}
+ * `repoRoot` is the scrubbed `rev-parse --show-toplevel` of the nearest existing directory, or null when the lookup failed.
+ * @returns {{ isRepoMutation: boolean, inLinkedWorktree: boolean, targetReal: string, repoRoot: string|null }}
  */
 export function classifyRepoMutation(abs) {
   let isRepoMutation = false;
   let inLinkedWorktree = false;
+  let repoRoot = null;
   const targetReal = realpathNearestExisting(abs);
   try {
-    const gitOpts = { encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_COMMON_DIR: undefined, GIT_INDEX_FILE: undefined }, stdio: ["ignore", "pipe", "ignore"] };
+    const gitOpts = { encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_COMMON_DIR: undefined, GIT_INDEX_FILE: undefined }, stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 };
     let dir = targetReal;
     while (!statSync(dir, { throwIfNoEntry: false })?.isDirectory() && path.dirname(dir) !== dir) dir = path.dirname(dir);
-    const repoRoot = execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], gitOpts).trim();
+    repoRoot = execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], gitOpts).trim();
     if (targetReal === repoRoot || targetReal.startsWith(repoRoot + "/")) {
       try {
         // `git check-ignore -q` exits 0 when ignored, 1 when not ignored.
@@ -340,7 +342,7 @@ export function classifyRepoMutation(abs) {
     // Outside every repo: not a mutation (the `.git` rule below still applies).
   }
   if (targetReal.split("/").includes(".git")) isRepoMutation = true;
-  return { isRepoMutation, inLinkedWorktree, targetReal };
+  return { isRepoMutation, inLinkedWorktree, targetReal, repoRoot };
 }
 
 /**
