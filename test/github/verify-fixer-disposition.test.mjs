@@ -126,7 +126,7 @@ for (const change of ["miss", "metadata-text", "mode", "offset", "offset-touch",
 });
 
 // ADR 0330: a proven base-only merge between X and H passes the descendant site check.
-for (const scenario of ["carried", "rejected", "touch-revert", "site-differs", "missing-base-ref"]) test(`base-only merge thread site carry: ${scenario}`, async () => {
+for (const scenario of ["carried", "rejected", "touch-revert", "site-differs", "unresolvable-base-ref", "throws"]) test(`base-only merge thread site carry: ${scenario}`, async () => {
   await withRepoRoot(async (root) => {
     await initPristineGitFixture(root);
     const git = (...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
@@ -150,8 +150,8 @@ for (const scenario of ["carried", "rejected", "touch-revert", "site-differs", "
       const result = spawnSync(cmd, args, { cwd: root, env: gitEnvNoDirOverrides(), encoding: "utf8" });
       return { code: result.status, stdout: result.stdout, stderr: result.stderr };
     } };
-    const proof = () => assertDescendantThreadSites({ repo: REPO, pr: PR, candidateHead: candidate, headSha: head, baseRef: scenario === "missing-base-ref" ? "refs/heads/missing" : "base-line",
-      baseOnlyMergeCarries: async () => scenario !== "rejected",
+    const proof = () => assertDescendantThreadSites({ repo: REPO, pr: PR, candidateHead: candidate, headSha: head, baseRef: scenario === "unresolvable-base-ref" ? "refs/heads/missing" : "base-line",
+      baseOnlyMergeCarries: async () => { if (scenario === "throws") throw new Error("predicate failed"); return scenario !== "rejected"; },
       handoff: { dispositions: [{ threadId: "t", disposition: "tackled" }] },
       parsed: { comments: [{ threadId: "t", id: "root", databaseId: "1" }] }, repoRoot: root }, deps);
     if (scenario === "carried") await proof();

@@ -97,8 +97,10 @@ Required:
                         The handoff counts only with a matching fixer pull receipt,
                         when written at or after that pull. Its candidate head X
                         may precede live --head-sha H only after containment and
-                        per-commit historical thread-site checks; uncertainty
-                        names the thread for pre_approval_gate --known-findings.
+                        per-commit historical thread-site checks; a proven
+                        base-only merge passes; other uncertainty names
+                        pre_approval_gate (ready PR) or gate close-sequence plus the
+                        next draft_gate round (draft PR) with --known-findings.
 Optional:
   --construct                 Construct the full worker's canonical report (ACT: from
                                authenticated completion input; THREAD: from the threads
