@@ -432,7 +432,7 @@ async function withLaneWorktree(fn) {
     await writeFile(path.join(repoRoot, "prefix.md"), "briefing prefix\n");
     const build = async (nonGoal) => writeGateContext(parseWriteGateContextCliArgs(["--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate", "--head-sha", head, "--angles", '["scope"]', "--acceptance-criteria", "#9", "--prefix-file", "prefix.md", "--issue-body", SPEC_BODY(nonGoal)]), { repoRoot });
     const guard = (prefixHash) => {
-      const result = spawnSync("node", [GUARD, "--scope", BUILDER_SCOPE, "--prefix-hash", prefixHash], { cwd: repoRoot, encoding: "utf8", timeout: 30_000 });
+      const result = spawnSync("node", [GUARD, "--scope", BUILDER_SCOPE, "--prefix-hash", prefixHash], { cwd: repoRoot, encoding: "utf8", timeout: 30_000, env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
       assert.equal(result.status, 0, result.stderr);
       return JSON.parse(result.stdout);
     };
