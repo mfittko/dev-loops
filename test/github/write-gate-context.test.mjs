@@ -11951,6 +11951,28 @@ test("a scoped final pre_approval_gate round whose PR-own delta is unproven is r
 });
 
 // Issue 3589 and 3588: the direct focus file clears round_cap_reached in resolveScopedFinalRound, as the issued fixer plan does, and a routed step 3 passes it.
+test("a malformed --operator-focus-file refuses on a draft_gate round and writes no context (GATE-EXEC-OPERATOR-FOCUS)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+    const focusFile = path.join(repoRoot, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "f", decision: "d", extra: 1 }] }), "utf8");
+    const prior = process.exitCode, write = process.stderr.write.bind(process.stderr), out = process.stdout.write.bind(process.stdout);
+    let text = "";
+    process.exitCode = undefined; process.stderr.write = (c) => { text += String(c); return true; }; process.stdout.write = (c) => { text += String(c); return true; };
+    let exitCode;
+    try {
+      await main(["--repo", "owner/repo", "--pr", "64", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha, "--operator-focus-file", focusFile], { repoRoot, run: stubGhRun });
+      exitCode = process.exitCode;
+    } finally { process.stderr.write = write; process.stdout.write = out; process.exitCode = prior; }
+    assert.equal(exitCode, 1, text);
+    assert.match(text, /GATE-EXEC-OPERATOR-FOCUS/);
+    assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-64", `draft_gate-${headSha}.json`)), false);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("--operator-focus-file clears a round_cap_reached stop of a pre_approval_gate round past the scoped round", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {

@@ -18,7 +18,7 @@ test("strings are sanitized: control characters become spaces, markup and backti
 });
 
 test("refusals: over-length, empty, unknown field, duplicate fingerprint, too many items", () => {
-  const bad = (raw, opts) => assert.throws(() => normalizeOperatorFocus(raw, opts), OperatorFocusRefusal);
+  const bad = (raw) => assert.throws(() => normalizeOperatorFocus(raw), OperatorFocusRefusal);
   bad({ round: "x".repeat(501) });
   bad({ round: "<>`" });
   bad({ other: "x" });

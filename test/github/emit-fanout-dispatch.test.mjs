@@ -2321,6 +2321,12 @@ test("operator focus: an over-length and a markup round are bounded and sanitize
     const items = runEmitCli([...base, "--operator-focus-file", focusFile], { cwd: tmpDir });
     assert.equal(items.status, 0, items.stderr);
     assert.deepEqual(JSON.parse(items.stdout).units[0].workOrder.operatorFocus, { round: "r" });
+    assert.doesNotMatch(await readFile(JSON.parse(items.stdout).units[0].promptPath, "utf8"), /fingerprint|decision: d/);
+
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "f", decision: "d" }] }));
+    const itemsOnly = runEmitCli([...base, "--operator-focus-file", focusFile], { cwd: tmpDir });
+    assert.equal(itemsOnly.status, 0, itemsOnly.stderr);
+    assert.ok(!("operatorFocus" in JSON.parse(itemsOnly.stdout).units[0].workOrder));
 
     await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "f", decision: "d", extra: 1 }] }));
     const malformed = runEmitCli([...base, "--operator-focus-file", focusFile], { cwd: tmpDir });

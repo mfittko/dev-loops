@@ -4781,6 +4781,8 @@ export async function main(
         if (refusal) throw new Error(refusal);
       }
     }
+    // GATE-EXEC-OPERATOR-FOCUS: a missing or malformed focus file refuses on every round, before any artifact write.
+    await readOperatorFocusFile(options.operatorFocusFile ? path.resolve(repoRoot, options.operatorFocusFile) : undefined);
     // Resolve the spec-of-record (PR body, linked issue(s) + their bodies)
     // BEFORE any diff work: a bundle that cannot state the spec truthfully must
     // not be written at all, and failing here costs nothing.
