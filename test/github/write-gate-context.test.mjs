@@ -11975,6 +11975,36 @@ test("a pre_approval_gate round forced by a pure base merge does not count towar
   }
 });
 
+// Issue 3589 finding 4: the direct focus file decides the effective latest round only; the base-merge-forced round fallback stays plan-only (issue 3586).
+test("refuseNonConvergence: a direct focus file that decides only a base-merge-forced latest round does not clear the stop", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["checkout", "-q", "-b", "mainline", baseSha]);
+    await writeFile(path.join(repoRoot, "src/other.mjs"), "export const other = 1;\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "main advances"]);
+    const mainSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    git(repoRoot, ["checkout", "-q", "--detach", headSha]);
+    git(repoRoot, ["merge", "--no-ff", "--no-commit", mainSha]);
+    git(repoRoot, ["commit", "-q", "-m", "merge main"]);
+    const mergedHead = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", mainSha]);
+    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-88");
+    await mkdir(dir, { recursive: true });
+    const act = (k) => ({ severity: "medium", summary: `finding ${k}`, files: [`src/${k}.mjs`], line: 1, judgeDisposition: "act", judgeTitle: `Finding ${k}`, judgeFix: "fix" });
+    const rounds = [[baseSha, ["a", "b"]], [headSha, ["a", "b"]], [mergedHead, ["c"]]];
+    for (const [i, [head, keys]] of rounds.entries()) {
+      await writeFile(path.join(dir, `pre_approval_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 88, gate: "pre_approval_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: keys.map((k, j) => ({ ...act(k), clusterId: j })) }), "utf8");
+    }
+    const [forced] = capRoundActList(rounds[2][1].map(act), mergedHead).map((a) => a.fingerprint);
+    const focusFile = path.join(repoRoot, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: forced, decision: "fix it" }] }), "utf8");
+    await assert.rejects(refuseNonConvergence({ repo: "owner/repo", pr: 88, gate: "pre_approval_gate", headSha: "9".repeat(40), operatorFocusFile: focusFile }, { repoRoot, prBase: "main" }), /non_convergence|Undecided/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("an operator decision naming every act item by fingerprint runs the round past the scoped round as one scoped round, once per act-item set", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {

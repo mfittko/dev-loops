@@ -1485,7 +1485,8 @@ export async function resolveCapBrakes(context, { repoRoot, config, operatorFocu
     // One item per acted cluster: the emitter binds an operator focus item only to an act-list fingerprint (GATE-EXEC-CAP-BRAKES).
     items: capRoundActList(last.findings, last.headSha).map((a) => `${a.fingerprint} [${normalizeSeverity(a.severity)}] ${String(a.summary ?? "").trim()}`),
   };
-  return await operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round: facts.round, cap: facts.cap }) ? { ...facts, operatorCleared: true } : facts;
+  // Fail closed: a focus file that fails to read here clears nothing, and the cap stop stays.
+  return await operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, round: facts.round, cap: facts.cap }).catch(() => false) ? { ...facts, operatorCleared: true } : facts;
 }
 
 // Builds the exact input object passed to evaluatePrGateCoordination.

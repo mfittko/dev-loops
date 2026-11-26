@@ -5564,6 +5564,19 @@ test("resolveCapBrakes sets operatorCleared only when every act fingerprint has 
   }
 });
 
+test("resolveCapBrakes keeps the cap stop (no operatorCleared) when the focus file fails to read", async () => {
+  const t = await capBrakesLedgers("pre_approval_gate", ["1", "2", "3"].map((c) => c.repeat(40)), { sets: [["a", "b"], ["a", "b"], ["a", "b"]] });
+  try {
+    const file = path.join(t.dir, "bad-focus.json");
+    await writeFile(file, "{ not json", "utf8");
+    const facts = await t.brakes(file);
+    assert.ok(facts?.items.length > 0, "the cap stop facts survive");
+    assert.equal(facts.operatorCleared, undefined);
+  } finally {
+    await rm(t.dir, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapBrakes: the once-per-set rule holds past the cap on pre_approval_gate, while a repeated draft_gate set with cap 0 still clears", async () => {
   const pre = await capBrakesLedgers("pre_approval_gate", ["1", "2", "3", "4"].map((c) => c.repeat(40)));
   const draft = await capBrakesLedgers("draft_gate", ["1", "2", "3"].map((c) => c.repeat(40)));

@@ -5123,7 +5123,7 @@ test("a pre_approval_gate fix round after a blocked verdict with no findings cau
 
 // GATE-EXEC-CAP-BRAKES: the pre_approval_gate round count follows the carried origin head and never counts a round forced by a base merge.
 // Round 1 is ledger "d" and round 2 is the origin head O (the cap round); origin/main then moves and the branch merges it into M.
-async function mergedPreApprovalScenario({ root, wt, files }, { ownChangeAfterMerge = false } = {}) {
+async function mergedPreApprovalScenario({ root, wt, files }, { ownChangeAfterMerge = false, earlierRounds = ["d".repeat(40)] } = {}) {
   await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { preApproval: { maxReviewRounds: 2 } } }));
   await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
   await writeFile(path.join(wt, "pr.md"), "pr content\n");
@@ -5132,7 +5132,7 @@ async function mergedPreApprovalScenario({ root, wt, files }, { ownChangeAfterMe
   const origin = git(wt, "rev-parse", "HEAD");
   const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
   await mkdir(dir, { recursive: true });
-  for (const [i, sha] of ["d".repeat(40), origin].entries()) {
+  for (const [i, sha] of [...earlierRounds, origin].entries()) {
     await writeFile(path.join(dir, `pre_approval_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [] }));
   }
   await writeFile(path.join(root, "main-only.md"), "main content\n");
@@ -5166,18 +5166,27 @@ test("a pre_approval_gate act list at a base-merge-forced head without a carry d
   });
 });
 
-// Issue 3589 (shape 2): a ledgerless base-merged head whose carry seam does not accept it (no verdict posted at the cap-round head) still reads the cap-round ledger at the cap-round head.
-test("a pre_approval_gate act list at a base-only merge of the cap round head reads the cap-round ledger instead of failing on the missing merged-head log", async () => {
+// Issue 3589 (shape 2): a ledgerless base-merged head past the cap reads the cap-round ledger and verdict at the cap-round head, and an operator focus decision clears the CAP-BRAKES refusal.
+test("a pre_approval_gate act list at a base-only merge of a past-cap round head reads the verdict and ledger at that head, and the focus file decides the emit", async () => {
   await withFixture(async (fx) => {
-    const { origin, merged, over } = await mergedPreApprovalScenario(fx);
-    // The first verdict read is the carry seam's: it finds no posted verdict at the cap-round head and refuses the carry. The cap guard's reads follow.
+    const { origin, merged, over } = await mergedPreApprovalScenario(fx, { earlierRounds: ["d".repeat(40), "e".repeat(40)] });
+    const act = JSON.parse(await readFile(fx.files.actList, "utf8"))[0];
     const probed = [];
     const base = over(origin);
+    // The first verdict read is the carry seam's: it finds no posted verdict at the cap-round head and refuses the carry.
     const fetchVerdictMarkers = (a) => { probed.push(a.headSha); return base.fetchVerdictMarkers(probed.length === 1 ? { ...a, headSha: "0".repeat(40) } : a); };
-    // The later post-before-fix check of pre_approval_gate still reads the merged head (its draft_gate rewrite follows the issue 3464 branch), so the emit may refuse there.
-    await fx.emit({ ...base, fetchVerdictMarkers }).catch(() => {});
-    assert.equal(probed[0], origin, "the carry seam reads the cap-round head");
+    await assert.rejects(fx.emit({ ...base, fetchVerdictMarkers }), (e) => e.refusal === "round_cap_reached" && /GATE-EXEC-CAP-BRAKES/.test(e.message) && e.message.includes(act.fingerprint));
     assert.equal(probed[1], origin, "the cap guard reads the verdict at the cap-round head, not the ledgerless merged head");
     assert.notEqual(probed[1], merged);
+    const focusFile = path.join(fx.root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: act.fingerprint, decision: "Fix it in this PR" }] }));
+    probed.length = 0;
+    assert.equal((await fx.emit({ ...base, fetchVerdictMarkers, operatorFocusFile: focusFile })).workOrder.source, "act-list");
+    assert.ok(probed.every((h, i) => i === 0 || h === origin), "every later verdict read, including post-before-fix, is at the cap-round head");
+  });
+  // A PR-own change after the merge is no base-only merge: the missing merged-head ledger refuses.
+  await withFixture(async (fx) => {
+    const { origin, over } = await mergedPreApprovalScenario(fx, { ownChangeAfterMerge: true, earlierRounds: ["d".repeat(40), "e".repeat(40)] });
+    await assert.rejects(fx.emit(over(origin)), (e) => e.refusal === "round_cap_reached");
   });
 });

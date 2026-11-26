@@ -2327,7 +2327,8 @@ export async function refuseNonConvergence(options, { repoRoot, prBase }) {
   const decided = new Set((focus?.items ?? []).filter((item) => item.fingerprint !== undefined && item.decision !== undefined).map((item) => item.fingerprint));
   const undecided = last.filter((fp) => !decided.has(fp));
   if (last.length > 0 && undecided.length === 0) return { reason: decision.reason, fingerprints: last };
-  if (await operatorDecidedLatestRound(options, { repoRoot, latest: closed.at(-1), last: actFingerprintSet(closed.at(-1)) })) return undefined;
+  // Plan-only (issue 3586): the direct focus file decides above for a round past the base merge; the fallback for a base-merge-forced latest round reads only the issued plan.
+  if (await operatorDecidedLatestRound({ ...options, operatorFocusFile: undefined }, { repoRoot, latest: closed.at(-1), last: actFingerprintSet(closed.at(-1)) })) return undefined;
   throw Object.assign(new Error(`${describeCapStop(decision)}. Undecided act fingerprints: ${undecided.join(", ") || "none"}. Report blocked with blockedOn operator_decision, or clear it with --operator-focus-file <path>.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); the operator clears it with --operator-focus-file <path>, a focus file with a decision item for each act fingerprint of the latest round (${last.join(", ")}) (GATE-EXEC-CAP-BRAKES)` });
 }
 

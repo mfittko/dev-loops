@@ -731,7 +731,9 @@ async function emitPlan({
       if (currentHeadLedgerExists()) return null;
       const from = closureFromHeadOf(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), onUnreadable: () => { throw new Error("unreadable prior ledger"); } }));
       const baseRefName = (await memoFetchBase())?.baseRefName;
-      return from && from !== headSha && baseRefName && await isBaseOnlyMergeSince({ fromHead: from, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd }) ? from : null;
+      if (!(from && from !== headSha && baseRefName && await isBaseOnlyMergeSince({ fromHead: from, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd }))) return null;
+      await capture.read(ledgerPath(from)); // pin the cap-round ledger like the carry seam
+      return from;
     } catch { return null; }
   };
   // One read of the operator focus file for the AC7 later-pass decision and the binding below: a shape error refuses here under GATE-EXEC-OPERATOR-FOCUS, never inside the swallowing cap-round catch.
@@ -741,6 +743,7 @@ async function emitPlan({
     // GATE-COMMENT-BLOCKED-BY: a posted blocked verdict whose causes hold no findings entry has no fix round; its next step is the operator's.
     // A ledger-less head carries the origin head's round and verdict (the carry seam), so both reads follow the origin head.
     const guardHead = (!existsSync(ledgerPath(headSha)) && (await carryOriginHead() || await baseMergeCapHead())) || headSha;
+    capRoundHead = guardHead; // the posted-verdict probe below reads the cap-round head, not the ledgerless merged head
     const blockedBy = (await fetchVerdictMarkers({ repo, pr, headSha: guardHead, gate, runtime }))?.[gate]?.blockedBy;
     if (blockedBy?.length > 0 && !blockedBy.includes("findings")) {
       throw new WorkOrderRefusal("blocked_without_findings", `blocked_without_findings (GATE-COMMENT-BLOCKED-BY): the posted pre_approval_gate verdict is blocked by ${blockedBy.join(", ")} with no findings; no fixer order follows it. Operator step: ${blockedBy.map((cause) => BLOCKED_BY_OPERATOR_STEPS[cause]).join("; ")}`);
@@ -991,6 +994,8 @@ async function emitPlan({
     try { markers = await fetchVerdictMarkers({ repo, pr, headSha: capRoundHead, gate, runtime: { env, ghCommand, runChild } }); } catch (error) {
       throw new Refusal(`verdict_not_posted: could not read the PR's posted verdicts (${error?.message ?? error}); post the ${gate} verdict review at ${capRoundHead} before fixing: ${upsert}`, "verdict_not_posted");
     }
+    // A cap-round head read (issue 3589) that finds no verdict still accepts one posted at the current head.
+    if (!verdictPosted(markers) && capRoundHead !== headSha) markers = await fetchVerdictMarkers({ repo, pr, headSha, gate, runtime: { env, ghCommand, runChild } }).catch(() => undefined);
     if (!verdictPosted(markers) && !(await carryOriginHead())) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${capRoundHead}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`, "verdict_not_posted", `${upsert}; when the post is refused for red current-head CI, run wait-pr-checks.mjs for the head, save its JSON, and emit with --ci-file <that file> --act-list-file ${actListFile} --gate ${gate} so the act items and the CI failure share one fixer order`);
   }
 
