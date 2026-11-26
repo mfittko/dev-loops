@@ -336,7 +336,7 @@ function defaultDetectEvidence({ repo, pr, env, cwd, baseRefName, readOnly, patc
 // head, plus `carriedConvergence` (the source review and its commit) for
 // converged_once and docs_only_suppression, or null (copilot_convergence then
 // refuses).
-async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha, rawReviews, config, draftGate, lightweight }, runtime) {
+async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha, rawReviews, config, draftGate, lightweight, baseRefName, repoRoot }, runtime) {
   const pinned = (kind) => ({ kind, headSha: currentHeadSha });
   const cap = resolveEffectiveCopilotRoundCap(config ?? { version: 1 }, { lightweight });
   if (cap === 0) return pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_GATE_DISABLED);
@@ -382,7 +382,7 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
   // Copilot accepted review requests on this head that never became observable
   // (the loop's copilot_unavailable); no review can ever land on it. A request
   // that became observable later is a normal round, so an outstanding review refuses.
-  if (await readRequestNotObservable({ repo, pr, headSha: currentHeadSha }, { checkpointDir: runtime.checkpointDir })
+  if (await readRequestNotObservable({ repo, pr, headSha: currentHeadSha, baseRef: baseRefName ? `origin/${baseRefName}` : null, repoRoot }, { checkpointDir: runtime.checkpointDir })
     && !(await isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews }, runtime))) {
     return pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_UNAVAILABLE);
   }
@@ -1001,7 +1001,7 @@ export async function mergePr(options, runtime = {}) {
   const rawConvergenceState = evaluateCopilotConvergence({ currentHeadSha, reviews: rawReviews }).state;
   const copilotAbsentReviewDisposition = rawConvergenceState === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW
     ? await resolveCopilotAbsentReviewDisposition(
-      { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, config: configLoad?.config, draftGate: evidence.draftGate, lightweight: options.lightweight === true },
+      { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, config: configLoad?.config, draftGate: evidence.draftGate, lightweight: options.lightweight === true, baseRefName, repoRoot },
       { env, ghCommand, runChild, ghJson, detectInternalOnlyPr, checkpointDir },
     )
     : null;

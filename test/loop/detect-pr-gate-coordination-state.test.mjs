@@ -5263,6 +5263,38 @@ test("loadPrGateCoordinationContext reads the unobservable-request record into t
   }
 });
 
+test("loadPrGateCoordinationContext carries the unobservable-request record across a base-only merge", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-gate-unobservable-"));
+  try {
+    const headSha = "def56789abcdef".padEnd(40, "0");
+    const key = { repo: "owner/repo", pr: 266, headSha: "a".repeat(40) };
+    for (let i = 0; i < 2; i += 1) {
+      await recordUnobservableRequest(key, { checkpointDir });
+      await recordTimedOutProbe(key, { checkpointDir });
+    }
+    const entries = pathAGhEntries({ reviewBody: "unused" }).map((entry) => {
+      if (entry.assertArgs?.includes("pr") && entry.assertArgs.includes("number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files")) {
+        return { ...entry, stdout: jsonLine({ ...JSON.parse(entry.stdout), reviews: [], baseRefName: "main" }) };
+      }
+      return entry.assertArgContains ? { ...entry, stdout: "" } : entry;
+    });
+    const carried = [];
+    const baseOnlyMerge = async (args) => { carried.push(args); return true; };
+    const context = await loadPrGateCoordinationContext(
+      { repo: "owner/repo", pr: 266 },
+      buildMockRuntime(writeGhStub(null, entries), { repoRoot: capFixtureRepoRoot, checkpointDir, baseOnlyMerge }),
+    );
+    assert.equal(context.currentHeadSha, headSha);
+    assert.equal(context.snapshot.copilotRequestNotObservable, true);
+    assert.equal(context.interpretation.state, "copilot_unavailable");
+    assert.equal(carried[0].originHead, "a".repeat(40));
+    assert.equal(carried[0].headSha, headSha);
+    assert.match(carried[0].baseRef, /^origin\/.+/);
+  } finally {
+    await rm(checkpointDir, { recursive: true, force: true });
+  }
+});
+
 describe("pull-request coordination snapshot", () => {
   const HEAD = "a".repeat(40);
   const options = { repo: "owner/repo", pr: 10 };
