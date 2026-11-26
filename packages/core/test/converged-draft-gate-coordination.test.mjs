@@ -151,6 +151,18 @@ describe("body-only converged marker (ADR 0271)", () => {
     assert.equal(state.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
   });
 
+  test("a below-cap body-only converged post at the same head returns mark_ready_for_review too (ADR 0332)", () => {
+    // The post is round-independent: the converged comment carries no round, so the same read serves round 2 of cap 4.
+    const comments = [comment(commentBody({ converged: `fixer \`${A}\` delta \`${DIGEST}\`` }))];
+    const state = evaluatePrGateCoordination({
+      pr: 10, currentHeadSha: A, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
+      draftGate: summarizeGateReviewComments(comments).draft_gate,
+      draftGateMarker: summarizeGateReviewCommentMarkers(comments, { headSha: A }).draft_gate,
+      draftOpenActList: { headSha: A, openActCount: 2, blockers: [], bodyOnly: true },
+    });
+    assert.equal(state.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+  });
+
   test("the detector reads the converged comment at the same head and at a head moved by a base-only merge", () => {
     assert.equal(markerAt(A, [commentBody({ converged: `fixer \`${A}\` delta \`${DIGEST}\`` })]).draft_gate.verdict, "clean");
     const moved = markerAt(FIX, [commentBody()]).draft_gate;

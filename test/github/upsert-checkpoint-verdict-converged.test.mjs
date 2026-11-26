@@ -571,13 +571,13 @@ test("a converged post on a cap-fixed PR is still refused when coordination forb
 // ADR 0271 (GATE-EXEC-NO-DEAD-END): a cap round whose act items are all PR-body items clears with no commit.
 const EDITED_BODY = `${DEFAULT_TEST_PR_BODY}\nEdited for the cap round.`;
 // ledgerTmpRoot puts the findings ledger and the prior rounds under another tmp root than the cap-round context (the main checkout versus the reviewed worktree).
-async function bodyOnlyPost(tempDir, { findings, actList = findings, fixer = A, input = {}, reviewedBody = DEFAULT_TEST_PR_BODY, runChildOptions = {}, ledgerTmpRoot }) {
+async function bodyOnlyPost(tempDir, { findings, actList = findings, fixer = A, input = {}, reviewedBody = DEFAULT_TEST_PR_BODY, runChildOptions = {}, ledgerTmpRoot, priorRounds = 3 }) {
   const ledgerPath = ledgerTmpRoot ? path.join(ledgerTmpRoot, "gate-findings", "owner-repo", "pr-17", "ledger.json") : undefined;
   const ctx = path.join(capOnRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
   await mkdir(path.dirname(ctx), { recursive: true });
   await writeFile(ctx, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(reviewedBody) }] }), "utf8");
   let out;
-  await withPriorRounds(3, async () => {
+  await withPriorRounds(priorRounds, async () => {
     out = await post(tempDir, { findings, converged: { fixerCommit: fixer, actList, bodyOnly: true, ...input }, root: capOnRoot, ledgerPath, runChildOptions: { currentHead: fixer, liveBody: EDITED_BODY, ...runChildOptions } });
   }, ledgerTmpRoot);
   await rm(ctx, { force: true });
@@ -595,6 +595,17 @@ test("body-only: an unchanged head and a head moved by a base-only merge both po
       assert.match(body, new RegExp(`\\*\\*Converged:\\*\\* fixer \`${fixer}\` delta \`sha256:[a-f0-9]{64}\``));
     }
   }, { prefix: "dev-loops-converged-bodyonly-ok-" });
+});
+
+// ADR 0332: the body-only post applies at every draft_gate round, so round 2 of cap 4 posts after a body edit at the same head.
+test("body-only: round 2 of cap 4 with two pr_body act items posts the converged record after a body edit at the same head", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [bodyFinding("medium", 1), bodyFinding("low", 2)];
+    const { result, body, error } = await bodyOnlyPost(tempDir, { findings, priorRounds: 1 });
+    assert.equal(error, undefined);
+    assert.equal(result.action, "updated");
+    assert.match(body, /\*\*Converged:\*\*/);
+  }, { prefix: "dev-loops-converged-bodyonly-below-cap-" });
 });
 
 test("a mixed code and PR-body converged post reads the body digests: unchanged refuses body_unchanged, an unrecorded read refuses body_read_unrecorded, a changed body posts", async () => {

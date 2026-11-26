@@ -4745,12 +4745,14 @@ test("3105 AC15: a legacy ledger with verdict clean and an open act item goes to
   } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
 });
 
-test("3105 AC15: an all-PR-body act list reruns the draft gate at the stale head; a mixed list goes to the fixer", async () => {
+test("3105 AC15 / 3611: an all-PR-body act list is a body-only list below the cap and at cap 0, null past the cap; a mixed list goes to the fixer", async () => {
   const body = await actListFixture({ "": { findings: [BODY_ACT] } });
   try {
-    const result = await body.detect();
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, result.reason);
-    assert.equal(await resolveDraftOpenActList({ repo: "owner/repo", pr: 10, currentHeadSha: body.headSha }, { repoRoot: body.tempDir, cap: 0 }), null);
+    const context = { repo: "owner/repo", pr: 10, currentHeadSha: body.headSha };
+    const expected = { headSha: body.headSha, openActCount: 1, blockers: [], bodyOnly: true };
+    assert.deepEqual(await resolveDraftOpenActList(context, { repoRoot: body.tempDir, cap: 0 }), expected);
+    assert.deepEqual(await resolveDraftOpenActList(context, { repoRoot: body.tempDir, cap: 4 }), expected);
+    assert.equal(await resolveDraftOpenActList(context, { repoRoot: body.tempDir, cap: 1 }).then((l) => l?.bodyOnly), true);
   } finally { await rm(body.tempDir, { recursive: true, force: true }); }
   const mixed = await actListFixture({ "": { findings: [BODY_ACT, ACT] } });
   try {
@@ -4901,8 +4903,29 @@ test("3309: a cap-round act list of PR-body items only names the body-only conve
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
   assert.match(result.agentRemedy?.command ?? "", /upsert-checkpoint-verdict\.mjs .*--converged-json/);
   assert.doesNotMatch(result.agentRemedy?.command ?? "", /emit-fixer-work-order|extend-cap-round-chain/);
-  const below = await detectCapFixture({ cap: 3, priorRounds: 1, finding: { file: undefined, severity: "low", summary: "PR body lacks non-goals" } });
-  assert.doesNotMatch(below.agentRemedy?.command ?? "", /converged-json/);
+});
+
+// Issue 3611 (ADR 0332): the same route applies below the cap and at cap 0; run_draft_gate is forbidden and the detector is stable on a rerun.
+test("3611: a below-cap and a cap-0 all-PR-body act list routes to the body-only post, never run_draft_gate", async () => {
+  const finding = { file: undefined, severity: "medium", summary: "PR body lacks non-goals" };
+  for (const { cap, priorRounds } of [{ cap: 4, priorRounds: 1 }, { cap: 0, priorRounds: 0 }]) {
+    const first = await detectCapFixture({ cap, priorRounds, finding });
+    const second = await detectCapFixture({ cap, priorRounds, finding });
+    assert.equal(first.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, first.reason);
+    assert.equal(second.nextAction, first.nextAction);
+    assert.ok(first.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+    assert.ok(!first.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+    assert.match(first.agentRemedy?.command ?? "", /upsert-checkpoint-verdict\.mjs .*bodyOnly: true/);
+    assert.match(first.agentRemedy?.summary ?? "", /edit-pr\.mjs/);
+    assert.match(first.reason, /at or below the round cap[^]*ADR 0271[^]*ADR 0332/);
+  }
+});
+
+test("3611: a below-cap all-PR-body act list with a high item reports blocked on an operator decision", async () => {
+  const result = await detectCapFixture({ cap: 4, priorRounds: 1, finding: { file: undefined, severity: "high", summary: "decide the auth model" } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+  assert.equal(result.blockedOn, "operator_decision");
+  assert.equal(result.agentRemedy, undefined);
 });
 
 // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so no fixer route follows it.

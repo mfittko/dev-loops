@@ -1406,8 +1406,8 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
 
 /**
  * Issue 3105 AC15 (ADR 0288): the open act list of the current head's live draft_gate ledger, or null.
- * Null when the head has no live ledger with an open act item, when every open item is a PR-body item below the cap, past the cap (cap > 0 and round > cap), and when every open item is a nit outside draft round 1.
- * At the cap round an all-PR-body list is `{ bodyOnly: true }`: its exit is the body-only converged post (GATE-EXEC-NO-DEAD-END).
+ * Null when the head has no live ledger with an open act item, past the cap (cap > 0 and round > cap), and when every open item is a nit outside draft round 1.
+ * At every round up to the cap an all-PR-body list is `{ bodyOnly: true }`: its exit is the body-only converged post (GATE-EXEC-NO-DEAD-END, ADR 0332).
  * `blockers` are the GATE-EXEC-SOFT-CAP blockers of the cap round; below the cap every act item goes to the fixer.
  * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
  */
@@ -1438,8 +1438,8 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnly
   if (open.length === 0) return null;
   // countCompletedRounds counts the round being posted, so the live ledger's round is one less.
   const round = await countCompletedRounds({ ...options, headSha: ledgerHead }, { repoRoot, includeLiveCurrentHead: true }) - 1;
-  // The emitter refuses an all-PR-body act list (delta_body_only_act_set): its only exit is the ADR 0271 body-only converged post at the cap round, any other round keeps the earlier routing.
-  if (open.every(isDeltaBodyItem)) return cap > 0 && round === cap ? { headSha: ledgerHead, ...(ledgerHead !== head ? { carriedToHead: head } : {}), openActCount: open.length, blockers: [...pastCapBlockers(log.findings, { round, cap }), ...open.filter(isBlockedActItem).map((f) => ({ kind: "round_cap_reached", reason: f.resurfaces ? "resurfaced" : "new_act", item: `[${normalizeSeverity(f.severity)}] ${String(f.summary ?? "").trim()} (blocked_item)` }))], bodyOnly: true } : null;
+  // The emitter refuses an all-PR-body act list (delta_body_only_act_set): its only exit is the ADR 0271 body-only converged post at every round up to the cap (ADR 0332); past the cap the earlier routing holds.
+  if (open.every(isDeltaBodyItem)) return !(cap > 0 && round > cap) ? { headSha: ledgerHead, ...(ledgerHead !== head ? { carriedToHead: head } : {}), openActCount: open.length, blockers: [...pastCapBlockers(log.findings, { round, cap }), ...open.filter(isBlockedActItem).map((f) => ({ kind: "round_cap_reached", reason: f.resurfaces ? "resurfaced" : "new_act", item: `[${normalizeSeverity(f.severity)}] ${String(f.summary ?? "").trim()} (blocked_item)` }))], bodyOnly: true } : null;
   // A carried list (a base-only merge of the cap head) is body-only or nothing.
   if (ledgerHead !== head) return null;
   // Past the cap the emitter refuses every act list (round_cap_reached), so that round keeps the earlier routing.
