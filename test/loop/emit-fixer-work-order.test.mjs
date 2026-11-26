@@ -170,7 +170,7 @@ for (const route of ["ACT", "THREAD"]) test(`detector carries only a complete au
         expected.push({ args: compare(head, candidate), status: "ahead" });
         if (route === "ACT") {
           expected.push({ args: compare(fixing, candidate), status: "ahead" });
-          expected.push({ args: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,statusCheckRollup"], payload: { headRefOid: null } });
+          expected.push({ args: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,statusCheckRollup,baseRefName"], payload: { headRefOid: null } });
         }
       }
       const calls = [];

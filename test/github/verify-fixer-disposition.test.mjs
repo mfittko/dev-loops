@@ -125,6 +125,42 @@ for (const change of ["miss", "metadata-text", "mode", "offset", "offset-touch",
   });
 });
 
+// ADR 0330: a proven base-only merge between X and H passes the descendant site check.
+for (const scenario of ["carried", "rejected", "touch-revert", "site-differs"]) test(`base-only merge thread site carry: ${scenario}`, async () => {
+  await withRepoRoot(async (root) => {
+    await initPristineGitFixture(root);
+    const git = (...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+    const file = path.join(root, "site.txt"), original = "one\ntwo\nthree\nfour\nfive\n";
+    const commit = async (name, text, message = "change") => { await writeFile(path.join(root, name), text); git("add", "-A"); git("commit", "-qm", message); return git("rev-parse", "HEAD"); };
+    const origin = await commit("site.txt", original);
+    const candidate = await commit("site.txt", original.replace("three", "fixed"));
+    if (scenario === "touch-revert") {
+      await commit("site.txt", original.replace("three", "changed"));
+      await commit("site.txt", original.replace("three", "fixed"));
+    }
+    git("checkout", "-qb", "base-line", candidate);
+    await commit(scenario === "site-differs" ? "site.txt" : "other.txt", scenario === "site-differs" ? original.replace("three", "fixed").replace("five", "elsewhere") : "base change\n", "base change");
+    git("checkout", "-q", "issue-1");
+    git("merge", "--no-ff", "base-line", "-m", "merge base");
+    const head = git("rev-parse", "HEAD");
+    const comment = { id: 1, node_id: "root", pull_request_url: `https://api.github.com/repos/${REPO}/pulls/${PR}`, path: "site.txt", original_commit_id: origin,
+      original_start_line: 2, original_line: 3, side: "RIGHT", start_side: "RIGHT" };
+    const deps = { env: runIdFreeEnv(), ghCommand: "gh", runChild: async (cmd, args) => {
+      if (cmd === "gh") return { code: 0, stdout: JSON.stringify(comment), stderr: "" };
+      const result = spawnSync(cmd, args, { cwd: root, env: gitEnvNoDirOverrides(), encoding: "utf8" });
+      return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+    } };
+    const proof = () => assertDescendantThreadSites({ repo: REPO, pr: PR, candidateHead: candidate, headSha: head, baseRef: "base-line",
+      baseOnlyMergeCarries: async () => scenario !== "rejected",
+      handoff: { dispositions: [{ threadId: "t", disposition: "tackled" }] },
+      parsed: { comments: [{ threadId: "t", id: "root", databaseId: "1" }] }, repoRoot: root }, deps);
+    if (scenario === "carried") await proof();
+    else await assert.rejects(proof, (error) => /thread_site_(unverifiable|changed): t/.test(error.message)
+      && /pre_approval_gate/.test(error.message) && /gate close-sequence/.test(error.message) && /draft_gate/.test(error.message));
+    void file;
+  });
+});
+
 function threadsPayload(threads) {
   return `${JSON.stringify({
     data: { repository: { pullRequest: { reviewThreads: { nodes: threads } } } },
@@ -156,7 +192,7 @@ async function withRepoRoot(fn) {
 }
 
 function liveHeadEntry(headRefOid = HEAD_SHA, statusCheckRollup = []) {
-  return { assertArgs: ["pr", "view", String(PR), "--json", "headRefOid,statusCheckRollup"], stdout: `${JSON.stringify({ headRefOid, statusCheckRollup })}\n` };
+  return { assertArgs: ["pr", "view", String(PR), "--json", "headRefOid,statusCheckRollup,baseRefName"], stdout: `${JSON.stringify({ headRefOid, statusCheckRollup, baseRefName: "main" })}\n` };
 }
 
 // Prepends the live-head read the verifier makes before any checkpoint write.
