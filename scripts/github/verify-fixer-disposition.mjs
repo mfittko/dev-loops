@@ -18,7 +18,7 @@ import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "
 import { captureParsedReviewThreads, findDeltaBlockedFixedReply, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
 import { planBatchReplyTargets } from "./reply-resolve-review-threads.mjs";
 import { buildContainmentMap, isCommitContainedByHead } from "./_commit-containment.mjs";
-import { EXECUTION_IDENTITY_RE, fixerReportPath, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
+import { DELIVERY_WAIT_SECONDS, EXECUTION_IDENTITY_RE, fixerReportPath, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
 import {
   evaluateFixerDisposition,
   composeFixerReplyBody,
@@ -985,9 +985,10 @@ async function verifyFixerDispositionCore(
       const code = orderHeadRunsCi || state === "pending" ? "ci_pending" : "ci_unknown";
       const shown = code === "ci_pending" ? "pending" : state;
       const recovery = code === "ci_pending"
-        ? `; recovery: run ${scriptCommand(new URL("./wait-pr-checks.mjs", import.meta.url))} --repo ${options.repo} --pr ${options.pr} --timeout 540 (re-issue it while it prints pending), then rerun this verifier command unchanged; a ci_pending refusal publishes no report`
+        ? `; recovery: run ${scriptCommand(new URL("./wait-pr-checks.mjs", import.meta.url))} --repo ${options.repo} --pr ${options.pr} --timeout ${DELIVERY_WAIT_SECONDS} (re-issue it while it prints pending), then rerun this verifier command unchanged; a ci_pending refusal publishes no report`
         : "";
-      throw Object.assign(new Error(`${code}: checks at ${options.headSha} are ${shown}, not settled green; resolve no thread, hand back ${code}${recovery}`), code === "ci_pending" ? { ciPending: true } : {});
+      const orderRead = orderCiUnreadable ? ` (the CI of order head ${orderHeadSha} could not be read)` : "";
+      throw Object.assign(new Error(`${code}: checks at ${options.headSha} are ${shown}${orderRead}, not settled green; resolve no thread, hand back ${code}${recovery}`), code === "ci_pending" ? { ciPending: true } : {});
     }
   }
   if (!options.check) {

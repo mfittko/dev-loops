@@ -21,7 +21,7 @@ import {
 } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { selectActThreadBinding } from "../../scripts/github/_fixer-act-thread-bindings.mjs";
-import { fixerReportPath, materializationHash, pullReceiptPath, pullWorkOrder, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { DELIVERY_WAIT_SECONDS, fixerReportPath, materializationHash, pullReceiptPath, pullWorkOrder, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitFixerWorkOrder, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -682,6 +682,7 @@ test("a check-less pushed head refuses ci_pending when the order head ran CI, na
       assert.match(error.message, /^ci_pending: /);
       assert.ok(error.message.includes(`wait-pr-checks.mjs --repo ${REPO} --pr ${PR}`));
       assert.match(error.message, /then rerun this verifier command unchanged/);
+      assert.ok(error.message.includes(`--timeout ${DELIVERY_WAIT_SECONDS} `));
       return true;
     });
     assert.equal(hasPost(mock.calls), false);
@@ -692,7 +693,11 @@ test("a check-less pushed head refuses ci_unknown when the order head is unreada
   await withRepoRoot(async (root) => {
     const { options, mockFor, ahead, threads, empty, order, pushed } = await pushedHeadFixture(root);
     const mock = mockFor([ahead, liveHeadEntry(pushed), threads(false), ...ciEntries(pushed, empty), ...ciEntries(order, { checkRunsExit: 1 })]);
-    await assert.rejects(verifyFixerDisposition(options, mock.deps), /ci_unknown: /);
+    await assert.rejects(verifyFixerDisposition(options, mock.deps), (error) => {
+      assert.match(error.message, /^ci_unknown: /);
+      assert.ok(error.message.includes(`the CI of order head ${order} could not be read`));
+      return true;
+    });
     assert.equal(hasPost(mock.calls), false);
   });
 });
