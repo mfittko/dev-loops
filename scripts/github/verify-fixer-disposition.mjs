@@ -115,7 +115,8 @@ Optional:
                                wait-pr-checks uses. A pushed head with no checks is judged
                                against the order head: ci_pending when the order head ran CI,
                                otherwise it passes. A ci_pending refusal publishes no report.
-                               Hand back the code and resolve no thread. Normal mode
+                               Resolve no thread and hand back the code; on a first
+                               ci_pending refusal follow its recovery once. Normal mode
                                also posts one residual-status reply on each deferred thread
                                whose delta status is not_resolved or cannot_verify and leaves
                                it open. A residual reply that

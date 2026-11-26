@@ -1568,7 +1568,7 @@ check runs listed in the PR `statusCheckRollup`, the set `wait-pr-checks` uses. 
 check runs and no statuses passes, unless the pushed head differs from the work order head and the order head has a non-loop-derived check run or status: the PR runs CI, so the pushed head is `ci_pending` (ADR 0334). A `ci_pending` refusal publishes no report under `--report-path`; every other outcome publishes once. Normal mode, after the guard passes, also posts one residual-status
 reply on each deferred thread without a `replyNote` whose delta status is `not_resolved` or `cannot_verify` and leaves it open;
 a noted deferred thread gets its composed note reply and is resolved instead.
-Re-entry posts no second reply. The fixer hands back the refusal code and resolves no thread.
+Re-entry posts no second reply. The fixer resolves no thread and hands back the refusal code. On a first `ci_pending` refusal it follows the refusal's recovery once and hands back `ci_pending` on a second refusal.
 A complete THREAD order finds its clearing record by `candidateHead` equal to the pushed head, because
 its order head is already the candidate. The matching record must also cover every pinned thread ID,
 and zero or several matching records refuse with a named reason. Every full-phase order states the numbered steps: push, confirm
