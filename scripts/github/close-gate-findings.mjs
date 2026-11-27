@@ -723,7 +723,8 @@ function isStrictAncestor(ancestor, head, repoRoot) {
 // later round that judged the fix closes the thread of a judge-act code finding it does not raise again. Only a settled round
 // (verdict clean or findings_present) that freshly reviewed the thread's angle counts, and only prior-ledger act evidence whose
 // head is a strict ancestor of the current head (a fix commit landed after the act round). A marker the current ledger still
-// carries stays with the fixer, and the two remedy kinds above keep their own passes.
+// carries stays with the fixer, and the two remedy kinds above keep their own passes. A question marker is never closed here:
+// a question needs an answer, so it stays on its answer and judge-rerun paths.
 async function runFixedActClosePass({ repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, verdict, provenance, allowedRefs = [] }, gh) {
   if (verdict !== "clean" && verdict !== "findings_present") return { fixedActClosed: 0, dispositionFailures: [] };
   const freshAngles = new Set((Array.isArray(provenance?.perAngle) ? provenance.perAngle : []).filter((e) => e && typeof e.angle === "string" && !e.carriedFromHead).map((e) => e.angle));
@@ -731,7 +732,7 @@ async function runFixedActClosePass({ repo, pr, gate, headSha, round, threads, s
     { label: "fixed act", repo, pr, threads, snapshot, login, allowedRefs },
     gh,
     async (thread, marker) => {
-      if (!freshAngles.has(marker.angle)) return false;
+      if (marker.severity === "question" || !freshAngles.has(marker.angle)) return false;
       const fps = new Set([marker.fp]);
       collectFingerprints(thread.body, fps);
       for (const memberFp of fps) {

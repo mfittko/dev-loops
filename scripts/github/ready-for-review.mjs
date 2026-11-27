@@ -117,20 +117,20 @@ export function describeUnresolvedGateThreadReasons(breakdown, fallbackCount) {
     );
   }
   if (nit > 0) {
-    // A nit is never a fixer target (unlike high/medium/low below) and is
-    // never closed from severity or round alone: close-gate-findings closes
-    // it only on a judge reject, a judge defer, or an evidence-only judge
-    // act (gate-review-sub-loop-contract.md; NON_DEFECT_SEVERITIES,
-    // gate-fanin.mjs) — naming the fixed-act close here would send operators to
-    // a remedy that cannot clear this count.
+    // A nit is never closed from severity or round alone: close-gate-findings
+    // closes it on a judge reject, a judge defer, an evidence-only judge act,
+    // or the fixed-act close (a judge act nit whose fix was pushed and which
+    // the next gate round does not raise again; gate-review-sub-loop-contract.md,
+    // NON_DEFECT_SEVERITIES in gate-fanin.mjs). An unjudged nit needs a judge rerun.
     reasons.push(
-      `${nit} open nit thread(s): rerun close-gate-findings once the judge has rejected or deferred it (or disposed it act with an evidence-only remedy); an unjudged or act nit needs a judge rerun, except a pr_body act thread, which close-gate-findings closes after the PR-body edit once the live body digest differs`,
+      `${nit} open nit thread(s): rerun close-gate-findings once the judge has rejected or deferred it (or disposed it act with an evidence-only remedy); a fixed act nit closes through the fixed-act close at the next gate round; an unjudged nit needs a judge rerun, except a pr_body act thread, which close-gate-findings closes after the PR-body edit once the live body digest differs`,
     );
   }
   if (other > 0) {
     // A judge-rejected or judge-deferred medium or low, and an evidence-only
     // judge act, is closed by a close-gate-findings rerun (ADR 0144). An
-    // unjudged or act thread needs the fixer or a judge rerun. Only a
+    // act thread closes through the fixed-act close at the next gate round once
+    // its fix is pushed; an unjudged thread needs a judge rerun. Only a
     // judge-rejected high is cleared by neither remedy and stays on the
     // operator path.
     reasons.push(

@@ -2495,6 +2495,14 @@ for (const [name, options] of FIXED_ACT_LEAVE_OPEN) {
   });
 }
 
+// A question needs an answer, not a fix: the fixed-act close never resolves it, so it stays on its answer and judge-rerun paths.
+test("the fixed-act close leaves a prior-act question thread open", async () => {
+  const fp = fingerprintFinding(FIXED_ACT_FINDING);
+  const body = `${buildFindingMarker({ fp, severity: "question", angle: "perf", round: 1 })}\n**question** (\`perf\`): why is the cache stale?`;
+  const thread = threadNode({ id: "THREAD_D", isResolved: false, path: "src/cache.mjs", line: 9, commentId: 6004, body, author: AUTHENTICATED_LOGIN });
+  await fixedActCase({ threads: [thread] }, { closes: false, assert: (result) => { assert.equal(result.fixedActClosed, 0); assert.equal(result.unresolvedGateThreadCount, 1); } });
+});
+
 test("the fixed-act close leaves a merged thread open when one member is raised again", async () => {
   const other = { severity: "worth-fixing-now", angle: "perf", summary: "second member claim" };
   const thread = mergedThread({ fp: fingerprintFinding(FIXED_ACT_FINDING) }, { fp: fingerprintFinding(other) }, { id: "THREAD_MERGED_FIXED", commentId: 6004 });
