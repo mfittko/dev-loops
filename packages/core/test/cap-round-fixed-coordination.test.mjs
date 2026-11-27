@@ -13,29 +13,6 @@ const draftAt = (overrides = {}) => evaluatePrGateCoordination({
   draftGate: marker("findings_present"), draftGateMarker: marker("findings_present"), unresolvedGateThreadCount: 0, ...overrides,
 });
 
-test("a fixed cap round returns mark_ready_for_review, and never run_draft_gate", () => {
-  for (const verdict of ["findings_present", "blocked"]) {
-    const fixed = draftAt({ draftCapRoundFixed: true, draftGate: marker(verdict), draftGateMarker: marker(verdict) });
-    assert.equal(fixed.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, verdict);
-    assert.ok(!fixed.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
-    assert.ok(!fixed.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE), verdict);
-    assert.ok(fixed.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE), verdict);
-  }
-  assert.equal(draftAt({ draftCapRoundFixed: false }).nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, "without the cap-round-fixed proof draft_gate still runs");
-});
-
-test("a fixed cap round still waits on CI and on unresolved gate threads before ready", () => {
-  assert.equal(draftAt({ draftCapRoundFixed: true, ciStatus: "failure" }).nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
-  assert.equal(draftAt({ draftCapRoundFixed: true, ciStatus: "pending" }).nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_CI);
-  for (const count of [2, -1]) {
-    const threads = draftAt({ draftCapRoundFixed: true, unresolvedGateThreadCount: count });
-    assert.equal(threads.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS, String(count));
-    assert.ok(threads.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
-    assert.equal(/could not be read/.test(threads.reason), count === -1, `${count}: only an unreadable count gets the retry-the-read reason`);
-    assert.ok(!/verdict is clean/.test(threads.reason), `${count}: the cap-round reason never claims a clean verdict`);
-  }
-});
-
 test("a ready PR with a fixed cap round and a stale blocked draft marker opens pre_approval_gate, never reconcile_draft_gate", () => {
   const ready = (overrides = {}) => evaluatePrGateCoordination({
     pr: 10, currentHeadSha: "fedcba987654", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, loopDisposition: DISPOSITION.CLEAN_CONVERGED,
@@ -44,47 +21,6 @@ test("a ready PR with a fixed cap round and a stale blocked draft marker opens p
   });
   assert.equal(ready({ draftCapRoundFixed: true }).nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
   assert.equal(ready({ draftCapRoundFixed: false }).nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE, "without the proof the evidence guard still reconciles");
-});
-
-test("a draft PR past the round cap without a fixed cap round reports blocked, never run_draft_gate", () => {
-  const refused = draftAt({ draftRoundRefused: true });
-  assert.equal(refused.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
-  assert.ok(refused.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
-  assert.equal(draftAt({ draftRoundRefused: true, draftCapRoundFixed: true }).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "a fixed cap round wins");
-});
-
-// ADR 0218: the refusal names the one failed condition and its own remedy.
-test("the cap-round refusal names its failed condition and the remedy for that condition", () => {
-  const table = [
-    ["baseline_orphaned", /not an ancestor of the current head.*Remedy: push the head to a new branch.*--head <new-branch> --allow-replacement-pr <this PR number>/],
-    ["no_clearing_record", /no sealed clearing delta record exists.*Remedy: run `node <dev-loops-package-root>\/cli\/index\.mjs loop pre-push-delta --reviewer-only`.*node <dev-loops-package-root>\/cli\/index\.mjs gate extend-cap-round-chain --repo <owner\/name> --pr <number>/],
-    ["unsealed_record", /carries no valid seal.*Remedy: rerun .*loop pre-push-delta --reviewer-only.*never edit the record/],
-    ["items_do_not_cover", /act refs of the cap round are not all named by the union of the sealed clearing records.*Remedy: run .*gate extend-cap-round-chain --repo <owner\/name> --pr <number>.*--cover-uncovered/],
-    // Issue 3443 delta review: the union counts every item of the first record and only the resolved items of each later link.
-    ["items_do_not_cover", /every item of the first record, the resolved items of each later link, and the sealed cover record of each ref/],
-    ["cap_round_unresolved", /could not be resolved.*Remedy: repair or quarantine the unreadable ledger or config/],
-    ["chain_does_not_reach_head", /ends before the current head.*Remedy: run .*loop pre-push-delta --reviewer-only.* for the current head, or fetch origin\/<base>.*node <dev-loops-package-root>\/cli\/index\.mjs gate extend-cap-round-chain --repo <owner\/name> --pr <number>/],
-  ];
-  for (const [condition, pattern] of table) {
-    const { reason, nextAction } = draftAt({ draftRoundRefused: true, draftCapRoundFailure: condition });
-    assert.equal(nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, condition);
-    assert.ok(reason.includes(`Condition ${condition}:`), condition);
-    assert.match(reason, pattern, condition);
-    for (const [other] of table.filter(([c]) => c !== condition)) assert.ok(!reason.includes(`Condition ${other}:`), `${condition} names only its own condition`);
-  }
-});
-
-// Issue 3443: items_do_not_cover names the uncovered act refs and the existing records, and keeps its extend-cap-round-chain agent remedy as the recovery.
-test("items_do_not_cover names the uncovered act refs and the records that exist", () => {
-  const draftCapRoundDetail = { uncovered: ["ref-escalated"], records: [{ baseline: "a".repeat(40), candidate: "b".repeat(40), refs: ["ref-one", "ref-two"] }] };
-  const named = draftAt({ draftRoundRefused: true, draftCapRoundFailure: "items_do_not_cover", draftCapRoundDetail, repo: "o/r" });
-  assert.match(named.reason, /Uncovered act refs: ref-escalated\. Records on the chain: aaaaaaa\.\.bbbbbbb \[ref-one, ref-two\]\./);
-  assert.equal(named.agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 10");
-  assert.ok(!draftAt({ draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record", draftCapRoundDetail }).reason.includes("Uncovered act refs"), "only items_do_not_cover carries the detail");
-  assert.ok(!draftAt({ draftRoundRefused: true, draftCapRoundFailure: "items_do_not_cover" }).reason.includes("Uncovered act refs"), "no detail, no suffix");
-  // A partial chain's reason never prescribes the plain reviewer-only run for the uncovered ref: that run refuses at the cap-round head and a chain-end baseline derives no items.
-  assert.doesNotMatch(named.reason, /so every act ref|reviewer-only` so/u);
-  assert.match(named.reason, /extend-cap-round-chain.*--cover-uncovered/u);
 });
 
 // Issue 3443 AC2 (review): the ready-PR report_blocked reason carries the same detail, so a revert to the bare CAP_ROUND_REFUSAL text drops the uncovered ref and fails here.
@@ -111,26 +47,6 @@ test("no source file contains the catch-all 'legacy unsealed delta record' refus
   assert.deepEqual(hits, []);
 });
 
-test("a cap-round refusal with an inherited or unknown condition falls back to cap_round_unresolved", () => {
-  for (const condition of ["constructor", "toString", "", "unknown_condition"]) {
-    const { reason } = draftAt({ draftRoundRefused: true, draftCapRoundFailure: condition });
-    assert.ok(reason.includes("Condition cap_round_unresolved:"), JSON.stringify(condition));
-    assert.ok(!reason.includes("native code"), JSON.stringify(condition));
-  }
-});
-
-test("a cap-round refusal with no reported condition names cap_round_unresolved, never no_clearing_record", () => {
-  const { reason } = draftAt({ draftRoundRefused: true, draftCapRoundFailure: null });
-  assert.ok(reason.includes("Condition cap_round_unresolved:"));
-  assert.ok(!reason.includes("no_clearing_record"));
-});
-
-test("a draft clean_cap_verdict_unposted refusal does not claim a missing fixer pass", () => {
-  const { reason } = draftAt({ draftRoundRefused: true, draftCapRoundFailure: "clean_cap_verdict_unposted" });
-  assert.ok(reason.includes("Condition clean_cap_verdict_unposted:"));
-  assert.ok(!reason.includes("fixer pass"));
-});
-
 // The unposted clean cap round (a local ledger only): a ready PR is never final_approval_ready on it, and the one exit is the ledger-derived post.
 test("a ready PR whose clean cap-round verdict is unposted reports blocked with the sealed-ledger post as its remedy", () => {
   const result = evaluatePrGateCoordination({
@@ -144,29 +60,3 @@ test("a ready PR whose clean cap-round verdict is unposted reports blocked with 
   assert.equal(result.agentRemedy.command, "dev-loops gate upsert-verdict --repo o/r --pr 10 --gate draft_gate --post-sealed-cap-round");
 });
 
-// Issue 3460 AC5/AC7/AC9: at the cap exit the open act list loads before ready.
-test("a cap exit with an open act list routes to the fixer, with ready also allowed once the gate threads are resolved", () => {
-  const sha = "ab".repeat(20);
-  const m = { visible: true, headSha: sha.slice(0, 7), verdict: "findings_present", contractComplete: true };
-  const at = (overrides = {}) => evaluatePrGateCoordination({
-    pr: 10, currentHeadSha: sha, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
-    draftGate: m, draftGateMarker: m, draftCapRoundFixed: true, draftOpenActList: { headSha: sha, openActCount: 2, blockers: [] }, unresolvedGateThreadCount: 2, ...overrides,
-  });
-  const open = at();
-  assert.equal(open.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, "act list, threads open: the fixer route");
-  assert.ok(!open.allowedNextActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
-  // The resolved state and the same-head state after a no-commit pass are one row: a no-commit pass leaves the head unmoved and the cap ledger immutable (ng:4, ng:6), so the act list stays open (act list at the head, gate threads resolved by the pass).
-  const resolved = at({ unresolvedGateThreadCount: 0 });
-  assert.equal(resolved.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, "the fixer route stays the next action");
-  assert.ok(resolved.allowedNextActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW), "ready is also allowed once the gate threads are resolved");
-  // Ready is allowed there through the thread check; it never loops back to the thread-resolution route.
-  assert.notEqual(resolved.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
-  assert.equal(at({ draftOpenActList: { headSha: sha, openActCount: 1, bodyOnly: true, blockers: [] }, unresolvedGateThreadCount: 0 }).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "a body-only act list goes to ready");
-  assert.equal(at({ draftOpenActList: { headSha: "cd".repeat(20), openActCount: 2, blockers: [] }, unresolvedGateThreadCount: 0 }).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "a later head: the thread check owns it");
-  // AC7: coordination reads no delta record; two commit_only passes leave the head moved past the cap-round list, and ready follows the thread check.
-  assert.equal(at({ currentHeadSha: "ef".repeat(20), draftGate: { ...m, headSha: "ef".repeat(3) + "e" }, draftGateMarker: { ...m, headSha: "ef".repeat(3) + "e" }, draftOpenActList: { headSha: sha, openActCount: 2, blockers: [] }, unresolvedGateThreadCount: 0 }).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "AC7: the last coordination read, with no delta record input, ends in ready");
-  // AC9: a locally_clear delta that carries a new low at the cap round adds no input to coordination; the pushed head is later than the cap-round list, so ready follows the thread check and never loops back to the fixer.
-  const afterPush = at({ currentHeadSha: "12".repeat(20), draftOpenActList: { headSha: sha, openActCount: 1, blockers: [] }, unresolvedGateThreadCount: 0 });
-  assert.equal(afterPush.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "AC9: a pushed head after a locally_clear delta with a new low ends in ready");
-  assert.ok(!afterPush.allowedNextActions.includes(PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK), "AC9: no second fixer pass");
-});

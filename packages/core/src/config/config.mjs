@@ -410,9 +410,9 @@ const GateConfig = z.strictObject({
 });
 
 // Only the draft and preApproval gates read maxReviewRounds, so only they accept it.
-// No schema-level `.default()` (same layer-shadowing hazard); resolveGateConfig applies 4 on draft and 2 on preApproval.
+// No schema-level `.default()` (same layer-shadowing hazard); resolveGateConfig applies 2 on both.
 const DraftGateConfig = GateConfig.extend({
-  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for the draft and pre-approval gates: a round whose count of completed judged rounds reaches this number is past the cap, and at the cap round only a named human decision blocks with round_cap_reached (GATE-EXEC-SOFT-CAP); other act items go to the fixer, and on draft a round after the cap round is refused. On preApproval the round after the cap round runs as the scoped final round within gates.capFixMaxLines (GATE-EXEC-CAP-BRAKES). 0 disables the cap. Default 4 on draft, 2 on preApproval."),
+  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for the draft and pre-approval gates: a round whose count of completed judged rounds reaches this number is past the cap, and at the cap round only a named human decision blocks with round_cap_reached (GATE-EXEC-SOFT-CAP); other act items go to the fixer, and on both gates the round after the cap round runs as the scoped final round within gates.capFixMaxLines (GATE-EXEC-CAP-BRAKES). 0 disables the cap. Default 2."),
 });
 
 // One named group of angles dispatched together onto a single reviewer under
@@ -2359,7 +2359,7 @@ export function resolveGateConfig(config, gate) {
     const resolved = resolveBlockingSeverities(config, g);
     if (g === gate) blockCleanOnFindingSeverities = resolved;
   }
-  const maxReviewRounds = gateConfig?.maxReviewRounds ?? (gate === "preApproval" ? 2 : 4);
+  const maxReviewRounds = gateConfig?.maxReviewRounds ?? 2;
   if (!Number.isInteger(maxReviewRounds) || maxReviewRounds < 0) {
     throw new Error(`gates.${gate}.maxReviewRounds must be a non-negative integer (0 disables the cap); got ${JSON.stringify(gateConfig.maxReviewRounds)}`);
   }

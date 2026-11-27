@@ -939,7 +939,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     completed: options.gate === "review" || Boolean(options.judgeVerdict),
   };
   let roundCap;
-  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, roundIdentity, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveCurrentHead: options.rejudgeSameRound !== true }));
+  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, roundIdentity, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveCurrentHead: options.rejudgeSameRound !== true, contextTmpRoot: options.contextTmpRoot }));
   // A judged round must be written with its verdict: a write without --judge-verdict while a judge execution's verdict sits on disk would persist the unjudged severity verdict.
   // A rejudge keeps the live judged fields and takes no judge verdict, so the precheck cannot apply (GATE-LEDGER-REJUDGE-SAME-ROUND).
   if (!options.judgeVerdict && options.gate !== "review" && options.rejudgeSameRound !== true) {

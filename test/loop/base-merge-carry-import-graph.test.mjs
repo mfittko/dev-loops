@@ -46,7 +46,7 @@ const ALLOWLIST = [
   ["issue, spec and PR-title parsing and plan intake: input data for the reviewer, not a rule", [
     "scripts/loop/detect-issue-refinement-artifact.mjs", "packages/core/src/loop/issue-refinement-artifact.mjs",
     "packages/core/src/loop/plan-file-promote-contract.mjs", "packages/core/src/loop/pr-title-markers.mjs",
-    "packages/core/src/loop/normalize.mjs",
+    "packages/core/src/loop/normalize.mjs", "scripts/loop/spec-lint.mjs",
   ]],
 ];
 const allowlisted = (f) => ALLOWLIST.some(([, paths]) => paths.some((k) => f === k || (k.endsWith("/") && f.startsWith(k))));

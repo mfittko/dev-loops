@@ -239,15 +239,15 @@ test("with the round cap on, a converged post with --findings-json is refused by
 });
 
 // ADR 0208: the converged post is the one carve-out of the round N+1 refusal; a non-converged post at the same count is refused.
-test("at round count cap+1 a converged post is accepted and a non-converged post is refused with round_cap_reached", async () => {
+test("after the scoped final round a converged post is accepted and a non-converged post is refused with round_cap_reached", async () => {
   await withTempDir(async (tempDir) => {
     const dir = path.join(capOnRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
     await rm(dir, { recursive: true, force: true });
     await mkdir(dir, { recursive: true });
-    for (const c of ["1", "2", "3", "4"]) {
+    for (const c of ["1", "2", "3", "4", "5"]) {
       const head = c.repeat(40);
       await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
-        repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${c}T00:00:00.000Z`, findings: [],
+        repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${c}T00:00:00.000Z`, findings: c === "5" ? [{ severity: "medium", summary: "open act", judgeDisposition: "act", judgeFix: "fix it", file: "a.mjs", line: 1 }] : [],
       }), "utf8");
     }
     try {
@@ -256,7 +256,7 @@ test("at round count cap+1 a converged post is accepted and a non-converged post
       assert.equal(accepted.error, undefined);
       assert.doesNotMatch(accepted.body, /round_cap_reached/);
       const refused = await post(tempDir, { findings, verdict: "clean", runChildOptions: { currentHead: A }, root: capOnRoot });
-      assert.match(refused.error ?? "", /round_cap_reached.*round 5 .*cap is 4/);
+      assert.match(refused.error ?? "", /round_cap_reached.*round 6 .*cap is 4/);
       assert.equal(refused.puts.length, 0, "nothing is posted");
     } finally {
       await rm(dir, { recursive: true, force: true });

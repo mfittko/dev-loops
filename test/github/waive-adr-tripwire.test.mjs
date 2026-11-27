@@ -402,55 +402,11 @@ test("post-ready path: a mismatched pre_approval_gate digest refuses, and neithe
 });
 
 const NO_VERDICT = { fetchDraftGateEvidence: async () => ({ currentHeadClean: false, preApprovalCurrentHeadClean: false }) };
-const capProof = (specDigest = DIGEST) => async () => ({ log: { specAuthority: { specDigest } }, residue: [] });
 
-test("cap-round-fixed proof with no verdict writes the line (GATE-EXEC-ROUND-CAP-WAIVER-PROOF)", async () => {
-  const calls = [];
-  const { edits, run } = harness({ ...NO_VERDICT, resolveCapRoundFixed: async (o, rt) => { calls.push({ o, rt }); return capProof()(); } });
-  assert.equal((await run()).action, "waiver_written");
-  assert.equal(edits.length, 1);
-  assert.deepEqual(calls[0].o, { repo: "o/n", pr: 9, headSha: HEAD, baseRefName: "main" });
-});
-
-test("a clean cap-round proof with no posted cap-round draft_gate review refuses clean_cap_verdict_unposted and posts no waiver", async () => {
-  const clean = async () => ({ round: 4, log: { verdict: "clean", findings: [], headSha: HEAD, specAuthority: { specDigest: DIGEST } }, residue: [] });
-  const result = await assertRefusal({ ...NO_VERDICT, resolveCapRoundFixed: clean }, "clean_cap_verdict_unposted");
-  assert.match(result.detail, /--post-sealed-cap-round/);
-  const posted = harness({ fetchDraftGateEvidence: async () => ({ currentHeadClean: false, preApprovalCurrentHeadClean: false, draftGatePostedHeads: [{ head: HEAD.slice(0, 7), round: 4 }] }), resolveCapRoundFixed: clean });
-  assert.equal((await posted.run()).action, "waiver_written");
-});
-
-test("cap-round-fixed proof with a stale ledger digest refuses spec_digest_mismatch", async () => {
-  await assertRefusal({ ...NO_VERDICT, resolveCapRoundFixed: capProof("sha256:stale") }, "spec_digest_mismatch");
-  await assertRefusal({ ...NO_VERDICT, resolveCapRoundFixed: async () => ({ log: {} }) }, "spec_digest_unrecorded");
-});
-
-test("a clean verdict with a stale digest never falls through to the cap-round proof", async () => {
-  let proofCalls = 0;
-  await assertRefusal({ readRecordedSpecDigest: async () => "sha256:stale", resolveCapRoundFixed: async () => { proofCalls++; return capProof()(); } }, "spec_digest_mismatch");
-  assert.equal(proofCalls, 0);
-});
-
-test("no verdict and no proof refuses naming the runnable chain-extension remedy", async () => {
-  const result = await assertRefusal({ ...NO_VERDICT, resolveCapRoundFixed: async () => null }, "no_clean_draft_gate");
-  assert.match(result.detail, /node <dev-loops-package-root>\/cli\/index\.mjs gate extend-cap-round-chain --repo o\/n --pr 9/);
-  assert.match(result.detail, /node <dev-loops-package-root>\/cli\/index\.mjs loop gate-coordination --repo o\/n --pr 9/);
-});
-
-test("a thrown cap-round-fixed predicate refuses cap_round_unresolved with its remedy and leaves the body unchanged", async () => {
-  const { edits, run } = harness({ ...NO_VERDICT, resolveCapRoundFixed: async () => { throw new Error("boom"); } });
-  const result = await run();
-  assert.equal(result.reason, "cap_round_unresolved");
-  assert.match(result.detail, /boom.*Condition cap_round_unresolved.*Remedy: repair or quarantine/);
-  assert.equal(edits.length, 0);
-});
-
-test("the waiver and ready-for-review.mjs share one cap-round-fixed predicate", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const imp = /import \{ resolveCapRoundFixed as realResolveCapRoundFixed \} from "\.\/write-gate-context\.mjs";/;
-  for (const file of ["waive-adr-tripwire.mjs", "ready-for-review.mjs"]) {
-    assert.match(await readFile(new URL(`../../scripts/github/${file}`, import.meta.url), "utf8"), imp, file);
-  }
+test("no clean verdict refuses no_clean_draft_gate and names gate-coordination, never a cap-round proof (ADR 0324)", async () => {
+  const result = await assertRefusal(NO_VERDICT, "no_clean_draft_gate");
+  assert.match(result.detail, /loop gate-coordination --repo o\/n --pr 9/);
+  assert.doesNotMatch(result.detail, /cap-round|extend-cap-round-chain/);
 });
 
 test("parse and CLI: --repo and --pr are required; a refusal exits 1 with a typed stderr reason", async () => {
@@ -621,18 +577,3 @@ test("keeps the spike marker as the last non-empty body line when writing the wa
   assert.equal(hasSpikePrMarker(edits[0].opts.body), true);
 });
 
-// Issue 3460 AC3: the waiver reads the cap exit (a posted unblocked findings cap review) before the chain proof, with no delta record.
-test("a posted findings cap round qualifies through the cap exit with no chain proof (GATE-EXEC-ROUND-CAP-EXIT)", async () => {
-  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "waive-cap-exit-")));
-  try {
-    for (const [i, headSha] of ["1", "2", "3"].map((c) => c.repeat(40)).concat(HEAD).entries()) {
-      const file = path.resolve(root, buildLogPath({ repo: "o/n", pr: 9, gate: "draft_gate", headSha, tmpRoot: path.join(root, "tmp") }));
-      mkdirSync(path.dirname(file), { recursive: true });
-      writeFileSync(file, JSON.stringify({ repo: "o/n", pr: 9, gate: "draft_gate", headSha, verdict: i === 3 ? "findings_present" : "clean", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, specAuthority: { specDigest: DIGEST }, findings: i === 3 ? [{ severity: "medium", summary: "guard missing", files: ["src/a.mjs"], line: 3, angle: "correctness", judgeDisposition: "act", judgeFix: "add it" }] : [] }));
-    }
-    const evidence = (round) => async () => ({ currentHeadClean: false, preApprovalCurrentHeadClean: false, draftGatePostedHeads: [{ head: HEAD.slice(0, 7), round, verdict: "findings_present" }] });
-    const exit = harness({ ...NO_VERDICT, repoRoot: root, fetchDraftGateEvidence: evidence(4) });
-    assert.equal((await exit.run()).action, "waiver_written");
-    await assertRefusal({ ...NO_VERDICT, repoRoot: root, fetchDraftGateEvidence: evidence(3) }, "no_clean_draft_gate");
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});

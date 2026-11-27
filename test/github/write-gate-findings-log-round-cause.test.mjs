@@ -111,6 +111,8 @@ test("W8 a repeated judged write of one round keeps the cause of the first write
       dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x", criterion: "AC-1" }],
     }));
     const unjudged = JSON.stringify([{ severity: "low", angle: "scope", summary: "x" }]);
+    // The seeded heads are not commits of a fixture repository, so the round count reads the PR base from a context artifact.
+    await writeCtx(dir, B, { baseFreshness: { base: "main" } });
     const first = await write(dir, B, { findings: unjudged, judgeVerdict });
     const again = await write(dir, B, { findings: unjudged, judgeVerdict });
     assert.equal(first.log.roundCause, "developer_findings");
@@ -232,6 +234,7 @@ test("W16 a repeated judged write of an earlier round keeps its cause after a la
       dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x", criterion: "AC-1" }],
     }));
     const unjudged = JSON.stringify([{ severity: "low", angle: "scope", summary: "x" }]);
+    await writeCtx(dir, A, { baseFreshness: { base: "main" } });
     const first = await write(dir, A, { findings: unjudged, judgeVerdict });
     assert.equal(first.log.roundCause, "first");
     await write(dir, B);
