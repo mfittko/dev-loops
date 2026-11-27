@@ -1078,9 +1078,10 @@ async function countUnresolvedGateThreads(threadsPayload, runtime) {
 
 // GATE-EXEC-THREAD-DISPOSITION: true when at least one gate-authored thread is open and every one is a judge-act code thread whose
 // recording round ran at a strict ancestor of the current head, read from the ledgers of the gate whose round the route runs (the
-// same ledgers that round's fixed-act close reads). A question, an ambiguous ledger, a failed read or a settled round of that gate
-// already at the current head fails closed to false, which keeps the fixer route.
-export async function onlyStaleGateRoundThreadsOpen({ threadsPayload, repo, pr, currentHeadSha, runtime }) {
+// same ledgers that round's fixed-act close reads). A question, an ambiguous ledger, a failed read or a pre_approval_gate
+// verdict already posted at the current head fails closed to false, which keeps the fixer route. A round whose ledger exists
+// but whose verdict is not yet posted does not block the route, so the poster can enter the gate.
+export async function onlyStaleGateRoundThreadsOpen({ threadsPayload, repo, pr, currentHeadSha, preApprovalGate, runtime }) {
   const gate = "pre_approval_gate";
   try {
     const login = await resolveAuthenticatedLogin(runtime);
@@ -1089,8 +1090,8 @@ export async function onlyStaleGateRoundThreadsOpen({ threadsPayload, repo, pr, 
     const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
     const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
     const head = currentHeadSha.toLowerCase();
-    const rounds = await readClosedPriorRoundLogs({ repo, pr, gate, headSha: currentHeadSha, tmpRoot }, { repoRoot, includeLiveCurrentHead: true, includeRetainedCurrentHead: true });
-    if (rounds.some((log) => String(log.headSha).trim().toLowerCase() === head)) return false;
+    const posted = String(preApprovalGate?.headSha ?? "").trim().toLowerCase();
+    if (preApprovalGate?.visible && posted && (head.startsWith(posted) || posted.startsWith(head))) return false;
     for (const node of open) {
       const body = typeof node.comments.nodes[0].body === "string" ? node.comments.nodes[0].body : "";
       const marker = parseFindingMarker(body);
@@ -1353,7 +1354,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     gateEvidence,
     unresolvedGateThreadCount,
     staleGateRoundThreadsOnly: unresolvedGateThreadCount > 0 && snapshot.unresolvedThreadCount === unresolvedGateThreadCount
-      && await onlyStaleGateRoundThreadsOpen({ threadsPayload, repo: options.repo, pr: options.pr, currentHeadSha, runtime }),
+      && await onlyStaleGateRoundThreadsOpen({ threadsPayload, repo: options.repo, pr: options.pr, currentHeadSha, preApprovalGate: gateEvidence.preApprovalGate, runtime }),
     interpretation,
     disposition,
     copilotBodyConvergence,
