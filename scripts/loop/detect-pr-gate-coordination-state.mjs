@@ -628,8 +628,9 @@ async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand
   const firstPresent = evaluated.find((e) => e.artifact && e.artifact.hasACs === true);
   const firstFetched = evaluated.find((e) => e.artifact !== null);
   const allFailed = evaluated.every((e) => e.artifact === null);
-  // A failed body fetch leaves the forecast unread: with no forecast from another issue, that is a read error and never a missing forecast line.
-  const failedIssues = evaluated.filter((e) => e.artifact === null).map((e) => `#${e.issue}`);
+  // A failed body fetch leaves the forecast unread only when that issue could be the forecast source: one listed before the first issue with ACs, or any failed issue when none has ACs. With no forecast, that is a read error and never a missing forecast line.
+  const sourceIndex = firstPresent ? evaluated.indexOf(firstPresent) : evaluated.length;
+  const failedIssues = evaluated.filter((e, i) => e.artifact === null && i < sourceIndex).map((e) => `#${e.issue}`);
   const forecastReadFor = (forecastWloc) => (forecastWloc > 0 || failedIssues.length === 0 ? {} : { forecastReadError: `the body of linked issue ${failedIssues.join(", ")} could not be fetched` });
   return { evaluated, refinedIssues, firstPresent, firstFetched, allFailed, forecastReadFor };
 }
