@@ -74,17 +74,22 @@ export async function watchCopilotRunUntilComplete(
   // One deadline for all attempts: a retry after the backoff gets the remaining budget, never a fresh timeoutMs.
   const deadline = Number.isInteger(timeoutMs) && timeoutMs >= 0 ? now() + timeoutMs : null;
   let attempts = 0;
-  let firstError = null;
+  let first = null;
   const attempt = async () => {
     attempts += 1;
     const remaining = deadline === null ? timeoutMs : deadline - now();
-    // Budget spent during the backoff: rethrow the first failure unchanged, so a transport failure is never reported as RATE_LIMITED.
-    if (attempts > 1 && deadline !== null && remaining <= 0) throw firstError;
+    // Budget spent during the backoff: replay the first settled outcome unchanged (a thrown error or a resolved failed result), so a transport failure is never reported as RATE_LIMITED or as success.
+    if (attempts > 1 && deadline !== null && remaining <= 0) {
+      if ("error" in first) throw first.error;
+      return first.value;
+    }
     if (ghCommand === "gh") await takeGhSlot({ env });
     try {
-      return await spawnImpl({ repo, runId, timeoutMs: remaining }, { env, ghCommand });
+      const value = await spawnImpl({ repo, runId, timeoutMs: remaining }, { env, ghCommand });
+      if (attempts === 1) first = { value };
+      return value;
     } catch (error) {
-      if (attempts === 1) firstError = error;
+      if (attempts === 1) first = { error };
       throw error;
     }
   };

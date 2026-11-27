@@ -777,3 +777,13 @@ test("watchCopilotRunUntilComplete rethrows a first transport failure unchanged 
     (error) => error === transport && error.code !== "RATE_LIMITED",
   );
 });
+
+test("watchCopilotRunUntilComplete returns a first resolved failed result when the backoff spends the budget", async () => {
+  const { watchCopilotRunUntilComplete } = await import("../../scripts/loop/watch-initial-copilot-pr.mjs");
+  let clock = 0;
+  const failed = { code: 1, stderr: "dial tcp 1.2.3.4:443: i/o timeout" };
+  const spawn = async () => { clock += 20_000; return failed; };
+  const sleep = async (ms) => { clock += ms; };
+  const result = await watchCopilotRunUntilComplete({ repo: "o/r", runId: 1, timeoutMs: 20_000 }, { env: { DEV_LOOPS_GH_STUB: "1" }, spawn, sleep, now: () => clock });
+  assert.equal(result, failed);
+});
