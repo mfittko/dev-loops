@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
+import { actFingerprintSet } from "../../scripts/github/write-gate-context.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { capRoundWaives, parseUpsertCheckpointVerdictCliArgs, renderGateReviewCommentBody, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
@@ -333,6 +334,83 @@ test("a round-5 ledger after four pre-cap rounds does not compose round_cap_reac
     assert.doesNotMatch(out.body, /round_cap_reached/);
   }, { prefix: "dev-loops-round-cap-replay-" });
 });
+
+// Operator-cleared cap round: the writer reads the focus file through the same operatorClearsCapStop predicate as the router.
+const capPriorHeads = ["1", "2", "3", "4", "5"].map((c) => c.repeat(40));
+const capActs = [
+  { severity: "medium", summary: "first medium act", judgeDisposition: "act", judgeFix: "fix one", files: ["a.mjs"], line: 1 },
+  { severity: "medium", summary: "second medium act", judgeDisposition: "act", judgeFix: "fix two", files: ["b.mjs"], line: 2 },
+  { severity: "low", summary: "third low act", judgeDisposition: "act", judgeFix: "fix three", files: ["c.mjs"], line: 3 },
+];
+
+async function seedCapRound(tempDir, { decided }) {
+  await seedPrior(repoRoot, capPriorHeads);
+  const capLog = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-17", `draft_gate-${capPriorHeads.at(-1)}.json`);
+  const log = JSON.parse(await readFile(capLog, "utf8"));
+  log.findings = capActs;
+  await writeFile(capLog, JSON.stringify(log), "utf8");
+  const fingerprints = actFingerprintSet(log);
+  assert.equal(fingerprints.length, 3);
+  const focus = path.join(tempDir, "focus.json");
+  await writeFile(focus, JSON.stringify({ items: fingerprints.slice(0, decided).map((fingerprint) => ({ fingerprint, decision: "act" })) }), "utf8");
+  return { focus, fingerprints, ledger: await writeLedger(tempDir, { overallVerdict: "clean", findings: [] }) };
+}
+
+test("a clean ledger past the scoped final round posts when the operator focus file covers every cap-round act fingerprint", async () => {
+  await withTempDir(async (tempDir) => {
+    const { focus, ledger } = await seedCapRound(tempDir, { decided: 3 });
+    const out = await post(["--verdict", "clean", "--findings-ledger", ledger, "--operator-focus-file", focus]);
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "clean");
+  }, { prefix: "dev-loops-round-cap-focus-clear-" });
+});
+
+for (const [name, decided] of [["no focus file", null], ["a focus file that misses one act fingerprint", 2]]) {
+  test(`a clean ledger past the scoped final round refuses round_cap_reached with ${name}, and the recovery names the fingerprints`, async () => {
+    await withTempDir(async (tempDir) => {
+      const { focus, fingerprints, ledger } = await seedCapRound(tempDir, { decided: decided ?? 0 });
+      const options = parseUpsertCheckpointVerdictCliArgs([
+        "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD, "--verdict", "clean", "--findings-summary", "s", "--next-action", "n", "--inline-reason", "r", "--findings-ledger", ledger,
+        ...(decided === null ? [] : ["--operator-focus-file", focus]),
+      ]);
+      const error = await upsertCheckpointVerdict(options, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild([]) }).catch((e) => e);
+      assert.match(error.message, /round_cap_reached/);
+      assert.match(error.recovery, /^stop: report_blocked with blockedOn operator_decision \(round_cap_reached\)/);
+      assert.match(error.recovery, /--operator-focus-file/);
+      for (const fingerprint of fingerprints) assert.ok(error.recovery.includes(fingerprint));
+    }, { prefix: "dev-loops-round-cap-focus-refuse-" });
+  });
+}
+
+test("a repeated act set past the scoped final round refuses with the notClearable text, even with a covering focus file", async () => {
+  await withTempDir(async (tempDir) => {
+    const heads = [...priorHeads, ...extraPriors, "6".repeat(40)];
+    await seedPrior(repoRoot, heads, { withAct: true });
+    const log = JSON.parse(await readFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-17", `draft_gate-${heads[0]}.json`), "utf8"));
+    const fingerprints = actFingerprintSet(log);
+    const focus = path.join(tempDir, "focus.json");
+    await writeFile(focus, JSON.stringify({ items: fingerprints.map((fingerprint) => ({ fingerprint, decision: "act" })) }), "utf8");
+    const options = parseUpsertCheckpointVerdictCliArgs([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD, "--verdict", "clean", "--findings-summary", "s", "--next-action", "n", "--inline-reason", "r",
+      "--findings-ledger", await writeLedger(tempDir, { overallVerdict: "clean", findings: [] }), "--operator-focus-file", focus,
+    ]);
+    const error = await upsertCheckpointVerdict(options, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild([]) }).catch((e) => e);
+    assert.match(error.message, /round_cap_reached/);
+    assert.doesNotMatch(error.message, /operator clears it/);
+    assert.match(error.message, /already had its one re-open/);
+    assert.doesNotMatch(error.recovery, /--operator-focus-file/);
+    assert.match(error.recovery, /no focus file clears it/);
+    for (const fingerprint of fingerprints) assert.ok(error.recovery.includes(fingerprint));
+  }, { prefix: "dev-loops-round-cap-not-clearable-" });
+});
+
+for (const gate of ["pre_approval_gate", "review"]) {
+  test(`--operator-focus-file is refused on --gate ${gate}`, () => {
+    assert.throws(() => parseUpsertCheckpointVerdictCliArgs([
+      "--repo", "owner/repo", "--pr", "17", "--gate", gate, "--head-sha", HEAD, "--verdict", "clean", "--findings-summary", "s", "--next-action", "n", "--operator-focus-file", "focus.json",
+    ]), /--operator-focus-file applies only to a draft_gate post/);
+  });
+}
 
 // ADR 0191 (#2937 S4a): the cap round fixes judge-specified remedies, the next round is the one closure round, a later round is refused.
 const withFix = { judgeFix: "the remedy and the test to add" };
