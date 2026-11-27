@@ -1,4 +1,4 @@
-# 0336. A gate fix pass pushes in the full phase and no delta review or push authority remains
+# 0337. A gate fix pass pushes in the full phase and no delta review or push authority remains
 
 ## Status
 

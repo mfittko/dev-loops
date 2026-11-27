@@ -159,7 +159,7 @@ deterministic checks live in `@dev-loops/core/loop/pre-push-delta-review`; the
 dev-loop coordinator runs them through `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta`.
 
 The dev-loop coordinator owns delta mode, because it dispatches the Phase 4
-fixer and owns the push. The sequence below is the retired `commit_only` route, which the later slices of issue 2937 delete; a gate fix pass now emits a full order (ADR 0336):
+fixer and owns the push. The sequence below is the retired `commit_only` route, which the later slices of issue 2937 delete; a gate fix pass now emits a full order (ADR 0337):
 
 1. The dev-loop coordinator emits a `commit_only` fixer work order from the act
    list with the invocation in
@@ -269,7 +269,7 @@ records stay legacy and unchanged. The emitted `--handback` check remains write-
 validation without attestation. THREAD and the reviewer-only route (ADR 0255) carry no ACT binding. See ADR 0150 in the
 [decision records](https://github.com/mfittko/dev-loops/tree/main/docs/decisions).
 
-A gate fix pass for a judge act list or for the captured set of unresolved review threads pushes in the full phase, and no delta review runs: the next gate round at the pushed head judges the fix (ADR 0336). The delta rules below describe the code that the later slices of issue 2937 delete.
+A gate fix pass for a judge act list or for the captured set of unresolved review threads pushes in the full phase, and no delta review runs: the next gate round at the pushed head judges the fix (ADR 0337). The delta rules below describe the code that the later slices of issue 2937 delete.
 
 The decision field list below is the THREAD/legacy base; ACT decisions additionally carry the binding above, except on the reviewer-only route.
 

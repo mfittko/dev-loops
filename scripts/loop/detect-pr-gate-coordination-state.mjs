@@ -934,7 +934,7 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
       const order = plan.workOrder;
       const foreign = (typeof order.target?.repo === "string" && order.target.repo !== repo)
         || (Number.isInteger(order.target?.pr) && order.target.pr !== pr);
-      // A ci-failure plan, or an act-list or threads plan with no delta or completion input (ADR 0235, ADR 0336), writes only { headSha }: its evidence is the settled green CI and the next gate round, so no disposition is verifiable.
+      // A ci-failure plan, or an act-list or threads plan with no delta or completion input (ADR 0235, ADR 0337), writes only { headSha }: its evidence is the settled green CI and the next gate round, so no disposition is verifiable.
       const headOnly = order.source === "ci-failure" || ["act-list", "threads"].includes(order.source) && !order.requiredReads?.some((read) => ["delta-result", "completion-input"].includes(read.kind));
       if (!foreign && order.phase !== "commit_only" && !headOnly) {
         if (order.role !== "fixer" || order.phase !== "full" || order.target?.repo !== repo || order.target?.pr !== pr || !order.headSha) {

@@ -252,13 +252,13 @@ test("delta-mode rules are registered, owned by the contract, and state their in
   assert.ok(doc.includes("`pre-push-reviewer` role and its two bounded modes"), "contract must name the one role with two modes");
 });
 
-test("the contract and the fixer state that a gate fix pass pushes in the full phase with no delta review (ADR 0336)", () => {
+test("the contract and the fixer state that a gate fix pass pushes in the full phase with no delta review (ADR 0337)", () => {
   const contract = readRepo(CONTRACT).replace(/\s+/g, " ");
   assert.ok(contract.includes("pushes in the full phase, and no delta review runs"), "contract must state the full-phase fix pass");
   assert.doesNotMatch(contract, /PRE-PUSH-DELTA-TRIGGER/);
   const fixer = readRepo("agents/fixer.agent.md");
-  assert.match(fixer, /A gate fix work order \(source `act-list` or `threads`, full phase, ADR 0336\)/);
-  assert.match(fixer, /A gate fix pass pushes in the full phase \(ADR 0336\)/);
+  assert.match(fixer, /A gate fix work order \(source `act-list` or `threads`, full phase, ADR 0337\)/);
+  assert.match(fixer, /A gate fix pass pushes in the full phase \(ADR 0337\)/);
 });
 
 test("delta mode states the decision record, the full-phase refusal and the fixed-reply refusal", () => {

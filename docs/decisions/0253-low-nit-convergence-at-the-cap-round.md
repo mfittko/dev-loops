@@ -2,7 +2,7 @@
 
 ## Status
 
-Superseded by [0336](0336-gate-fix-pass-pushes-in-the-full-phase-no-delta-review.md) — 2026-11-27 ([issue 2937](https://github.com/mfittko/dev-loops/issues/2937))
+Superseded by [0337](0337-gate-fix-pass-pushes-in-the-full-phase-no-delta-review.md) — 2026-11-27 ([issue 2937](https://github.com/mfittko/dev-loops/issues/2937))
 
 Amends [ADR 0168](./0168-draft-gate-low-nit-convergence.md) and the draft-gate low deferral of [ADR 0188](./0188-low-nit-never-block.md) (as amended by [ADR 0196](./0196-pre-approval-gate-low-nit-never-block.md)). Every other decision of those records stays in force, and the records stay unedited.
 
