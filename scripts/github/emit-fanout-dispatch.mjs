@@ -797,7 +797,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const retryEmitted = new Set(dispatchUnits.filter((unit) => retryCrashed.has(unit.name)));
   const notPending = [...retryCrashed].filter((name) => !emittedNames.includes(name));
   if (notPending.length > 0) {
-    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: --retry-crashed names ${notPending.map((n) => JSON.stringify(n)).join(", ")}, which is not a pending unit`, recovery: `The emitted units are ${emittedNames.map((n) => JSON.stringify(n)).join(", ") || "(none: every pending unit already finished at this head)"}; name only an emitted unit whose agent ended without result artifacts.` }, false);
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: --retry-crashed names ${notPending.map((n) => JSON.stringify(n)).join(", ")}, which is not a pending unit`, recovery: `The emitted units are ${emittedNames.map((n) => JSON.stringify(n)).join(", ") || "(none)"}; name only an emitted unit whose agent ended without result artifacts.` }, false);
   }
   const ambiguous = [...retryCrashed].filter((name) => emittedNames.filter((n) => n === name).length > 1);
   if (ambiguous.length > 0) {
