@@ -78,8 +78,8 @@ Required:
                                  prefix refuses "not found"
   --head-sha <sha>              Current head SHA (head B); must be the CWD worktree HEAD
 Optional:
-  --rerun-angle <angle>         Repeatable. Force the named angle (an angle in the prior log) into
-                                 mustRerun with reason operator_rerun; an unknown angle is refused.
+  --rerun-angle <angle>         Repeatable. Force the named angle (a perAngle row or an orphan finding
+                                 angle in the prior log) into mustRerun with reason operator_rerun; an unknown angle is refused.
                                  A carried angle whose base unit has a re-run member re-runs with reason
                                  base_unit_rerun. The resolver reads the live gate:full label through gh
                                  (30 s bound; a gh failure or timeout fails closed to labelled; a TypeError,
@@ -237,7 +237,14 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
   }
   // Refusal precedence (GATE-EXEC-RERUN-ANGLE): an unknown --rerun-angle name is refused before the
   // eligibility refusal below, so no fallback plan is written for a typo.
-  const knownAngles = Array.isArray(log.provenance?.perAngle) ? log.provenance.perAngle.map((a) => a?.angle) : [];
+  const perAngleRows = Array.isArray(log.provenance?.perAngle) ? log.provenance.perAngle.map((a) => a?.angle) : [];
+  const rowBases = new Set(perAngleRows.filter((a) => typeof a === "string").map((a) => baseAngleName(a).toLowerCase()));
+  // Only a real orphan (no perAngle row by base name, not the copilot-body skip) is a known rerun angle.
+  // A finding whose angle has no perAngle row cannot be proved clean, so that angle re-runs (never carried).
+  const orphanAngles = new Set((Array.isArray(log.findings) ? log.findings : [])
+    .map((f) => (typeof f?.angle === "string" ? f.angle.trim() : ""))
+    .filter((a) => a.length > 0 && !rowBases.has(baseAngleName(a).toLowerCase()) && a !== COPILOT_BODY_ANGLE));
+  const knownAngles = [...perAngleRows, ...orphanAngles];
   const unknownRerun = rerunAngles.filter((a) => !knownAngles.includes(a));
   if (unknownRerun.length > 0) {
     throw Object.assign(new Error(`--rerun-angle names no angle in the prior findings-log: ${unknownRerun.join(", ")}`), { code: "unknown_rerun_angle" });
@@ -308,12 +315,13 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
   // carrying it forward (below) is how the problem stays visible instead of
   // silently vanishing because a later delta left its surface untouched.
   //
-  // Attribution: `log.findings` must be an array, and every finding must match
-  // a KNOWN prevAngles entry via {@link baseAngleName} (a `<angle>-delta-at-...`
+  // Attribution: `log.findings` must be an array, and each finding is matched
+  // to a prevAngles entry via {@link baseAngleName} (a `<angle>-delta-at-...`
   // re-review entry counts toward its base angle, per gate-fanin's own coverage
-  // check) case-insensitively. An unattributable finding means no angle is
-  // provably clean, so it refuses the whole plan (the one exception is the synthetic
-  // `copilot-body` finding, skipped before attribution when no perAngle row carries that name).
+  // check) case-insensitively. A finding whose angle matches no row is an orphan:
+  // that angle re-runs and never carries. Only an angle-less finding refuses the
+  // whole plan (the synthetic `copilot-body` finding is skipped before attribution
+  // when no perAngle row carries that name).
   if (log.findings !== undefined && !Array.isArray(log.findings)) {
     throw new Error("prior gate findings-log's findings field is not an array — cannot verify which angles are clean (fail-closed)");
   }
@@ -344,12 +352,10 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
     if (rawAngle.length === 0) {
       throw new Error("prior gate findings-log has a finding with no angle — cannot attribute it to a carried angle (fail-closed)");
     }
-    // The synthetic Copilot body finding has no perAngle row by design; every other unattributable angle still fails closed.
+    // The synthetic Copilot body finding has no perAngle row by design; an unmatched angle is an orphan (orphanAngles above).
     if (rawAngle === COPILOT_BODY_ANGLE && !prevAnglesByLowerBase.has(COPILOT_BODY_ANGLE)) continue;
     const matches = prevAnglesByLowerBase.get(baseAngleName(rawAngle).toLowerCase());
-    if (!matches || matches.length === 0) {
-      throw new Error(`prior gate findings-log has a finding for angle ${JSON.stringify(rawAngle)}, which matches no provenance.perAngle entry — cannot prove that angle is clean (fail-closed)`);
-    }
+    if (!matches || matches.length === 0) continue;
     if (matches.length > 1) {
       for (const angle of matches) ambiguousAngles.add(angle);
       continue;
@@ -359,16 +365,24 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
     priorFindingsByAngle.get(angle).push(finding);
   }
 
+  const orphanRerun = [...orphanAngles].map((angle) => ({
+    angle,
+    reason: rerunAngles.includes(angle) ? "operator_rerun" : "angle returned a finding at the prior head but has no provenance.perAngle entry, so it cannot be proved clean and re-runs (fail-closed)",
+  }));
+
   if (incrementalFiles.some(isDevLoopConfigSourcePath)) {
     return {
       prevHead: headSha,
       carried: [],
-      mustRerun: prevAngles.map((angle) => ({ angle, reason: rerunAngles.includes(angle) ? "operator_rerun" : "incremental delta changed a dev-loop config source; every angle must re-run" })),
+      mustRerun: [
+        ...prevAngles.map((angle) => ({ angle, reason: rerunAngles.includes(angle) ? "operator_rerun" : "incremental delta changed a dev-loop config source; every angle must re-run" })),
+        ...orphanRerun,
+      ],
     };
   }
 
   const carried = [];
-  const mustRerun = [];
+  const mustRerun = [...orphanRerun];
   const AMBIGUOUS_FINDING_REASON = "angle returned a finding at the prior head that matches more than one provenance.perAngle entry — attribution is ambiguous, so it never carries forward regardless of the delta (fail-closed)";
   for (const angle of prevAngles) {
     if (rerunAngles.includes(angle)) {
@@ -587,7 +601,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // buildCarryForwardPlan tags ONLY the genuine eligibility refusal (an
     // ineligible prior verdict) with `carryForwardRefusal`; a log INTEGRITY
     // failure (corrupt/truncated/inconsistent ledger — missing provenance,
-    // malformed headSha, unattributable finding, findings_present with no
+    // malformed headSha, angle-less finding, findings_present with no
     // findings, duplicate angle) throws UNTAGGED and is treated like an
     // operational failure below: no marker, emitter refuses. So the catch never
     // blanket-tags — it trusts the tag the pure seam set.
