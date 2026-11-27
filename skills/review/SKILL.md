@@ -195,8 +195,8 @@ this skill dispatches the `review` agents directly.
        and the whole mechanical report inside a collapsed `<details>` block (markers
        kept). It refuses with a named recovery on `--auto`, a missing
        `--interactive-confirm`, a missing or non-comment/approve `--submit`, an empty or
-       unreadable opener file, an opener that holds an HTML comment, `<details>` or
-       `<summary>` tag or an unclosed code fence (edit the opener file), no same-head pending draft, or an
+       unreadable opener file, an opener that holds an HTML comment, declaration or
+       block tag (`<details>`, `<summary>`, `<pre>`, `<script>`, `<style>`, `<textarea>`) or an unclosed code fence (edit the opener file), no same-head pending draft, or an
        issue/PR reference in the body. With `approve`, explain that the event satisfies
        required-approvals branch protection independently of dev-loops gates. On this gate
        only `act` or unjudged findings are inline; `defer` and `reject` findings sit

@@ -255,7 +255,7 @@ file content with trailing whitespace removed and leading indentation kept. The 
 so the gate header, head SHA, verdict, `Next action` line and every marker sit inside the block.
 A `review` verdict is never lifecycle evidence, so the kept markers stay safe. The mode is refused,
 before any GitHub write and with a named `recovery`, with `--auto`, without `--interactive-confirm`,
-with any `--submit` other than `comment` or `approve`, with an empty or unreadable opener file (the refusal names the error code), with an opener that holds an HTML comment, `<details>` or `<summary>` tag or an unclosed code fence, with
+with any `--submit` other than `comment` or `approve`, with an empty or unreadable opener file (the refusal names the error code), with an opener that holds an HTML comment, declaration or block tag (`<details>`, `<summary>`, `<pre>`, `<script>`, `<style>`, `<textarea>`) or an unclosed code fence, with
 no own same-head pending draft (post `--submit pending` first), and on a body the issue/PR-id guard
 refuses (edit the opener file or repeat the original `--allowed-refs`). On `--gate review` only, a finding takes the inline track when it
 counts as `act`: the judge disposed it `act`, or it has no judge disposition (an unjudged finding

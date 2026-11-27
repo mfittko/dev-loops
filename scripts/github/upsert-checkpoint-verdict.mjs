@@ -419,7 +419,7 @@ Optional:
                                             --interactive-confirm and --submit
                                             comment|approve; refused with --auto, an
                                             opener with an unclosed code fence, or an
-                                            HTML comment, details or summary tag.
+                                            HTML comment, declaration or block tag.
   --new-round                              SCOPED TO --gate review ONLY. Bypass
                                             the same-head submitted-review dedup
                                             and force a FRESH review round even
