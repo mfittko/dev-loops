@@ -4792,7 +4792,7 @@ test("3105 AC15: a posted findings_present draft_gate verdict with an open act l
   const head = "ab".repeat(20);
   const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
   const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict };
-  const fixer = `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo o/r --pr 9 --head-sha ${head} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`;
+  const fixer = `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo o/r --pr 9 --head-sha ${head} --phase full --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`;
   // PR 3221 (round 2, 5 act items) and PR 3239 (cap round, no high, no fixer pass); the PR 3234 stale-base shape is the detector case.
   // A round up to the cap (PR 3221) routes to the fixer; a round past the scoped final round never does (GATE-EXEC-CAP-BRAKES, ADR 0324).
   const result = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 5, blockers: [] } });
@@ -4813,6 +4813,21 @@ test("3105 AC15: a posted findings_present draft_gate verdict with an open act l
   const blocked = evaluatePrGateCoordination({ ...blockedInput, draftOpenActList: open });
   assert.equal(blocked.nextAction, evaluatePrGateCoordination(blockedInput).nextAction, blocked.reason);
   assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, blocked.reason);
+});
+
+test("an act-list fix pass pushed in the full phase routes the pushed head to the next gate round from an input that carries no delta-record field", () => {
+  const reviewed = "ab".repeat(20);
+  const pushed = "cd".repeat(20);
+  const verdict = { visible: true, headSha: reviewed, verdict: "findings_present", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict };
+  const atReviewedHead = evaluatePrGateCoordination({ ...base, currentHeadSha: reviewed, draftOpenActList: { headSha: reviewed, openActCount: 2, blockers: [] } });
+  assert.equal(atReviewedHead.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, atReviewedHead.reason);
+  assert.match(atReviewedHead.agentRemedy.command, /--phase full /);
+  // The fixer pushed a new head: no verdict stands at it, so the next step is the gate round. The evaluator is pure, so the input itself must carry no delta-record field.
+  const pushedInput = { ...base, currentHeadSha: pushed };
+  assert.deepEqual(Object.keys(pushedInput).filter((key) => /delta/i.test(key)), []);
+  const atPushedHead = evaluatePrGateCoordination(pushedInput);
+  assert.equal(atPushedHead.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, atPushedHead.reason);
 });
 
 test("3309: a cap-round body-only act list routes to the converged post, never the fixer; a clean converged verdict ends the block", async () => {
@@ -5249,4 +5264,31 @@ test("cap brakes: notClearable keeps the Items list and says a focus file does n
   assert.match(stopped.reason, /already had its one re-open, so a focus file does not clear it and the decision stays with the operator/);
   assert.doesNotMatch(stopped.reason, /Clear it with --operator-focus-file/);
   assert.doesNotMatch(stopped.reason, /clears it with an operator focus item/);
+});
+
+// A fix pass moved the head past a gate round whose judge-act threads are all that is open: the round itself is next, not the fixer.
+const staleRoundInput = (extra = {}) => ({
+  pr: 266,
+  currentHeadSha: "abc123456789",
+  prDraft: false,
+  lifecycleState: STATE.UNRESOLVED_FEEDBACK_PRESENT,
+  loopDisposition: DISPOSITION.UNRESOLVED_FEEDBACK,
+  draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+  draftGateMarker: gate({ visible: false }),
+  preApprovalGate: gate({ visible: false }),
+  preApprovalGateMarker: gate({ visible: false }),
+  copilotReviewOnCurrentHead: true,
+  ...extra,
+});
+
+test("ready PR whose only open threads are judge-act threads from an older ancestor head runs the pre_approval_gate", () => {
+  const result = evaluatePrGateCoordination(staleRoundInput({ staleGateRoundThreadsOnly: true }));
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK));
+});
+
+test("ready PR with a Copilot, human or same-head thread among the open threads still routes to the fixer", () => {
+  const result = evaluatePrGateCoordination(staleRoundInput({ staleGateRoundThreadsOnly: false }));
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
 });

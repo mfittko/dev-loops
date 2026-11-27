@@ -12,7 +12,8 @@ const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir,
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 
-import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveCapBrakes, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { detectPrGateCoordinationState, onlyStaleGateRoundThreadsOpen, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveCapBrakes, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
@@ -4568,15 +4569,15 @@ for (const { name, isDraft, seal, expected } of [
   });
 }
 
-// Issue 2787 C11: a ci-failure fixer plan has no thread to verify, so the ADR 0155 advisory check skips it.
-for (const [source, advisory] of [["ci-failure", false], ["threads", true]]) test(`an active full ${source} plan ${advisory ? "raises" : "raises no"} unverified_active_fixer advisory`, async () => {
+// Issue 2787 C11, issue 2937: a ci-failure, act-list or threads fixer plan hands back only { headSha }, so the ADR 0155 advisory check skips it; a review-body plan keeps the check.
+for (const [source, advisory, requiredReads] of [["ci-failure", false, []], ["act-list", false, []], ["threads", false, []], ["review-body", true, []], ["threads", true, [{ kind: "delta-result" }]], ["act-list", true, [{ kind: "completion-input" }]]]) test(`an active full ${source} plan with reads [${requiredReads.map((read) => read.kind)}] ${advisory ? "raises" : "raises no"} unverified_active_fixer advisory`, async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-ci-failure-"));
   try {
     initGitFixture(tempDir);
     const head = "a".repeat(40);
     const fixerDir = path.join(tempDir, "tmp", "gate-fixer", "owner-repo", "pr-9");
     await mkdir(path.join(fixerDir, "f1-0000abcd"), { recursive: true });
-    const workOrder = { role: "fixer", phase: "full", source, target: { repo: "owner/repo", pr: 9 }, headSha: head, outputRefs: [path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json")], requiredReads: [] };
+    const workOrder = { role: "fixer", phase: "full", source, target: { repo: "owner/repo", pr: 9 }, headSha: head, outputRefs: [path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json")], requiredReads };
     await writeFile(path.join(fixerDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder), executionIdentity: "f1-0000abcd" }));
     const result = await resolveFixerDispositionInput({ repo: "owner/repo", pr: 9, currentHeadSha: head, parsedThreads: { threads: [], comments: [] } }, { repoRoot: tempDir });
     if (advisory) assert.match(result.incomplete[0].failedStep, /^unverified_active_fixer/);
@@ -4659,7 +4660,7 @@ test("3105 AC15: the detector derives the open act list from the current-head le
     const result = await fixture.detect();
     assert.equal(result.ok, true);
     assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
-    assert.equal(result.agentRemedy.command, `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo owner/repo --pr 10 --head-sha ${fixture.headSha} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`);
+    assert.equal(result.agentRemedy.command, `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo owner/repo --pr 10 --head-sha ${fixture.headSha} --phase full --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`);
   } finally {
     await rm(fixture.tempDir, { recursive: true, force: true });
   }
@@ -6000,4 +6001,83 @@ test("loop gate-coordination refuses a malformed --operator-focus-file before an
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+// GATE-EXEC-THREAD-DISPOSITION: the stale-thread route reads the same ledgers the next pre_approval_gate round's fixed-act close reads.
+describe("onlyStaleGateRoundThreadsOpen", () => {
+  const REPO = "owner/repo";
+  const PR = 77;
+  const GATE_LOGIN = "dev-loops-gate[bot]";
+  const FINDING = { severity: "medium", angle: "perf", summary: "stale cache not invalidated" };
+
+  const threadNode = ({ severity = "medium", author = GATE_LOGIN } = {}) => ({
+    isResolved: false,
+    comments: { nodes: [{ author: { login: author }, body: `${buildFindingMarker({ fp: fingerprintFinding(FINDING), severity, angle: "perf", round: 1 })}\n**${severity}** (\`perf\`): ${FINDING.summary}` }] },
+  });
+
+  async function staleCase(ledgers, { threads = [threadNode()], postedAtCurrentHead = false, postedVerdict = "clean" } = {}) {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-threads-"));
+    try {
+      initGitFixture(repoRoot);
+      const a = runGitFixture(repoRoot, ["rev-parse", "HEAD"]);
+      runGitFixture(repoRoot, ["commit", "-q", "--allow-empty", "-m", "fix"]);
+      const b = runGitFixture(repoRoot, ["rev-parse", "HEAD"]);
+      const heads = { A: a, B: b };
+      const tmpRoot = path.join(repoRoot, "tmp");
+      for (const { gate, head, findings = [{ ...FINDING, judgeDisposition: "act", judgeRationale: "fix it" }], verdict = "findings_present", loggedAt } of ledgers) {
+        const file = buildLogPath({ repo: REPO, pr: PR, gate, headSha: heads[head], tmpRoot });
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate, headSha: heads[head], verdict, loggedAt, findings }), "utf8");
+      }
+      const runChild = async () => ({ code: 0, stdout: JSON.stringify({ login: GATE_LOGIN }), stderr: "" });
+      return await onlyStaleGateRoundThreadsOpen({ threadsPayload: threads, repo: REPO, pr: PR, currentHeadSha: b, preApprovalGate: postedAtCurrentHead ? { visible: true, headSha: b.slice(0, 7), verdict: postedVerdict } : { visible: false }, runtime: { repoRoot, env: {}, ghCommand: "gh", runChild } });
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  }
+
+  const ACT_AT_A = { gate: "pre_approval_gate", head: "A", loggedAt: "2026-09-10T00:00:00.000Z" };
+
+  it("is true for a judge-act thread whose pre_approval_gate round ran at an ancestor head", async () => {
+    assert.equal(await staleCase([ACT_AT_A]), true);
+  });
+
+  it("is false for a question thread", async () => {
+    assert.equal(await staleCase([ACT_AT_A], { threads: [threadNode({ severity: "question" })] }), false);
+  });
+
+  it("is false when only the other gate's ledger holds the ancestor act", async () => {
+    assert.equal(await staleCase([{ ...ACT_AT_A, gate: "draft_gate" }]), false);
+  });
+
+  it("is false when a newer pre_approval_gate ledger rejected the finding, whatever the other gate holds", async () => {
+    const reject = [{ ...FINDING, judgeDisposition: "reject", judgeRationale: "no" }];
+    assert.equal(await staleCase([{ ...ACT_AT_A, findings: reject, loggedAt: "2026-09-11T00:00:00.000Z" }, { ...ACT_AT_A, gate: "draft_gate" }]), false);
+  });
+
+  const CLEAN_AT_B = { gate: "pre_approval_gate", head: "B", findings: [], verdict: "clean", loggedAt: "2026-09-12T00:00:00.000Z" };
+
+  it("stays true when the round just run at the current head has a ledger but no posted verdict", async () => {
+    assert.equal(await staleCase([ACT_AT_A, CLEAN_AT_B]), true);
+  });
+
+  it("is false when a pre_approval_gate verdict is already posted at the current head", async () => {
+    assert.equal(await staleCase([ACT_AT_A, CLEAN_AT_B], { postedAtCurrentHead: true }), false);
+  });
+
+  it("is true when only a blocked pre_approval_gate verdict is posted at the current head", async () => {
+    assert.equal(await staleCase([ACT_AT_A, CLEAN_AT_B], { postedAtCurrentHead: true, postedVerdict: "blocked" }), true);
+  });
+
+  it("is false when a findings_present pre_approval_gate verdict is posted at the current head", async () => {
+    assert.equal(await staleCase([ACT_AT_A, CLEAN_AT_B], { postedAtCurrentHead: true, postedVerdict: "findings_present" }), false);
+  });
+
+  it("is false when the current head raised the finding again", async () => {
+    assert.equal(await staleCase([ACT_AT_A, { gate: "pre_approval_gate", head: "B", loggedAt: "2026-09-12T00:00:00.000Z" }]), false);
+  });
+
+  it("is false when the open thread is not authored by the gate login", async () => {
+    assert.equal(await staleCase([ACT_AT_A], { threads: [threadNode({ author: "someone-else" })] }), false);
+  });
 });

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-10-24 ([parent issue 2917](https://github.com/mfittko/dev-loops/issues/2917), [snapshot issue 2918](https://github.com/mfittko/dev-loops/issues/2918)).
+Superseded by [0337](0337-gate-fix-pass-pushes-in-the-full-phase-no-delta-review.md) — 2026-11-27 ([issue 2937](https://github.com/mfittko/dev-loops/issues/2937))
 
 ## Context
 

@@ -355,6 +355,7 @@ test("closeGateFindings posts no review and no comment of its own: a round with 
         rejectClosed: 0,
         evidenceOnlyClosed: 0,
         prBodyActClosed: 0,
+        fixedActClosed: 0,
         unresolvedGateThreadCount: 0,
         foldedFiled: 0,
       });
@@ -1020,7 +1021,7 @@ test("answering a previously-unanswered, judge-rejected question lets the pass c
   });
 });
 
-test("an answered question the judge did NOT reject (act) stays open (the fixer's own answer-and-resolve path owns it)", async () => {
+test("an answered question the judge did NOT reject (act) stays open (only a judge rerun at the current head changes its disposition)", async () => {
   const finding = { severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "act", judgeRationale: "Worth fixing." };
   const fp = fingerprintFinding(finding);
   const questionBody = `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why this approach?`;
@@ -2436,6 +2437,90 @@ test("a prior-ledger act with remedyKind evidence_only is replied to and resolve
   ));
 });
 
+// A full-phase fix pass resolves no thread, so a later round that judged the fix closes the prior-round code act thread.
+// repoRoot becomes a git repo with commit A (the act round) and its descendant B (the current head); the prior act ledger sits at priorHead.
+const FIXED_ACT_FINDING = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated" };
+const FRESH_PERF = { perAngle: [{ angle: "perf", reviewer: "review-a" }] };
+
+async function fixedActCase({ priorHead = "A", priorExtra = {}, priorFinding = {}, verdict = "findings_present", provenance = FRESH_PERF, ledgerFindings = [], threads, ambiguousSibling = false }, check) {
+  const thread = threads ?? [openWfnThread({ commentId: 6004, fp: fingerprintFinding(FIXED_ACT_FINDING) })];
+  await withLedgerFile(makeLedger({ gate: "draft_gate" }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: thread }),
+      ...(check.closes ? [{ ...postReplyEntry(6004, { id: 7004 }), assertStdinIncludes: ["did not raise it again"] }, resolveThreadEntry("THREAD_D")] : []),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      initGitFixture(repoRoot);
+      const a = runGitFixture(repoRoot, ["rev-parse", "HEAD"]);
+      runGitFixture(repoRoot, ["commit", "-q", "--allow-empty", "-m", "fix"]);
+      const b = runGitFixture(repoRoot, ["rev-parse", "HEAD"]);
+      await writeFile(ledgerPath, JSON.stringify(makeLedger({ gate: "draft_gate", headSha: b, verdict, provenance, findings: ledgerFindings })), "utf8");
+      const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
+      await mkdir(findingsDir, { recursive: true });
+      const headOf = { A: a, B: b, none: undefined }[priorHead];
+      await writeFile(
+        path.join(findingsDir, `draft_gate-${a}.json`),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: headOf, verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ ...FIXED_ACT_FINDING, judgeDisposition: "act", judgeRationale: "fix it", ...priorFinding }], ...priorExtra }),
+        "utf8",
+      );
+      if (ambiguousSibling) {
+        await writeFile(path.join(findingsDir, `draft_gate-${a}.round-2.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: a, verdict: "findings_present", findings: [{ ...FIXED_ACT_FINDING, judgeDisposition: "reject", judgeRationale: "no" }] }), "utf8");
+      }
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      await check.assert(result);
+    },
+  ));
+}
+
+const closesWith = (closed) => ({ closes: closed === 1, assert: (result) => { assert.equal(result.fixedActClosed, closed); assert.equal(result.unresolvedGateThreadCount, 1 - closed); } });
+
+test("a prior-ledger code act at an ancestor head that the current ledger does not raise again is replied to and resolved", async () => {
+  await fixedActCase({}, closesWith(1));
+});
+
+const FIXED_ACT_LEAVE_OPEN = [
+  ["the act ledger sits at the current head", { priorHead: "B" }],
+  ["the act ledger records no head", { priorHead: "none" }],
+  ["the current round is blocked", { verdict: "blocked" }],
+  ["the current round has no provenance for the angle", { provenance: null }],
+  ["the angle is carried from an earlier head", { provenance: { perAngle: [{ angle: "perf", carriedFromHead: "a".repeat(40) }] } }],
+  ["the current ledger raises the finding again", { ledgerFindings: [{ ...FIXED_ACT_FINDING, judgeDisposition: "act" }] }],
+  ["the prior act carries remedyKind evidence_only", { priorFinding: { remedyKind: "evidence_only" } }],
+  ["the prior disposition is reject", { priorFinding: { judgeDisposition: "reject" } }],
+  ["the thread is from another author", { threads: [openWfnThread({ commentId: 6004, fp: fingerprintFinding(FIXED_ACT_FINDING), author: "someone-else" })] }],
+];
+for (const [name, options] of FIXED_ACT_LEAVE_OPEN) {
+  test(`the fixed-act close leaves the thread open when ${name}`, async () => {
+    await fixedActCase(options, { closes: false, assert: (result) => { assert.equal(result.fixedActClosed, 0); assert.equal(result.evidenceOnlyClosed, 0); } });
+  });
+}
+
+// A question needs an answer, not a fix: the fixed-act close never resolves it, so it stays on its answer and judge-rerun paths.
+test("the fixed-act close leaves a prior-act question thread open", async () => {
+  const fp = fingerprintFinding(FIXED_ACT_FINDING);
+  const body = `${buildFindingMarker({ fp, severity: "question", angle: "perf", round: 1 })}\n**question** (\`perf\`): why is the cache stale?`;
+  const thread = threadNode({ id: "THREAD_D", isResolved: false, path: "src/cache.mjs", line: 9, commentId: 6004, body, author: AUTHENTICATED_LOGIN });
+  await fixedActCase({ threads: [thread] }, { closes: false, assert: (result) => { assert.equal(result.fixedActClosed, 0); assert.equal(result.unresolvedGateThreadCount, 1); assert.equal(result.dispositionFailures, undefined, "no reply is attempted for a question"); } });
+});
+
+test("the fixed-act close leaves a merged thread open when one member is raised again", async () => {
+  const other = { severity: "worth-fixing-now", angle: "perf", summary: "second member claim" };
+  const thread = mergedThread({ fp: fingerprintFinding(FIXED_ACT_FINDING) }, { fp: fingerprintFinding(other) }, { id: "THREAD_MERGED_FIXED", commentId: 6004 });
+  // The prior ledger acts on both members, so only the re-raise loop keeps the thread open.
+  const priorActs = [FIXED_ACT_FINDING, other].map((f) => ({ ...f, judgeDisposition: "act", judgeRationale: "fix it" }));
+  await fixedActCase({ threads: [thread], priorExtra: { findings: priorActs }, provenance: { perAngle: [{ angle: "perf", reviewer: "review-a" }, { angle: "correctness", reviewer: "review-b" }] }, ledgerFindings: [{ ...other, judgeDisposition: "act" }] }, { closes: false, assert: (result) => { assert.equal(result.fixedActClosed, 0); assert.deepEqual(result.dispositionFailures ?? [], []); } });
+});
+
+test("the fixed-act close leaves a thread open when the prior ledger lookup is ambiguous", async () => {
+  // Two prior ledgers with no loggedAt that disagree on the disposition are undecidable.
+  await fixedActCase({ priorExtra: { loggedAt: undefined }, ambiguousSibling: true }, { closes: false, assert: (result) => assert.equal(result.fixedActClosed, 0) });
+});
+
+test("the fixed-act close records a dispositionFailure for a thread with no valid root commentId", async () => {
+  const thread = openWfnThread({ commentId: -1, fp: fingerprintFinding(FIXED_ACT_FINDING) });
+  await fixedActCase({ threads: [thread] }, { closes: false, assert: (result) => { assert.equal(result.fixedActClosed, 0); assert.match(result.dispositionFailures[0].error, /fixed act thread THREAD_D has no valid root commentId/); } });
+});
+
 // The same holds for the CURRENT ledger.
 test("a current-ledger act with remedyKind evidence_only is replied to and resolved with no stamp", async () => {
   const finding = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated" };
@@ -3028,7 +3113,8 @@ test("a pr_body act finding in the current ledger closes once the live body dige
 
 test("an act thread without a pr_body remedy is never selected by the PR-body act pass", async () => {
   const findings = [prBodyFinding("first body edit", { remedyKind: undefined })];
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  // The current ledger raises it again, so the fixed-act pass leaves it open too.
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings }), (ledgerPath) => withGhStub(
     roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: findings.map(prBodyThread) }),
     async ({ env, ghCommand, runChild, repoRoot }) => {
       await writePrBodyActFixture(repoRoot, findings);

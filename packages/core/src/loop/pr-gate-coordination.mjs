@@ -1632,7 +1632,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
         reason: "The PR is still draft and this round's draft_gate verdict is clean, but"
-          + " a gate-authored review thread is still unresolved (ADR 0088) — reply/resolve it rather than re-running the draft gate. An open defect thread is resolved via fixer fix-close, or a close-gate-findings rerun once the judge has deferred it or disposed it act with an evidence-only remedy (ADR 0144); an open judge-act thread with remedyKind pr_body is closed by a close-gate-findings rerun after the PR-body edit is applied (the live PR body digest differs from the one recorded at the verdict head); a judge-rejected medium, low or nit defect thread is reject-closed by a close-gate-findings rerun (ADR 0144), and a judge-rejected high needs an operator decision. A question thread's remedy depends on the judge's disposition: unanswered — post an answer reply, then rerun close-gate-findings, which reject-closes it if the judge disposed it reject; answered and judge-disposed reject — rerun close-gate-findings to reject-close it; answered and judge-disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied — closed by a close-gate-findings rerun; any other judge-disposed act question — resolved by the fixer's own answer-and-resolve path; ambiguous/unrecorded disposition — needs an operator decision, no automated path.",
+          + " a gate-authored review thread is still unresolved (ADR 0088) — reply/resolve it rather than re-running the draft gate. An open defect thread is resolved by a close-gate-findings rerun once the judge has deferred it, disposed it act with an evidence-only remedy (ADR 0144), or disposed it act with a code remedy that the current round does not raise again after the fix pass; an open judge-act thread with remedyKind pr_body is closed by a close-gate-findings rerun after the PR-body edit is applied (the live PR body digest differs from the one recorded at the verdict head); a judge-rejected medium, low or nit defect thread is reject-closed by a close-gate-findings rerun (ADR 0144), and a judge-rejected high needs an operator decision. A question thread's remedy depends on the judge's disposition: unanswered — post an answer reply, then rerun close-gate-findings, which reject-closes it if the judge disposed it reject; answered and judge-disposed reject — rerun close-gate-findings to reject-close it; answered and judge-disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied — closed by a close-gate-findings rerun; any other judge-disposed act question — stays open until a judge rerun at the current head changes its disposition; ambiguous/unrecorded disposition — needs an operator decision, no automated path.",
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,
@@ -1749,7 +1749,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK,
         ...remedyOrOperator(input, (r, n) => ({
-          command: `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo ${r} --pr ${n} --head-sha ${currentHeadSha} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>${actList.operatorCleared === true ? " --operator-focus-file <operator focus file>" : ""}`,
+          command: `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo ${r} --pr ${n} --head-sha ${currentHeadSha} --phase full --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>${actList.operatorCleared === true ? " --operator-focus-file <operator focus file>" : ""}`,
           summary: "Emit the fixer work order for the open act list (the judge-pass --out file of this head's round) and dispatch it.",
         })),
         reason: `The PR is still draft and the current head carries a posted \`draft_gate\` \`findings_present\` verdict with ${actList.openActCount} open act item(s) and no round-cap blocker, so the fixer runs before any further round or base integration.`,
@@ -1994,6 +1994,36 @@ function evaluatePrGateCoordinationCore(input = {}) {
       conflictFiles,
         refinementArtifact,
     copilotReviewRoundCount,
+    });
+  }
+
+  // GATE-EXEC-THREAD-DISPOSITION: every open thread is a judge-act gate thread from a round at a strict ancestor of this head, so the fix pass already ran; the fixed-act close needs a newer round's ledger, so the round itself is next.
+  if (effectiveLifecycleState === STATE.UNRESOLVED_FEEDBACK_PRESENT && input.staleGateRoundThreadsOnly === true) {
+    pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE]);
+    pushUnique(forbiddenActions, [
+      PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+      PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+      PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+      PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+    ]);
+    return buildResult({
+      repo: input.repo ?? null,
+      pr: Number.isInteger(input.pr) ? input.pr : null,
+      currentHeadSha,
+      lifecycleState: effectiveLifecycleState,
+      loopDisposition: loopDisposition ?? DISPOSITION.UNRESOLVED_FEEDBACK,
+      gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+      draftGateAlreadySatisfied,
+      draftGate,
+      preApprovalGate,
+      allowedNextActions,
+      forbiddenActions,
+      nextAction: PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+      reason: "Every open thread is a gate-authored judge-act thread from a gate round at an earlier head, and a fix pass moved the head past that round, so the gate round itself is next: a round that no longer raises the finding closes its thread, and one that raises it again routes to the fixer.",
+      mergeStateStatus,
+      conflictFiles,
+      refinementArtifact,
+      copilotReviewRoundCount,
     });
   }
 

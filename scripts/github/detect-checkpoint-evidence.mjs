@@ -1097,7 +1097,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   ].filter((spec) => spec.required && spec.marker.visible);
   const gates = [];
   for (const spec of gateSpecs) {
-    // A converged draft_gate marker maps to the fixed head; its ledger is the reviewed head's (GATE-EXEC-LOW-NIT-CONVERGENCE).
+    // A converged draft_gate marker maps to the fixed head; its ledger is the reviewed head's (body-only converged post).
     const headSha = spec.marker.convergedFromHeadSha ?? spec.marker.headSha ?? currentHeadSha;
     // The light-mode scope re-derivation runs against the marker's own head (the fixer commit for a converged marker), never the ledger head A.
     const scopeHeadSha = spec.marker.headSha ?? currentHeadSha;

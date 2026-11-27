@@ -5,9 +5,8 @@ import path from "node:path";
 import { afterAll, test } from "bun:test";
 import { recoveryHint, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
-import { gateDeltaRecordPath, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
+import { writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { closeGateSequence, fixerGraceMs } from "../../scripts/loop/close-gate-sequence.mjs";
-import { assertDeltaClearsFullPhase } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { SANCTIONED_COMMANDS } from "../../scripts/loop/sanctioned-commands.mjs";
 import { withTempDir } from "../_helpers.mjs";
 
@@ -112,36 +111,6 @@ test("every push-authority refusal text names an agent step and none names a mar
   for (const [label, text] of hints) assertAgentStep(`push authority ${label}`, text);
   // The no-branch and non-hex texts name the close command that handles an unreadable marker.
   for (const [, text] of hints.slice(1)) assert.match(text, /gate close-sequence/);
-});
-
-test("every --phase full delta refusal names an agent step and none names a marker delete or an operator", async () => {
-  await withTempDir(async (tmpRoot) => {
-    const record = { reviewBaselineHead: HEAD, candidateHead: CANDIDATE, actSetId: "set", invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "r", status: "resolved" }] };
-    const writeRecord = (over = {}) => {
-      mkdirSync(path.dirname(gateDeltaRecordPath(tmpRoot, HEAD)), { recursive: true });
-      writeFileSync(gateDeltaRecordPath(tmpRoot, HEAD), JSON.stringify({ ...record, ...over }));
-    };
-    const delta = { actSetId: "set", outcome: "locally_clear", candidateHead: CANDIDATE, actionableItems: [{ ref: "r", status: "resolved" }] };
-    const refusalOf = (args) => { try { assertDeltaClearsFullPhase({ tmpRoot, headSha: HEAD, ...args }); } catch (error) { return error.message; } throw new Error("no refusal"); };
-    const cases = [];
-    writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix" });
-    cases.push(["non-clearing record", refusalOf({ delta })]);
-    writeRecord();
-    cases.push(["no --delta-result", refusalOf({ delta: undefined })]);
-    cases.push(["other act set", refusalOf({ delta: { ...delta, actSetId: "other" } })]);
-    cases.push(["item statuses differ", refusalOf({ delta: { ...delta, actionableItems: [{ ref: "r", status: "cannot_verify" }] } })]);
-    cases.push(["HEAD past the candidate", refusalOf({ delta, candidateHead: MOVED })]);
-    writeRecord({ reviewBaselineHead: MOVED });
-    cases.push(["baseline differs", refusalOf({ delta, candidateHead: CANDIDATE })]);
-    const threads = [{ threadId: "T1" }];
-    cases.push(["thread candidate differs", refusalOf({ delta: undefined, threads, candidateHead: MOVED })]);
-    writeRecord({ items: [{ ref: "T9", status: "resolved" }] });
-    cases.push(["unbound thread ref", refusalOf({ delta: undefined, threads, candidateHead: CANDIDATE })]);
-    writeRecord({ items: [] });
-    cases.push(["uncovered thread", refusalOf({ delta: undefined, threads, candidateHead: CANDIDATE })]);
-    assert.match(cases.find(([label]) => label === "HEAD past the candidate")[1], /head_moved/);
-    for (const [label, text] of cases) assertAgentStep(`--phase full ${label}`, text);
-  });
 });
 
 test("the contract names BOUNDED_OUT and MARKER_UNREADABLE and no longer ends a marker by deleting it", () => {

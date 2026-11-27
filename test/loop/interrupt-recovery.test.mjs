@@ -216,10 +216,9 @@ async function emitOverUnfinishedPlan() {
   return () => emitFixerWorkOrder({ ...common, phase: "full", ciFile: ci, executionIdentity: "f1790000000001-0000abcd" });
 }
 
-test("known failure (issue 3419): a CI-fix emission over an unfinished thread plan keeps its thread obligations", async () => {
-  // Today the emitter refuses while the plan is unfinished; the fix either carries the thread read or completes the plan.
+test("issue 3419: a CI-fix emission over an unfinished thread plan succeeds, because the full phase holds no sequence marker", async () => {
   const ciEmission = await emitOverUnfinishedPlan(); // the first (thread) emission must succeed; its failure fails the test
-  const outcome = await ciEmission().then((unit) => ({ unit }), (error) => ({ error }));
-  assert.ok(outcome.error, "recovery now works (the emission succeeded): remove the 3419 known failure so the suite turns strict");
-  assert.match(String(outcome.error.message), /sequence is active/, `the refusal changed; re-check issue 3419: ${outcome.error.message}`);
+  const unit = await ciEmission();
+  assert.equal(unit.workOrder.phase, "full");
+  assert.equal(unit.workOrder.source, "ci-failure");
 });
