@@ -31,14 +31,14 @@ import { parseArgs } from "node:util";
 
 import { isDevLoopConfigSourcePath } from "@dev-loops/core/analysis/diff-analyzer";
 import { validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-verdict-carry";
-import { loadDevLoopConfigStrict, resolveBaseBranch, resolveClassifyRules, resolveGateAngleContract } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveBaseBranch, resolveClassifyRules, resolveFanoutGroups, resolveGateAngleContract } from "@dev-loops/core/config";
 import {
   angleReviewSurface,
   RENAME_ONLY_ANGLES,
   resolveAngleCarryForward,
   resolveConvergenceCarryForward,
 } from "@dev-loops/core/loop/gate-carry-forward";
-import { baseAngleName, isSeededCapFinding } from "@dev-loops/core/loop/gate-fanin";
+import { baseAngleName, isSeededCapFinding, ledgerAngleNames, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -218,9 +218,10 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
  *   ran, so an EMPTY delta carries every eligible angle (integrate-only base-move)
  *   instead of failing closed. Threaded to {@link resolveAngleCarryForward}.
  * @param {import("@dev-loops/core/analysis/diff-analyzer").ClassifyRules|null} [input.rules] — repository `classify` rules from resolveClassifyRules
+ * @param {string[][]} [input.baseUnits] — the prior round's base units (the writer's `resolveFanoutGroups` derivation); a carried angle whose unit has a re-run member re-runs with reason `base_unit_rerun`
  * @returns {{ prevHead: string, carried: Array<{angle: string, carriedFromHead: string, reviewer?: string, dispatchId?: string, model?: string, prevVerdict: "clean"|"findings_present", findings: Array<object>, reason: string}>, mustRerun: Array<{angle: string, reason: string}> }}
  */
-export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = [], alwaysRerun = [], deltaComplete = false, rules = null, rerunAngles = [] }) {
+export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = [], alwaysRerun = [], deltaComplete = false, rules = null, rerunAngles = [], baseUnits = [] }) {
   if (!log || typeof log !== "object") {
     throw new Error("prior gate findings-log not found or unreadable — cannot carry forward (fail-closed)");
   }
@@ -387,7 +388,16 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
       mustRerun.push({ angle, reason: decision.reason });
     }
   }
-  return { prevHead: headSha, carried, mustRerun };
+  // A base unit carries whole or not at all: the findings-log writer re-derives units from fresh plus carried angles,
+  // and a dispatch unit that splits a base unit is refused. Units are disjoint, so one pass is enough.
+  const rerunBases = new Set(mustRerun.map((m) => baseAngleName(m.angle)));
+  const wholeCarried = [];
+  for (const entry of carried) {
+    const unit = baseUnits.find((u) => u.includes(baseAngleName(entry.angle)));
+    if (unit && unit.some((a) => rerunBases.has(a))) mustRerun.push({ angle: entry.angle, reason: "base_unit_rerun" });
+    else wholeCarried.push(entry);
+  }
+  return { prevHead: headSha, carried: wholeCarried, mustRerun };
 }
 
 async function assertWorktreeAtHeadAsync(headSha, { repoRoot, runGit = runGitCommand }) {
@@ -562,9 +572,11 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       const ownEdited = new Set(own.stdout.split("\0").filter(Boolean));
       resolutionScopePaths = baseMerge.resolutionPaths.filter((p) => !ownEdited.has(p));
     }
+    const catalogKey = resolveGateAngleCatalogKey(options.gate);
+    const baseUnits = resolveFanoutGroups(config, catalogKey, ledgerAngleNames(log.provenance?.perAngle, resolveGateAngleContract(config, catalogKey).pool ?? [])).map((g) => g.angles);
     const rawPlan = buildCarryForwardPlan({
       log, changedFiles: partial ? baseMerge.rerunPaths : changedFiles, incrementalFiles, alwaysRerun,
-      deltaComplete: partial || reduced, rules, rerunAngles: options.rerunAngles,
+      deltaComplete: partial || reduced, rules, rerunAngles: options.rerunAngles, baseUnits,
     });
     // AC1 (ADR 0061): optional --spec-authority stamps the pinned revision
     // identity onto the plan via the ONE shared helper. Pure no-op when absent.

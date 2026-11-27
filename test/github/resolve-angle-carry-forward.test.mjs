@@ -210,6 +210,25 @@ test("buildCarryForwardPlan still fails closed on non-synthetic or case-drifted 
   }
 });
 
+test("buildCarryForwardPlan carries a base unit whole or not at all (base_unit_rerun)", () => {
+  const delta = { log: cleanLog, changedFiles: ["docs/guide.md"] };
+  const names = (list) => list.map((e) => e.angle).sort();
+  // A unit with a re-run member (docs) pulls every carried member into mustRerun.
+  const whole = buildCarryForwardPlan({ ...delta, baseUnits: [["correctness", "coverage", "docs"]] });
+  assert.deepEqual(whole.carried, []);
+  assert.deepEqual(names(whole.mustRerun), ["correctness", "coverage", "docs"]);
+  assert.deepEqual(whole.mustRerun.filter((m) => m.angle !== "docs").map((m) => m.reason), ["base_unit_rerun", "base_unit_rerun"]);
+  // A unit with no re-run member still carries every eligible angle.
+  const split = buildCarryForwardPlan({ ...delta, baseUnits: [["correctness", "coverage"], ["docs"]] });
+  assert.deepEqual(names(split.carried), ["correctness", "coverage"]);
+  // A mandatory angle and an operator --rerun-angle each pull their whole unit.
+  const mandatory = buildCarryForwardPlan({ log: cleanLog, changedFiles: [], deltaComplete: true, alwaysRerun: ["docs"], baseUnits: [["correctness", "docs"], ["coverage"]] });
+  assert.deepEqual(names(mandatory.carried), ["coverage"]);
+  const operator = buildCarryForwardPlan({ log: cleanLog, changedFiles: [], deltaComplete: true, rerunAngles: ["coverage"], baseUnits: [["correctness", "coverage"], ["docs"]] });
+  assert.deepEqual(names(operator.carried), ["docs"]);
+  assert.equal(operator.mustRerun.find((m) => m.angle === "correctness").reason, "base_unit_rerun");
+});
+
 test("buildCarryForwardPlan carries code angles on a doc-only delta, marks provenance honestly", () => {
   const plan = buildCarryForwardPlan({ log: cleanLog, changedFiles: ["docs/guide.md"] });
   assert.equal(plan.prevHead, "aaaaaaa");

@@ -787,7 +787,7 @@ function recordedUnitError(unit, baseUnits, baseOf, bound) {
   if (unknown !== undefined) return `unit "${unit.name}" contains angle "${unknown}" that is not a member of any re-derived base unit`;
   const bases = new Set(angles.map((a) => baseOf.get(baseAngleName(a))));
   for (const index of bases) {
-    if (!baseUnits[index].every((a) => members.has(baseAngleName(a)))) return `unit "${unit.name}" is not a union of whole base units: it splits base unit ${baseUnits[index].join("+")}`;
+    if (!baseUnits[index].every((a) => members.has(baseAngleName(a)))) return `unit "${unit.name}" is not a union of whole base units: it splits base unit ${baseUnits[index].join("+")}; re-run resolve-angle-carry-forward.mjs, write-gate-context.mjs and a full emit-fanout-dispatch.mjs at this head to regroup (GATE-EXEC-NO-DEAD-END)`;
   }
   return null;
 }

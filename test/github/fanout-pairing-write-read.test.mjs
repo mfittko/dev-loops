@@ -844,7 +844,7 @@ describe("fanoutReviewerPairingError reads the recorded unit bound (packed unit 
   test("REJECT: a packed unit above 5 still fails closed for a split, foreign, duplicated or cross-unit angle, naming it", async () => {
     await withConfig(BOUND_DEVLOOPS, async (dir) => {
       const cases = [
-        ["missing", [{ name: "u", angles: BOUND_BIG.filter((a) => a !== "srp") }, BOUND_UNITS[1]], boundPerAngle(), /splits base unit yagni\+deep\+srp/],
+        ["missing", [{ name: "u", angles: BOUND_BIG.filter((a) => a !== "srp") }, BOUND_UNITS[1]], boundPerAngle(), /splits base unit yagni\+deep\+srp; re-run resolve-angle-carry-forward\.mjs.*emit-fanout-dispatch\.mjs/],
         ["foreign", [{ name: "u", angles: [...BOUND_BIG, "zzz-foreign"] }, BOUND_UNITS[1]], boundPerAngle(), /angle "zzz-foreign" that is not a member/],
         ["duplicated", [BOUND_UNITS[0], { name: "dup", angles: ["dry"] }, BOUND_UNITS[1]], boundPerAngle(), /angle "dry" is recorded in more than one dispatch unit/],
         ["cross-unit reviewer", BOUND_UNITS, boundPerAngle({ srp: "r-pr" }), /"r-pr" is recorded for fresh angles: srp, pr-checklist/],

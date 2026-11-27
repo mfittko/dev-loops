@@ -42,9 +42,23 @@ test("a partial round at the same head and gate is retired and reported as retir
   });
 });
 
-test("a round with a posted verdict at the head is refused with a recovery and left in place", async () => {
+test("a round with a fan-in ledger and no findings log retires on a full call and is left alone under specDecisionOnly", async () => {
   await withRound(async (tmpRoot) => {
     const ledger = buildGateFaninLedgerPath({ ...KEY, tmpRoot });
+    await mkdir(path.dirname(ledger), { recursive: true });
+    await writeFile(ledger, "{}");
+    assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot, currentSpecDigest: NEW_DIGEST, specDecisionOnly: true }), { retiredRound: null });
+    assert.equal(existsSync(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`)), true);
+    const result = await retireStaleRound({ ...KEY, tmpRoot });
+    assert.equal(result.refusal, undefined);
+    assert.equal(result.retiredRound.retired, 1);
+    assert.equal(existsSync(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-coverage-${HEAD}.json`)), false);
+  });
+});
+
+test("a round with a posted verdict at the head is refused with a recovery and left in place", async () => {
+  await withRound(async (tmpRoot) => {
+    const ledger = buildLogPath({ ...KEY, tmpRoot });
     await writeFile(ledger, "{}").catch(async () => { await mkdir(path.dirname(ledger), { recursive: true }); await writeFile(ledger, "{}"); });
     const result = await retireStaleRound({ ...KEY, tmpRoot });
     assert.equal(result.retiredRound, undefined);
@@ -232,7 +246,7 @@ test("a distinct records root retires the dispatch records the emitter wrote the
 test("an error other than ENOENT reading a verdict marker fails closed instead of retiring (ENOTDIR, EACCES, EIO share one path)", async () => {
   // ENOTDIR: the ledger's parent is a file, so access() fails with ENOTDIR, not ENOENT.
   await withRound(async (tmpRoot) => {
-    const ledger = buildGateFaninLedgerPath({ ...KEY, tmpRoot });
+    const ledger = buildLogPath({ ...KEY, tmpRoot });
     let parent = path.dirname(ledger);
     while (path.dirname(parent) !== tmpRoot) parent = path.dirname(parent);
     await writeFile(parent, "not a directory");
@@ -242,7 +256,7 @@ test("an error other than ENOENT reading a verdict marker fails closed instead o
   // EACCES: the ledger's parent lacks search permission (a no-op check as root, which ignores modes).
   if (process.getuid?.() !== 0) {
     await withRound(async (tmpRoot) => {
-      const ledger = buildGateFaninLedgerPath({ ...KEY, tmpRoot });
+      const ledger = buildLogPath({ ...KEY, tmpRoot });
       await mkdir(path.dirname(ledger), { recursive: true });
       await writeFile(ledger, "{}");
       await chmod(path.dirname(ledger), 0o000);
@@ -362,7 +376,8 @@ test("a plan written at the same instant as a sentinel is stale: the tie counts 
     const t = new Date(Date.now() + 60_000);
     await utimes(path.join(tmpRoot, SENTINEL_FILE), t, t);
     await utimes(path.join(buildGateArtifactPath({ ...KEY, tmpRoot, dir: "gate-judge" }), "judge-emit-plan.json"), t, t);
-    assert.match((await retireStaleRound({ ...KEY, tmpRoot, ...decided })).refusal.error, /a verdict is already recorded/);
+    assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot, ...decided, specDecisionOnly: true }), { retiredRound: null });
+    assert.equal(existsSync(path.join(tmpRoot, SENTINEL_FILE)), true);
   });
 });
 
@@ -398,9 +413,8 @@ test("an unchanged or missing digest, a missing or unparsable plan or verdict, o
   ];
   for (const { name, setup, opts } of cases) {
     await withStoppedRound(async (tmpRoot) => {
-      const result = await retireStaleRound({ ...KEY, tmpRoot, ...decided, ...opts });
-      assert.match(result.refusal?.error ?? "", /a verdict is already recorded/, name);
-      assert.match(result.refusal.recovery, /^operator: /, name);
+      const result = await retireStaleRound({ ...KEY, tmpRoot, ...decided, ...opts, specDecisionOnly: true });
+      assert.deepEqual(result, { retiredRound: null }, name);
       assert.equal(existsSync(path.join(tmpRoot, SENTINEL_FILE)), true, name);
     }, setup);
   }
@@ -561,8 +575,8 @@ test("a judge plan older than a sentinel of a newer fan-out is stale: the new ro
   await withStoppedRound(async (tmpRoot) => {
     const t = new Date(Date.now() + 60_000);
     await utimes(path.join(tmpRoot, SENTINEL_FILE), t, t);
-    const result = await retireStaleRound({ ...KEY, tmpRoot, ...decided });
-    assert.match(result.refusal.error, /a verdict is already recorded/);
+    const result = await retireStaleRound({ ...KEY, tmpRoot, ...decided, specDecisionOnly: true });
+    assert.deepEqual(result, { retiredRound: null });
     assert.equal(existsSync(path.join(tmpRoot, SENTINEL_FILE)), true);
   });
 });

@@ -109,9 +109,8 @@ async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdic
   state.stopped = stopped !== null;
   for (const root of verdictRoots) {
     const key = { repo, pr, gate, headSha: head, tmpRoot: root };
-    for (const marker of [buildGateFaninLedgerPath(key), buildLogPath(key)]) {
-      // A fan-in ledger without a findings log posted no verdict when the round stopped for a spec decision that has since changed the spec.
-      if (stopped && marker === buildGateFaninLedgerPath(key)) continue;
+    // Only the findings log marks a posted verdict: the verdict comment renders only from it (ADR 0336).
+    for (const marker of [buildLogPath(key)]) {
       if (await exists(marker)) {
         return {
           refusal: {

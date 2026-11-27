@@ -5292,13 +5292,22 @@ test("issue 3416: a rebuild at a full head retires the partial round and reports
     const rebuilt = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Corrected body."]), { repoRoot });
     assert.equal(rebuilt.retiredRound.retired, 1);
     await assert.rejects(readFile(sentinel), /ENOENT/);
-    // A fan-in ledger at the head marks a posted verdict: the next rebuild refuses and keeps the round.
+    // A fan-in ledger alone is no posted verdict (ADR 0336): the next rebuild retires the round.
     const ledger = path.resolve(repoRoot, buildGateFaninLedgerPath({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: fullSha, tmpRoot: "tmp" }));
     await mkdir(path.dirname(ledger), { recursive: true });
     await writeFile(ledger, "{}\n", "utf8");
     await writeFile(sentinel, "{}\n", "utf8");
+    await mkdir(reviewsDir, { recursive: true });
+    await writeFile(path.join(reviewsDir, "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", headSha: fullSha, findings: [] }), "utf8");
+    const third =await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Third body."]), { repoRoot });
+    assert.equal(third.retiredRound.retired, 1);
+    // A findings log at the head marks a posted verdict: the next rebuild refuses and keeps the round.
+    const log = path.resolve(repoRoot, buildLogPath({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: fullSha, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(log), { recursive: true });
+    await writeFile(log, "{}\n", "utf8");
+    await writeFile(sentinel, "{}\n", "utf8");
     await assert.rejects(
-      writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Third body."]), { repoRoot }),
+      writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Fourth body."]), { repoRoot }),
       (err) => /a verdict is already recorded/.test(err.message) && /retire-gate-round\.mjs/.test(err.recovery),
     );
     assert.equal((await readFile(sentinel, "utf8")).trim(), "{}");
