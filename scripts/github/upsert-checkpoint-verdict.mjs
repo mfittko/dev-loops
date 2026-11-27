@@ -71,7 +71,7 @@ import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import { countPrOwnCommits as realCountPrOwnCommits } from "../loop/check-pre-push-delta.mjs";
 import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
-import { buildValidationResultsPath, countCapRounds, isCleanCapRound, ledgerTmpRoot, prBodySha256, readGateContext, readReviewedBodySha256, refusesPastScopedRound, resolveCapRound, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
+import { actFingerprintSet, buildValidationResultsPath, countCapRounds, isCleanCapRound, ledgerTmpRoot, prBodySha256, readClosedPriorRoundLogs, readGateContext, readReviewedBodySha256, refusesPastScopedRound, resolveCapRound, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
@@ -163,7 +163,9 @@ async function roundStartedAtCurrentBase(options, headSha, repoRoot, base) {
   return false;
 }
 
-const roundCapReachedError = (round, cap) => new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap}; the scoped final round (round ${cap + 1}) has run (GATE-EXEC-CAP-BRAKES). Report blocked with blockedOn operator_decision; the operator clears it with an operator focus item whose decision names the act items by fingerprint. When every open act item is a PR-body item, edit the PR body and run \`--converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`);
+const roundCapReachedError = (round, cap, fingerprints = []) => Object.assign(new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap}; the scoped final round (round ${cap + 1}) has run (GATE-EXEC-CAP-BRAKES). Report blocked with blockedOn operator_decision; the operator clears it with an operator focus item whose decision names the act items by fingerprint. When every open act item is a PR-body item, edit the PR body and run \`--converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`), {
+  recovery: `Re-run this post with --operator-focus-file <path>, a focus file whose fingerprint items carry a decision for every act fingerprint of the cap round (${fingerprints.join(", ") || "none recorded"}).`,
+});
 
 const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>; on every gate, --findings-ledger alone suffices; a draft_gate post requires --findings-ledger carrying overallVerdict while gates.draft.maxReviewRounds > 0) [--next-action <text> (required except on --gate review or with --findings-ledger)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
    or: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --gate draft_gate --post-sealed-cap-round (head, verdict and findings derive from the sealed clean cap-round ledger)
@@ -269,6 +271,7 @@ Required:
                                             without --findings-ledger still requires the flag, ignores its
                                             value and derives "mark ready for review".)
 Optional:
+  --operator-focus-file <path>              GATE-EXEC-OPERATOR-FOCUS JSON naming each act fingerprint of the cap round with a decision; it clears the round_cap_reached refusal of a draft_gate post (GATE-EXEC-CAP-BRAKES).
   --converged-json <path>                   draft_gate low/nit convergence
                                             (GATE-EXEC-LOW-NIT-CONVERGENCE):
                                             { fixerCommit, actList, deltaResult }.
@@ -770,6 +773,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       "findings-file": { type: "string" },
       "findings-json": { type: "string" },
       "findings-ledger": { type: "string" },
+      "operator-focus-file": { type: "string" },
       "converged-json": { type: "string" },
       "next-action": { type: "string" },
       "findings-severity-counts": { type: "string" },
@@ -805,6 +809,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     findingsFile: undefined,
     findingsJson: undefined,
     findingsLedger: undefined,
+    operatorFocusFile: undefined,
     convergedJson: undefined,
     nextAction: undefined,
     findingsSeverityCounts: undefined,
@@ -902,6 +907,12 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
         throw parseError("--findings-ledger must be a non-empty path");
       }
       options.findingsLedger = rawPath;
+      continue;
+    }
+    if (token.name === "operator-focus-file") {
+      const trimmed = requireTokenValue(token, parseError).trim();
+      if (trimmed.length === 0) throw parseError("--operator-focus-file must not be empty/whitespace-only");
+      options.operatorFocusFile = trimmed;
       continue;
     }
     if (token.name === "converged-json") {
@@ -3297,10 +3308,13 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     if (options.gate === "draft_gate" && draftGateConfig.maxReviewRounds > 0) {
       // GATE-EXEC-CAP-BRAKES: a round after the scoped final round never runs, whatever the post shape (the inline exception below included), unless the operator cleared it; a converged post is the one carve-out.
       // A cap-round catch-up post publishes the already-completed cap round, never a new one.
-      const roundOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.findingsLedger ? ledgerTmpRoot(options.findingsLedger) : undefined };
+      const roundOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.findingsLedger ? ledgerTmpRoot(options.findingsLedger) : undefined, operatorFocusFile: options.operatorFocusFile };
       const roundBase = coordinationContext?.prData?.baseRefName;
       const roundNo = options.convergedJson ? 0 : capRoundHead ? draftGateConfig.maxReviewRounds : await countCapRounds(roundOptions, { repoRoot, prBase: roundBase });
-      if (await refusesPastScopedRound(roundOptions, { repoRoot, prBase: roundBase, cap: draftGateConfig.maxReviewRounds, round: roundNo })) throw roundCapReachedError(roundNo, draftGateConfig.maxReviewRounds);
+      if (await refusesPastScopedRound(roundOptions, { repoRoot, prBase: roundBase, cap: draftGateConfig.maxReviewRounds, round: roundNo })) {
+        const latest = (await readClosedPriorRoundLogs(roundOptions, { repoRoot })).at(-1);
+        throw roundCapReachedError(roundNo, draftGateConfig.maxReviewRounds, latest ? actFingerprintSet(latest) : []);
+      }
       const inlineVerdictOnlyClean = !options.findingsJson && !options.findingsLedger && !options.findingsFile && options.verdict === "clean"
         && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent";
       const refused = inlineVerdictOnlyClean ? null : options.findingsJson ? "--findings-json"
