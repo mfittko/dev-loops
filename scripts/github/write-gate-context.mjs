@@ -4144,7 +4144,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
         const scope = dispatchUnitScope(options.gate, unit);
         const sentinel = sentinelOf(scope);
         const pending = pendingScopes.has(scope) || unit.angles.some((angle) => pendingKeys.has(keyOf(angle)));
-        // A pending unit that holds no body-reading angle but finished with a live sentinel (a findings_present
+        // A pending unit that holds no body-reading angle but finished with a live sentinel (a blocked
         // artifact) is re-emitted too, so its sentinel must retire or the reviewer's fresh-context guard refuses it.
         if (sentinel) {
           // Any unfinished unit refuses: a non-body unit left live would be re-dispatched by the next --pending emission under a new execution.

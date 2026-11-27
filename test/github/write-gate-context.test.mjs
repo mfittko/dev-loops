@@ -7189,12 +7189,18 @@ test("buildGateContext: a findings_present unit is absent from fanout.pendingGro
       JSON.stringify({ angle: "docs", verdict: "findings_present", headSha, findings: [{ severity: "low", summary: "x" }] }),
       "utf8",
     );
-    const config = draftConfig({ dynamicAngles: false, angles: ["scope", "docs"], mandatoryAngles: ["gate-evidence"] });
+    await writeFile(
+      path.join(path.resolve(repoRoot, dir), "srp.json"),
+      JSON.stringify({ angle: "srp", verdict: "blocked", headSha, findings: [], unreviewedAngles: ["srp"], reason: "budget" }),
+      "utf8",
+    );
+    const config = draftConfig({ dynamicAngles: false, angles: ["scope", "docs", "srp"], mandatoryAngles: ["gate-evidence"] });
     config.gates.fanout = { maxAnglesPerGroup: 1 };
     const result = await buildGateContext({ config, gate, diff: null, repo, pr, headSha }, { repoRoot });
     const pending = result.artifact.fanout.pendingGroups.flatMap((g) => g.angles);
     assert.equal(pending.includes("docs"), false);
     assert.equal(pending.includes("scope"), true);
+    assert.equal(pending.includes("srp"), true, "a blocked artifact stays pending");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -10890,6 +10896,21 @@ test("a body-only rebuild keeps a finished non-body unit whose artifact is findi
     const live = await readdir(path.join(repoRoot, "tmp"));
     assert.ok(live.includes(`checkpoint-context-sentinel-${bodyRerunUnits.holistic}-${BODY_RERUN_SHA}.json`), live.join(","));
     assert.ok(existsSync(path.join(reviews, "holistic.json")), "the findings_present artifact stays with its kept unit");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a body-only rebuild retires a finished pending non-body unit whose artifact is blocked and its live sentinel", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-blocked-nonbody-"));
+  try {
+    await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+    const reviews = await seedCompleteBodyRound(repoRoot);
+    await writeFile(path.join(reviews, "holistic.json"), JSON.stringify({ angle: "holistic", verdict: "blocked", headSha: BODY_RERUN_SHA, findings: [], unreviewedAngles: ["holistic"], reason: "budget" }), "utf8");
+    const second = await buildGateContext(bodyRerunInput("Edited"), { repoRoot });
+    assert.ok(second.bodyOnlyRerun.scopes.includes(bodyRerunUnits.holistic));
+    const live = await readdir(path.join(repoRoot, "tmp"));
+    assert.equal(live.includes(`checkpoint-context-sentinel-${bodyRerunUnits.holistic}-${BODY_RERUN_SHA}.json`), false, "the sentinel moved");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
