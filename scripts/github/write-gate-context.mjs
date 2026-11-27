@@ -2244,8 +2244,12 @@ export async function capFixBudgetFacts({ fromHead, headSha, prBase, repoRoot, r
   if (!own.reduced) throw new Error(`closure_delta_no_pr_own_change: the PR-own delta since ${fromHead} is unproven (origin/${prBase} does not resolve); the fix budget cannot be measured (GATE-EXEC-CAP-BRAKES).`);
   // An empty PR-own delta is refused later with its own reason (closure_delta_no_pr_own_change).
   if (own.changedFiles.length === 0) return { logicLoc: 0, addedFiles: 0 };
-  const { wholeLogicLoc } = await evaluatePrSizeBudget({ base: fromHead, head: headSha, repoRoot, paths: own.changedFiles });
-  const added = await runGit(["diff", "--name-status", "--diff-filter=A", `${fromHead}..${headSha}`, "--", ...own.changedFiles], { repoRoot });
+  // The delta starts at fromHead merged with the current base, so what a base merge brought is not a fix; a failed merge-tree (exit 128 or older git) keeps fromHead, an over-count.
+  const mergedBase = await runGit(["merge-base", headSha, `origin/${prBase}`], { repoRoot });
+  const virtual = mergedBase.code === 0 ? await runGit(["merge-tree", "--write-tree", "--no-messages", fromHead, mergedBase.stdout.trim()], { repoRoot }) : { code: 128 };
+  const from = virtual.code === 0 || virtual.code === 1 ? virtual.stdout.split("\n")[0].trim() || fromHead : fromHead;
+  const { wholeLogicLoc } = await evaluatePrSizeBudget({ base: from, head: headSha, repoRoot, paths: own.changedFiles, twoDot: true });
+  const added = await runGit(["diff", "--name-status", "--diff-filter=A", `${from}..${headSha}`, "--", ...own.changedFiles], { repoRoot });
   // runGitCommand resolves on a nonzero exit: an unmeasured added-file count refuses like an unproven PR-own delta, never reads as zero.
   if (added.code !== 0) throw new Error(`closure_delta_added_files_unmeasured: git diff --diff-filter=A since ${fromHead} exited ${added.code} (${String(added.stderr ?? "").trim()}); the fix budget cannot be measured (GATE-EXEC-CAP-BRAKES).`);
   return { logicLoc: wholeLogicLoc, addedFiles: added.stdout.split("\n").filter(Boolean).length };
@@ -2360,7 +2364,11 @@ export async function resolveScopedFinalRound(options, { repoRoot, prBase, confi
     }
   }
   if (decision.action === "operator") {
-    throw Object.assign(new Error(`${describeCapStop(decision)}. Report blocked with blockedOn operator_decision.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); the operator clears it with an operator focus item whose decision names the act items by fingerprint (GATE-EXEC-CAP-BRAKES)` });
+    // An operator focus decision clears only round_cap_reached; an over-budget fix needs a smaller fix or a larger budget.
+    const clearedBy = decision.reason === "cap_fix_over_budget"
+      ? `an operator focus decision does not clear it; shrink the fix to at most ${fixBudget.maxLines} PR-own logic LOC with no added file, or the operator raises gates.capFixMaxLines`
+      : "the operator clears it with an operator focus item whose decision names the act items by fingerprint";
+    throw Object.assign(new Error(`${describeCapStop(decision)}. Report blocked with blockedOn operator_decision.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); ${clearedBy} (GATE-EXEC-CAP-BRAKES)` });
   }
   return decision.action === "scoped_final_round" ? closure : null;
 }

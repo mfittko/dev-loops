@@ -12130,6 +12130,32 @@ test("capFixBudgetFacts refuses when the added-file git diff exits nonzero, neve
   }
 });
 
+// Issue 3464: the fix budget counts PR-own lines only; what a base merge brought into a PR-touched file is not a fix.
+test("capFixBudgetFacts excludes what a base merge brought into a PR-touched file", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["checkout", "-q", "-b", "mainline", baseSha]);
+    const changed = path.join(repoRoot, "src/changed.mjs");
+    const original = await readFile(changed, "utf8");
+    await writeFile(changed, `${Array.from({ length: 100 }, (_, i) => `export const main${i} = ${i};`).join("\n")}\n${original}`, "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "main advances in the same file"]);
+    const mainSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", mainSha]);
+    git(repoRoot, ["checkout", "-q", "--detach", headSha]);
+    git(repoRoot, ["merge", "--no-ff", "-q", "-m", "merge main", mainSha]);
+    await writeFile(changed, (await readFile(changed, "utf8")).replace("helper() + 1", "helper() + 2"), "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "small fix"]);
+    const head = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    const facts = await capFixBudgetFacts({ fromHead: headSha, headSha: head, prBase: "main", repoRoot });
+    assert.ok(facts.logicLoc <= 4, `the PR-own fix is one line, not the ${facts.logicLoc} logic LOC the merge brought`);
+    assert.equal(facts.addedFiles, 0);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("refuseNonConvergence refuses with the operator_decision recovery when a prior closed ledger is unreadable (AC7)", async () => {
   const { repoRoot } = await makeBaseDiffRepo();
   try {
@@ -12189,6 +12215,8 @@ test("CLI refuses a scoped final draft_gate context with the policy reason when 
     const added = await runPreApprovalContext(repoRoot, 72, newHead, baseSha, "draft_gate");
     assert.equal(added.exitCode, 1);
     assert.match(added.out, /cap_fix_over_budget/);
+    assert.match(added.out, /an operator focus decision does not clear it; shrink the fix to at most 60/);
+    assert.doesNotMatch(added.out, /the operator clears it with an operator focus item/);
     assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-72", `draft_gate-${newHead}.json`)), false, "no artifact");
     await seedClosedRounds(repoRoot, 73, ["1".repeat(40), baseSha, headSha]);
     const past = await runPreApprovalContext(repoRoot, 73, newHead, baseSha, "draft_gate");
