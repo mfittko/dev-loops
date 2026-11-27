@@ -372,5 +372,6 @@ test("issue 3590: one FOCUS file feeds steps 3, 7 and 11", () => {
   assert.match(runbook, /named file whose `round` is absent or differs: stop, hand back the conflict/);
   assert.equal(runbook.split("No `FOCUS`: omit it.").length - 1, 3);
   assert.doesNotMatch(runbook, /decision file/);
-  assert.match(runbook, /`\$F\/focus.json` holding `\{ "round": "<text>" \}`/);
+  const variables = runbook.slice(runbook.indexOf("## Variables"), runbook.indexOf("Operator focus (GATE-EXEC"));
+  assert.match(variables, /\nFOCUS=<operator file, else "\$F\/focus.json" holding \{ "round": "<text>" \} for round text/);
 });

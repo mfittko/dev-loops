@@ -65,9 +65,10 @@ HARNESS=<pi|claude|codex, your own harness>; BASE=<PR base branch, pr.baseRefNam
 CONTRACT="${path.join(docsDir, CONTRACT_FILE)}"; D="$(dirname "$CONTRACT")"
 SLUG="$(echo "$R" | tr / -)"; G="$W/tmp/gate-context/$SLUG/pr-$N"; F="$W/tmp/gate-fanin/$SLUG/pr-$N/$GATE-$H"
 A="$W/tmp/gate-judge/$SLUG/pr-$N/$GATE-$H"; mkdir -p "$F" "$A"
+FOCUS=<operator file, else "$F/focus.json" holding { "round": "<text>" } for round text, else unset>
 \`\`\`
 
-Operator focus (GATE-EXEC-OPERATOR-FOCUS). \`FOCUS\` is the named file, else \`$F/focus.json\` holding \`{ "round": "<text>" }\`, else none. Round text plus a named file whose \`round\` is absent or differs: stop, hand back the conflict. Step 3: \`draft_gate\`, \`pre_approval_gate\` only.
+Operator focus (GATE-EXEC-OPERATOR-FOCUS). Round text plus a named file whose \`round\` is absent or differs: stop, hand back the conflict. Step 3: not \`review\`.
 
 ## Steps
 
