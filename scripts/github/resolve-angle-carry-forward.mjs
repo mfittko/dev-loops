@@ -38,7 +38,7 @@ import {
   resolveAngleCarryForward,
   resolveConvergenceCarryForward,
 } from "@dev-loops/core/loop/gate-carry-forward";
-import { baseAngleName, isSeededCapFinding, ledgerAngleNames, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
+import { baseAngleName, isSeededCapFinding, ledgerAngleNames, orderAnglesByCatalog, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -390,7 +390,9 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
   }
   // A base unit carries whole or not at all: the findings-log writer re-derives units from fresh plus carried angles,
   // and a dispatch unit that splits a base unit is refused. Units are disjoint, so one pass is enough.
-  const rerunBases = new Set(mustRerun.map((m) => baseAngleName(m.angle)));
+  // An always-re-run angle with no prior row is fresh at this head, so it is a re-run member of its unit too.
+  const priorBases = new Set(prevAngles.map(baseAngleName));
+  const rerunBases = new Set([...mustRerun.map((m) => baseAngleName(m.angle)), ...alwaysRerun.map(baseAngleName).filter((a) => !priorBases.has(a))]);
   const wholeCarried = [];
   for (const entry of carried) {
     const unit = baseUnits.find((u) => u.includes(baseAngleName(entry.angle)));
@@ -573,7 +575,11 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       resolutionScopePaths = baseMerge.resolutionPaths.filter((p) => !ownEdited.has(p));
     }
     const catalogKey = resolveGateAngleCatalogKey(options.gate);
-    const baseUnits = resolveFanoutGroups(config, catalogKey, ledgerAngleNames(log.provenance?.perAngle, resolveGateAngleContract(config, catalogKey).pool ?? [])).map((g) => g.angles);
+    // The writer derives units over fresh plus carried angles, so derive them over the prior angles plus the always-re-run ones.
+    const pool = resolveGateAngleContract(config, catalogKey).pool ?? [];
+    const unitAngles = orderAnglesByCatalog([...new Set([...ledgerAngleNames(log.provenance?.perAngle, pool), ...alwaysRerun.map(baseAngleName)])], pool);
+    // shortcut: a fresh angle the classification adds beyond the always-re-run set is unseen here, upgrade when the resolver reads the resolved set.
+    const baseUnits = resolveFanoutGroups(config, catalogKey, unitAngles).map((g) => g.angles);
     const rawPlan = buildCarryForwardPlan({
       log, changedFiles: partial ? baseMerge.rerunPaths : changedFiles, incrementalFiles, alwaysRerun,
       deltaComplete: partial || reduced, rules, rerunAngles: options.rerunAngles, baseUnits,

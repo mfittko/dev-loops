@@ -16,6 +16,7 @@ import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation
 import { countFreshDispatchUnits, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildFanoutEnforcement, buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-evidence.mjs";
+import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { expandDispatchUnits, packedUnitName } from "../../scripts/github/_dispatch-units.mjs";
 import { buildGateContextPath, parseWriteGateContextCliArgs, readGateContext, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 
@@ -164,6 +165,25 @@ describe("fanoutReviewerPairingError at write time and read time", () => {
     ]);
     assert.match(write ?? "", /does not place all of them in one group/);
     assert.match(read ?? "", /does not place all of them in one group/);
+  });
+});
+
+// The round shape of the carry-forward plan that moves a base unit whole: contract-surface re-runs, so link-check and
+// config-drift re-run with it and the one unit passes the writer's pairing check.
+test("a round built from the whole-base-unit plan passes the pairing check and writes the log", async () => {
+  const devloops = [
+    "version: 1", "gates:", "  requireFanoutEvidence: true", "  requireFanoutProvenance: true", "  preApproval:", "    angles:",
+    "      - link-check", "      - config-drift", "      - contract-surface",
+    "      - { name: pr-checklist, enabled: false }", "      - { name: holistic, enabled: false }", "  fanout:", "    groups:",
+    "      - name: docs-surface", "        angles: [link-check, config-drift, contract-surface]", "",
+  ].join("\n");
+  const angles = ["link-check", "config-drift", "contract-surface"];
+  const log = { headSha: "abc1234", verdict: "clean", provenance: { perAngle: angles.map((angle) => ({ angle, reviewer: `p-${angle}` })) } };
+  const plan = buildCarryForwardPlan({ log, changedFiles: [], deltaComplete: true, alwaysRerun: ["contract-surface"], baseUnits: [angles] });
+  assert.deepEqual(plan.carried, []);
+  const perAngle = plan.mustRerun.map((m) => ({ angle: m.angle, reviewer: "r1", group: "docs-surface" }));
+  await withConfig(devloops, async (dir) => {
+    assert.equal(await writeCheck(dir, perAngle), null);
   });
 });
 

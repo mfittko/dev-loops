@@ -118,7 +118,8 @@ async function makeCarryForwardRepo({ mandatoryAngles = [], perAngle, mutate, ve
     : "      []";
   await writeFile(
     path.join(repoRoot, ".devloops.yaml"),
-    `version: 1\ngates:\n  draft:\n    angles:\n${angleLines}\n`,
+    // maxAnglesPerGroup 1 keeps each ungrouped angle its own base unit, so a fresh mandatory angle never shares a unit with a carried one.
+    `version: 1\ngates:\n  fanout:\n    maxAnglesPerGroup: 1\n  draft:\n    angles:\n${angleLines}\n`,
     "utf8",
   );
   const base = {
@@ -227,6 +228,50 @@ test("buildCarryForwardPlan carries a base unit whole or not at all (base_unit_r
   const operator = buildCarryForwardPlan({ log: cleanLog, changedFiles: [], deltaComplete: true, rerunAngles: ["coverage"], baseUnits: [["correctness", "coverage"], ["docs"]] });
   assert.deepEqual(names(operator.carried), ["docs"]);
   assert.equal(operator.mustRerun.find((m) => m.angle === "correctness").reason, "base_unit_rerun");
+});
+
+test("buildCarryForwardPlan moves the docs-surface unit whole when contract-surface, a fresh angle or a delta-suffixed angle re-runs", () => {
+  const unit = [["link-check", "config-drift", "contract-surface"]];
+  const log = { headSha: "aaaaaaa", verdict: "clean", provenance: { distinctReviewers: 3, perAngle: [
+    { angle: "link-check", reviewer: "r1" }, { angle: "config-drift", reviewer: "r2" }, { angle: "contract-surface", reviewer: "r3" },
+  ] } };
+  const rerunOnly = (plan) => plan.mustRerun.map((m) => `${m.angle}:${m.reason}`).sort();
+  const viaMandatory = buildCarryForwardPlan({ log, changedFiles: [], deltaComplete: true, alwaysRerun: ["contract-surface"], baseUnits: unit });
+  assert.deepEqual(viaMandatory.carried, []);
+  assert.deepEqual(rerunOnly(viaMandatory).filter((r) => !r.startsWith("contract-surface")), ["config-drift:base_unit_rerun", "link-check:base_unit_rerun"]);
+  // A fresh always-re-run angle with no prior row re-runs its unit's carried members.
+  const fresh = buildCarryForwardPlan({ log, changedFiles: [], deltaComplete: true, alwaysRerun: ["docs"], baseUnits: [[...unit[0], "docs"]] });
+  assert.deepEqual(fresh.carried, []);
+  assert.equal(fresh.mustRerun.length, 3);
+  // A delta-suffixed angle re-runs and counts toward its base angle's unit, so a carried member moves with it.
+  const suffixed = { ...log, provenance: { distinctReviewers: 3, perAngle: [
+    { angle: "link-check-delta-at-abc1234", reviewer: "r1" }, { angle: "config-drift", reviewer: "r2" }, { angle: "contract-surface", reviewer: "r3" },
+  ] } };
+  const plan = buildCarryForwardPlan({ log: suffixed, changedFiles: [], deltaComplete: true, alwaysRerun: ["contract-surface"], baseUnits: unit });
+  assert.deepEqual(plan.carried, []);
+  assert.deepEqual(plan.mustRerun.map((m) => m.angle).sort(), ["config-drift", "contract-surface", "link-check-delta-at-abc1234"]);
+  assert.equal(plan.mustRerun.find((m) => m.angle === "config-drift").reason, "base_unit_rerun");
+});
+
+test("CLI derives base units over the prior angles plus the always-re-run angles", async () => {
+  // docs is mandatory with no prior row; link-check shares its shipped docs-surface unit, so it must not carry.
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: ["docs"],
+    perAngle: [{ angle: "link-check", reviewer: "review-a" }, { angle: "correctness", reviewer: "review-b" }],
+    mutate: async (root) => {
+      await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8");
+    },
+  });
+  try {
+    const result = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(result.ok, true);
+    assert.ok(!result.carried.some((c) => c.angle === "link-check"), "link-check shares docs-surface with the fresh docs angle");
+    assert.equal(result.mustRerun.find((m) => m.angle === "link-check")?.reason, "base_unit_rerun");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });
 
 test("buildCarryForwardPlan carries code angles on a doc-only delta, marks provenance honestly", () => {
@@ -538,7 +583,7 @@ test("CLI carries code angles + Copilot convergence across an integrate-only bas
     git(repoRoot, ["init", "-q", "-b", "main"]);
     git(repoRoot, ["config", "user.email", "test@example.com"]);
     git(repoRoot, ["config", "user.name", "Test"]);
-    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\ngates:\n  draft: {}\n", "utf8");
+    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\ngates:\n  fanout:\n    maxAnglesPerGroup: 1\n  draft: {}\n", "utf8");
     await mkdir(path.join(repoRoot, "src"), { recursive: true });
     await mkdir(path.join(repoRoot, "docs"), { recursive: true });
     await writeFile(path.join(repoRoot, "src/foo.mjs"), "export const foo = 1;\n", "utf8");
@@ -601,7 +646,7 @@ test("CLI excludes against the CONFIGURED base branch, not a hardcoded origin/ma
     git(repoRoot, ["init", "-q", "-b", "release-1"]);
     git(repoRoot, ["config", "user.email", "test@example.com"]);
     git(repoRoot, ["config", "user.name", "Test"]);
-    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\nworkflow:\n  baseBranch: release-1\ngates:\n  draft: {}\n", "utf8");
+    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\nworkflow:\n  baseBranch: release-1\ngates:\n  fanout:\n    maxAnglesPerGroup: 1\n  draft: {}\n", "utf8");
     await mkdir(path.join(repoRoot, "src"), { recursive: true });
     await mkdir(path.join(repoRoot, "docs"), { recursive: true });
     await writeFile(path.join(repoRoot, "src/other.mjs"), "export const other = 1;\n", "utf8");

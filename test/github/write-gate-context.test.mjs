@@ -5299,7 +5299,7 @@ test("issue 3416: a rebuild at a full head retires the partial round and reports
     await writeFile(sentinel, "{}\n", "utf8");
     await mkdir(reviewsDir, { recursive: true });
     await writeFile(path.join(reviewsDir, "scope.json"), JSON.stringify({ angle: "scope", verdict: "clean", headSha: fullSha, findings: [] }), "utf8");
-    const third =await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Third body."]), { repoRoot });
+    const third = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Third body."]), { repoRoot });
     assert.equal(third.retiredRound.retired, 1);
     // A findings log at the head marks a posted verdict: the next rebuild refuses and keeps the round.
     const log = path.resolve(repoRoot, buildLogPath({ repo: "owner/repo", pr: 9, gate: "draft_gate", headSha: fullSha, tmpRoot: "tmp" }));

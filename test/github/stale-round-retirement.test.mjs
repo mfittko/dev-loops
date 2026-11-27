@@ -348,16 +348,19 @@ async function withStoppedRound(fn, setup) {
 }
 const decided = { currentSpecDigest: NEW_DIGEST, liveOnly: true };
 
-test("a stopped spec-decision round with a changed spec digest retires past its fan-in ledger and names both digests", async () => {
+test("a stopped spec-decision round with a changed spec digest retires, moves its fan-in ledger and names both digests", async () => {
   await withStoppedRound(async (tmpRoot) => {
+    const ledger = buildGateFaninLedgerPath({ ...KEY, tmpRoot });
     const { retiredRound, refusal } = await retireStaleRound({ ...KEY, tmpRoot, ...decided });
     assert.equal(refusal, undefined);
     assert.equal(retiredRound.retired, 1);
     assert.equal(existsSync(path.join(tmpRoot, SENTINEL_FILE)), false);
+    assert.equal(existsSync(ledger), false);
+    assert.equal(existsSync(path.join(retiredRound.retirementDir, path.basename(ledger))), true);
     const record = JSON.parse(await readFile(path.join(retiredRound.retirementDir, "retirement.json"), "utf8"));
     assert.match(record.reason, /SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT/);
     assert.ok(record.reason.includes(`${"a".repeat(12)} to ${"b".repeat(12)})`), record.reason);
-    // A second rebuild finds no live round and never refuses on the ledger left in place.
+    // A second rebuild finds no live round.
     assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot, ...decided }), { retiredRound: null });
     // A second stop at the same head retires again.
     await writeStoppedFiles(tmpRoot);
