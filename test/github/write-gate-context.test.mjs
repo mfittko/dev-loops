@@ -33,6 +33,7 @@ import {
   capFixBudgetFacts,
   actSetAlreadyHeld,
   refusesPastScopedRound,
+  resolveScopedFinalRound,
   collapsePureSubstitutionRuns,
   prematureGateOrderingRefusal,
   ISSUE_BODY_ABSENT_SENTINEL,
@@ -11975,6 +11976,12 @@ test("refusesPastScopedRound applies the base-merge-forced union rule: a decisio
     assert.equal(await refused(), true, "the effective latest set alone does not clear");
     await decide("f", "e");
     assert.equal(await refused(), false, "the union clears");
+    // The refusal names the union an operator must decide, not only the latest closed round's set.
+    await assert.rejects(resolveScopedFinalRound(options,{ repoRoot, prBase: "main", config: {} }), (error) => {
+      assert.match(error.message, /Open act items:/);
+      for (const k of ["e", "f"]) assert.ok(error.message.includes(fingerprintFinding(act(k))), `names the ${k} set`);
+      return true;
+    });
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -12135,6 +12142,28 @@ test("a draft_gate operator decision naming every act item by fingerprint clears
     assert.match(noActs.out, /cap_fix_over_budget/);
     assert.match(noActs.out, /shrink the fix to at most 60/);
     assert.doesNotMatch(noActs.out, /Open act items/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a draft_gate operator decision clears cap_fix_over_budget at round cap+2 as it clears round_cap_reached", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+    await writeFile(path.join(repoRoot, "src/added.mjs"), "export const added = 1;\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "add a file"]);
+    const newHead = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    const act = { severity: "medium", summary: "guard missing", files: ["src/changed.mjs"], line: 2, judgeDisposition: "act", judgeTitle: "Guard is missing", judgeFix: "add the guard" };
+    await seedClosedRounds(repoRoot, 77, ["1".repeat(40), baseSha, headSha]);
+    assert.equal((await runPreApprovalContext(repoRoot, 77, newHead, baseSha, "draft_gate")).exitCode, 1, "undecided stays with the operator");
+    const planDir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", "pr-77");
+    await mkdir(planDir, { recursive: true });
+    const workOrder = { gate: "draft_gate", headSha, operatorFocus: { items: [{ fingerprint: fingerprintFinding(act), decision: "fix it" }] } };
+    await writeFile(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder) }), "utf8");
+    const cleared = await runPreApprovalContext(repoRoot, 77, newHead, baseSha, "draft_gate");
+    assert.notEqual(cleared.exitCode, 1, cleared.out);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

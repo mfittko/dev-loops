@@ -2360,13 +2360,21 @@ export async function resolveScopedFinalRound(options, { repoRoot, prBase, confi
     if (cleared) {
       const clearedFacts = await capFixBudgetFacts({ fromHead: cleared.fromHead, headSha: options.headSha, prBase, repoRoot });
       decision = decideCapRound({ round: cap + 1, cap, fixBudget: { ...clearedFacts, maxLines: fixBudget.maxLines } });
+      // The operator decision clears an over-budget fix at round cap+2 as it clears round_cap_reached.
       if (decision.action === "scoped_final_round") return cleared;
+      // An act-free latest round has nothing to decide, so only decided act items clear the over-budget fix.
+      if (decision.reason === "cap_fix_over_budget") {
+        const decided = await resolveOperatorClearedRound(options, { repoRoot, cap, prBase, requireActItems: true });
+        if (decided) return decided;
+      }
     }
   }
   if (decision.action === "operator") {
     // The refusal names the open act items of the latest closed round; an over-budget fix also keeps its smaller-fix and raised-budget exits.
     const closed = await readClosedPriorRoundLogs(options, { repoRoot });
-    const fingerprints = closed.length > 0 ? actFingerprintSet(closed.at(-1)) : [];
+    // A base-merge-forced latest round needs the union of its own and the effective latest set decided (operatorClearsCapStop), so the refusal names the union.
+    const effectiveLatest = closed.length > 0 ? (await effectiveRounds(closed, { prBase, repoRoot })).at(-1) : undefined;
+    const fingerprints = closed.length > 0 ? [...new Set([...actFingerprintSet(closed.at(-1)), ...actFingerprintSet(effectiveLatest)])] : [];
     const clear = "the operator clears it with an operator focus item whose decision names the act items by fingerprint";
     const shrink = `shrink the fix to at most ${fixBudget.maxLines} PR-own logic LOC with no added file, or the operator raises gates.capFixMaxLines`;
     const clearedBy = decision.reason !== "cap_fix_over_budget" ? clear : fingerprints.length > 0 ? `${clear}; or ${shrink}` : shrink;
