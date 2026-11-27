@@ -1718,7 +1718,7 @@ const unobservableSnapshot = {
   copilotRequestNotObservable: true,
 };
 
-test("unobservable requests with timed-out probes report copilot_unavailable / request_not_observable", () => {
+test("two unobservable requests report copilot_unavailable / request_not_observable", () => {
   const result = interpretLoopState(unobservableSnapshot, { maxCopilotRounds: 3 });
   assert.equal(result.state, STATE.COPILOT_UNAVAILABLE);
   assert.equal(result.copilotUnavailableReason, "request_not_observable");
