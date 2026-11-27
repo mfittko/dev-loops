@@ -1443,6 +1443,23 @@ test("buildCarryForwardPlan accepts --rerun-angle for an orphan finding angle as
   assert.deepEqual(plan.mustRerun.find((m) => m.angle === "typo-ed-angle"), { angle: "typo-ed-angle", reason: "operator_rerun" });
 });
 
+test("buildCarryForwardPlan refuses --rerun-angle for a finding angle that matches a perAngle row or is the copilot-body skip", () => {
+  for (const angle of ["Correctness", "correctness-delta-at-abc1234", "copilot-body"]) {
+    const log = { ...orphanLog, findings: [{ angle, severity: "nice-to-have", summary: "x" }] };
+    assert.throws(
+      () => buildCarryForwardPlan({ log, changedFiles: ["docs/guide.md"], rerunAngles: [angle] }),
+      { code: "unknown_rerun_angle" },
+      angle,
+    );
+  }
+});
+
+test("buildCarryForwardPlan keeps an orphan angle in mustRerun and out of carried when the head does not resolve it", () => {
+  const plan = buildCarryForwardPlan({ log: orphanLog, changedFiles: ["docs/guide.md"], freshAngles: [] });
+  assert.ok(plan.mustRerun.some((m) => m.angle === "typo-ed-angle"));
+  assert.ok(!plan.carried.some((c) => c.angle === "typo-ed-angle"));
+});
+
 test("buildCarryForwardPlan keeps the orphan angle in mustRerun on a dev-loop config-source delta", () => {
   const plan = buildCarryForwardPlan({ log: orphanLog, changedFiles: [".devloops"], incrementalFiles: [".devloops"] });
   assert.ok(plan.mustRerun.some((m) => m.angle === "typo-ed-angle"));
