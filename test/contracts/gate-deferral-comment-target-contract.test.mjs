@@ -1,8 +1,8 @@
 // Conformance guard for the gate tools' comment-only deferral path (ADR 0092,
 // amends ADR 0051). No gate tool creates an issue for a deferred finding; the
-// disposition pass never defer-closes an open judge `act` thread; the fixer
-// replies to and resolves every thread it fixed before close-gate-findings
-// runs. Assertions key on load-bearing tokens with bounded gaps, so a
+// disposition pass never defer-closes an open judge `act` thread; a gate fix
+// pass posts no reply and resolves no thread, close-gate-findings closes a
+// gate-authored thread. Assertions key on load-bearing tokens with bounded gaps, so a
 // semantics-preserving rewording does not falsely break them.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -52,7 +52,7 @@ test("GATE-EXEC-DEFERRAL-RECORD names the comment target and states no tool crea
   assert.doesNotMatch(section, /ONE tracked (GitHub )?follow-up issue/, "the old one-follow-up-issue wording must not return");
 });
 
-test("GATE-EXEC-THREAD-DISPOSITION states the act-thread exclusion and the fixer reply-and-resolve sentence", async () => {
+test("GATE-EXEC-THREAD-DISPOSITION states the act-thread exclusion and that a gate fix pass posts no reply and resolves no thread", async () => {
   const section = ruleSection(await readFile(`${repoRoot}${CONTRACT}`, "utf8"), "GATE-EXEC-THREAD-DISPOSITION");
   assertClaims(section, [
     ["never selects", "did not dispose", "`defer`"],
@@ -60,7 +60,8 @@ test("GATE-EXEC-THREAD-DISPOSITION states the act-thread exclusion and the fixer
     ["prior local ledgers", "decide"],
     ["Only a reject", "judge: <disposition>", "a defer needs ledger evidence"],
     ["`act`", "no stamp", "no reply", "no resolve", "no deferral comment entry", "fixing commit", "decline reason", "judge rerun"],
-    ["fixer", "replies", "`act`", "decline reason", "resolves it", "`close-gate-findings.mjs`"],
+    ["A gate fix pass", "posts no reply", "resolves no thread"],
+    ["`close-gate-findings.mjs`", "closes a gate-authored thread", "judge `act` item"],
   ], "GATE-EXEC-THREAD-DISPOSITION");
   assert.doesNotMatch(section, /PR's tracked follow-up issue/);
 });
