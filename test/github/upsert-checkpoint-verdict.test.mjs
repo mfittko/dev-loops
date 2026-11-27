@@ -9935,6 +9935,30 @@ for (const { submit, expectedEvent, needsConfirm } of [
   });
 }
 
+// AC3: the review gate resolves its own pending review before the create, so a create 422 rethrows with no events submit and no further reviews read.
+test("--gate review rethrows a one-pending-review create 422 without a reviews read or an events submit", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries({ files: null }),
+      { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], exitCode: 1, stderr: "gh: Unprocessable Entity (HTTP 422)\n", stdout: ONE_PENDING_REVIEW_BODY },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    await assert.rejects(
+      upsertCheckpointVerdict({
+        repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+        nextAction: "none — informational review, no re-gate required",
+        findingsLedger: ledgerPath, judgeSpecSource: "none", executionMode: "fanout_fanin",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }),
+      /Unprocessable Entity/,
+    );
+    const createIndex = calls.findIndex(isWriteCall);
+    assert.ok(createIndex >= 0);
+    assert.equal(calls.slice(createIndex + 1).length, 0);
+    assert.equal(calls.some((call) => call.args.some((arg) => String(arg).endsWith("/events"))), false);
+  }, { prefix: "dev-loops-upsert-review-gate-422-rethrow-" });
+});
+
 // #1848 — interactive /loop-review Submit leaves NO dangling pending draft. The
 // interactive Phase 4 Submit-as choice re-runs `--gate review --submit <mode>`
 // against the SAME head as the Phase 3 `--submit pending` draft, so it must
@@ -13951,3 +13975,104 @@ test("review gate: a judged defer or reject finding is never inline; an act find
     assert.match(posted.body, /reject finding text/);
   }, { prefix: "dev-loops-upsert-review-act-inline-" });
 });
+
+// An own PENDING review makes the gate verdict create 422, so draft_gate and pre_approval_gate resolve it first.
+const DRAFT_GATE_HEAD = "abc1234000000000000000000000000000000000";
+// The body gh api writes to stdout for the real GitHub 422; stderr carries only the top-level message.
+const ONE_PENDING_REVIEW_BODY = JSON.stringify({ message: "Unprocessable Entity", errors: ["User can only have one pending review per pull request"] }) + "\n";
+const runDraftGateVerdict = async (gate, reviews, { force422 = false, createStderr = "gh: Unprocessable Entity (HTTP 422)\n", createStdout = ONE_PENDING_REVIEW_BODY } = {}) => {
+  const preApproval = gate === "pre_approval_gate";
+  const entries = [
+    ...buildGateCoordinationEntries({
+      isDraft: !preApproval,
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      ...(preApproval ? { issueComments: [buildGateComment({ headSha: DRAFT_GATE_HEAD })], reviews: PRE_APPROVAL_READY_REVIEWS } : {}),
+    }),
+    ...(preApproval ? [{ assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n' }] : []),
+    // GitHub 422s the first create while the caller has a pending review.
+    ...(force422 || reviews.some((review) => review.state === "PENDING")
+      ? [{ assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], exitCode: 1, stderr: createStderr, stdout: createStdout }]
+      : []),
+    // The round's own reviews read comes first; the pending-review lookup after the 422 is the second read.
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify(reviews) + "\n" },
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify(reviews) + "\n" },
+    { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews/8101/events", "--input", "-"], stdout: '{"id":8101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-8101"}\n' },
+    { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n' },
+  ];
+  const { runChild, calls } = makeGhMock(entries.map((entry) => ({ ...entry, matchByClaims: true })), { repeatLastOnOverflow: true });
+  const settled = await upsertCheckpointVerdict({
+    repo: "owner/repo",
+    pr: 17,
+    gate,
+    headSha: DRAFT_GATE_HEAD,
+    verdict: "clean",
+    findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0 },
+    findingsSummary: "all good",
+    nextAction: "next",
+  }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot, evaluatePrSizeBudget: async () => ({ outcome: "pass", t1SliceLoc: 0, waiver: { t1Valid: false, defaultValid: false } }) })
+    .then((result) => ({ result }), (error) => ({ error }));
+  return { ...settled, calls };
+};
+const isWriteCall = (call) => call.args.includes("POST") || call.args.includes("DELETE") || call.args.includes("PATCH");
+
+for (const gate of ["draft_gate", "pre_approval_gate"]) {
+  test(`${gate} verdict submits an own PENDING tool draft with event COMMENT before it posts`, async () => {
+    const { result, error, calls } = await runDraftGateVerdict(gate, [{ id: 8101, state: "PENDING", commit_id: DRAFT_GATE_HEAD, body: "Reviewer-loop draft verdict: COMMENT\n\nfindings" }]);
+    assert.equal(error, undefined);
+    assert.equal(result.action, "created");
+    const writes = calls.filter(isWriteCall);
+    // The rejected create, the one events submit, then the create that lands.
+    assert.equal(writes.length, 3);
+    assert.ok(writes[1].args.includes("repos/owner/repo/pulls/17/reviews/8101/events"));
+    assert.equal(JSON.parse(writes[1].stdinText).event, "COMMENT");
+    assert.ok(writes[2].args.includes("repos/owner/repo/pulls/17/reviews"));
+  });
+
+  test(`${gate} verdict refuses without a submit or delete when an own PENDING human draft exists`, async () => {
+    const { result, error, calls } = await runDraftGateVerdict(gate, [{ id: 8101, state: "PENDING", commit_id: DRAFT_GATE_HEAD, body: "my half-written review" }]);
+    assert.equal(result, undefined);
+    assert.equal(error.reason, "own_pending_review_blocks_post");
+    assert.equal(error.reviewId, 8101);
+    assert.match(error.recovery, /8101/);
+    // The CLI prints only error and recovery, so the reason and id must be in the printed error text.
+    const printed = JSON.parse(formatCliError(error));
+    assert.match(printed.error, /own_pending_review_blocks_post/);
+    assert.match(printed.error, /8101/);
+    assert.ok(printed.recovery);
+    // No events call and no second create.
+    assert.equal(calls.filter(isWriteCall).length, 1);
+    assert.equal(calls.some((call) => call.args.some((arg) => String(arg).endsWith("/events"))), false);
+  });
+
+  test(`${gate} verdict rethrows the original 422 when no own PENDING review exists`, async () => {
+    const { result, error, calls } = await runDraftGateVerdict(gate, [{ id: 8101, state: "COMMENTED", commit_id: DRAFT_GATE_HEAD, body: "Reviewer-loop draft verdict: COMMENT\n\nfindings" }], { force422: true });
+    assert.equal(result, undefined);
+    assert.match(error.message, /Unprocessable Entity/);
+    assert.equal(calls.filter(isWriteCall).length, 1);
+    assert.equal(calls.some((call) => call.args.some((arg) => String(arg).endsWith("/events"))), false);
+  });
+
+  test(`${gate} verdict rethrows a create failure that is not the one-pending-review 422 without a reviews read or submit`, async () => {
+    const { result, error, calls } = await runDraftGateVerdict(gate, [{ id: 8101, state: "PENDING", commit_id: DRAFT_GATE_HEAD, body: "Reviewer-loop draft verdict: COMMENT\n\nfindings" }], { force422: true, createStderr: "gh: Validation Failed (HTTP 422)\n", createStdout: JSON.stringify({ message: "Validation Failed", errors: [{ resource: "PullRequestReview", code: "custom" }] }) + "\n" });
+    assert.equal(result, undefined);
+    assert.match(error.message, /Validation Failed/);
+    assert.equal(calls.filter(isWriteCall).length, 1);
+    // No reviews-list read follows the failed create, and nothing is submitted.
+    const createIndex = calls.findIndex(isWriteCall);
+    assert.equal(calls.slice(createIndex + 1).some((call) => call.args.some((arg) => String(arg).includes("pulls/17/reviews"))), false);
+    assert.equal(calls.some((call) => call.args.some((arg) => String(arg).endsWith("/events"))), false);
+  });
+
+  test(`${gate} verdict also submits the tool draft when the one-pending-review text is only in stderr`, async () => {
+    const { result, error } = await runDraftGateVerdict(gate, [{ id: 8101, state: "PENDING", commit_id: DRAFT_GATE_HEAD, body: "Reviewer-loop draft verdict: COMMENT\n\nfindings" }], { createStderr: "gh: User can only have one pending review per pull request (HTTP 422)\n", createStdout: "" });
+    assert.equal(error, undefined);
+    assert.equal(result.action, "created");
+  });
+
+  test(`${gate} verdict posts without an events call when the tool draft is already submitted`, async () => {
+    const { result, error, calls } = await runDraftGateVerdict(gate, [{ id: 8101, state: "COMMENTED", commit_id: DRAFT_GATE_HEAD, body: "Reviewer-loop draft verdict: COMMENT\n\nfindings" }]);
+    assert.equal(error, undefined);
+    assert.equal(result.action, "created");
+    assert.equal(calls.some((call) => call.args.some((arg) => String(arg).endsWith("/events"))), false);
+  });
+}
