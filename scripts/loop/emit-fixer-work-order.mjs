@@ -244,7 +244,7 @@ ${pushWaitHandoffSteps(workOrder, dispositionPath, `Commit the fixes and push th
 }
 
 // A Copilot or human thread has no gate marker, so the fixer that knows each outcome posts the replies (the verifier posts none on this route).
-const THREADS_REPLY_STEP = "reply to each thread you fixed and resolve it, citing the full pushed head SHA, with `reply-resolve-review-threads.mjs --disposition fixed --resolve`; on each thread you declined (and on every thread after a full decline, which has no commit to cite) post a `rejected` or `deferred` reply with `--disposition rejected|deferred` and no `--resolve`.";
+const THREADS_REPLY_STEP = "run `reply-resolve-review-thread.mjs --comment-id <n> --thread-id <id> --body-file <path> --disposition <fixed|deferred|rejected>` once per thread in the order, with that thread's own disposition: `fixed` citing the full pushed head SHA for a thread you fixed; `rejected` or `deferred` for a thread you declined (and for every thread after a full decline, which has no commit to cite).";
 
 // A gate fix pass (an act list or the unresolved threads) pushes in the full phase and ends like a ci-failure order: the next gate round judges the fix at the pushed head.
 function gateFixFullTask(workOrder, dispositionPath) {
@@ -285,7 +285,7 @@ export function renderWorkOrder(workOrder) {
   const [dispositionPath] = workOrder.outputRefs;
   if (workOrder.operation === "complete") {
     const root = path.dirname(path.dirname(workOrder.executionRules.contract));
-    const task = `${pushWaitHandoffSteps(workOrder, dispositionPath, `Stop and report when the local HEAD is not ${workOrder.candidateHead}. Otherwise push that commit to branch ${JSON.stringify(workOrder.mutationAuthority.branch)} with this command (the refspec is shell-quoted because the branch name is PR-supplied):\n\`\`\`sh\ngit push origin ${shellQuote(`${workOrder.candidateHead}:refs/heads/${workOrder.mutationAuthority.branch}`)}\n\`\`\`\nWhen the remote head already equals ${workOrder.candidateHead}, push nothing.`)}\nDo not read the source again or take on unrelated live threads.`;
+    const task = `${pushWaitHandoffSteps(workOrder, dispositionPath, `Stop and report when the local HEAD is not ${workOrder.candidateHead}. Otherwise push that commit to branch ${JSON.stringify(workOrder.mutationAuthority.branch)} with this command (the refspec is shell-quoted because the branch name is PR-supplied):\n\`\`\`sh\ngit push origin ${shellQuote(`${workOrder.candidateHead}:refs/heads/${workOrder.mutationAuthority.branch}`)}\n\`\`\`\nWhen the remote head already equals ${workOrder.candidateHead}, push nothing.`, workOrder.source === "threads" ? THREADS_REPLY_STEP : null)}\nDo not read the source again or take on unrelated live threads.`;
     return `# Fixer delivery-only work order (ADR 0106)
 
 Operation: complete. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.

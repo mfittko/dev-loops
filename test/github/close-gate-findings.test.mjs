@@ -2498,7 +2498,9 @@ for (const [name, options] of FIXED_ACT_LEAVE_OPEN) {
 test("the fixed-act close leaves a merged thread open when one member is raised again", async () => {
   const other = { severity: "worth-fixing-now", angle: "perf", summary: "second member claim" };
   const thread = mergedThread({ fp: fingerprintFinding(FIXED_ACT_FINDING) }, { fp: fingerprintFinding(other) }, { id: "THREAD_MERGED_FIXED", commentId: 6004 });
-  await fixedActCase({ threads: [thread], provenance: { perAngle: [{ angle: "correctness", reviewer: "review-a" }] }, ledgerFindings: [{ ...other, judgeDisposition: "act" }] }, { closes: false, assert: (result) => assert.equal(result.fixedActClosed, 0) });
+  // The prior ledger acts on both members, so only the re-raise loop keeps the thread open.
+  const priorActs = [FIXED_ACT_FINDING, other].map((f) => ({ ...f, judgeDisposition: "act", judgeRationale: "fix it" }));
+  await fixedActCase({ threads: [thread], priorExtra: { findings: priorActs }, provenance: { perAngle: [{ angle: "perf", reviewer: "review-a" }, { angle: "correctness", reviewer: "review-b" }] }, ledgerFindings: [{ ...other, judgeDisposition: "act" }] }, { closes: false, assert: (result) => { assert.equal(result.fixedActClosed, 0); assert.deepEqual(result.dispositionFailures ?? [], []); } });
 });
 
 test("the fixed-act close leaves a thread open when the prior ledger lookup is ambiguous", async () => {

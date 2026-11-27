@@ -925,12 +925,13 @@ test("an act-list source and a threads source emit a full-phase order with no de
       assert.doesNotMatch(text, /run no step below except step 4/);
       if (source === "threads") {
         // The fixer knows each thread's outcome, so it posts the replies after green CI and before the handoff.
-        assert.match(text, /4\. Only when CI is green, reply to each thread you fixed and resolve it, citing the full pushed head SHA, with `reply-resolve-review-threads\.mjs --disposition fixed --resolve`/);
-        assert.match(text, /post a `rejected` or `deferred` reply with `--disposition rejected\|deferred` and no `--resolve`/);
+        assert.match(text, /4\. Only when CI is green, run `reply-resolve-review-thread\.mjs --comment-id <n> --thread-id <id> --body-file <path> --disposition <fixed\|deferred\|rejected>` once per thread in the order, with that thread's own disposition: `fixed` citing the full pushed head SHA/);
+        assert.match(text, /`rejected` or `deferred` for a thread you declined/);
+        assert.doesNotMatch(text, /reply-resolve-review-threads/);
         assert.match(text, /5\. Only when CI is green, write the handoff/);
       } else {
         assert.match(text, /Post no thread reply and resolve no thread/);
-        assert.doesNotMatch(text, /reply-resolve-review-threads/);
+        assert.doesNotMatch(text, /reply-resolve-review-thread/);
       }
     }
     assert.equal(existsSync(marker), false, "a full emission writes no sequence marker");
@@ -1875,7 +1876,7 @@ for (const source of ["act-list", "threads"]) test(`complete ${source} pulls del
     assert.match(active, new RegExp(`1\\. Stop and report when the local HEAD is not ${unit.workOrder.candidateHead}\\. Otherwise push that commit to branch "issue-1"`));
     assert.ok(active.includes(`git push origin '${unit.workOrder.candidateHead}:refs/heads/issue-1'`));
     assert.match(active, /2\. Confirm the remote head equals the pushed commit/);
-    assert.match(active, /4\. Only when CI is green, write the handoff `\{ "headSha": "<full pushed SHA>" \}`/);
+    assert.match(active, source === "threads" ? /5\. Only when CI is green, write the handoff `\{ "headSha": "<full pushed SHA>" \}`/ : /4\. Only when CI is green, write the handoff `\{ "headSha": "<full pushed SHA>" \}`/);
     assert.ok(result.stdout.endsWith(`${JSON.stringify(unit.workOrder, null, 2)}\n\x60\x60\x60\n`));
     assert.equal(hook(wt, unit.workOrder.outputRefs[0]), "allow");
     assert.equal(hook(wt, path.join(wt, "src/a.mjs")), "deny");
@@ -3498,6 +3499,14 @@ for (const route of ["ACT", "THREAD"]) {
       assert.deepEqual(await readFile(path.join(path.dirname(unit.planPath), old.executionIdentity, "original-fixer-emit-plan.json")), oldPlan);
       assert.equal(await readFile(unit.promptPath, "utf8"), renderWorkOrder(unit.workOrder));
       assert.equal(unit.joinRef, unit.workOrder.outputRefs[0]);
+      // A recovered threads pass posts the step 4 replies; an act-list pass posts none.
+      const delivery = await readFile(unit.promptPath, "utf8");
+      if (route === "THREAD") {
+        assert.match(delivery, /4\. Only when CI is green, run `reply-resolve-review-thread\.mjs --comment-id <n> --thread-id <id> --body-file <path> --disposition <fixed\|deferred\|rejected>` once per thread/);
+        assert.match(delivery, /5\. Only when CI is green, write the handoff/);
+      } else {
+        assert.doesNotMatch(delivery, /reply-resolve-review-thread/);
+      }
       assert.equal(pull(unit, fx.wt).status, 0, "the unchanged consumer admission accepts the order");
       assert.equal(refusal(pull(old, fx.wt)), "stale_dispatch");
       // Cross-harness row (issue 1086): the completion-only plan builds a valid dispatch payload for every harness.
