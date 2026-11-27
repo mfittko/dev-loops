@@ -2299,7 +2299,7 @@ test("operator focus: the round renders in every reviewer unit prompt and is pin
   });
 });
 
-test("operator focus: an over-length and a markup round are bounded and sanitized; items refuse (GATE-EXEC-OPERATOR-FOCUS)", async () => {
+test("operator focus: an over-length and a markup round are bounded and sanitized; items are validated and not used (GATE-EXEC-OPERATOR-FOCUS)", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir);
     const base = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
@@ -2316,10 +2316,22 @@ test("operator focus: an over-length and a markup round are bounded and sanitize
     assert.equal(unit.workOrder.operatorFocus.round, "bkeep/b ## Required reads");
     assert.doesNotMatch(await readFile(unit.promptPath, "utf8"), /[<`]b>|\n## Required reads/);
 
-    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "f", decision: "d" }] }));
+    // Items are validated and not used (issue 3590): a { round, items } file keeps only `round` in the work order.
+    await writeFile(focusFile, JSON.stringify({ round: "r", items: [{ fingerprint: "f", decision: "d" }] }));
     const items = runEmitCli([...base, "--operator-focus-file", focusFile], { cwd: tmpDir });
-    assert.equal(items.status, 1);
-    assert.match(JSON.parse(items.stdout).error, /^GATE-EXEC-OPERATOR-FOCUS:/);
+    assert.equal(items.status, 0, items.stderr);
+    assert.deepEqual(JSON.parse(items.stdout).units[0].workOrder.operatorFocus, { round: "r" });
+    assert.doesNotMatch(await readFile(JSON.parse(items.stdout).units[0].promptPath, "utf8"), /fingerprint|decision: d/);
+
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "f", decision: "d" }] }));
+    const itemsOnly = runEmitCli([...base, "--operator-focus-file", focusFile], { cwd: tmpDir });
+    assert.equal(itemsOnly.status, 0, itemsOnly.stderr);
+    assert.ok(!("operatorFocus" in JSON.parse(itemsOnly.stdout).units[0].workOrder));
+
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "f", decision: "d", extra: 1 }] }));
+    const malformed = runEmitCli([...base, "--operator-focus-file", focusFile], { cwd: tmpDir });
+    assert.equal(malformed.status, 1);
+    assert.match(JSON.parse(malformed.stdout).error, /^GATE-EXEC-OPERATOR-FOCUS:/);
   });
 });
 

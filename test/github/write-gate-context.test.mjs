@@ -31,7 +31,6 @@ import {
   buildValidationResultsPath,
   captureDiffFromBase,
   capFixBudgetFacts,
-  refuseNonConvergence,
   collapsePureSubstitutionRuns,
   prematureGateOrderingRefusal,
   ISSUE_BODY_ABSENT_SENTINEL,
@@ -11731,7 +11730,7 @@ test("the scoped final round diffs from the previous round head: a PR change com
   }
 });
 
-test("the context writer refuses the next round on non-convergence on both gates: 3 then 3 acted clusters", async () => {
+test("the context writer builds the next round on both gates when 3 then 3 acted clusters (no non-convergence brake), with no --operator-focus-file", async () => {
   for (const gate of ["draft_gate", "pre_approval_gate"]) {
     const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
     try {
@@ -11739,7 +11738,7 @@ test("the context writer refuses the next round on non-convergence on both gates
       const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-69");
       await mkdir(dir, { recursive: true });
       const acts = ["a", "b", "c"].map((k) => ({ severity: "medium", summary: `finding ${k}`, files: [`src/${k}.mjs`], line: 1, judgeDisposition: "act", judgeTitle: `Finding ${k}`, judgeFix: "fix" }));
-      for (const [i, head] of ["1".repeat(40), "2".repeat(40)].entries()) {
+      for (const [i, head] of ["1".repeat(40), baseSha].entries()) {
         await writeFile(path.join(dir, `${gate}-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 69, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: acts.map((a, j) => ({ ...a, clusterId: j })) }), "utf8");
       }
       let out = "", exitCode;
@@ -11753,149 +11752,12 @@ test("the context writer refuses the next round on non-convergence on both gates
       } finally {
         process.stdout.write = realOut; process.stderr.write = realErr; process.exitCode = prior;
       }
-      assert.equal(exitCode, 1, `${gate}: ${out}`);
-      assert.match(out, /non_convergence/, gate);
+      assert.equal(exitCode ?? 0, 0, `${gate}: ${out}`);
+      const artifact = JSON.parse(await readFile(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-69", `${gate}-${headSha}.json`), "utf8"));
+      assert.equal(artifact.gate, gate);
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }
-  }
-});
-
-test("an operator decision on each act-list fingerprint clears a non_convergence stop when an acted cluster holds two members", async () => {
-  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
-  try {
-    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
-    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-70");
-    await mkdir(dir, { recursive: true });
-    const act = (k) => ({ severity: "medium", summary: `finding ${k}`, files: [`src/${k}.mjs`], line: 1, judgeDisposition: "act", judgeTitle: `Finding ${k}`, judgeFix: "fix" });
-    // Three acted clusters; cluster 0 holds two members, so the ledger has 4 fingerprints and the act list 3.
-    const findings = [act("a"), act("a2"), act("b"), act("c")].map((f, i) => ({ ...f, clusterId: Math.max(0, i - 1) }));
-    const latest = "2".repeat(40);
-    for (const [i, head] of ["1".repeat(40), latest].entries()) {
-      await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings }), "utf8");
-    }
-    const actList = capRoundActList(findings, latest);
-    assert.equal(actList.length, 3);
-    const planDir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", "pr-70");
-    await mkdir(planDir, { recursive: true });
-    const run = () => main(["--repo", "owner/repo", "--pr", "70", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], { repoRoot, run: stubGhRun });
-    const writePlan = async (items) => {
-      const workOrder = { gate: "draft_gate", headSha: latest, operatorFocus: { items } };
-      await writeFile(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder) }), "utf8");
-    };
-    const exitOf = async () => {
-      const prior = process.exitCode, write = process.stderr.write.bind(process.stderr), out = process.stdout.write.bind(process.stdout);
-      process.exitCode = undefined; process.stderr.write = () => true; process.stdout.write = () => true;
-      try { await run(); return process.exitCode; } finally { process.stderr.write = write; process.stdout.write = out; process.exitCode = prior; }
-    };
-    await writePlan(actList.slice(1).map((a) => ({ fingerprint: a.fingerprint, decision: "fix it" })));
-    assert.equal(await exitOf(), 1, "a missing act-list decision keeps the stop");
-    await writePlan(actList.map((a) => ({ fingerprint: a.fingerprint, decision: "fix it" })));
-    assert.notEqual(await exitOf(), 1, "a decision on each act-list fingerprint clears it");
-  } finally {
-    await rm(repoRoot, { recursive: true, force: true });
-  }
-});
-
-// Issue 3586: --operator-focus-file clears non_convergence directly, and one round per head is compared.
-async function runNonConvergence(pr, rounds, extraArgs = [], beforeRun) {
-  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
-  try {
-    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
-    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", `pr-${pr}`);
-    await mkdir(dir, { recursive: true });
-    const act = (k) => ({ severity: "medium", summary: `finding ${k}`, files: [`src/${k}.mjs`], line: 1, judgeDisposition: "act", judgeTitle: `Finding ${k}`, judgeFix: "fix" });
-    const fingerprints = {};
-    for (const [i, r] of rounds.entries()) {
-      const findings = (r.acts ?? []).map((k, j) => ({ ...act(k), clusterId: j }));
-      const head = r.head === "current" ? headSha : r.head.repeat(40);
-      const name = `draft_gate-${head}${r.retained ? `.round-${r.retained}` : ""}.json`;
-      await writeFile(path.join(dir, name), JSON.stringify({ repo: "owner/repo", pr, gate: "draft_gate", headSha: head, verdict: r.verdict ?? "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings }), "utf8");
-      fingerprints[r.head + (r.retained ?? "")] = capRoundActList(findings, head).map((a) => a.fingerprint);
-    }
-    const focusFile = path.join(repoRoot, "focus.json");
-    await beforeRun?.({ focusFile, fingerprints, repoRoot });
-    const run = async (args) => {
-      let out = "";
-      const realOut = process.stdout.write.bind(process.stdout), realErr = process.stderr.write.bind(process.stderr), prior = process.exitCode;
-      process.stdout.write = (c) => { out += String(c); return true; };
-      process.stderr.write = (c) => { out += String(c); return true; };
-      process.exitCode = undefined;
-      try {
-        await main(["--repo", "owner/repo", "--pr", String(pr), "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha, ...args], { repoRoot, run: stubGhRun });
-        return { out, exitCode: process.exitCode };
-      } finally {
-        process.stdout.write = realOut; process.stderr.write = realErr; process.exitCode = prior;
-      }
-    };
-    return { run, focusFile, fingerprints, contextPath: path.join(repoRoot, "tmp", "gate-context", "owner-repo", `pr-${pr}`, `draft_gate-${headSha}.json`) };
-  } catch (error) {
-    await rm(repoRoot, { recursive: true, force: true });
-    throw error;
-  }
-}
-
-test("--operator-focus-file clears a non_convergence stop with no fixer plan and records operatorClear", async () => {
-  const t = await runNonConvergence(73, [{ head: "1", acts: ["a", "b"] }, { head: "2", acts: ["a", "b"] }]);
-  const repoRoot = path.dirname(t.focusFile);
-  try {
-    const refused = await t.run([]);
-    assert.equal(refused.exitCode, 1, refused.out);
-    assert.match(refused.out, /non_convergence/);
-    const refusal = JSON.parse(refused.out.slice(refused.out.indexOf("{")));
-    assert.match(refusal.error ?? refusal.message, /--operator-focus-file/, "the message names the clear input");
-    assert.match(refusal.recovery, /--operator-focus-file/, "the recovery names the clear input");
-    const decisions = (fps) => JSON.stringify({ items: fps.map((fingerprint) => ({ fingerprint, decision: "fix it" })) });
-    const [one, two] = t.fingerprints["2"];
-    await writeFile(t.focusFile, decisions([one]), "utf8");
-    const partial = await t.run(["--operator-focus-file", t.focusFile]);
-    assert.equal(partial.exitCode, 1, partial.out);
-    assert.ok(partial.out.includes(two), "the refusal lists the undecided fingerprint");
-    await writeFile(t.focusFile, decisions([one, two]), "utf8");
-    const cleared = await t.run(["--operator-focus-file", t.focusFile]);
-    assert.notEqual(cleared.exitCode, 1, cleared.out);
-    const artifact = JSON.parse(await readFile(t.contextPath, "utf8"));
-    assert.deepEqual(artifact.operatorClear, { reason: "non_convergence", fingerprints: [one, two].sort() });
-    await rm(t.contextPath);
-    const rerun = await t.run([]);
-    assert.equal(rerun.exitCode, 1, "a same-head rerun without the file stops again");
-    assert.match(rerun.out, /non_convergence/);
-  } finally {
-    await rm(repoRoot, { recursive: true, force: true });
-  }
-});
-
-test("a malformed --operator-focus-file refuses with GATE-EXEC-OPERATOR-FOCUS and writes no context artifact", async () => {
-  const t = await runNonConvergence(74, [{ head: "1", acts: ["a"] }]);
-  try {
-    await writeFile(t.focusFile, "not json", "utf8");
-    const result = await t.run(["--operator-focus-file", t.focusFile]);
-    assert.equal(result.exitCode, 1, result.out);
-    assert.match(result.out, /GATE-EXEC-OPERATOR-FOCUS/);
-    assert.equal(existsSync(t.contextPath), false);
-  } finally {
-    await rm(path.dirname(t.focusFile), { recursive: true, force: true });
-  }
-});
-
-test("a retained same-head round that a later round at that head replaced is not a non_convergence comparison point", async () => {
-  const t = await runNonConvergence(75, [{ head: "1", retained: 1, acts: ["a"] }, { head: "1", acts: ["a", "b"] }]);
-  try {
-    const result = await t.run([]);
-    assert.notEqual(result.exitCode, 1, result.out);
-  } finally {
-    await rm(path.dirname(t.focusFile), { recursive: true, force: true });
-  }
-});
-
-test("a retained round at a head with no finished live ledger still counts in the non_convergence comparison", async () => {
-  const t = await runNonConvergence(76, [{ head: "1", retained: 1, acts: ["a", "b"] }, { head: "1", verdict: "blocked" }, { head: "3", acts: ["a", "b"] }]);
-  try {
-    const result = await t.run([]);
-    assert.equal(result.exitCode, 1, result.out);
-    assert.match(result.out, /non_convergence/);
-  } finally {
-    await rm(path.dirname(t.focusFile), { recursive: true, force: true });
   }
 });
 
@@ -12015,36 +11877,6 @@ test("a pre_approval_gate round forced by a pure base merge does not count towar
   }
 });
 
-// Issue 3589 finding 4: the direct focus file decides the effective latest round only; the base-merge-forced round fallback stays plan-only (issue 3586).
-test("refuseNonConvergence: a direct focus file that decides only a base-merge-forced latest round does not clear the stop", async () => {
-  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
-  try {
-    git(repoRoot, ["checkout", "-q", "-b", "mainline", baseSha]);
-    await writeFile(path.join(repoRoot, "src/other.mjs"), "export const other = 1;\n", "utf8");
-    git(repoRoot, ["add", "-A"]);
-    git(repoRoot, ["commit", "-q", "-m", "main advances"]);
-    const mainSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
-    git(repoRoot, ["checkout", "-q", "--detach", headSha]);
-    git(repoRoot, ["merge", "--no-ff", "--no-commit", mainSha]);
-    git(repoRoot, ["commit", "-q", "-m", "merge main"]);
-    const mergedHead = git(repoRoot, ["rev-parse", "HEAD"]).trim();
-    git(repoRoot, ["update-ref", "refs/remotes/origin/main", mainSha]);
-    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-88");
-    await mkdir(dir, { recursive: true });
-    const act = (k) => ({ severity: "medium", summary: `finding ${k}`, files: [`src/${k}.mjs`], line: 1, judgeDisposition: "act", judgeTitle: `Finding ${k}`, judgeFix: "fix" });
-    const rounds = [[baseSha, ["a", "b"]], [headSha, ["a", "b"]], [mergedHead, ["c"]]];
-    for (const [i, [head, keys]] of rounds.entries()) {
-      await writeFile(path.join(dir, `pre_approval_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 88, gate: "pre_approval_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: keys.map((k, j) => ({ ...act(k), clusterId: j })) }), "utf8");
-    }
-    const [forced] = capRoundActList(rounds[2][1].map(act), mergedHead).map((a) => a.fingerprint);
-    const focusFile = path.join(repoRoot, "focus.json");
-    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: forced, decision: "fix it" }] }), "utf8");
-    await assert.rejects(refuseNonConvergence({ repo: "owner/repo", pr: 88, gate: "pre_approval_gate", headSha: "9".repeat(40), operatorFocusFile: focusFile }, { repoRoot, prBase: "main" }), /non_convergence|Undecided/);
-  } finally {
-    await rm(repoRoot, { recursive: true, force: true });
-  }
-});
-
 test("an operator decision naming every act item by fingerprint runs the round past the scoped round as one scoped round, once per act-item set", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
@@ -12106,23 +11938,6 @@ test("capFixBudgetFacts refuses when the added-file git diff exits nonzero, neve
   }
 });
 
-test("refuseNonConvergence refuses with the operator_decision recovery when a prior closed ledger is unreadable (AC7)", async () => {
-  const { repoRoot } = await makeBaseDiffRepo();
-  try {
-    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-70");
-    await mkdir(dir, { recursive: true });
-    const acts = ["a", "b", "c"].map((k, j) => ({ severity: "medium", summary: `finding ${k}`, files: [`src/${k}.mjs`], line: 1, judgeDisposition: "act", judgeTitle: `Finding ${k}`, judgeFix: "fix", clusterId: j }));
-    await writeFile(path.join(dir, `draft_gate-${"1".repeat(40)}.json`), JSON.stringify({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: "1".repeat(40), verdict: "findings_present", loggedAt: "2026-11-01T00:00:00.000Z", findings: acts }), "utf8");
-    await writeFile(path.join(dir, `draft_gate-${"2".repeat(40)}.json`), "{ not json", "utf8");
-    await assert.rejects(
-      refuseNonConvergence({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: "3".repeat(40) }, { repoRoot }),
-      (error) => /unreadable/.test(error.message) && /operator_decision/.test(error.recovery),
-    );
-  } finally {
-    await rm(repoRoot, { recursive: true, force: true });
-  }
-});
-
 test("a scoped final pre_approval_gate round whose PR-own delta is unproven is refused, never measured as a zero fix budget", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
@@ -12136,6 +11951,28 @@ test("a scoped final pre_approval_gate round whose PR-own delta is unproven is r
 });
 
 // Issue 3589 and 3588: the direct focus file clears round_cap_reached in resolveScopedFinalRound, as the issued fixer plan does, and a routed step 3 passes it.
+test("a malformed --operator-focus-file refuses on a draft_gate round and writes no context (GATE-EXEC-OPERATOR-FOCUS)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+    const focusFile = path.join(repoRoot, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "f", decision: "d", extra: 1 }] }), "utf8");
+    const prior = process.exitCode, write = process.stderr.write.bind(process.stderr), out = process.stdout.write.bind(process.stdout);
+    let text = "";
+    process.exitCode = undefined; process.stderr.write = (c) => { text += String(c); return true; }; process.stdout.write = (c) => { text += String(c); return true; };
+    let exitCode;
+    try {
+      await main(["--repo", "owner/repo", "--pr", "64", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha, "--operator-focus-file", focusFile], { repoRoot, run: stubGhRun });
+      exitCode = process.exitCode;
+    } finally { process.stderr.write = write; process.stdout.write = out; process.exitCode = prior; }
+    assert.equal(exitCode, 1, text);
+    assert.match(text, /GATE-EXEC-OPERATOR-FOCUS/);
+    assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-64", `draft_gate-${headSha}.json`)), false);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("--operator-focus-file clears a round_cap_reached stop of a pre_approval_gate round past the scoped round", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
@@ -12160,6 +11997,11 @@ test("--operator-focus-file clears a round_cap_reached stop of a pre_approval_ga
     const refused = await run();
     assert.equal(refused.exitCode, 1, refused.text);
     assert.match(refused.text, /round_cap_reached/);
+    await writeFile(focusFile, "not json", "utf8");
+    const malformed = await run("--operator-focus-file", focusFile);
+    assert.equal(malformed.exitCode, 1, malformed.text);
+    assert.match(malformed.text, /GATE-EXEC-OPERATOR-FOCUS/);
+    assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-64", `pre_approval_gate-${newHead}.json`)), false);
     await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "0".repeat(16), decision: "fix it" }] }), "utf8");
     assert.equal((await run("--operator-focus-file", focusFile)).exitCode, 1, "a file that decides no act fingerprint keeps the stop");
     await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint, decision: "fix it" }] }), "utf8");

@@ -163,27 +163,6 @@ describe("body-only converged marker (ADR 0271)", () => {
     assert.equal(state.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
   });
 
-  describe("non_convergence brake skip needs the head-bound act list", () => {
-    const run = (currentHeadSha) => {
-      const comments = [comment(commentBody({ converged: `fixer \`${A}\` delta \`${DIGEST}\`` }))];
-      return evaluatePrGateCoordination({
-        pr: 10, repo: "o/r", currentHeadSha, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
-        draftGate: summarizeGateReviewComments(comments).draft_gate,
-        draftGateMarker: summarizeGateReviewCommentMarkers(comments, { headSha: A }).draft_gate,
-        draftOpenActList: { headSha: A, openActCount: 1, blockers: [], bodyOnly: true },
-        capBrakes: { gate: "draft_gate", round: 3, cap: 4, actCounts: [1, 1], items: ["[low] body (new_act)"] },
-      });
-    };
-
-    test("a full current head SHA bound to the list passes the brake to mark_ready_for_review", () => {
-      assert.equal(run(A).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
-    });
-
-    test("an empty or short current head SHA keeps the brake stop", () => {
-      for (const head of ["", "aaaaaaaa"]) assert.equal(run(head).nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, JSON.stringify(head));
-    });
-  });
-
   test("the detector reads the converged comment at the same head and at a head moved by a base-only merge", () => {
     assert.equal(markerAt(A, [commentBody({ converged: `fixer \`${A}\` delta \`${DIGEST}\`` })]).draft_gate.verdict, "clean");
     const moved = markerAt(FIX, [commentBody()]).draft_gate;

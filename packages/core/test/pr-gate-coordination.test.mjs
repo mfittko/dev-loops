@@ -5138,57 +5138,19 @@ test("draft PR with red CI and no repo names the operator and no recovery (issue
 });
 
 // GATE-EXEC-CAP-BRAKES: a cap brake stop is a report_blocked with blockedOn operator_decision, the numbers and the named items.
-const NEXT_WHEN_CONVERGING = { draft_gate: "address_review_feedback", pre_approval_gate: "run_pre_approval_gate" };
-test("cap brakes: non-convergence stops the lane before another fixer pass on both gates (3 then 3 and 3 then 4 stop, 3 then 2 continues)", () => {
-  const head = "ab".repeat(20);
-  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
-  const items = ["[medium] guard is missing (new_act)", "[high] null deref (new_act)"];
-  const gates = [
-    ["draft_gate", { prDraft: true, lifecycleState: STATE.PR_DRAFT, draftGate: verdict, draftGateMarker: verdict, draftOpenActList: { headSha: head, openActCount: 3, blockers: [] } }, 4],
-    ["pre_approval_gate", { prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, maxCopilotRounds: 0, draftGate: { visible: true, headSha: head, verdict: "clean", contractComplete: true }, draftGateMarker: { visible: true, headSha: head, verdict: "clean", contractComplete: true }, preApprovalGate: verdict, preApprovalGateMarker: verdict }, 2],
-  ];
-  for (const [gate, shape, cap] of gates) {
-    const base = { pr: 9, repo: "o/r", currentHeadSha: head, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", ...shape };
-    for (const [actCounts, stops] of [[[3, 3], true], [[3, 4], true], [[3, 2], false]]) {
-      const result = evaluatePrGateCoordination({ ...base, capBrakes: { gate, round: 3, cap, actCounts, items } });
-      if (!stops) {
-        assert.doesNotMatch(result.reason, /non_convergence/, `${gate} ${actCounts}`);
-        assert.equal(result.nextAction, NEXT_WHEN_CONVERGING[gate], `${gate} ${result.reason}`);
-        continue;
-      }
-      assert.deepEqual({ next: result.nextAction, on: result.blockedOn, remedy: result.agentRemedy }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION, remedy: undefined }, `${gate} ${actCounts}`);
-      assert.match(result.reason, new RegExp(`non_convergence.*${actCounts[0]} then ${actCounts[1]}`), `${gate} ${actCounts}`);
-      for (const item of items) assert.ok(result.reason.includes(item), `${gate} names ${item}`);
-      assert.match(result.reason, /operator focus item whose decision names the act items by fingerprint/);
-    }
-  }
-});
-
 test("cap brakes: a round past the pre_approval_gate scoped final round stops with round_cap_reached and the named items, while the scoped round itself runs", () => {
   const head = "ab".repeat(20);
   const verdict = { visible: true, headSha: head, verdict: "blocked", contractComplete: true };
   const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
   const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", maxCopilotRounds: 0, draftGate: clean, draftGateMarker: clean, preApprovalGate: verdict, preApprovalGateMarker: verdict };
-  const stop = evaluatePrGateCoordination({ ...base, capBrakes: { gate: "pre_approval_gate", round: 4, cap: 2, actCounts: [3, 2, 1], items: ["[medium] guard is missing (new_act)"] } });
+  const stop = evaluatePrGateCoordination({ ...base, capBrakes: { gate: "pre_approval_gate", round: 4, cap: 2, items: ["[medium] guard is missing (new_act)"] } });
   assert.deepEqual({ next: stop.nextAction, on: stop.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION });
   assert.match(stop.reason, /round_cap_reached.*round 4 is past the round cap of 2/);
   assert.match(stop.reason, /\[medium\] guard is missing/);
   // The scoped final round itself (round cap+1) is not stopped by the cap.
-  const scoped = evaluatePrGateCoordination({ ...base, capBrakes: { gate: "pre_approval_gate", round: 3, cap: 2, actCounts: [3, 2], items: [] } });
+  const scoped = evaluatePrGateCoordination({ ...base, capBrakes: { gate: "pre_approval_gate", round: 3, cap: 2, items: [] } });
   assert.doesNotMatch(scoped.reason, /round_cap_reached/);
   assert.equal(scoped.nextAction, "run_pre_approval_gate", scoped.reason);
-});
-
-test("cap brakes: at the draft cap round a non-shrinking act count stops the lane instead of the soft-cap fixer route", () => {
-  const head = "ab".repeat(20);
-  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
-  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict, draftOpenActList: { headSha: head, openActCount: 3, blockers: [] } };
-  const brakes = (actCounts) => ({ gate: "draft_gate", round: 4, cap: 4, actCounts, items: ["[medium] guard is missing (new_act)"] });
-  const shrinking = evaluatePrGateCoordination({ ...base, capBrakes: brakes([4, 3]) });
-  assert.equal(shrinking.nextAction, "address_review_feedback", "a shrinking count keeps the fixer route");
-  const stalled = evaluatePrGateCoordination({ ...base, capBrakes: brakes([3, 3]) });
-  assert.deepEqual({ next: stalled.nextAction, on: stalled.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION });
-  assert.match(stalled.reason, /non_convergence/);
 });
 
 // Issue 3589: an operator decision on every act item clears a cap brake stop where it is reported.
@@ -5200,9 +5162,8 @@ test("cap brakes: operatorCleared routes past each operator stop; without it the
   // Body-only act items (pr_body remedies) sit next to a code item, as the dod:0 fixture names them.
   const items = ["abcdef0123456789 [medium] body wording (new_act)", "0123456789abcdef [low] PR description validation evidence (pr_body)"];
   const cases = {
-    growth_past_forecast: { gate: "pre_approval_gate", round: 3, cap: 2, actCounts: [3], wholeLogicLoc: 810, forecastWloc: 380, items },
-    non_convergence: { gate: "pre_approval_gate", round: 3, cap: 2, actCounts: [3, 3], items },
-    round_cap_reached: { gate: "pre_approval_gate", round: 4, cap: 2, actCounts: [3, 2, 1], items },
+    growth_past_forecast: { gate: "pre_approval_gate", round: 3, cap: 2, wholeLogicLoc: 810, forecastWloc: 380, items },
+    round_cap_reached: { gate: "pre_approval_gate", round: 4, cap: 2, items },
   };
   for (const [reason, brakes] of Object.entries(cases)) {
     const stopped = evaluatePrGateCoordination({ ...base, capBrakes: brakes });
@@ -5223,7 +5184,7 @@ test("cap brakes: notClearable keeps the Items list and says a focus file does n
   const verdict = { visible: true, headSha: head, verdict: "blocked", contractComplete: true };
   const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", maxCopilotRounds: 0, draftGate: clean, draftGateMarker: clean, preApprovalGate: verdict, preApprovalGateMarker: verdict };
   const item = "abcdef0123456789 [medium] repeated set";
-  const stopped = evaluatePrGateCoordination({ ...base, capBrakes: { gate: "pre_approval_gate", round: 4, cap: 2, actCounts: [3, 2, 1], items: [item], notClearable: true } });
+  const stopped = evaluatePrGateCoordination({ ...base, capBrakes: { gate: "pre_approval_gate", round: 4, cap: 2, items: [item], notClearable: true } });
   assert.deepEqual({ next: stopped.nextAction, on: stopped.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION });
   assert.ok(stopped.reason.includes(item));
   assert.match(stopped.reason, /already had its one re-open, so a focus file does not clear it and the decision stays with the operator/);
