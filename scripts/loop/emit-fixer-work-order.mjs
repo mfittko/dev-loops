@@ -18,8 +18,8 @@ import { BLOCKED_BY_OPERATOR_STEPS, VALID_SEVERITIES, normalizeSeverity, hasSeve
 import { EvidenceSealError, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
-import { startDeltaSequence, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
-import { isDeltaBodyItem, normalizeThreadsPayload, operatorFocusActItems, REVIEW_NODE_ID_PATTERN, toDeltaActItems } from "@dev-loops/core/loop/fixer-disposition";
+import { isDeltaBodyItem, normalizeThreadsPayload, operatorFocusActItems, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
+import { REVIEW_NODE_ID_PATTERN } from "@dev-loops/core/loop/fixer-disposition";
 import { sequenceClosurePath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "bun:test";
 
-import { composeBodyOnlyConvergedDraftGate } from "../src/loop/fixer-disposition.mjs";
+import { composeBodyOnlyConvergedDraftGate } from "../src/loop/pre-push-delta-review.mjs";
 
 const A = "a".repeat(40);
 

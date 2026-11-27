@@ -65,7 +65,7 @@ import { draftGatePostedHeads, fingerprintFinding, resolveTrustedEvidencePredica
 import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { decideCapRound, describeCapStop } from "@dev-loops/core/loop/review-round-cap";
 import { workOrderDigest } from "@dev-loops/core/loop/work-order-digest";
-import { isDeltaBodyItem } from "@dev-loops/core/loop/fixer-disposition";
+import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, isClearingCoverRecord, listGateDeltaRecords, readGateDeltaRecord, readSealedCoverRecord, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince, runGitCommand } from "../lib/git-delta.mjs";
 import { existsSync } from "node:fs";

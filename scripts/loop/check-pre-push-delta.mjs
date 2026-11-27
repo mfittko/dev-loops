@@ -47,10 +47,11 @@ import {
   deltaCoverageBinding,
   deltaFixerFindings,
   resolveDeltaTrigger,
+  staleSurfaceTruncatedHit,
   startDeltaSequence,
   threadsToActList,
 } from "@dev-loops/core/loop/pre-push-delta-review";
-import { collectStaleSurface, staleSurfaceTruncatedHit } from "@dev-loops/core/loop/stale-surface-hits";
+import { collectStaleSurface } from "@dev-loops/core/loop/stale-surface-hits";
 import { normalizeFixerDispositionHandoff, recordedSkipReason, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
 import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
