@@ -1264,7 +1264,12 @@ export async function createGateReview({ repo, pr, headSha, body, comments, allo
     env,
     `${JSON.stringify(payload)}\n`,
   );
-  assertGhSuccess(result);
+  try {
+    assertGhSuccess(result);
+  } catch (error) {
+    // gh prints only the top-level message to stderr; the 422 detail is in the stdout body.
+    throw Object.assign(error, { stdout: result.stdout ?? "" });
+  }
   return parseReviewMutationResponse(parseJsonText(result.stdout, { label: "gh api pulls reviews (POST)" }));
 }
 

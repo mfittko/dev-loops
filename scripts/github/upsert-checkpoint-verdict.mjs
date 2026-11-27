@@ -4373,7 +4373,8 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   } catch (error) {
     // GitHub allows one pending review per user per PR, so the caller's own pending review 422s this create.
     // Read the reviews list only then, so a post without one costs no extra call. The review gate resolves its own above.
-    if (isReviewGate || !/one pending review/i.test(error?.message ?? "")) throw error;
+    // gh keeps the 422 detail in the stdout body, so match it as well as the message.
+    if (isReviewGate || !/one pending review/i.test(`${error?.message ?? ""}\n${error?.stdout ?? ""}`)) throw error;
     const ownDraft = await findOwnPendingDraft({ repo: options.repo, pr: options.pr }, gh);
     if (!ownDraft) throw error;
     // A tool draft (the UI review's) is submitted as a COMMENT review, which keeps its inline comments; a human draft is not ours to publish.
