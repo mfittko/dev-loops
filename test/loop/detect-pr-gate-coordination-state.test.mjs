@@ -13,7 +13,7 @@ import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 
 import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveCapBrakes, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
-import { recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
+import { recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
@@ -5260,7 +5260,6 @@ test("loadPrGateCoordinationContext reads the unobservable-request record into t
     const key = { repo: "owner/repo", pr: 266, headSha };
     for (let i = 0; i < 2; i += 1) {
       await recordUnobservableRequest(key, { checkpointDir });
-      await recordTimedOutProbe(key, { checkpointDir });
     }
     // No Copilot review and no review_requested event on the head: the record is the only signal.
     const entries = pathAGhEntries({ reviewBody: "unused" }).map((entry) => {
@@ -5303,7 +5302,6 @@ test("loadPrGateCoordinationContext carries the unobservable-request record acro
     const key = { repo: "owner/repo", pr: 266, headSha: "a".repeat(40) };
     for (let i = 0; i < 2; i += 1) {
       await recordUnobservableRequest(key, { checkpointDir });
-      await recordTimedOutProbe(key, { checkpointDir });
     }
     const entries = pathAGhEntries({ reviewBody: "unused" }).map((entry) => {
       if (entry.assertArgs?.includes("pr") && entry.assertArgs.includes("number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files")) {

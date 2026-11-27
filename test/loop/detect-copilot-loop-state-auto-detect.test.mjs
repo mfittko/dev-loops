@@ -1692,7 +1692,6 @@ test("auto-detect reads the unobservable-request record and the loop reports cop
     const pr = { repo: "owner/repo", pr: 17 };
     for (let i = 0; i < 2; i += 1) {
       await unobservableRecord.recordUnobservableRequest({ ...pr, headSha: "abc123" }, { checkpointDir });
-      await unobservableRecord.recordTimedOutProbe({ ...pr, headSha: "abc123" }, { checkpointDir });
     }
     const emptyThreads = JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
     const { env } = await writeGhStub(tempDir, [

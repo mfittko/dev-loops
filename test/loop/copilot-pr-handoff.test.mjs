@@ -332,6 +332,34 @@ test("copilot-pr-handoff requests review and emits watch action for pr_ready_no_
   }
 });
 
+test("copilot-pr-handoff reports copilot_unavailable and stops when the request returns copilot_unavailable", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-unavailable-"));
+  const originalPath = process.env.PATH;
+  try {
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo"], stdout: OPEN_PR + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+    ]);
+    const { runChild } = makeGhMock(env[GH_MOCK_ENTRIES]);
+    const cleanEnv = runIdFreeEnv({ ...env, DEVLOOPS_RUN_ID: "" });
+    delete cleanEnv[GH_MOCK_ENTRIES];
+    process.env.PATH = [gitStubDir, originalPath ?? ""].filter(Boolean).join(path.delimiter);
+    const result = await runHandoff(parseHandoffCliArgs(["--repo", "owner/repo", "--pr", "17"]), {
+      env: cleanEnv,
+      ghCommand: "gh",
+      runChild,
+      repoRoot: capFixtureRepoRoot,
+      performReview: async () => ({ ok: true, status: "copilot_unavailable" }),
+    });
+    assert.equal(result.state, "copilot_unavailable");
+    assert.equal(result.action, "stop");
+  } finally {
+    process.env.PATH = originalPath;
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 // ADR 0155: an incomplete tackled disposition places the request and the handoff output carries the warning.
 test("copilot-pr-handoff places the request and carries fixerDispositionWarning for an incomplete disposition", async () => {
   const head = "abc9988776";
