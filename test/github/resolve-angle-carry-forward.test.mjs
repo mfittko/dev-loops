@@ -261,6 +261,21 @@ test("buildCarryForwardPlan moves the docs-surface unit whole when contract-surf
   assert.equal(plan.mustRerun.find((m) => m.angle === "config-drift").reason, "base_unit_rerun");
 });
 
+test("buildCarryForwardPlan moves the docs-surface unit whole when a delta touches only contract-surface, and carries all three when it touches none", () => {
+  const log = { headSha: "aaaaaaa", verdict: "clean", provenance: { distinctReviewers: 3, perAngle: [
+    { angle: "link-check", reviewer: "r1" }, { angle: "config-drift", reviewer: "r2" }, { angle: "contract-surface", reviewer: "r3" },
+  ] } };
+  const baseUnits = [["link-check", "config-drift", "contract-surface"]];
+  // A source file is claimed by contract-surface alone, so the delta drives the unit's re-run.
+  const touched = buildCarryForwardPlan({ log, changedFiles: ["src/foo.mjs"], deltaComplete: true, baseUnits });
+  assert.deepEqual(touched.carried, []);
+  assert.deepEqual(touched.mustRerun.filter((m) => m.angle !== "contract-surface").map((m) => `${m.angle}:${m.reason}`).sort(), ["config-drift:base_unit_rerun", "link-check:base_unit_rerun"]);
+  // A test file touches none of the three surfaces, so the unit has no re-run member and all three carry.
+  const untouched = buildCarryForwardPlan({ log, changedFiles: ["test/foo.test.mjs"], deltaComplete: true, baseUnits });
+  assert.deepEqual(untouched.carried.map((c) => c.angle).sort(), ["config-drift", "contract-surface", "link-check"]);
+  assert.deepEqual(untouched.mustRerun, []);
+});
+
 test("CLI derives base units over the prior angles plus the always-re-run angles", async () => {
   // docs is mandatory with no prior row; link-check shares its shipped docs-surface unit, so it must not carry.
   const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
