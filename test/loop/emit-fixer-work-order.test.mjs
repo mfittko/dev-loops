@@ -5176,6 +5176,59 @@ test("a pre_approval_gate act list at a base-only merge below the cap does not r
   });
 });
 
+// A draft_gate ledger-less base-merged head (cap 2, pre_approval cap `preApprovalCap`). The carry seam refuses (main edits pr.md and the merge keeps the PR side), so only the cap guard can read the cap-round head.
+// `forcedFirst`: the round before the cap round is itself a base-merge-forced round (h1 -> h2 is a base-only merge), so the raw round count of the merged head is one above the effective count.
+async function mergedDraftScenario({ root, wt, head, files }, { preApprovalCap = 2, forcedFirst = false, capFindings } = {}) {
+  await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 }, preApproval: { maxReviewRounds: preApprovalCap } } }));
+  const rounds = [];
+  if (forcedFirst) {
+    rounds.push(head);
+    await writeFile(path.join(root, "main-first.md"), "main first\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "main moves first");
+    git(root, "update-ref", "refs/remotes/origin/main", "main");
+    git(wt, "merge", "-q", "--no-ff", "-m", "merge origin/main first", "origin/main");
+  }
+  await writeFile(path.join(wt, "pr.md"), "pr content\n");
+  git(wt, "add", "pr.md");
+  git(wt, "commit", "-q", "-m", "pr change");
+  const origin = git(wt, "rev-parse", "HEAD");
+  const act = withFp({ ...ACT[0], severity: capFindings?.severity ?? "medium", ...(capFindings?.judgeFix === null ? {} : { judgeFix: "guard the deref" }) });
+  await writeFile(files.actList, JSON.stringify([act]));
+  const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
+  await mkdir(dir, { recursive: true });
+  const closed = forcedFirst ? [head, git(wt, "rev-parse", "HEAD~1"), origin] : ["d".repeat(40), origin];
+  for (const [i, sha] of closed.entries()) {
+    await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: sha === origin ? [act] : [] }));
+  }
+  await writeFile(path.join(root, "pr.md"), "main content\n");
+  git(root, "add", "-A");
+  git(root, "commit", "-q", "-m", "main moves");
+  git(root, "update-ref", "refs/remotes/origin/main", "main");
+  git(wt, "merge", "-q", "--no-ff", "-X", "ours", "-m", "merge origin/main", "origin/main");
+  const merged = git(wt, "rev-parse", "HEAD");
+  return { origin, merged, over: { gate: "draft_gate", phase: "commit_only", deltaResult: undefined, headSha: merged, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: merged, baseRefName: "main" }), fetchVerdictMarkers: verdictPostedAt(origin) } };
+}
+
+// GATE-REVIEW-SIBLING-SWEEP: baseMergeCapHead compares the round count with the cap of the gate being emitted, not the pre_approval cap.
+test("a draft_gate act list at a ledgerless base-merged head reads the cap-round head by the draft cap, not the pre_approval cap", async () => {
+  await withFixture(async (fx) => {
+    const { origin, over } = await mergedDraftScenario(fx, { preApprovalCap: 3 });
+    const probed = [];
+    const fetchVerdictMarkers = (a) => { probed.push(a.headSha); return over.fetchVerdictMarkers(a); };
+    assert.equal((await fx.emit({ ...over, fetchVerdictMarkers })).workOrder.source, "act-list");
+    assert.equal(probed[1], origin, "the cap guard reads the verdict at the cap-round head under the draft cap of 2 (the pre_approval cap of 3 would not)");
+  });
+});
+
+// GATE-EXEC-ROUND-CAP: an earlier base-merge-forced round never counts, so the merged head of the effective cap round (cap 2: h1, forced h2, cap round h3, then a base-only merge) still gets the cap-round blocker check.
+test("a draft_gate cap round with a high act item and no judgeFix refuses round_cap_reached at its ledgerless base-merged head after an earlier base-merge-forced round", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await mergedDraftScenario(fx, { forcedFirst: true, capFindings: { severity: "high", judgeFix: null } });
+    await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached" && /GATE-EXEC-SOFT-CAP/.test(e.message));
+  });
+});
+
 // Issue 3589: a retained current-head round written after the base-merge cap-head check returned is caught by the publish-time recheck.
 test("a retained current-head ledger written after the base-merge cap-head check refuses the emit with ledger_appeared", async () => {
   await withFixture(async (fx) => {

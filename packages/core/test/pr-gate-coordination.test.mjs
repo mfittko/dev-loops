@@ -4855,6 +4855,32 @@ test("3309: a cap-round body-only act list routes to the converged post, never t
   assert.notEqual(done.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, done.reason);
 });
 
+// GATE-EXEC-SOFT-CAP: a blocker (a high without a judgeFix at the cap round) that is no PR-body item keeps report_blocked, whether or not the round is refused.
+test("a draft cap-round act list with a non-body-only blocker routes to report_blocked with the blocker in the reason", () => {
+  const head = "ab".repeat(20);
+  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict, draftRoundRefused: false };
+  const result = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 1, blockers: [{ kind: "round_cap_reached", item: "[high] x" }] } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+  assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+  assert.match(result.reason, /names a human decision \(GATE-EXEC-SOFT-CAP\): \[high\] x\./);
+  assert.ok(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK));
+});
+
+// AC7: a failed growth read with a forecast stops the lane; an operator decision (operatorCleared) clears it, a missing forecast never stops it.
+test("a failed growth read with a forecast routes report_blocked until an operator decision clears it", () => {
+  const head = "ab".repeat(20);
+  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
+  const capBrakes = { gate: "draft_gate", round: 1, cap: 3, actCounts: [1], items: ["fp [medium] x"], forecastWloc: 120, growthReadError: "git fetch failed" };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict, draftOpenActList: { headSha: head, openActCount: 1, blockers: [] } };
+  const stopped = evaluatePrGateCoordination({ ...base, capBrakes });
+  assert.equal(stopped.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, stopped.reason);
+  assert.equal(stopped.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+  assert.match(stopped.reason, /growth_unread: .*\(git fetch failed\).*rerun.*--operator-focus-file/);
+  assert.equal(evaluatePrGateCoordination({ ...base, capBrakes: { ...capBrakes, operatorCleared: true } }).nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+  assert.equal(evaluatePrGateCoordination({ ...base, capBrakes: { ...capBrakes, forecastWloc: null } }).nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+});
+
 test("3105 AC15: an eligible open act list wins over a BEHIND-only refresh, and a real conflict still resolves first", () => {
   const head = "ab".repeat(20);
   const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };

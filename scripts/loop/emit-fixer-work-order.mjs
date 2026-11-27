@@ -28,7 +28,7 @@ import { OperatorFocusRefusal, bindOperatorFocusItems, operatorFocusDigestEntry,
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
-import { closureFromHeadOf, clearingChainWalk, countCapRounds, mapGateToConfigKey, readClosedPriorRoundLogs, renderRequiredReadLine, resolveCapRound, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
+import { closureFromHeadOf, clearingChainWalk, countCapRounds, effectiveRounds, mapGateToConfigKey, readClosedPriorRoundLogs, renderRequiredReadLine, resolveCapRound, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { fixerEmitCarryAccepts } from "../github/_carried-verdict.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
@@ -735,7 +735,7 @@ async function emitPlan({
       const baseRefName = (await memoFetchBase())?.baseRefName;
       if (!(from && from !== headSha && baseRefName && await isBaseOnlyMergeSince({ fromHead: from, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd }))) return null;
       // Below the cap the carry seam stays the only acceptance path for a ledgerless merged head.
-      const cap = resolveGateConfig(config, "preApproval").maxReviewRounds;
+      const cap = resolveGateConfig(config, mapGateToConfigKey(gate)).maxReviewRounds;
       if (!(cap > 0 && await countCapRounds({ repo, pr, gate, headSha: from, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: baseRefName }) >= cap)) return null;
       await capture.read(ledgerPath(from)); // pin the cap-round ledger like the carry seam
       if (currentHeadLedgerExists()) return null; // re-check after the pending reads, as carryOriginHead does
@@ -796,9 +796,17 @@ async function emitPlan({
     let { lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: roundBase ?? null });
     // Slice 4: when the seam accepts, the act list belongs to the origin head's round, so the round and cap are counted there, not one round late at the ledger-less head.
     let seamCounted = false; // the round is already counted at the origin head, so the ADR 0197 rewrite below must not reinterpret it
+    // The raw count of a ledger-less head holds earlier base-merge-forced rounds too: drop those (not the head's own merge, which the ADR 0197 block below decides) so a base-only merge of the cap round still reads as cap+1.
+    if (cap > 0 && round > cap + 1 && roundBase === undefined) {
+      const baseRefName = (await memoFetchBase())?.baseRefName;
+      if (baseRefName) try {
+        const closed = await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd) });
+        round -= closed.length - (await effectiveRounds(closed, { prBase: baseRefName, repoRoot: resolveRepoRoot(cwd) })).length;
+      } catch { /* an unreadable round keeps the raw count */ }
+    }
     let laterPass = false; // the head is a sealed chain candidate (a later cap-round pass)
     if (gate === "draft_gate" && !existsSync(ledgerPath(headSha)) && await carryOriginHead()) {
-      ({ lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha: await carryOriginHead(), tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: (await memoFetchBase())?.baseRefName }));
+      ({ lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha: await carryOriginHead(), tmpRoot }, { repoRoot: resolveRepoRoot(cwd), prBase: (await memoFetchBase())?.baseRefName ?? null }));
       seamCounted = true;
     }
     // ADR 0197: a base-only merge after the cap round neither counts as a round nor consumes the closure round. The head with no ledger of its own,

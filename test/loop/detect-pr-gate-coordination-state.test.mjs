@@ -5674,7 +5674,18 @@ test("the growth read refreshes origin/<base> first: a stale ref that reads 761 
     evaluateSize: async () => { throw new Error("the size read must not run after a failed fetch"); },
   });
   assert.match(failed.capBrakesWarning, /the growth limit could not be evaluated \(base_fetch_failed: network down\)/);
+  assert.doesNotMatch(failed.capBrakesWarning, /next gate round is still refused by write-gate-context/, "write-gate-context does not enforce growth");
+  // AC7: with a forecast, a failed read stops the lane; no fixer pass follows and only a rerun or an operator decision clears it.
+  assert.equal(failed.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.equal(failed.blockedOn, "operator_decision");
+  assert.match(failed.reason, /growth_unread: .*could not be read \(base_fetch_failed: network down\).*rerun.*--operator-focus-file/);
   assert.doesNotMatch(failed.reason, /growth_past_forecast/);
+});
+
+test("a growth size read that throws with a forecast stops the lane instead of routing the fixer", async () => {
+  const failed = await detectWithForecast({ evaluateSize: async () => { throw new Error("git diff failed"); } });
+  assert.equal(failed.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(failed.reason, /growth_unread: .*\(git diff failed\)/);
 });
 
 test("detectPrGateCoordinationState forwards --operator-focus-file into the cap brakes: a full file clears the non_convergence stop", async () => {

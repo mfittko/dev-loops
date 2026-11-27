@@ -2944,7 +2944,7 @@ test("resolveDraftRoundCap keeps the raw count for prBase null and reads the rec
     assert.equal((await resolveDraftRoundCap(input, { repoRoot: tmpDir })).round, 1, "an omitted prBase reads the recorded base: the base-merge round is forced and never counts");
     // The artifact under the ledger tmp root (not the checkout's own tmp) gives the same count, so the round never depends on the caller's checkout.
     await rm(path.join(tmpDir, "tmp"), { recursive: true, force: true });
-    await assert.rejects(resolveDraftRoundCap(input, { repoRoot: tmpDir }), /round_cap_base_unresolved/, "no context artifact anywhere and a prior round at another head: refuse instead of a silent raw count");
+    await assert.rejects(resolveDraftRoundCap(input, { repoRoot: tmpDir }), /round_cap_base_unresolved.*pass --context-tmp-root/, "no context artifact anywhere and a prior round at another head: refuse instead of a silent raw count");
     assert.equal((await resolveDraftRoundCap(input, { repoRoot: tmpDir, prBase: null })).round, 2, "an explicit prBase null keeps the raw count");
     const ledgerRootCtx = path.resolve(tmpDir, buildGateContextPath(input));
     await mkdir(path.dirname(ledgerRootCtx), { recursive: true });
@@ -2967,7 +2967,7 @@ test("resolveDraftRoundCap refuses when the merge probe fails because a prior ro
     const { resolveDraftRoundCap } = await import("../../scripts/github/write-gate-context.mjs");
     const input = { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: presentHead, tmpRoot: tmpDir };
     await writeCapPrior(tmpDir, { head: "f".repeat(40), findings: [] });
-    await assert.rejects(resolveDraftRoundCap(input, { repoRoot: tmpDir }), /round_cap_base_unresolved/, "a prior head absent from the repository makes rev-list exit nonzero: refuse, never a silent raw count");
+    await assert.rejects(resolveDraftRoundCap(input, { repoRoot: tmpDir }), /round_cap_base_unresolved.*pass --context-tmp-root/, "a prior head absent from the repository makes rev-list exit nonzero: refuse, never a silent raw count");
     assert.equal((await resolveDraftRoundCap(input, { repoRoot: tmpDir, prBase: null })).round, 2, "an explicit prBase null keeps the raw count without probing");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });

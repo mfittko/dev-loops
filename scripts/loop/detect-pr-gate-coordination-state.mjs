@@ -1836,9 +1836,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // ADR 0238: all-untrusted open threads are non-blocking but visible, with authors and the remedy.
   if (context.skippedUntrusted?.length > 0) result.skippedUntrusted = context.skippedUntrusted;
   // GATE-EXEC-CAP-BRAKES: an unreadable ledger leaves the brakes unevaluated; the warning keeps that visible (the context writer still refuses the round).
-  if (capBrakesError) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the cap brakes could not be evaluated (${capBrakesError.message}); the next gate round is still refused by write-gate-context.mjs when a brake applies.`;
+  if (capBrakesError) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the cap brakes could not be evaluated (${capBrakesError.message}); write-gate-context.mjs still refuses the round-count and non-convergence brakes of the next gate round, but only this detector evaluates the growth limit.`;
   // GATE-EXEC-CAP-BRAKES: a judged round with no forecast to compare has no growth limit; the warning names the gap and the lane does not stop.
-  else if (capBrakes?.growthReadError !== undefined) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the growth limit could not be evaluated (${capBrakes.growthReadError}); the other cap brakes still apply.`;
+  else if (capBrakes?.growthReadError !== undefined) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the growth limit could not be evaluated (${capBrakes.growthReadError}); with a forecast the lane stops until a rerun reads it or an operator decision clears it, and the other cap brakes still apply.`;
   else if (capBrakes && !(capBrakes.forecastWloc > 0)) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the growth limit is not evaluated because ${context.refinementArtifact?.linkedIssue ? `linked issue #${context.refinementArtifact.linkedIssue} has no \`- forecast: slice=<id> wloc=<n> files=<paths>\` line with wloc above 0 under \`## Size forecast\`` : "the PR has no linked issue"}.`;
   // ADR 0155: an incomplete fixer disposition is a visible warning, never a block.
   if (context.fixerDisposition?.warning) {
