@@ -1026,6 +1026,29 @@ test("emits the configured (unclamped) maxConcurrent under a non-Claude env (#19
   });
 });
 
+test("a --pending emission tells each redispatched unit to pass --same-head-retry; a full emission does not (#3642)", async () => {
+  for (const pending of [true, false]) {
+    await withTmpDir(async (tmpDir) => {
+      await seedBundle(tmpDir);
+      const result = runEmitCli(
+        ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, ...(pending ? ["--pending"] : [])],
+        { cwd: tmpDir },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      const unit = JSON.parse(result.stdout).units.find((u) => u.scope === "pre-approval-gate-contradiction-lens");
+      const composed = await readFile(unit.promptPath, "utf8");
+      assert.ok(composed.includes(`--scope ${unit.scope}`));
+      assert.equal(composed.includes("--same-head-retry"), pending);
+    });
+  }
+});
+
+test("buildAngleNamingSuffix adds the same-head-retry instruction only when asked (#3642)", () => {
+  const unit = { name: "coverage", angles: ["coverage"] };
+  assert.doesNotMatch(buildAngleNamingSuffix(unit, "draft-gate-coverage"), /--same-head-retry/);
+  assert.match(buildAngleNamingSuffix(unit, "draft-gate-coverage", [], [], undefined, null, undefined, [], [], [], true), /--scope draft-gate-coverage.*--same-head-retry/);
+});
+
 test("--pending emits only the pendingGroups subset", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir);

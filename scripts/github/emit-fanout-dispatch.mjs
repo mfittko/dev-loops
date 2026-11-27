@@ -246,9 +246,10 @@ export const REVIEWER_VERIFIED_ITEMS_INSTRUCTION = "Verified items: in the findi
  *   unit-scoped required reads, rendered worktree-absolute from the cwd
  * @param {{ maxModelTurns: number, maxToolCalls: number }} [budget] this unit's
  *   computed budget (computeReviewerUnitBudget); the floor when absent
+ * @param {boolean} [sameHeadRetry] true for a `--pending` redispatch: the unit also passes `--same-head-retry` to the sentinel check
  * @returns {string}
  */
-export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET, operatorFocus = null, unitBound = REVIEWER_UNIT_MAX_ANGLES, resolutionPaths = [], resolutionMerges = [], fullReviewPaths = []) {
+export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET, operatorFocus = null, unitBound = REVIEWER_UNIT_MAX_ANGLES, resolutionPaths = [], resolutionMerges = [], fullReviewPaths = [], sameHeadRetry = false) {
   if (typeof scope !== "string" || scope.length === 0) {
     throw new TypeError(`buildAngleNamingSuffix requires a non-empty scope string, got ${JSON.stringify(scope)}`);
   }
@@ -258,7 +259,7 @@ export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unit
   const header = single
     ? `## Your review angle: ${list}`
     : `## Your review angles (dispatch unit "${unit?.name}"): ${list}`;
-  const scopeLine = `Dispatch scope: pass \`--scope ${scope}\` verbatim to the mandatory \`verify-fresh-review-context.mjs\` sentinel named in the briefing prefix above — this is your dispatch unit's exact emitted scope, never composed from the unit name.`;
+  const scopeLine = `Dispatch scope: pass \`--scope ${scope}\` verbatim to the mandatory \`verify-fresh-review-context.mjs\` sentinel named in the briefing prefix above — this is your dispatch unit's exact emitted scope, never composed from the unit name.${sameHeadRetry ? " This is a redispatch of an unfinished unit: also pass `--same-head-retry` to that check, so a sentinel left by a crashed earlier run of this unit at the same briefing is replaced (a rebuilt briefing still refuses and names retirement)." : ""}`;
   const reads = unitReads.length > 0
     ? `Unit required read. It REPLACES the shared \`evidence\` read of the prefix's \`## Required reads\` for this unit: read this scoped evidence IN FULL instead of the shared evidence file, and verify its sha256 before judgment. Every other prefix read still applies:\n${unitReads.map((read) => renderRequiredReadLine(read, process.cwd())).join("\n")}\n\n`
     : "";
@@ -881,7 +882,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
-      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound, resolutionDeltaPaths, resolutionDeltaMerges, resolutionDeltaFullPaths), "utf8");
+      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound, resolutionDeltaPaths, resolutionDeltaMerges, resolutionDeltaFullPaths, pendingOnly), "utf8");
     } catch (err) {
       return failAfterRetirement(err);
     }
