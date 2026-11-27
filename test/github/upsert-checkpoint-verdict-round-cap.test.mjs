@@ -375,6 +375,7 @@ for (const [name, decided] of [["no focus file", null], ["a focus file that miss
       ]);
       const error = await upsertCheckpointVerdict(options, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild([]) }).catch((e) => e);
       assert.match(error.message, /round_cap_reached/);
+      assert.match(error.recovery, /^stop: report_blocked with blockedOn operator_decision \(round_cap_reached\)/);
       assert.match(error.recovery, /--operator-focus-file/);
       for (const fingerprint of fingerprints) assert.ok(error.recovery.includes(fingerprint));
     }, { prefix: "dev-loops-round-cap-focus-refuse-" });
