@@ -606,7 +606,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     }
     const catalogKey = resolveGateAngleCatalogKey(options.gate);
     // The writer derives units over the angles it sees: the ones this head resolves (dispatched or carried) plus the carried ones.
-    // `reduced` proves the base ref resolves; without it only the prior and always-re-run angles count, and the writer's split refusal stays the backstop.
+    // Head angles resolve only when `reduced` (the base ref resolves and gives a reduced delta); otherwise the round reruns every angle and the units cover the always-re-run and carried prior angles, with the writer's split refusal as the backstop.
     // The resolution takes the context builder's inputs, so a head resolved with --angles or --full-label can differ (the contract names that limit).
     // It also resolves from the configured base ref and the full diff, while the builder uses the PR base after its freshness fetch and, in a closure round, the PR-own delta; auto-chunk boundaries can then differ. Recover with --rerun-angle for each carried angle of the split base unit.
     const pool = resolveGateAngleContract(config, catalogKey).pool ?? [];
