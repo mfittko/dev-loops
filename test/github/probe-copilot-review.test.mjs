@@ -526,36 +526,21 @@ async function runFinalChunkTimeout({ headCall, args = ["--timeout", "170"], rea
   }
 }
 
-test("probe-copilot-review does not count a short --timeout probe, and a pending first chunk does not count", async () => {
-  const headCall = `echo '{"headRefOid":"abc"}'; exit 0`;
-  const short = await runFinalChunkTimeout({ headCall, args: ["--timeout", "1"] });
+test("probe-copilot-review does not count a probe call that waits less than the cap", async () => {
+  const short = await runFinalChunkTimeout({ headCall: `echo '{"headRefOid":"abc"}'; exit 0`, args: ["--timeout", "1"] });
   assert.equal(short.result.status, "timeout");
   assert.equal(short.record.timedOutProbes, 0);
+});
+
+test("probe-copilot-review counts each probe call that waits the full cap, first chunk or reissue", async () => {
+  const headCall = `echo '{"headRefOid":"abc"}'; exit 0`;
   const firstChunk = await runFinalChunkTimeout({ headCall, args: ["--timeout", "600"] });
   assert.equal(firstChunk.result.outcome, "pending");
-  assert.equal(firstChunk.record.timedOutProbes, 0);
   assert.match(firstChunk.result.reissue, / --timeout 430$/);
-  assert.equal(firstChunk.record.probeStartedAt, 0);
-});
-
-test("probe-copilot-review counts the final chunk only after the recorded start shows a full cap of wall time", async () => {
-  const headCall = `echo '{"headRefOid":"abc"}'; exit 0`;
-  const args = ["--timeout", "5", "--baseline-ids", JSON.stringify({ reviewThreadComments: [], reviews: [], issueComments: [] })];
-  const resumed = await runFinalChunkTimeout({ headCall, args, record: { probeStartedAt: -170_000 } });
-  assert.equal(resumed.record.timedOutProbes, 1);
-  const tooSoon = await runFinalChunkTimeout({ headCall, args, record: { probeStartedAt: -1_000 } });
-  assert.equal(tooSoon.record.timedOutProbes, 0);
-  assert.equal(tooSoon.record.probeStartedAt, undefined);
-  assert.equal(resumed.record.probeStartedAt, undefined);
-});
-
-test("probe-copilot-review: a second short reissue after a counted probe does not count", async () => {
-  const headCall = `echo '{"headRefOid":"abc"}'; exit 0`;
-  const args = ["--timeout", "1", "--baseline-ids", JSON.stringify({ reviewThreadComments: [], reviews: [], issueComments: [] })];
-  const first = await runFinalChunkTimeout({ headCall, args, record: { probeStartedAt: -170_000 } });
-  assert.equal(first.record.timedOutProbes, 1);
-  const second = await runFinalChunkTimeout({ headCall, args, record: first.record });
-  assert.equal(second.record.timedOutProbes, 1);
+  assert.equal(firstChunk.record.timedOutProbes, 1);
+  const baseline = JSON.stringify({ reviewThreadComments: [], reviews: [], issueComments: [] });
+  const reissue = await runFinalChunkTimeout({ headCall, args: ["--timeout", "170", "--baseline-ids", baseline] });
+  assert.equal(reissue.record.timedOutProbes, 1);
 });
 
 test("probe-copilot-review counts nothing for a caller-supplied total budget or a short reissue", async () => {
@@ -573,7 +558,7 @@ test.skipIf(process.getuid?.() === 0)("probe-copilot-review warns when the timed
   assert.equal(record.timedOutProbes, 0);
 });
 
-test("probe-copilot-review counts a final-chunk timeout on the head of an earlier unobservable request", async () => {
+test("probe-copilot-review counts a full-cap timeout on the head of an earlier unobservable request", async () => {
   const { result, record } = await runFinalChunkTimeout({ headCall: `echo '{"headRefOid":"abc"}'; exit 0` });
   assert.equal(result.status, "timeout");
   assert.equal(result.warning, undefined);

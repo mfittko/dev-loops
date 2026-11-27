@@ -5,9 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import {
-  readProbeStartedAt,
   readRequestNotObservable,
-  recordProbeStart,
   recordPath,
   recordTimedOutProbe,
   recordUnobservableRequest,
@@ -118,18 +116,6 @@ test("the default record path is the main checkout's from a linked worktree", as
   }
 });
 
-test("a probe start is stored only on a record of the same head and a new request clears it", async () => {
-  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
-  const key = { ...pr, headSha: "a" };
-  assert.equal(await recordProbeStart({ ...key, startedAt: 5 }, { checkpointDir }), null);
-  await recordUnobservableRequest(key, { checkpointDir });
-  await recordProbeStart({ ...key, startedAt: 5 }, { checkpointDir });
-  assert.equal(await readProbeStartedAt(key, { checkpointDir }), 5);
-  assert.equal(await readProbeStartedAt({ ...pr, headSha: "b" }, { checkpointDir }), null);
-  await recordUnobservableRequest(key, { checkpointDir });
-  assert.equal(await readProbeStartedAt(key, { checkpointDir }), null);
-});
-
 test("the threshold needs a timed-out probe after the latest unobservable request", async () => {
   const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
   const key = { ...pr, headSha: "a" };
@@ -141,14 +127,4 @@ test("the threshold needs a timed-out probe after the latest unobservable reques
   assert.equal(await read(), false);
   await recordTimedOutProbe(key, { checkpointDir });
   assert.equal(await read(), true);
-});
-
-test("a second recordTimedOutProbe with the already consumed start leaves the count unchanged", async () => {
-  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
-  const key = { ...pr, headSha: "a" };
-  await recordUnobservableRequest(key, { checkpointDir });
-  await recordProbeStart({ ...key, startedAt: 5 }, { checkpointDir });
-  assert.equal((await recordTimedOutProbe({ ...key, probeStartedAt: 5 }, { checkpointDir })).timedOutProbes, 1);
-  assert.equal(await recordTimedOutProbe({ ...key, probeStartedAt: 5 }, { checkpointDir }), null);
-  assert.equal((await recordTimedOutProbe(key, { checkpointDir })).timedOutProbes, 2);
 });
