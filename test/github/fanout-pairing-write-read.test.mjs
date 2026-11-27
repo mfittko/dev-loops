@@ -16,6 +16,7 @@ import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation
 import { countFreshDispatchUnits, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildFanoutEnforcement, buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-evidence.mjs";
+import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { expandDispatchUnits, packedUnitName } from "../../scripts/github/_dispatch-units.mjs";
 import { buildGateContextPath, parseWriteGateContextCliArgs, readGateContext, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 
@@ -164,6 +165,38 @@ describe("fanoutReviewerPairingError at write time and read time", () => {
     ]);
     assert.match(write ?? "", /does not place all of them in one group/);
     assert.match(read ?? "", /does not place all of them in one group/);
+  });
+});
+
+// The round shape of the carry-forward plan that moves a base unit whole: contract-surface re-runs, so link-check and
+// config-drift re-run with it and the one unit passes the writer's pairing check.
+test("a round built from the whole-base-unit plan passes the pairing check and writes the log", async () => {
+  const devloops = [
+    "version: 1", "gates:", "  requireFanoutEvidence: true", "  requireFanoutProvenance: true", "  preApproval:", "    angles:",
+    "      - link-check", "      - config-drift", "      - contract-surface",
+    "      - { name: pr-checklist, enabled: false }", "      - { name: holistic, enabled: false }", "  fanout:", "    groups:",
+    "      - name: docs-surface", "        angles: [link-check, config-drift, contract-surface]", "",
+  ].join("\n");
+  const angles = ["link-check", "config-drift", "contract-surface"];
+  const log = { headSha: "abc1234", verdict: "clean", provenance: { perAngle: angles.map((angle) => ({ angle, reviewer: `p-${angle}` })) } };
+  const plan = buildCarryForwardPlan({ log, changedFiles: [], deltaComplete: true, alwaysRerun: ["contract-surface"], baseUnits: [angles] });
+  assert.deepEqual(plan.carried, []);
+  const perAngle = plan.mustRerun.map((m) => ({ angle: m.angle, reviewer: "r1", group: "docs-surface" }));
+  await withConfig(devloops, async (dir) => {
+    assert.equal(await writeCheck(dir, perAngle), null);
+    // The writer records the packed unit from the context artifact: the whole base unit passes its split check.
+    const packed = await writePacked(dir, "pre_approval_gate", [{ name: "docs-surface", angles }], perAngle);
+    assert.equal(packed.error, null);
+  });
+  // Negative control: the pre-fix shape (fresh contract-surface only, link-check and config-drift carried out of its unit) splits the base unit.
+  await withConfig(devloops, async (dir) => {
+    const prefix = [
+      { angle: "contract-surface", reviewer: "r1", group: "docs-surface" },
+      { angle: "link-check", reviewer: "p-link-check", carriedFromHead: "abc1234" },
+      { angle: "config-drift", reviewer: "p-config-drift", carriedFromHead: "abc1234" },
+    ];
+    const packed = await writePacked(dir, "pre_approval_gate", [{ name: "docs-surface", angles: ["contract-surface"] }], prefix);
+    assert.match(packed.error ?? "", /is not a union of whole base units/);
   });
 });
 
@@ -437,8 +470,8 @@ describe("fanoutReviewerPairingError against recorded dispatch membership (packe
             { name: "rest", angles: ["kiss", "deep", "holistic"] },
             { name: "process", angles: ["pr-checklist"] },
           ],
-          writeError: /is not a union of whole base units/,
-          readError: /is not a union of whole base units/,
+          writeError: /is not a union of whole base units.*--rerun-angle/,
+          readError: /is not a union of whole base units.*--rerun-angle/,
         },
         {
           label: "oversized unit",
@@ -844,7 +877,7 @@ describe("fanoutReviewerPairingError reads the recorded unit bound (packed unit 
   test("REJECT: a packed unit above 5 still fails closed for a split, foreign, duplicated or cross-unit angle, naming it", async () => {
     await withConfig(BOUND_DEVLOOPS, async (dir) => {
       const cases = [
-        ["missing", [{ name: "u", angles: BOUND_BIG.filter((a) => a !== "srp") }, BOUND_UNITS[1]], boundPerAngle(), /splits base unit yagni\+deep\+srp/],
+        ["missing", [{ name: "u", angles: BOUND_BIG.filter((a) => a !== "srp") }, BOUND_UNITS[1]], boundPerAngle(), /splits base unit yagni\+deep\+srp; re-run resolve-angle-carry-forward\.mjs.*emit-fanout-dispatch\.mjs/],
         ["foreign", [{ name: "u", angles: [...BOUND_BIG, "zzz-foreign"] }, BOUND_UNITS[1]], boundPerAngle(), /angle "zzz-foreign" that is not a member/],
         ["duplicated", [BOUND_UNITS[0], { name: "dup", angles: ["dry"] }, BOUND_UNITS[1]], boundPerAngle(), /angle "dry" is recorded in more than one dispatch unit/],
         ["cross-unit reviewer", BOUND_UNITS, boundPerAngle({ srp: "r-pr" }), /"r-pr" is recorded for fresh angles: srp, pr-checklist/],
