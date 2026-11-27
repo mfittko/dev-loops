@@ -765,3 +765,15 @@ test("watchCopilotRunUntilComplete retries with the remaining budget and throws 
   await assert.rejects(() => out.result, { code: "RATE_LIMITED" });
   assert.deepEqual(out.budgets, [540_000]);
 });
+
+test("watchCopilotRunUntilComplete rethrows a first transport failure unchanged when the backoff spends the budget", async () => {
+  const { watchCopilotRunUntilComplete } = await import("../../scripts/loop/watch-initial-copilot-pr.mjs");
+  let clock = 0;
+  const transport = new Error("gh command failed: dial tcp 1.2.3.4:443: i/o timeout");
+  const spawn = async () => { clock += 20_000; throw transport; };
+  const sleep = async (ms) => { clock += ms; };
+  await assert.rejects(
+    () => watchCopilotRunUntilComplete({ repo: "o/r", runId: 1, timeoutMs: 20_000 }, { env: { DEV_LOOPS_GH_STUB: "1" }, spawn, sleep, now: () => clock }),
+    (error) => error === transport && error.code !== "RATE_LIMITED",
+  );
+});

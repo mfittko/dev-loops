@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { setTimeout as delay } from "node:timers/promises";
 import { takeGhSlot } from "@dev-loops/core/github/gh-throttle";
-import { rateLimitedError, withSecondaryLimitBackoff } from "@dev-loops/core/github/gh";
+import { withSecondaryLimitBackoff } from "@dev-loops/core/github/gh";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, requireTokenValue } from "../_cli-primitives.mjs";
@@ -74,14 +74,19 @@ export async function watchCopilotRunUntilComplete(
   // One deadline for all attempts: a retry after the backoff gets the remaining budget, never a fresh timeoutMs.
   const deadline = Number.isInteger(timeoutMs) && timeoutMs >= 0 ? now() + timeoutMs : null;
   let attempts = 0;
+  let firstError = null;
   const attempt = async () => {
     attempts += 1;
     const remaining = deadline === null ? timeoutMs : deadline - now();
-    if (attempts > 1 && deadline !== null && remaining <= 0) {
-      throw rateLimitedError("gh command failed", "secondary rate limit; the watch budget was spent during the backoff");
-    }
+    // Budget spent during the backoff: rethrow the first failure unchanged, so a transport failure is never reported as RATE_LIMITED.
+    if (attempts > 1 && deadline !== null && remaining <= 0) throw firstError;
     if (ghCommand === "gh") await takeGhSlot({ env });
-    return spawnImpl({ repo, runId, timeoutMs: remaining }, { env, ghCommand });
+    try {
+      return await spawnImpl({ repo, runId, timeoutMs: remaining }, { env, ghCommand });
+    } catch (error) {
+      if (attempts === 1) firstError = error;
+      throw error;
+    }
   };
   return ghCommand === "gh" ? withSecondaryLimitBackoff(attempt, { sleep }) : attempt();
 }
