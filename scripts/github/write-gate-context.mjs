@@ -2220,11 +2220,11 @@ export async function resolveClosureRound(options, { repoRoot, cap, round }) {
 }
 
 /** `head` is reached from `fromHead` by merges only (no non-merge commit outside the base), so a conflicted merge resolution is a forced round too. */
-async function isBaseMergeRound({ fromHead, head, mainRef, repoRoot, runGit = runGitCommand }) {
+async function isBaseMergeRound({ fromHead, head, mainRef, repoRoot }) {
   if (!fromHead || !head || fromHead === head) return false;
-  const ancestor = await runGit(["merge-base", "--is-ancestor", fromHead, head], { repoRoot });
+  const ancestor = await runGitCommand(["merge-base", "--is-ancestor", fromHead, head], { repoRoot });
   if (ancestor.code !== 0) return false;
-  const nonMerges = await runGit(["rev-list", "--no-merges", "--count", `${fromHead}..${head}`, `^${mainRef}`], { repoRoot });
+  const nonMerges = await runGitCommand(["rev-list", "--no-merges", "--count", `${fromHead}..${head}`, `^${mainRef}`], { repoRoot });
   return nonMerges.code === 0 && nonMerges.stdout.trim() === "0";
 }
 
@@ -2267,7 +2267,7 @@ export const actFingerprintSet = (log) => capRoundActList(log.findings, log.head
 async function isCleanBaseMerge(options, { repoRoot, prBase, fromHead }) {
   const latest = (await readClosedPriorRoundLogs(options, { repoRoot })).at(-1);
   return Boolean(latest) && String(latest.headSha).trim().toLowerCase() === fromHead && isCleanCapRound({ log: latest })
-    && await isBaseMergeRound({ fromHead, head: options.headSha, mainRef: `origin/${prBase}`, repoRoot })
+    && fromHead !== options.headSha
     && await isBaseOnlyMergeSince({ fromHead, head: options.headSha, mainRef: `origin/${prBase}`, repoRoot });
 }
 

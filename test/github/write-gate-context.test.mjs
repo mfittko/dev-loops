@@ -11695,7 +11695,7 @@ test("CLI refuses a scoped final pre_approval_gate context with the policy reaso
   }
 });
 
-test("a pre_approval_gate base-merge head with a PR-own resolution change counts as a round, while a pure base merge does not (AC6)", async () => {
+test("a pre_approval_gate merge-only head does not count toward the cap, whatever its resolution carries, and neither does a pure base merge (AC6)", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
     git(repoRoot, ["checkout", "-q", "-b", "mainline", baseSha]);
@@ -12178,7 +12178,7 @@ test("a draft_gate operator decision clears cap_fix_over_budget at round cap+2 a
   }
 });
 
-test("a draft_gate round forced by a pure base merge does not count toward the cap, while a merge resolution with a PR-own change does (ADR 0324)", async () => {
+test("a draft_gate merge-only head does not count toward the cap, whatever its resolution carries, and neither does a pure base merge (ADR 0324)", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
     git(repoRoot, ["checkout", "-q", "-b", "mainline", baseSha]);
@@ -12218,10 +12218,10 @@ async function conflictedBaseMergeRepo({ mainLines = 1 } = {}) {
   const mainSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
   git(repoRoot, ["update-ref", "refs/remotes/origin/main", mainSha]);
   // Merges mainSha into `from` with a conflict, resolved by a new PR-own line plus what main added.
-  const mergeConflicted = async (from) => {
+  const mergeConflicted = async (from, { ownLines = 0 } = {}) => {
     git(repoRoot, ["checkout", "-q", "--detach", from]);
     assert.throws(() => git(repoRoot, ["merge", "--no-ff", "--no-commit", mainSha]));
-    await writeFile(changed, `${extra}${extra ? "\n" : ""}import { helper } from "./dep.mjs";\nexport function changed() { return helper() + 3; }\n`, "utf8");
+    await writeFile(changed, `${extra}${extra ? "\n" : ""}import { helper } from "./dep.mjs";\nexport function changed() { return helper() + 3; }\n${Array.from({ length: ownLines }, (_, i) => `export const own${i} = ${i};\n`).join("")}`, "utf8");
     git(repoRoot, ["add", "-A"]);
     git(repoRoot, ["commit", "-q", "-m", "merge main, resolve conflict"]);
     return git(repoRoot, ["rev-parse", "HEAD"]).trim();
@@ -12252,7 +12252,7 @@ test("a conflicted merge-only head after the cap round does not count as a round
 test("capFixBudgetFacts reads a conflicted base merge as no fix budget, and a clean base merge keeps the fix measured (#3630 AC2)", async () => {
   const conflicted = await conflictedBaseMergeRepo({ mainLines: 101 });
   try {
-    const merged = await conflicted.mergeConflicted(conflicted.headSha);
+    const merged = await conflicted.mergeConflicted(conflicted.headSha, { ownLines: 100 });
     assert.deepEqual(await capFixBudgetFacts({ fromHead: conflicted.headSha, headSha: merged, prBase: "main", repoRoot: conflicted.repoRoot }), { logicLoc: 0, addedFiles: 0 });
   } finally {
     await rm(conflicted.repoRoot, { recursive: true, force: true });
@@ -12283,7 +12283,7 @@ test("a draft_gate conflicted merge-only head after cap round 2 stays a full rou
   const { repoRoot, headSha, mergeConflicted, fix } = await conflictedBaseMergeRepo({ mainLines: 101 });
   try {
     const merged = await mergeConflicted(headSha);
-    const fixed = await mergeConflicted(await fix(headSha));
+    const fixed = await mergeConflicted(await fix(headSha), { ownLines: 100 });
     await seedClosedRounds(repoRoot, 70, ["1".repeat(40), headSha]);
     const base = { repo: "owner/repo", pr: 70, gate: "draft_gate" };
     assert.equal(await resolveScopedFinalRound({ ...base, headSha: merged }, { repoRoot, prBase: "main", config: {} }), null);
