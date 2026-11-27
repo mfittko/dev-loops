@@ -2222,9 +2222,15 @@ export async function resolveClosureRound(options, { repoRoot, cap, round }) {
 /** `head` is reached from `fromHead` by merges only (no non-merge commit outside the base), so a conflicted merge resolution is a forced round too. */
 async function isBaseMergeRound({ fromHead, head, mainRef, repoRoot }) {
   if (!fromHead || !head || fromHead === head) return false;
-  const ancestor = await runGitCommand(["merge-base", "--is-ancestor", fromHead, head], { repoRoot });
+  const git = { repoRoot, timeout: 30_000 };
+  const ancestor = await runGitCommand(["merge-base", "--is-ancestor", fromHead, head], git);
   if (ancestor.code !== 0) return false;
-  const nonMerges = await runGitCommand(["rev-list", "--no-merges", "--count", `${fromHead}..${head}`, `^${mainRef}`], { repoRoot });
+  // The range must advance the merged base: a merge-base already reachable from fromHead means no new base content.
+  const base = await runGitCommand(["merge-base", head, mainRef], git);
+  if (base.code !== 0) return false;
+  const merged = await runGitCommand(["merge-base", "--is-ancestor", base.stdout.trim(), fromHead], git);
+  if (merged.code !== 1) return false;
+  const nonMerges = await runGitCommand(["rev-list", "--no-merges", "--count", `${fromHead}..${head}`, `^${mainRef}`], git);
   return nonMerges.code === 0 && nonMerges.stdout.trim() === "0";
 }
 

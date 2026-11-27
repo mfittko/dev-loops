@@ -12249,6 +12249,21 @@ test("a conflicted merge-only head after the cap round does not count as a round
   }
 });
 
+test("a merges-only range that merges no new base content counts as a round (#3630 AC1)", async () => {
+  const { repoRoot, headSha, mergeConflicted } = await conflictedBaseMergeRepo();
+  try {
+    const merged = await mergeConflicted(headSha);
+    const reMerge = await mergeConflicted(headSha, { ownLines: 1 });
+    git(repoRoot, ["checkout", "-q", "--detach", merged]);
+    git(repoRoot, ["merge", "--no-ff", "-s", "ours", "-m", "re-merge", reMerge]);
+    const remerged = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    await seedClosedRounds(repoRoot, 69, ["1".repeat(40), merged]);
+    assert.equal(await countCapRounds({ repo: "owner/repo", pr: 69, gate: "draft_gate", headSha: remerged }, { repoRoot, prBase: "main" }), 3, "no new base commit, so the round counts");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("capFixBudgetFacts reads a conflicted base merge as no fix budget, and a clean base merge keeps the fix measured (#3630 AC2)", async () => {
   const conflicted = await conflictedBaseMergeRepo({ mainLines: 101 });
   try {
