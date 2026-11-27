@@ -5715,7 +5715,8 @@ async function detectPastScopedRound({ withFocusFile }) {
       operatorFocusFile = path.join(tempDir, "focus.json");
       await writeFile(operatorFocusFile, JSON.stringify({ items: items.map((item) => ({ fingerprint: item.slice(0, 16), decision: "fix it" })) }), "utf8");
     }
-    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
+    // The poster composes blocked for a scoped round with act items.
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "1 finding", nextAction: "stop" });
     const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
     return await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10, operatorFocusFile }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
   } finally {

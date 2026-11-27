@@ -1333,7 +1333,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
     && carriedMarker.verdict === "findings_present" && carriedMarker.headSha !== null && String(actList.headSha ?? "").toLowerCase().startsWith(carriedMarker.headSha.toLowerCase());
   // The one head binding of the open act list: a full current head SHA that the list names as its head or its carried head.
   const actListHeadBound = /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase());
-  const headActList = !draftReady && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"))
+  const headActList = !draftReady && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete
+    // The poster writes blocked for a scoped round with act items, so an operator-cleared list accepts that verdict too.
+    && (draftGate.verdict === "findings_present" || (draftGate.verdict === "blocked" && actList?.operatorCleared === true))))
     && actListHeadBound
     && Number.isInteger(actList.openActCount) && actList.openActCount > 0
     && input.draftRoundRefused !== true;

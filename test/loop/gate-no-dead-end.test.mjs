@@ -108,6 +108,18 @@ test("every body-only act list block is typed, with and without a blocker or a n
   assert.equal(removedRemedy, 2);
 });
 
+test("a blocked draft verdict routes the fixer only when the act list is operator-cleared", () => {
+  const FULL = "a".repeat(40);
+  const blocked = gate(FULL, "blocked");
+  const route = (operatorCleared) => evaluatePrGateCoordination({
+    pr: 7, repo: "o/r", currentHeadSha: FULL, prDraft: true, lifecycleState: STATE.PR_DRAFT_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "success", maxCopilotRounds: 2, draftGate: blocked, draftGateMarker: blocked,
+    draftOpenActList: { headSha: FULL, openActCount: 1, blockers: [], ...(operatorCleared ? { operatorCleared: true } : {}) },
+  });
+  assert.equal(route(true).nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+  assert.notEqual(route(false).nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+});
+
 test("the predicate flags a typed result with its remedy stripped", () => {
   const input = { pr: 7, repo: "o/r", currentHeadSha: HEAD, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, prTitle: "WIP: x", draftGate: CLEAN, draftGateMarker: CLEAN, ciStatus: "success", maxCopilotRounds: 0 };
   const typed = evaluatePrGateCoordination(input);
