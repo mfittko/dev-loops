@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.13-pre.1
+
+### Added
+
+- The Claude Bash gate denies shell file writes from coordinators, developers and fixers (`OPS-EDITOR-TOOL-WRITES`) (#2683)
+- The `review` submit choice offers a human-style review: a visible opener over the collapsed gate report, and only act or unjudged findings inline (#3200)
+- Draft cap defaults to 2 with a scoped final round, a growth brake and a `growth_unread` stop; an operator focus decision clears `cap_fix_over_budget` (#3464)
+
+### Changed
+
+- A unit coordinator continues at routine gate boundaries and hands back at a stop or after three; ready-flip reasons name `dev-loops pr ready-for-review` (#3097)
+- A `draft_gate` round now runs at a stale base. Only `pre_approval_gate` and `merge-pr` require a head that contains `origin/<base>` (#3571)
+- A `draft_gate` round whose open act items are all PR-body items now exits through the body-only converged post at every round up to the cap, with no operator step (#3611)
+- `emit-fanout-dispatch.mjs --pending --retry-crashed <unit>` tells a named crashed unit to pass `--same-head-retry`, so its stale sentinel no longer blocks it (#3642)
+
+### Fixed
+
+- The fixer verifier no longer resolves threads at a pushed head with unregistered checks, and a `ci_pending` refusal publishes no join report, so a rerun after CI settles does (#3518)
+- A draft_gate or pre_approval_gate verdict post submits the caller's own pending tool draft review, and refuses with a recovery for a human draft (#3568)
+- The five `loop ui-review-*` stages accept `--out <path>` to save their result JSON, and `ui-review-provision` stops with `ready-url-in-use` when an earlier app already answers `readyUrl` (#3581)
+- The non-convergence brake is deleted: a raw act count stopped lanes that were converging. The round cap and the growth brake stay (#3582)
+- The fanout and judge emitters accept the operator focus file with `items` and use only its `round`; the runbook passes one `FOCUS` file to steps 3, 7 and 11 (#3590)
+- The `non_convergence` stop now clears with `--operator-focus-file`, and a replaced same-head round no longer counts (#3586)
+- `loop gate-coordination --operator-focus-file` clears cap brake stops, the emitter reads the cap-round ledger at a base-only merged head, and runbook step 3 passes the file (#3589)
+- A repeated act set past the scoped final round reports `capBrakes.notClearable`, and the cap stop reason names the operator-only step instead of `--operator-focus-file` (#3597)
+- The Copilot-unavailable record now survives a base-only merge, so a PR reaches `pre_approval_gate`; revert the `refinement.maxCopilotRounds: 0` workaround (#3599)
+- A base-only merge after a delta-verified fixer commit no longer refuses `thread_site_unverifiable`; remaining refusals name the draft-PR exit (`gate close-sequence`, next `draft_gate`) (#3601)
+- The merge owner Bash-gate deny matches a command that runs the merge script, so a subagent can `grep`, `sed -n` and `git show` the script (#3605)
+- Removed the export `commandMentionsMergePr` of `@dev-loops/core/loop/bash-gate-decisions`; a consumer that imports it fails at module load (#3605)
+- A gate round that stopped for a human spec decision retires automatically on the same-head rebuild once the spec digest changed, so the rerun needs no operator-approved retirement (#3612)
+- `gate upsert-verdict` posts a clean `pre_approval_gate` under `copilot_unavailable`, and gate-entry refusals carry a `recovery` (#3615)
+- Two unobservable Copilot review requests on one head now report `copilot_unavailable`, so the PR continues to the pre-approval gate without Copilot (#3617)
+- A gh dial or TLS handshake timeout now backs off 30 seconds and retries once, like a secondary rate limit (#3619)
+- A conflicted base merge after the round cap no longer counts as a round or a fix over the budget, so the lane is not stopped by it (#3630)
+- Carry-forward carries whole base units, and only a findings log blocks automatic round retirement, so a clean round writes its log without an operator step (#3634)
+- Carry-forward re-runs an angle named by a prior finding that has no provenance.perAngle row, and --rerun-angle accepts it, instead of refusing the whole plan (#3638)
+- The `draft_gate` verdict writer takes `--operator-focus-file`, so an operator-cleared cap round posts its clean closing verdict and the PR leaves draft (#3639)
+
 ## 1.0.13-pre.0
 
 ### Added
