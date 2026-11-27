@@ -555,8 +555,8 @@ test("emitted and pulled THREAD full binds missing output without an execution d
     await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: plan.planPath, check: true }, deps),
       (error) => error.code === "FIXER_RESULT_MISSING" && assert.deepEqual(error.activeFixer, expected) === undefined);
     const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: head }, deps);
-    assert.equal(result.complete, false);
-    assert.deepEqual(result.activeFixer, expected);
+    // A full-phase threads plan reads no delta or completion input (ADR 0337), so the resolver treats it as head-only: no disposition is verifiable.
+    assert.equal(result, null);
     assert.equal(existsSync(executionDir), false);
     assert.deepEqual(calls, []);
   });
