@@ -1079,7 +1079,7 @@ async function countUnresolvedGateThreads(threadsPayload, runtime) {
 // GATE-EXEC-THREAD-DISPOSITION: true when at least one gate-authored thread is open and every one is a judge-act code thread whose
 // recording round ran at a strict ancestor of the current head, read from the ledgers of the gate whose round the route runs (the
 // same ledgers that round's fixed-act close reads). A question, an ambiguous ledger, a failed read or a pre_approval_gate
-// verdict already posted at the current head fails closed to false, which keeps the fixer route. A round whose ledger exists
+// clean or findings-present verdict already posted at the current head (a blocked verdict does not count) fails closed to false, which keeps the fixer route. A round whose ledger exists
 // but whose verdict is not yet posted does not block the route, so the poster can enter the gate.
 export async function onlyStaleGateRoundThreadsOpen({ threadsPayload, repo, pr, currentHeadSha, preApprovalGate, runtime }) {
   const gate = "pre_approval_gate";
@@ -1091,7 +1091,8 @@ export async function onlyStaleGateRoundThreadsOpen({ threadsPayload, repo, pr, 
     const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
     const head = currentHeadSha.toLowerCase();
     const posted = String(preApprovalGate?.headSha ?? "").trim().toLowerCase();
-    if (preApprovalGate?.visible && posted && (head.startsWith(posted) || posted.startsWith(head))) return false;
+    const closesRound = preApprovalGate?.verdict === "clean" || preApprovalGate?.verdict === "findings_present";
+    if (preApprovalGate?.visible && closesRound && posted && (head.startsWith(posted) || posted.startsWith(head))) return false;
     for (const node of open) {
       const body = typeof node.comments.nodes[0].body === "string" ? node.comments.nodes[0].body : "";
       const marker = parseFindingMarker(body);

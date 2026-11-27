@@ -6015,7 +6015,7 @@ describe("onlyStaleGateRoundThreadsOpen", () => {
     comments: { nodes: [{ author: { login: author }, body: `${buildFindingMarker({ fp: fingerprintFinding(FINDING), severity, angle: "perf", round: 1 })}\n**${severity}** (\`perf\`): ${FINDING.summary}` }] },
   });
 
-  async function staleCase(ledgers, { threads = [threadNode()], postedAtCurrentHead = false } = {}) {
+  async function staleCase(ledgers, { threads = [threadNode()], postedAtCurrentHead = false, postedVerdict = "clean" } = {}) {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-threads-"));
     try {
       initGitFixture(repoRoot);
@@ -6030,7 +6030,7 @@ describe("onlyStaleGateRoundThreadsOpen", () => {
         await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate, headSha: heads[head], verdict, loggedAt, findings }), "utf8");
       }
       const runChild = async () => ({ code: 0, stdout: JSON.stringify({ login: GATE_LOGIN }), stderr: "" });
-      return await onlyStaleGateRoundThreadsOpen({ threadsPayload: threads, repo: REPO, pr: PR, currentHeadSha: b, preApprovalGate: postedAtCurrentHead ? { visible: true, headSha: b.slice(0, 7), verdict: "clean" } : { visible: false }, runtime: { repoRoot, env: {}, ghCommand: "gh", runChild } });
+      return await onlyStaleGateRoundThreadsOpen({ threadsPayload: threads, repo: REPO, pr: PR, currentHeadSha: b, preApprovalGate: postedAtCurrentHead ? { visible: true, headSha: b.slice(0, 7), verdict: postedVerdict } : { visible: false }, runtime: { repoRoot, env: {}, ghCommand: "gh", runChild } });
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }
@@ -6063,6 +6063,14 @@ describe("onlyStaleGateRoundThreadsOpen", () => {
 
   it("is false when a pre_approval_gate verdict is already posted at the current head", async () => {
     assert.equal(await staleCase([ACT_AT_A, CLEAN_AT_B], { postedAtCurrentHead: true }), false);
+  });
+
+  it("is true when only a blocked pre_approval_gate verdict is posted at the current head", async () => {
+    assert.equal(await staleCase([ACT_AT_A, CLEAN_AT_B], { postedAtCurrentHead: true, postedVerdict: "blocked" }), true);
+  });
+
+  it("is false when a findings_present pre_approval_gate verdict is posted at the current head", async () => {
+    assert.equal(await staleCase([ACT_AT_A, CLEAN_AT_B], { postedAtCurrentHead: true, postedVerdict: "findings_present" }), false);
   });
 
   it("is false when the current head raised the finding again", async () => {
