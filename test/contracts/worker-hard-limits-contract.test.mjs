@@ -18,6 +18,8 @@ for (const file of ["agents/fixer.agent.md", "agents/developer.agent.md"]) {
     const section = hardLimits(await read(file));
     assert.match(section, /Edit or Write tools/);
     assert.match(section, /sed -i/);
+    assert.match(section, /shell redirection/);
+    assert.match(section, /any other script that rewrites files/);
     assert.match(section, /--allow-untick/);
     assert.match(section, /--allow-cross-issue/);
     assert.match(section, /merge script/);
@@ -31,5 +33,6 @@ test("agents/fixer.agent.md states the stale-prose search rule", async () => {
   for (const root of ["`skills/`", "`agents/`", "`docs/`", "`docs/decisions/`", "`scripts/`", "`packages/core/src/`", "`test/`"]) {
     assert.ok(text.includes(root), `missing search root ${root}`);
   }
+  assert.match(text, /Fix every in-scope hit in the same pass/);
   assert.match(text, /out of scope with the reason/);
 });
