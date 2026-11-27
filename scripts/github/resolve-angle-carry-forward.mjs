@@ -31,7 +31,7 @@ import { parseArgs } from "node:util";
 
 import { isDevLoopConfigSourcePath } from "@dev-loops/core/analysis/diff-analyzer";
 import { validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-verdict-carry";
-import { loadDevLoopConfigStrict, resolveBaseBranch, resolveClassifyRules, resolveFanoutGroups, resolveGateAngleContract } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveBaseBranch, resolveClassifyRules, resolveFanoutGroups, resolveGateAngleContract, resolveGateAnglesDynamic } from "@dev-loops/core/config";
 import {
   angleReviewSurface,
   RENAME_ONLY_ANGLES,
@@ -55,6 +55,7 @@ import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
 import {
   buildCarryForwardPlanPath,
+  captureDiffFromBase,
   mapGateToConfigKey,
 } from "./write-gate-context.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
@@ -218,10 +219,11 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
  *   ran, so an EMPTY delta carries every eligible angle (integrate-only base-move)
  *   instead of failing closed. Threaded to {@link resolveAngleCarryForward}.
  * @param {import("@dev-loops/core/analysis/diff-analyzer").ClassifyRules|null} [input.rules] — repository `classify` rules from resolveClassifyRules
+ * @param {string[]} [input.freshAngles] — the angles this head resolves; one with no prior row is a re-run member of its base unit
  * @param {string[][]} [input.baseUnits] — the prior round's base units (the writer's `resolveFanoutGroups` derivation); a carried angle whose unit has a re-run member re-runs with reason `base_unit_rerun`
  * @returns {{ prevHead: string, carried: Array<{angle: string, carriedFromHead: string, reviewer?: string, dispatchId?: string, model?: string, prevVerdict: "clean"|"findings_present", findings: Array<object>, reason: string}>, mustRerun: Array<{angle: string, reason: string}> }}
  */
-export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = [], alwaysRerun = [], deltaComplete = false, rules = null, rerunAngles = [], baseUnits = [] }) {
+export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = [], alwaysRerun = [], deltaComplete = false, rules = null, rerunAngles = [], baseUnits = [], freshAngles = [] }) {
   if (!log || typeof log !== "object") {
     throw new Error("prior gate findings-log not found or unreadable — cannot carry forward (fail-closed)");
   }
@@ -390,9 +392,9 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
   }
   // A base unit carries whole or not at all: the findings-log writer re-derives units from fresh plus carried angles,
   // and a dispatch unit that splits a base unit is refused. Units are disjoint, so one pass is enough.
-  // An always-re-run angle with no prior row is fresh at this head, so it is a re-run member of its unit too.
+  // An always-re-run or resolved angle with no prior row is fresh at this head, so it is a re-run member of its unit too.
   const priorBases = new Set(prevAngles.map(baseAngleName));
-  const rerunBases = new Set([...mustRerun.map((m) => baseAngleName(m.angle)), ...alwaysRerun.map(baseAngleName).filter((a) => !priorBases.has(a))]);
+  const rerunBases = new Set([...mustRerun.map((m) => baseAngleName(m.angle)), ...[...alwaysRerun, ...freshAngles].map(baseAngleName).filter((a) => !priorBases.has(a))]);
   const wholeCarried = [];
   for (const entry of carried) {
     const unit = baseUnits.find((u) => u.includes(baseAngleName(entry.angle)));
@@ -575,14 +577,19 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       resolutionScopePaths = baseMerge.resolutionPaths.filter((p) => !ownEdited.has(p));
     }
     const catalogKey = resolveGateAngleCatalogKey(options.gate);
-    // The writer derives units over fresh plus carried angles, so derive them over the prior angles plus the always-re-run ones.
+    // The writer derives units over fresh plus carried angles, so derive them over the prior angles plus the angles this head resolves
+    // (the context builder's resolution over the base diff, without the gate:full label) and the always-re-run ones.
     const pool = resolveGateAngleContract(config, catalogKey).pool ?? [];
-    const unitAngles = orderAnglesByCatalog([...new Set([...ledgerAngleNames(log.provenance?.perAngle, pool), ...alwaysRerun.map(baseAngleName)])], pool);
-    // shortcut: a fresh angle the classification adds beyond the always-re-run set is unseen here, upgrade when the resolver reads the resolved set.
+    let resolvedAngles = [];
+    // `reduced` proves the base ref resolves; without it only the prior and always-re-run angles count, and the writer's split refusal stays the backstop.
+    if (reduced) {
+      resolvedAngles = (await resolveGateAnglesDynamic(config, mapGateToConfigKey(options.gate), { diff: captureDiffFromBase(mainRef, { repoRoot }), hasFullLabel: false })).recommendedAngles ?? [];
+    }
+    const unitAngles = orderAnglesByCatalog([...new Set([...ledgerAngleNames(log.provenance?.perAngle, pool), ...alwaysRerun.map(baseAngleName), ...resolvedAngles.map(baseAngleName)])], pool);
     const baseUnits = resolveFanoutGroups(config, catalogKey, unitAngles).map((g) => g.angles);
     const rawPlan = buildCarryForwardPlan({
       log, changedFiles: partial ? baseMerge.rerunPaths : changedFiles, incrementalFiles, alwaysRerun,
-      deltaComplete: partial || reduced, rules, rerunAngles: options.rerunAngles, baseUnits,
+      deltaComplete: partial || reduced, rules, rerunAngles: options.rerunAngles, baseUnits, freshAngles: resolvedAngles,
     });
     // AC1 (ADR 0061): optional --spec-authority stamps the pinned revision
     // identity onto the plan via the ONE shared helper. Pure no-op when absent.

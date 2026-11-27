@@ -402,7 +402,7 @@ test("specDecisionOnly leaves an ordinary posted-verdict round alone instead of 
   });
 });
 
-test("an unchanged or missing digest, a missing or unparsable plan or verdict, or no spec_cannot_decide keeps the refusal", async () => {
+test("an unchanged or missing digest, a missing or unparsable plan or verdict, or no spec_cannot_decide leaves the round in place without a retirement under specDecisionOnly", async () => {
   const cases = [
     { name: "unchanged digest", opts: { currentSpecDigest: OLD_DIGEST } },
     { name: "no digest", opts: { currentSpecDigest: null } },
@@ -581,5 +581,37 @@ test("a judge plan older than a sentinel of a newer fan-out is stale: the new ro
     const result = await retireStaleRound({ ...KEY, tmpRoot, ...decided, specDecisionOnly: true });
     assert.deepEqual(result, { retiredRound: null });
     assert.equal(existsSync(path.join(tmpRoot, SENTINEL_FILE)), true);
+  });
+});
+
+test("retirement moves a fan-in ledger from each of two verdict roots into the retirement directory without overwrite", async () => {
+  await withRound(async (tmpRoot) => {
+    const otherRoot = await mkdtemp(path.join(os.tmpdir(), "stale-round-other-"));
+    try {
+      const ledgers = [tmpRoot, otherRoot].map((root) => buildGateFaninLedgerPath({ ...KEY, tmpRoot: root }));
+      for (const [i, ledger] of ledgers.entries()) {
+        await mkdir(path.dirname(ledger), { recursive: true });
+        await writeFile(ledger, JSON.stringify({ root: i }));
+      }
+      const { retiredRound } = await retireStaleRound({ ...KEY, tmpRoot, verdictRoots: [tmpRoot, otherRoot] });
+      const name = path.basename(ledgers[0]);
+      assert.deepEqual(JSON.parse(await readFile(path.join(retiredRound.retirementDir, name), "utf8")), { root: 0 });
+      assert.deepEqual(JSON.parse(await readFile(path.join(retiredRound.retirementDir, `root-1-${name}`), "utf8")), { root: 1 });
+      for (const ledger of ledgers) assert.equal(existsSync(ledger), false);
+    } finally {
+      await rm(otherRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+test("a ledger left behind by a crash after the audited move is finished into the latest retirement by the next call", async () => {
+  await withRound(async (tmpRoot) => {
+    const { retiredRound } = await retireStaleRound({ ...KEY, tmpRoot });
+    const ledger = buildGateFaninLedgerPath({ ...KEY, tmpRoot });
+    await mkdir(path.dirname(ledger), { recursive: true });
+    await writeFile(ledger, "{}");
+    assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot }), { retiredRound: null });
+    assert.equal(existsSync(ledger), false);
+    assert.equal(existsSync(path.join(retiredRound.retirementDir, path.basename(ledger))), true);
   });
 });

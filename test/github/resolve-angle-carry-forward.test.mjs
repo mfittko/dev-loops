@@ -108,14 +108,16 @@ async function runMainRaw(argv, { repoRoot }) {
   }
 }
 
-async function makeCarryForwardRepo({ mandatoryAngles = [], perAngle, mutate, verdict = "clean", findings = [] }) {
+async function makeCarryForwardRepo({ mandatoryAngles = [], optionalAngles = [], perAngle, mutate, verdict = "clean", findings = [] }) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-cli-"));
   git(repoRoot, ["init", "-q"]);
   git(repoRoot, ["config", "user.email", "test@example.com"]);
   git(repoRoot, ["config", "user.name", "Test"]);
-  const angleLines = mandatoryAngles.length > 0
-    ? mandatoryAngles.map((name) => `      - name: ${name}\n        mandatory: true`).join("\n")
-    : "      []";
+  const angleEntries = [
+    ...mandatoryAngles.map((name) => `      - name: ${name}\n        mandatory: true`),
+    ...optionalAngles.map((name) => `      - name: ${name}`),
+  ];
+  const angleLines = angleEntries.length > 0 ? angleEntries.join("\n") : "      []";
   await writeFile(
     path.join(repoRoot, ".devloops.yaml"),
     // maxAnglesPerGroup 1 keeps each ungrouped angle its own base unit, so a fresh mandatory angle never shares a unit with a carried one.
@@ -268,6 +270,39 @@ test("CLI derives base units over the prior angles plus the always-re-run angles
     ], { repoRoot });
     assert.equal(result.ok, true);
     assert.ok(!result.carried.some((c) => c.angle === "link-check"), "link-check shares docs-surface with the fresh docs angle");
+    assert.equal(result.mustRerun.find((m) => m.angle === "link-check")?.reason, "base_unit_rerun");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildCarryForwardPlan re-runs a carried angle whose unit holds a resolved angle that is new at this head", () => {
+  const log = { headSha: "aaaaaaa", verdict: "clean", provenance: { distinctReviewers: 2, perAngle: [
+    { angle: "link-check", reviewer: "r1" }, { angle: "config-drift", reviewer: "r2" },
+  ] } };
+  const baseUnits = [["link-check", "config-drift", "contract-surface"]];
+  const args = { log, changedFiles: [], deltaComplete: true, baseUnits };
+  assert.deepEqual(buildCarryForwardPlan(args).carried.map((c) => c.angle), ["link-check", "config-drift"]);
+  const plan = buildCarryForwardPlan({ ...args, freshAngles: ["link-check", "contract-surface"] });
+  assert.deepEqual(plan.carried, []);
+  assert.deepEqual(plan.mustRerun.map((m) => `${m.angle}:${m.reason}`).sort(), ["config-drift:base_unit_rerun", "link-check:base_unit_rerun"]);
+});
+
+test("CLI derives base units over the angles the head resolves, so a group member new at this head re-runs its carried sibling", async () => {
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    optionalAngles: ["link-check", "contract-surface", "correctness"],
+    perAngle: [{ angle: "link-check", reviewer: "review-a" }, { angle: "correctness", reviewer: "review-b" }],
+    mutate: async (root) => {
+      await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8");
+    },
+  });
+  try {
+    // The base diff (origin/main...HEAD) resolves the head's angles; the fixture has no remote, so point the ref at the first commit.
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", prevHead]);
+    const result = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(result.ok, true);
     assert.equal(result.mustRerun.find((m) => m.angle === "link-check")?.reason, "base_unit_rerun");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -1572,8 +1607,9 @@ for (const [name, conflict, decision] of [["same-file line shift", false, "parti
       const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot });
       assert.equal(result.baseMergeCarry, decision);
       assert.deepEqual(result.rerunPaths, ["src/foo.mjs"]);
-      assert.deepEqual(result.mustRerun.map((m) => m.angle), ["correctness"]);
-      assert.deepEqual(result.carried.map((c) => c.angle), ["docs"]);
+      // docs shares a base unit with contract-surface, which this head resolves with no prior row, so docs re-runs with it.
+      assert.deepEqual(result.mustRerun.map((m) => `${m.angle}:${m.reason === "base_unit_rerun"}`), ["correctness:false", "docs:true"]);
+      assert.deepEqual(result.carried, []);
       assert.deepEqual(result.resolutionDeltaPaths, conflict ? ["src/foo.mjs"] : undefined);
       assert.equal(conflict ? result.resolutionDeltaMerges?.length : result.resolutionDeltaMerges, conflict ? 1 : undefined);
       assert.deepEqual(result.resolutionDeltaFullPaths, conflict ? [] : undefined);
