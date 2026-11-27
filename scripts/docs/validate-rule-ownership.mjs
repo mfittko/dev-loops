@@ -305,6 +305,11 @@ const KNOWN_INTENTIONAL_DUPLICATE_SENTENCES = new Set([
   // ban verbatim — both are direct implementation agents that touch the same shared-`.git`
   // worktree layout, so the guardrail belongs in both, not just one.
   "- Never (or /): is shared across every worktree over this repo's one directory, so a stash can pop into a different worktree.",
+  // agents/developer.agent.md and agents/fixer.agent.md state the same Hard limits verbatim
+  // (issue 3654): both workers share one hard-limit wording, so the lines repeat by design.
+  "Do not use , shell redirection into tracked files or any other script that rewrites files.",
+  "- Never run the merge script.",
+  "Never write or request an line.",
 ]);
 
 const USAGE = `Usage: validate-rule-ownership.mjs [--help]
