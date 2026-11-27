@@ -4288,11 +4288,10 @@ export async function seamFirstRoundFor({ gate, repo, pr, headSha, tmpRoot }, re
 }
 
 const FULL_LABEL_READ_TIMEOUT_MS = 30_000;
-const GH_FAILURE_CODES = new Set(["RATE_LIMITED", "GH_THROTTLE_UNAVAILABLE", "GH_TIMEOUT", "ENOENT"]);
 
 /**
  * The live PR's gate:full label, shared by the context builder and the carry-forward resolver so both resolve the same angles.
- * A gh failure or a timeout of the bounded read fails closed to labelled (`error` carries the cause); any other error propagates.
+ * Any failure of the bounded read (gh, spawn, timeout, bad JSON) fails closed to labelled (`error` carries the cause); only a programming error (TypeError, ReferenceError, RangeError) propagates.
  */
 export async function readFullLabel({ repo, pr }, { run = runChild } = {}) {
   const bounded = (command, args, env, stdin) => run(command, args, env, stdin, { timeoutMs: FULL_LABEL_READ_TIMEOUT_MS });
@@ -4300,7 +4299,7 @@ export async function readFullLabel({ repo, pr }, { run = runChild } = {}) {
     const { pr: view } = await viewPr({ repo, pr, fields: "labels" }, { run: bounded });
     return { fullLabel: Array.isArray(view?.labels) && view.labels.some((label) => (label?.name ?? label) === GATE_FULL_LABEL) };
   } catch (error) {
-    if (!GH_FAILURE_CODES.has(error?.code) && !/^(gh |Invalid JSON)/.test(String(error?.message)) && !(error instanceof SyntaxError)) throw error;
+    if (error instanceof TypeError || error instanceof ReferenceError || error instanceof RangeError) throw error;
     return { fullLabel: true, error };
   }
 }

@@ -470,8 +470,8 @@ describe("fanoutReviewerPairingError against recorded dispatch membership (packe
             { name: "rest", angles: ["kiss", "deep", "holistic"] },
             { name: "process", angles: ["pr-checklist"] },
           ],
-          writeError: /is not a union of whole base units/,
-          readError: /is not a union of whole base units/,
+          writeError: /is not a union of whole base units.*--rerun-angle/,
+          readError: /is not a union of whole base units.*--rerun-angle/,
         },
         {
           label: "oversized unit",

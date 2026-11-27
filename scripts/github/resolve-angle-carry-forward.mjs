@@ -80,6 +80,10 @@ Required:
 Optional:
   --rerun-angle <angle>         Repeatable. Force the named angle (an angle in the prior log) into
                                  mustRerun with reason operator_rerun; an unknown angle is refused.
+                                 A carried angle whose base unit has a re-run member re-runs with reason
+                                 base_unit_rerun. The resolver reads the live gate:full label through gh
+                                 (30 s bound; a gh failure or timeout fails closed to labelled; a TypeError,
+                                 ReferenceError or RangeError exits 1).
   --tmp-root <path>             Root tmp directory. Omitted, the prior findings-log ledger is read
                                  from the MAIN worktree's tmp/ (the stable per-repo ledger location)
                                  while the carry-forward plan stays worktree-local; an explicit path pins both.
@@ -606,6 +610,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // The writer derives units over the angles it sees: the ones this head resolves (dispatched or carried) plus the carried ones.
     // `reduced` proves the base ref resolves; without it only the prior and always-re-run angles count, and the writer's split refusal stays the backstop.
     // The resolution takes the context builder's inputs, so a head resolved with --angles or --full-label can differ (the contract names that limit).
+    // It also resolves from the configured base ref and the full diff, while the builder uses the PR base after its freshness fetch and, in a closure round, the PR-own delta; auto-chunk boundaries can then differ. Recover with --rerun-angle for each carried angle of the split base unit.
     const pool = resolveGateAngleContract(config, catalogKey).pool ?? [];
     let resolvedAngles = [];
     if (reduced) {

@@ -370,6 +370,13 @@ test("readFullLabel reads the label: unlabelled is false, labelled is true, an E
   const closed = await readFullLabel({ repo: "o/n", pr: 7 }, { run: async () => { throw missing; } });
   assert.equal(closed.fullLabel, true);
   assert.equal(closed.error, missing);
+  for (const code of ["EACCES", "EAGAIN"]) {
+    const spawnError = Object.assign(new Error(`spawn gh ${code}`), { code });
+    const failed = await readFullLabel({ repo: "o/n", pr: 7 }, { run: async () => { throw spawnError; } });
+    assert.equal(failed.fullLabel, true, code);
+    assert.equal(failed.error, spawnError);
+  }
+  await assert.rejects(readFullLabel({ repo: "o/n", pr: 7 }, { run: async () => { throw new ReferenceError("x is not defined"); } }), ReferenceError);
 });
 
 test("CLI label read: a timed-out gh read fails closed to labelled and a non-gh error propagates", async () => {
@@ -397,7 +404,7 @@ test("CLI label read: a timed-out gh read fails closed to labelled and a non-gh 
   }
 });
 
-test("CLI size-budget read fails closed to null, so the floors treat the evidence as ambiguous", async () => {
+test("CLI size-budget read: a throwing size-budget read does not abort the resolver", async () => {
   const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
     optionalAngles: ["link-check", "contract-surface", "correctness"],
     perAngle: [{ angle: "link-check", reviewer: "review-a" }, { angle: "correctness", reviewer: "review-b" }],
