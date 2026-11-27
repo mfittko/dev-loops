@@ -2295,6 +2295,20 @@ export function actSetHeld({ logs, effective, cap }) {
   return last.length > 0 && effective.slice(cap).some((log) => log !== latest && actFingerprintSet(log).join() === last.join());
 }
 
+/**
+ * The act fingerprints a cap stop names (the latest closed round's set unioned with the effective latest, as operatorClearsCapStop decides them) and whether
+ * no focus file can clear it (the set is held, see {@link actSetHeld}).
+ */
+export async function capStopFacts(options, { repoRoot, prBase, cap }) {
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot });
+  if (closed.length === 0) return { fingerprints: [], notClearable: false };
+  const effective = await effectiveRounds(closed, { prBase, repoRoot });
+  return {
+    fingerprints: [...new Set([...actFingerprintSet(closed.at(-1)), ...actFingerprintSet(effective.at(-1))])],
+    notClearable: actSetHeld({ logs: closed, effective, cap }),
+  };
+}
+
 /** {@link actSetHeld} over the closed round logs of `options`. */
 export async function actSetAlreadyHeld(options, { repoRoot, cap, prBase, includeLiveCurrentHead = false }) {
   const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead });
@@ -2371,10 +2385,8 @@ export async function resolveScopedFinalRound(options, { repoRoot, prBase, confi
   }
   if (decision.action === "operator") {
     // The refusal names the open act items of the latest closed round; an over-budget fix also keeps its smaller-fix and raised-budget exits.
-    const closed = await readClosedPriorRoundLogs(options, { repoRoot });
     // A base-merge-forced latest round needs the union of its own and the effective latest set decided (operatorClearsCapStop), so the refusal names the union.
-    const effectiveLatest = closed.length > 0 ? (await effectiveRounds(closed, { prBase, repoRoot })).at(-1) : undefined;
-    const fingerprints = closed.length > 0 ? [...new Set([...actFingerprintSet(closed.at(-1)), ...actFingerprintSet(effectiveLatest)])] : [];
+    const { fingerprints } = await capStopFacts(options, { repoRoot, prBase, cap });
     const clear = "the operator clears it with an operator focus item whose decision names the act items by fingerprint";
     const shrink = `shrink the fix to at most ${fixBudget.maxLines} PR-own logic LOC with no added file, or the operator raises gates.capFixMaxLines`;
     const clearedBy = decision.reason !== "cap_fix_over_budget" ? clear : fingerprints.length > 0 ? `${clear}; or ${shrink}` : shrink;
@@ -4340,6 +4352,39 @@ export async function seamFirstRoundFor({ gate, repo, pr, headSha, tmpRoot }, re
   }
 }
 
+const FULL_LABEL_READ_TIMEOUT_MS = 30_000;
+
+/**
+ * The live PR's gate:full label, shared by the context builder and the carry-forward resolver so both resolve the same angles.
+ * Any failure of the bounded read (gh, spawn, timeout, bad JSON) fails closed to labelled (`error` carries the cause); only a programming error (TypeError, ReferenceError, RangeError) propagates.
+ */
+export async function readFullLabel({ repo, pr }, { run = runChild } = {}) {
+  const bounded = (command, args, env, stdin) => run(command, args, env, stdin, { timeoutMs: FULL_LABEL_READ_TIMEOUT_MS });
+  try {
+    const { pr: view } = await viewPr({ repo, pr, fields: "labels" }, { run: bounded });
+    return { fullLabel: Array.isArray(view?.labels) && view.labels.some((label) => (label?.name ?? label) === GATE_FULL_LABEL) };
+  } catch (error) {
+    if (error instanceof TypeError || error instanceof ReferenceError || error instanceof RangeError) throw error;
+    return { fullLabel: true, error };
+  }
+}
+
+/** The size-budget outcome of the base diff; it fails closed to null, which checkFloors treats as ambiguous. */
+export async function readSizeOutcome({ base, repoRoot }, { evaluateSize = evaluatePrSizeBudget } = {}) {
+  try {
+    return await evaluateSize({ base, head: "HEAD", repoRoot });
+  } catch {
+    return null;
+  }
+}
+
+/** The dynamic angle resolution of one head: the one call the context builder and the carry-forward resolver both make. */
+export async function resolveHeadAngles(config, gate, { diff, fullLabel, sizeOutcome, checkFloors, explicitAngles, seamInput }, repoRoot) {
+  return resolveGateAnglesDynamic(config, mapGateToConfigKey(gate), {
+    diff, hasFullLabel: fullLabel === true, checkFloors, sizeOutcome, explicitAngles, seamFirstRound: await seamFirstRoundFor(seamInput, repoRoot),
+  });
+}
+
 export async function buildGateContext(input, { repoRoot = process.cwd() } = {}) {
   const isReviewGate = input.gate === "review";
   // review has no config key of its own (resolveGateAnglesDynamic only
@@ -4953,14 +4998,7 @@ export async function main(
     // full_fanout dispatch but leaves the angle set at the matched tier or
     // dynamic best-effort selection. A --prefix-file/no-base thin briefing has
     // no diff to evaluate a size outcome against, so checkFloors stays off.
-    let sizeOutcome = null;
-    if (options.base) {
-      try {
-        sizeOutcome = await evaluatePrSizeBudget({ base: options.base, head: "HEAD", repoRoot });
-      } catch {
-        sizeOutcome = null; // fails CLOSED — checkFloors treats null as ambiguous
-      }
-    }
+    const sizeOutcome = options.base ? await readSizeOutcome({ base: options.base, repoRoot }) : null;
 
     // Angle resolution: when --angles is omitted, resolve dynamically from the
     // loaded config (.devloops) + the captured --base diff — the SAME path the
@@ -4997,15 +5035,9 @@ export async function main(
         });
       } else {
         if (options.fullLabel !== true && !options.prefixFile) {
-          try {
-            const { pr } = await viewPr(
-              { repo: options.repo, pr: options.pr, fields: "labels" },
-              { run },
-            );
-            options.fullLabel = Array.isArray(pr?.labels)
-              && pr.labels.some((label) => (label?.name ?? label) === GATE_FULL_LABEL);
-          } catch (error) {
-            options.fullLabel = true;
+          const { fullLabel, error } = await readFullLabel({ repo: options.repo, pr: options.pr }, { run });
+          options.fullLabel = fullLabel;
+          if (error) {
             process.stderr.write(
               `[write-gate-context] warning: could not read PR labels to check for ${GATE_FULL_LABEL} (${error?.message ?? error}); failing closed to the untriered angle set.\n`,
             );
@@ -5016,15 +5048,10 @@ export async function main(
             `[write-gate-context] note: --prefix-file mode cannot read PR labels; resolving the untriered angle set (pass --angles to override).\n`,
           );
         }
-        const configKey = mapGateToConfigKey(options.gate);
-        resolverResult = await resolveGateAnglesDynamic(config, configKey, {
-          diff,
-          hasFullLabel: options.fullLabel === true,
-          checkFloors: Boolean(options.base),
-          sizeOutcome,
-          explicitAngles: Array.isArray(options.angles) ? options.angles : undefined,
-          seamFirstRound: await seamFirstRoundFor(options, repoRoot),
-        });
+        resolverResult = await resolveHeadAngles(config, options.gate, {
+          diff, fullLabel: options.fullLabel, sizeOutcome, checkFloors: Boolean(options.base),
+          explicitAngles: Array.isArray(options.angles) ? options.angles : undefined, seamInput: options,
+        }, repoRoot);
       }
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
       // The zero-review-coverage refusal is enforced by writeGateContext (the

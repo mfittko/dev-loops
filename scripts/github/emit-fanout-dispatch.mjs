@@ -162,7 +162,7 @@ Exit codes:
      carries an inline "diff --git" line, a draft_gate run has no --ci-file
      (ci_file_required), the --ci-file result is not settled green at
      --head-sha (ci_not_green), a full emission finds a posted verdict
-     (a fan-in ledger or findings log) at the head and refuses to retire that round
+     (a findings log) at the head and refuses to retire that round
      (the "recovery" field names the operator step), or a reviewer sentinel at the
      head has no newer valid findings artifact for its unit and the full emission
      refuses to retire a round whose reviewer may still run (resume with

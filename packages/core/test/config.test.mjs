@@ -4504,7 +4504,7 @@ test("every light-mode caller feeds the same inputs (AC5)", async () => {
   // resolve-gate-dispatch and write-gate-context: resolveReviewProportionality with changedFiles + sizeOutcome.
   assert.match(dispatch, /resolveReviewProportionality\(config, opts\.gate, \{[^}]*changedFiles,\s*sizeOutcome/s);
   // write-gate-context: the CLI call site passes diff, checkFloors and sizeOutcome to resolveGateAnglesDynamic.
-  assert.match(context, /await resolveGateAnglesDynamic\(config, configKey, \{\s*diff,[^}]*checkFloors: Boolean\(options\.base\),\s*sizeOutcome,/s);
+  assert.match(context, /await resolveHeadAngles\(config, options\.gate, \{\s*diff,[^}]*sizeOutcome,\s*checkFloors: Boolean\(options\.base\)/s);
   // merge gate: the same resolver with merge-base changedFiles + sizeOutcome.
   assert.match(merge, /resolveGateDispatchMode\(config, spec\.name === "draft_gate" \? "draft" : "preApproval", \{[^}]*changedFiles:[^}]*sizeOutcome/s);
 });
