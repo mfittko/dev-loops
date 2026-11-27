@@ -163,7 +163,7 @@ async function roundStartedAtCurrentBase(options, headSha, repoRoot, base) {
   return false;
 }
 
-const roundCapReachedError = (round, cap, { fingerprints = [], notClearable = false } = {}) => Object.assign(new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap}; the scoped final round (round ${cap + 1}) has run (GATE-EXEC-CAP-BRAKES). Report blocked with blockedOn operator_decision; the operator clears it with an operator focus item whose decision names the act items by fingerprint. When every open act item is a PR-body item, edit the PR body and run \`--converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`), {
+const roundCapReachedError = (round, cap, { fingerprints = [], notClearable = false } = {}) => Object.assign(new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap}; the scoped final round (round ${cap + 1}) has run (GATE-EXEC-CAP-BRAKES). Report blocked with blockedOn operator_decision; ${notClearable ? "this act set already had its one re-open, so the decision stays with the operator" : "the operator clears it with an operator focus item whose decision names the act items by fingerprint"}. When every open act item is a PR-body item, edit the PR body and run \`--converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`), {
   recovery: notClearable ? `operator: this act set already ran a scoped round, so no focus file clears it (${fingerprints.join(", ")}); hand back to the operator (GATE-EXEC-CAP-BRAKES).` : `Re-run this post with --operator-focus-file <path>, a focus file whose fingerprint items carry a decision for every act fingerprint of the cap round (${fingerprints.join(", ") || "none recorded"}).`,
 });
 
@@ -1033,6 +1033,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   // only meaningful for inline mode; drop it for fanout_fanin to avoid recording
   // a misleading reason.
   // The sealed cap-round ledger supplies head, verdict, findings and mode at run time (a cap-round ledger is fan-out).
+  if (options.operatorFocusFile !== undefined && options.gate !== undefined && options.gate !== "draft_gate") throw parseError("--operator-focus-file applies only to a draft_gate post");
   if (options.postSealedCapRound) {
     if (options.gate !== "draft_gate") throw parseError("--post-sealed-cap-round requires --gate draft_gate");
     // The sealed ledger supplies these; a caller-supplied value would be silently replaced or passed through.
@@ -3186,6 +3187,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
         throw new Error(`Cannot auto-resolve gate for ${options.repo}#${options.pr}: no gate action is currently allowed (${coordination.reason})`);
       }
     }
+    if (options.operatorFocusFile !== undefined && options.gate !== "draft_gate") throw new Error("--operator-focus-file applies only to a draft_gate post");
     const requestedGateAction = resolveGateAction(options.gate);
     const prIsDraft = Boolean(coordinationContext.prData?.isDraft);
     if (options.gate === "draft_gate" && coordination.draftGateAlreadySatisfied && !(capRoundHead && !(coordinationContext.gateEvidence?.draftGate?.visible && coordinationContext.gateEvidence.draftGate.verdict === "clean"))) {
