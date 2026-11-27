@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { spawnSyncTrusted as spawnSync } from "../_helpers.mjs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, listPriorFindingsLogHeads, main as emitMain, unitBudgetBasis } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
-import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, readCompletedAnglesForHead, renderPrBodyRead, renderRequiredReadLine, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { buildGateContextPath, buildGateEmitPlanPath,buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, readCompletedAnglesForHead, renderPrBodyRead, renderRequiredReadLine, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
@@ -3120,5 +3120,47 @@ test("a --pending --retry-crashed emit against a stale context drops finished un
     for (const unit of plan.units.filter((u) => u.resumed)) {
       assert.equal(unit.executionIdentity, wave1.find((w) => w.scope === unit.scope).executionIdentity);
     }
+  });
+});
+
+async function setupThreeAngleRound(repoRoot) {
+  const gate = "draft_gate";
+  const angles = ["srp", "soc", "pr-description"];
+  await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: { groups: angles.map((angle) => ({ name: angle, angles: [angle] })), maxAnglesPerGroup: 6 } } }), "utf8");
+  const { config } = await loadDevLoopConfig({ repoRoot });
+  const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
+  const tmpRoot = path.join(repoRoot, "tmp");
+  const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", "Body"]);
+  await writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { maxAnglesPerGroup: 6 }) }, { repoRoot });
+  const emitArgs = ["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA];
+  assert.equal(runEmitCli(emitArgs, { cwd: repoRoot }).status, 0);
+  const findingsDir = buildGateReviewsDir({ ...id, tmpRoot });
+  await mkdir(findingsDir, { recursive: true });
+  for (const angle of angles) await writeFile(path.join(findingsDir, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+  return { id, tmpRoot, emitArgs, contextPath: buildGateContextPath({ ...id, tmpRoot }) };
+}
+
+test("a --pending emit drops nothing when the context was rebuilt after the artifacts (#3661)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const { id, tmpRoot, emitArgs, contextPath } = await setupThreeAngleRound(repoRoot);
+    const later = new Date(Date.now() + 60_000);
+    await utimes(contextPath, later, later);
+    const pending = runEmitCli([...emitArgs, "--pending"], { cwd: repoRoot });
+    assert.equal(pending.status, 0, pending.stderr || pending.stdout);
+    assert.equal(JSON.parse(pending.stdout).units.length, 3);
+    assert.equal(JSON.parse(await readFile(buildGateEmitPlanPath({ ...id, tmpRoot }), "utf8")).units.length, 3);
+  });
+});
+
+test("a --pending emit with every unit finished refuses with fan-in recovery and keeps the keyed plan (#3661)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const { id, tmpRoot, emitArgs, contextPath } = await setupThreeAngleRound(repoRoot);
+    const past = new Date(Date.now() - 60_000);
+    await utimes(contextPath, past, past);
+    const pending = runEmitCli([...emitArgs, "--pending"], { cwd: repoRoot });
+    assert.notEqual(pending.status, 0);
+    assert.match(pending.stdout + pending.stderr, /already finished at this head/);
+    assert.match(pending.stdout + pending.stderr, /recovery/);
+    assert.equal(JSON.parse(await readFile(buildGateEmitPlanPath({ ...id, tmpRoot }), "utf8")).units.length, 3);
   });
 });

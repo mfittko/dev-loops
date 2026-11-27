@@ -503,10 +503,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // every successful emission: a refused run followed by a --pending run finds the latest prior units. fan-in never reads the sidecar.
   const priorPlanSidecar = `${buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot })}.prior`;
   let priorPlan = null;
-  let priorPlanMtimeMs = null;
+  let priorText = null;
   if (pendingOnly) {
-    priorPlanMtimeMs = (await stat(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot })).catch(() => stat(priorPlanSidecar).catch(() => null)))?.mtimeMs ?? null;
-    const priorText = await readFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), "utf8").catch(() => null)
+    priorText = await readFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), "utf8").catch(() => null)
       ?? await readFile(priorPlanSidecar, "utf8").catch(() => null);
     try {
       priorPlan = priorText === null ? null : JSON.parse(priorText);
@@ -681,12 +680,10 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout.pendingGroups is present but not an array (malformed plan); re-run write-gate-context.mjs` }, false);
     }
     units = fanout.pendingGroups;
-    // A context older than the prior plan can list units that finished since: drop them. A context rebuilt after the
-    // emission deliberately lists body-reading angles as pending, so it is trusted as is.
-    if (priorPlanMtimeMs !== null && (await stat(contextPath)).mtimeMs < priorPlanMtimeMs) {
-      liveCompleted = new Set(await readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: process.cwd(), config }));
-      units = units.filter((unit) => !normalizeUnitAngles(unit).every((angle) => liveCompleted.has(angle)));
-    }
+    // A unit whose angles all have a terminal artifact written after this context finished since it was built: drop it.
+    // Artifacts older than the context (a body-only rerun rebuilt it) are not trusted as finished.
+    liveCompleted = new Set(await readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot, newerThanMs: (await stat(contextPath)).mtimeMs }, { repoRoot: process.cwd(), config }));
+    units = units.filter((unit) => !(normalizeUnitAngles(unit).length > 0 && normalizeUnitAngles(unit).every((angle) => liveCompleted.has(angle))));
   } else {
     units = fanout.groups;
   }
@@ -706,6 +703,11 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const allCarried = pendingOnly && Array.isArray(fanout.groups) && fanout.groups.length > 0
     && fanout.groups.every((unit) => normalizeUnitAngles(unit).length > 0
       && normalizeUnitAngles(unit).every((angle) => carried.has(angle.trim().toLowerCase())));
+  if (liveCompleted.size > 0 && Array.isArray(units) && units.length === 0 && !allCarried && priorText !== null) {
+    // The start-of-flow rm deleted the keyed plan: restore it so fan-in still finds the round's units.
+    await writeFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), priorText, "utf8");
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — every pending unit already finished at this head — nothing to dispatch`, recovery: "All pending units already finished at this head; run fan-in (consolidate-fanin.mjs) instead of another dispatch." }, false);
+  }
   if (!Array.isArray(units) || (units.length === 0 && !allCarried)) {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout dispatch plan resolves zero units (${pendingOnly ? "pendingGroups" : "groups"}) — nothing to dispatch` }, false);
   }
@@ -787,7 +789,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const retryEmitted = new Set(dispatchUnits.filter((unit) => retryCrashed.has(unit.name)));
   const notPending = [...retryCrashed].filter((name) => !emittedNames.includes(name));
   if (notPending.length > 0) {
-    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: --retry-crashed names ${notPending.map((n) => JSON.stringify(n)).join(", ")}, which is not a pending unit`, recovery: `The emitted units are ${emittedNames.map((n) => JSON.stringify(n)).join(", ") || "(none)"}; name only an emitted unit whose agent ended without result artifacts.` }, false);
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: --retry-crashed names ${notPending.map((n) => JSON.stringify(n)).join(", ")}, which is not a pending unit`, recovery: `The emitted units are ${emittedNames.map((n) => JSON.stringify(n)).join(", ") || "(none: every pending unit already finished at this head)"}; name only an emitted unit whose agent ended without result artifacts.` }, false);
   }
   const ambiguous = [...retryCrashed].filter((name) => emittedNames.filter((n) => n === name).length > 1);
   if (ambiguous.length > 0) {
