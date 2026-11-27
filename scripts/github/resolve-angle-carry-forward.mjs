@@ -31,16 +31,16 @@ import { parseArgs } from "node:util";
 
 import { isDevLoopConfigSourcePath } from "@dev-loops/core/analysis/diff-analyzer";
 import { validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-verdict-carry";
-import { loadDevLoopConfigStrict, resolveBaseBranch, resolveClassifyRules, resolveGateAngleContract } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveBaseBranch, resolveClassifyRules, resolveFanoutGroups, resolveGateAngleContract } from "@dev-loops/core/config";
 import {
   angleReviewSurface,
   RENAME_ONLY_ANGLES,
   resolveAngleCarryForward,
   resolveConvergenceCarryForward,
 } from "@dev-loops/core/loop/gate-carry-forward";
-import { baseAngleName } from "@dev-loops/core/loop/gate-fanin";
+import { baseAngleName, ledgerAngleNames, orderAnglesByCatalog, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 
-import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { captureMainRelativeChangedFilesSince, runGitCommand } from "../lib/git-delta.mjs";
 export { runGitCommand } from "../lib/git-delta.mjs";
@@ -52,10 +52,15 @@ import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHead
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { COPILOT_BODY_ANGLE } from "./_copilot-body-disposition.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
 import {
   buildCarryForwardPlanPath,
+  captureDiffFromBase,
   mapGateToConfigKey,
+  readFullLabel,
+  readSizeOutcome,
+  resolveHeadAngles,
 } from "./write-gate-context.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
@@ -75,6 +80,10 @@ Required:
 Optional:
   --rerun-angle <angle>         Repeatable. Force the named angle (an angle in the prior log) into
                                  mustRerun with reason operator_rerun; an unknown angle is refused.
+                                 A carried angle whose base unit has a re-run member re-runs with reason
+                                 base_unit_rerun. The resolver reads the live gate:full label through gh
+                                 (30 s bound; a gh failure or timeout fails closed to labelled; a TypeError,
+                                 ReferenceError or RangeError exits 1).
   --tmp-root <path>             Root tmp directory. Omitted, the prior findings-log ledger is read
                                  from the MAIN worktree's tmp/ (the stable per-repo ledger location)
                                  while the carry-forward plan stays worktree-local; an explicit path pins both.
@@ -218,9 +227,11 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
  *   ran, so an EMPTY delta carries every eligible angle (integrate-only base-move)
  *   instead of failing closed. Threaded to {@link resolveAngleCarryForward}.
  * @param {import("@dev-loops/core/analysis/diff-analyzer").ClassifyRules|null} [input.rules] — repository `classify` rules from resolveClassifyRules
+ * @param {string[]} [input.freshAngles] — the angles this head resolves (the context builder's resolution: live gate:full label, size budget, base diff); one with no prior row is a re-run member of its base unit
+ * @param {string[][]} [input.baseUnits] — the base units over the set the writer will see (the head-resolved and always-re-run angles plus the prior angles that carry; the writer's `resolveFanoutGroups` derivation, see {@link planOverWriterUnits}); a carried angle whose unit has a re-run member re-runs with reason `base_unit_rerun`
  * @returns {{ prevHead: string, carried: Array<{angle: string, carriedFromHead: string, reviewer?: string, dispatchId?: string, model?: string, prevVerdict: "clean"|"findings_present", findings: Array<object>, reason: string}>, mustRerun: Array<{angle: string, reason: string}> }}
  */
-export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = [], alwaysRerun = [], deltaComplete = false, rules = null, rerunAngles = [] }) {
+export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = [], alwaysRerun = [], deltaComplete = false, rules = null, rerunAngles = [], baseUnits = [], freshAngles = [] }) {
   if (!log || typeof log !== "object") {
     throw new Error("prior gate findings-log not found or unreadable — cannot carry forward (fail-closed)");
   }
@@ -385,7 +396,39 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
       mustRerun.push({ angle, reason: decision.reason });
     }
   }
-  return { prevHead: headSha, carried, mustRerun };
+  // A base unit carries whole or not at all: the findings-log writer re-derives units from fresh plus carried angles,
+  // and a dispatch unit that splits a base unit is refused. Units are disjoint, so one pass is enough.
+  // An always-re-run or resolved angle with no prior row is fresh at this head, so it is a re-run member of its unit too.
+  const priorBases = new Set(prevAngles.map(baseAngleName));
+  const rerunBases = new Set([...mustRerun.map((m) => baseAngleName(m.angle)), ...[...alwaysRerun, ...freshAngles].map(baseAngleName).filter((a) => !priorBases.has(a))]);
+  const wholeCarried = [];
+  for (const entry of carried) {
+    const unit = baseUnits.find((u) => u.includes(baseAngleName(entry.angle)));
+    if (unit && unit.some((a) => rerunBases.has(a))) mustRerun.push({ angle: entry.angle, reason: "base_unit_rerun" });
+    else wholeCarried.push(entry);
+  }
+  return { prevHead: headSha, carried: wholeCarried, mustRerun };
+}
+
+/**
+ * Plan the carry over the base units the findings-log writer will derive. The writer sees the angles this head resolves plus the carried ones,
+ * and positional auto-chunking depends on that set, so a prior angle that neither re-runs at this head nor carries must not shape the units.
+ * Shrink the unit angle set to the fixed (re-run or resolved) angles plus the carried ones until it stops changing; an angle never re-enters, so this ends.
+ * An angle that falls out of the set has no unit to carry in: it re-runs with `base_unit_rerun`.
+ * `buildPlan(baseUnits)` is {@link buildCarryForwardPlan} bound to this head's inputs; `deriveUnits(angles)` is the writer's `resolveFanoutGroups` derivation.
+ */
+export function planOverWriterUnits({ priorAngles, fixedAngles, deriveUnits, buildPlan }) {
+  let unitAngles = [...new Set([...priorAngles, ...fixedAngles])];
+  let plan;
+  for (;;) {
+    plan = buildPlan(deriveUnits(unitAngles));
+    const next = [...new Set([...fixedAngles, ...plan.carried.map((c) => baseAngleName(c.angle)).filter((a) => unitAngles.includes(a))])];
+    if (next.length === unitAngles.length) break;
+    unitAngles = next;
+  }
+  const outside = plan.carried.filter((c) => !unitAngles.includes(baseAngleName(c.angle)));
+  if (outside.length === 0) return plan;
+  return { ...plan, carried: plan.carried.filter((c) => !outside.includes(c)), mustRerun: [...plan.mustRerun, ...outside.map((c) => ({ angle: c.angle, reason: "base_unit_rerun" }))] };
 }
 
 async function assertWorktreeAtHeadAsync(headSha, { repoRoot, runGit = runGitCommand }) {
@@ -429,7 +472,8 @@ async function persistCarryForwardPlan(planBody, { repoRoot, repo, pr, gate, hea
 }
 
 // The base-merge classifier (computeBaseMergeCarry) always runs git through the pinned runner and ignores the injected runGit.
-export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), runGit = runGitCommand } = {}) {
+// `run` is the gh runner of the gate:full label read and `evaluateSize` the size-budget read; tests stub both so no CLI test spawns gh.
+export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), runGit = runGitCommand, run = runChild, evaluateSize = evaluatePrSizeBudget } = {}) {
   let options;
   try {
     options = parseResolveAngleCarryForwardCliArgs(argv);
@@ -560,9 +604,27 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       const ownEdited = new Set(own.stdout.split("\0").filter(Boolean));
       resolutionScopePaths = baseMerge.resolutionPaths.filter((p) => !ownEdited.has(p));
     }
-    const rawPlan = buildCarryForwardPlan({
-      log, changedFiles: partial ? baseMerge.rerunPaths : changedFiles, incrementalFiles, alwaysRerun,
-      deltaComplete: partial || reduced, rules, rerunAngles: options.rerunAngles,
+    const catalogKey = resolveGateAngleCatalogKey(options.gate);
+    // The writer derives units over the angles it sees: the ones this head resolves (dispatched or carried) plus the carried ones.
+    // Head angles resolve only when `reduced` (the base ref resolves and gives a reduced delta); otherwise no head angle is resolved, a prior angle that the plain prevHead..head delta does not touch still carries, an empty unreduced delta carries nothing, and the units cover the always-re-run and carried prior angles, with the writer's split refusal as the backstop.
+    // The resolution takes the context builder's inputs, so a head resolved with --angles or --full-label can differ (the contract names that limit).
+    // It also resolves from the configured base ref and the full diff, while the builder uses the PR base after its freshness fetch and, in a closure round, the PR-own delta; auto-chunk boundaries can then differ. Recover with --rerun-angle for each carried angle of the split base unit.
+    const pool = resolveGateAngleContract(config, catalogKey).pool ?? [];
+    let resolvedAngles = [];
+    if (reduced) {
+      const { fullLabel } = await readFullLabel({ repo: options.repo, pr: options.pr }, { run });
+      resolvedAngles = (await resolveHeadAngles(config, options.gate, {
+        diff: captureDiffFromBase(mainRef, { repoRoot }), fullLabel, sizeOutcome: await readSizeOutcome({ base: mainRef, repoRoot }, { evaluateSize }), checkFloors: true, seamInput: options,
+      }, repoRoot)).recommendedAngles ?? [];
+    }
+    const fixedAngles = [...alwaysRerun, ...resolvedAngles].map(baseAngleName);
+    const deriveUnits = (angles) => resolveFanoutGroups(config, catalogKey, orderAnglesByCatalog([...new Set(angles)], pool)).map((g) => g.angles);
+    const rawPlan = planOverWriterUnits({
+      priorAngles: ledgerAngleNames(log.provenance?.perAngle, pool), fixedAngles, deriveUnits,
+      buildPlan: (baseUnits) => buildCarryForwardPlan({
+        log, changedFiles: partial ? baseMerge.rerunPaths : changedFiles, incrementalFiles, alwaysRerun,
+        deltaComplete: partial || reduced, rules, rerunAngles: options.rerunAngles, baseUnits, freshAngles: resolvedAngles,
+      }),
     });
     // AC1 (ADR 0061): optional --spec-authority stamps the pinned revision
     // identity onto the plan via the ONE shared helper. Pure no-op when absent.

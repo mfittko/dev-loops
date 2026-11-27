@@ -11,7 +11,7 @@ import path from "node:path";
 import { afterAll, describe, test } from "bun:test";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
-import { buildGateContextPath, buildGateFaninLedgerPath, buildGateReviewsDir, repoSlugFor } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { buildGateContextPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { emitFixerWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { addLocalOrigin, runGitFixture, runIdFreeEnv } from "../_helpers.mjs";
@@ -161,11 +161,14 @@ test("the shared retirement helper step refuses a round whose reviewer may still
   assert.deepEqual(await snapshot(root), before);
 });
 
-// A round that already recorded its verdict (fan-in ledger) is never retired by the retirement helper: it refuses.
+// A round that already recorded its verdict (findings log) is never retired by the retirement helper: it refuses.
 test("the retirement step over a round with a posted verdict refuses and keeps the round", async () => {
   const root = await makeRoot();
   const done = runChild("round", root);
   assert.equal(done.status, 0, done.stderr);
+  const log = buildLogPath({ ...GATE_KEY, headSha: runGitFixture(root, ["rev-parse", "HEAD"]).trim(), tmpRoot: path.join(root, "tmp") });
+  await mkdir(path.dirname(log), { recursive: true });
+  await writeFile(log, "{}");
   const before = await snapshot(root);
   const redo = runChild("round", root, { INTERRUPT_AFTER: "context", PREFIX_HASH: "b".repeat(64) });
   assert.equal(redo.status, 5, redo.stdout + redo.stderr);

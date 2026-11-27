@@ -6,15 +6,18 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
+import { resolveFanoutGroups } from "@dev-loops/core/config";
+import { orderAnglesByCatalog } from "@dev-loops/core/loop/gate-fanin";
 
 import {
   buildCarryForwardPlan,
   main,
   parseResolveAngleCarryForwardCliArgs,
+  planOverWriterUnits,
   runGitCommand,
 } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { buildLogPath, parseProvenanceJson } from "../../scripts/github/write-gate-findings-log.mjs";
-import { buildCarryForwardPlanPath } from "../../scripts/github/write-gate-context.mjs";
+import { buildCarryForwardPlanPath, readFullLabel } from "../../scripts/github/write-gate-context.mjs";
 
 // Scrub inherited global/system git config and any leaked GIT_DIR/GIT_WORK_TREE
 // so host-side commit signing, hooks, templates, or an exported repo pointer
@@ -75,12 +78,15 @@ test("async Git runner surfaces the close signal and keeps a null exit code as 1
 
 // Run the CLI main() against a repoRoot and return the parsed JSON result it
 // writes to stdout (default emitResult mode).
-async function runMain(argv, { repoRoot }) {
+// No CLI test spawns gh: the label read fails like an offline host (fail closed to labelled) unless a test injects `run`.
+const OFFLINE = { run: async () => ({ code: 1, stdout: "", stderr: "offline" }), evaluateSize: async () => null };
+
+async function runMain(argv, { repoRoot, ...deps }) {
   const chunks = [];
   const orig = process.stdout.write;
   process.stdout.write = (chunk) => { chunks.push(String(chunk)); return true; };
   try {
-    await main(argv, { repoRoot });
+    await main(argv, { repoRoot, ...OFFLINE, ...deps });
   } finally {
     process.stdout.write = orig;
   }
@@ -89,7 +95,7 @@ async function runMain(argv, { repoRoot }) {
 
 // Run main() capturing stdout+stderr and the exit code, WITHOUT parsing — for the
 // fail-closed paths where main writes an error and sets process.exitCode = 1.
-async function runMainRaw(argv, { repoRoot }) {
+async function runMainRaw(argv, { repoRoot, ...deps }) {
   const out = [];
   const err = [];
   const origOut = process.stdout.write;
@@ -99,7 +105,7 @@ async function runMainRaw(argv, { repoRoot }) {
   process.stderr.write = (chunk) => { err.push(String(chunk)); return true; };
   process.exitCode = 0;
   try {
-    await main(argv, { repoRoot });
+    await main(argv, { repoRoot, ...OFFLINE, ...deps });
     return { stdout: out.join(""), stderr: err.join(""), exitCode: process.exitCode };
   } finally {
     process.stdout.write = origOut;
@@ -108,17 +114,20 @@ async function runMainRaw(argv, { repoRoot }) {
   }
 }
 
-async function makeCarryForwardRepo({ mandatoryAngles = [], perAngle, mutate, verdict = "clean", findings = [] }) {
+async function makeCarryForwardRepo({ mandatoryAngles = [], optionalAngles = [], perAngle, mutate, verdict = "clean", findings = [], maxAnglesPerGroup = 1, noGroups = false }) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-cli-"));
   git(repoRoot, ["init", "-q"]);
   git(repoRoot, ["config", "user.email", "test@example.com"]);
   git(repoRoot, ["config", "user.name", "Test"]);
-  const angleLines = mandatoryAngles.length > 0
-    ? mandatoryAngles.map((name) => `      - name: ${name}\n        mandatory: true`).join("\n")
-    : "      []";
+  const angleEntries = [
+    ...mandatoryAngles.map((name) => `      - name: ${name}\n        mandatory: true`),
+    ...optionalAngles.map((name) => `      - name: ${name}`),
+  ];
+  const angleLines = angleEntries.length > 0 ? angleEntries.join("\n") : "      []";
   await writeFile(
     path.join(repoRoot, ".devloops.yaml"),
-    `version: 1\ngates:\n  draft:\n    angles:\n${angleLines}\n`,
+    // maxAnglesPerGroup 1 keeps each ungrouped angle its own base unit, so a fresh mandatory angle never shares a unit with a carried one.
+    `version: 1\ngates:\n  fanout:\n    maxAnglesPerGroup: ${maxAnglesPerGroup}\n${noGroups ? "    groups: []\n" : ""}  draft:\n    angles:\n${angleLines}\n`,
     "utf8",
   );
   const base = {
@@ -207,6 +216,223 @@ test("buildCarryForwardPlan attributes copilot-body to configured perAngle rows 
 test("buildCarryForwardPlan still fails closed on non-synthetic or case-drifted copilot-body angles", () => {
   for (const angle of ["copilot-body-x", "Copilot-Body"]) {
     assert.throws(() => buildCarryForwardPlan({ log: withFindings(cleanLog, [bodyFinding(angle)]), changedFiles: ["docs/guide.md"] }), /matches no provenance\.perAngle entry/);
+  }
+});
+
+test("buildCarryForwardPlan carries a base unit whole or not at all (base_unit_rerun)", () => {
+  const delta = { log: cleanLog, changedFiles: ["docs/guide.md"] };
+  const names = (list) => list.map((e) => e.angle).sort();
+  // A unit with a re-run member (docs) pulls every carried member into mustRerun.
+  const whole = buildCarryForwardPlan({ ...delta, baseUnits: [["correctness", "coverage", "docs"]] });
+  assert.deepEqual(whole.carried, []);
+  assert.deepEqual(names(whole.mustRerun), ["correctness", "coverage", "docs"]);
+  assert.deepEqual(whole.mustRerun.filter((m) => m.angle !== "docs").map((m) => m.reason), ["base_unit_rerun", "base_unit_rerun"]);
+  // A unit with no re-run member still carries every eligible angle.
+  const split = buildCarryForwardPlan({ ...delta, baseUnits: [["correctness", "coverage"], ["docs"]] });
+  assert.deepEqual(names(split.carried), ["correctness", "coverage"]);
+  // A mandatory angle and an operator --rerun-angle each pull their whole unit.
+  const mandatory = buildCarryForwardPlan({ log: cleanLog, changedFiles: [], deltaComplete: true, alwaysRerun: ["docs"], baseUnits: [["correctness", "docs"], ["coverage"]] });
+  assert.deepEqual(names(mandatory.carried), ["coverage"]);
+  const operator = buildCarryForwardPlan({ log: cleanLog, changedFiles: [], deltaComplete: true, rerunAngles: ["coverage"], baseUnits: [["correctness", "coverage"], ["docs"]] });
+  assert.deepEqual(names(operator.carried), ["docs"]);
+  assert.equal(operator.mustRerun.find((m) => m.angle === "correctness").reason, "base_unit_rerun");
+});
+
+test("buildCarryForwardPlan moves the docs-surface unit whole when contract-surface, a fresh angle or a delta-suffixed angle re-runs", () => {
+  const unit = [["link-check", "config-drift", "contract-surface"]];
+  const log = { headSha: "aaaaaaa", verdict: "clean", provenance: { distinctReviewers: 3, perAngle: [
+    { angle: "link-check", reviewer: "r1" }, { angle: "config-drift", reviewer: "r2" }, { angle: "contract-surface", reviewer: "r3" },
+  ] } };
+  const rerunOnly = (plan) => plan.mustRerun.map((m) => `${m.angle}:${m.reason}`).sort();
+  const viaMandatory = buildCarryForwardPlan({ log, changedFiles: [], deltaComplete: true, alwaysRerun: ["contract-surface"], baseUnits: unit });
+  assert.deepEqual(viaMandatory.carried, []);
+  assert.deepEqual(rerunOnly(viaMandatory).filter((r) => !r.startsWith("contract-surface")), ["config-drift:base_unit_rerun", "link-check:base_unit_rerun"]);
+  // A fresh always-re-run angle with no prior row re-runs its unit's carried members.
+  const fresh = buildCarryForwardPlan({ log, changedFiles: [], deltaComplete: true, alwaysRerun: ["docs"], baseUnits: [[...unit[0], "docs"]] });
+  assert.deepEqual(fresh.carried, []);
+  assert.equal(fresh.mustRerun.length, 3);
+  // A delta-suffixed angle re-runs and counts toward its base angle's unit, so a carried member moves with it.
+  const suffixed = { ...log, provenance: { distinctReviewers: 3, perAngle: [
+    { angle: "link-check-delta-at-abc1234", reviewer: "r1" }, { angle: "config-drift", reviewer: "r2" }, { angle: "contract-surface", reviewer: "r3" },
+  ] } };
+  const plan = buildCarryForwardPlan({ log: suffixed, changedFiles: [], deltaComplete: true, alwaysRerun: ["contract-surface"], baseUnits: unit });
+  assert.deepEqual(plan.carried, []);
+  assert.deepEqual(plan.mustRerun.map((m) => m.angle).sort(), ["config-drift", "contract-surface", "link-check-delta-at-abc1234"]);
+  assert.equal(plan.mustRerun.find((m) => m.angle === "config-drift").reason, "base_unit_rerun");
+});
+
+test("buildCarryForwardPlan moves the docs-surface unit whole when a delta touches only contract-surface, and carries all three when it touches none", () => {
+  const log = { headSha: "aaaaaaa", verdict: "clean", provenance: { distinctReviewers: 3, perAngle: [
+    { angle: "link-check", reviewer: "r1" }, { angle: "config-drift", reviewer: "r2" }, { angle: "contract-surface", reviewer: "r3" },
+  ] } };
+  const baseUnits = [["link-check", "config-drift", "contract-surface"]];
+  // A source file is claimed by contract-surface alone, so the delta drives the unit's re-run.
+  const touched = buildCarryForwardPlan({ log, changedFiles: ["src/foo.mjs"], deltaComplete: true, baseUnits });
+  assert.deepEqual(touched.carried, []);
+  assert.deepEqual(touched.mustRerun.filter((m) => m.angle !== "contract-surface").map((m) => `${m.angle}:${m.reason}`).sort(), ["config-drift:base_unit_rerun", "link-check:base_unit_rerun"]);
+  // A test file touches none of the three surfaces, so the unit has no re-run member and all three carry.
+  const untouched = buildCarryForwardPlan({ log, changedFiles: ["test/foo.test.mjs"], deltaComplete: true, baseUnits });
+  assert.deepEqual(untouched.carried.map((c) => c.angle).sort(), ["config-drift", "contract-surface", "link-check"]);
+  assert.deepEqual(untouched.mustRerun, []);
+});
+
+test("CLI derives base units over the prior angles plus the always-re-run angles", async () => {
+  // docs is mandatory with no prior row; link-check shares its shipped docs-surface unit, so it must not carry.
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: ["docs"],
+    perAngle: [{ angle: "link-check", reviewer: "review-a" }, { angle: "correctness", reviewer: "review-b" }],
+    mutate: async (root) => {
+      await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8");
+    },
+  });
+  try {
+    const result = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(result.ok, true);
+    assert.ok(!result.carried.some((c) => c.angle === "link-check"), "link-check shares docs-surface with the fresh docs angle");
+    assert.equal(result.mustRerun.find((m) => m.angle === "link-check")?.reason, "base_unit_rerun");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildCarryForwardPlan re-runs a carried angle whose unit holds a resolved angle that is new at this head", () => {
+  const log = { headSha: "aaaaaaa", verdict: "clean", provenance: { distinctReviewers: 2, perAngle: [
+    { angle: "link-check", reviewer: "r1" }, { angle: "config-drift", reviewer: "r2" },
+  ] } };
+  const baseUnits = [["link-check", "config-drift", "contract-surface"]];
+  const args = { log, changedFiles: [], deltaComplete: true, baseUnits };
+  assert.deepEqual(buildCarryForwardPlan(args).carried.map((c) => c.angle), ["link-check", "config-drift"]);
+  const plan = buildCarryForwardPlan({ ...args, freshAngles: ["link-check", "contract-surface"] });
+  assert.deepEqual(plan.carried, []);
+  assert.deepEqual(plan.mustRerun.map((m) => `${m.angle}:${m.reason}`).sort(), ["config-drift:base_unit_rerun", "link-check:base_unit_rerun"]);
+});
+
+test("CLI derives base units over the angles the head resolves, so a group member new at this head re-runs its carried sibling", async () => {
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    optionalAngles: ["link-check", "contract-surface", "correctness"],
+    perAngle: [{ angle: "link-check", reviewer: "review-a" }, { angle: "correctness", reviewer: "review-b" }],
+    mutate: async (root) => {
+      await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8");
+    },
+  });
+  try {
+    // The base diff (origin/main...HEAD) resolves the head's angles; the fixture has no remote, so point the ref at the first commit.
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", prevHead]);
+    const result = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(result.ok, true);
+    assert.equal(result.mustRerun.find((m) => m.angle === "link-check")?.reason, "base_unit_rerun");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("planOverWriterUnits derives the units over the writer's angle set: a touched prior angle the head no longer resolves does not shift the auto-chunk boundary", () => {
+  // Default maxAnglesPerGroup (5), no configured groups: ungrouped angles chunk by position.
+  const pool = ["link-check", "correctness", "coverage", "determinism", "state-concurrency", "input-validation"];
+  const config = { gates: { fanout: { groups: [] } } };
+  const deriveUnits = (angles) => resolveFanoutGroups(config, "draft", orderAnglesByCatalog([...new Set(angles)], pool)).map((g) => g.angles);
+  const log = { headSha: "aaaaaaa", verdict: "clean", provenance: { distinctReviewers: 6, perAngle: pool.map((angle) => ({ angle, reviewer: `r-${angle}` })) } };
+  // The delta touches link-check's docs surface; the head resolves the first four code angles, not link-check.
+  const fixedAngles = pool.slice(1, 5);
+  const plan = planOverWriterUnits({
+    priorAngles: pool, fixedAngles, deriveUnits,
+    buildPlan: (baseUnits) => buildCarryForwardPlan({ log, changedFiles: ["docs/guide.md"], deltaComplete: true, baseUnits, freshAngles: fixedAngles }),
+  });
+  assert.deepEqual(plan.mustRerun.map((m) => m.angle), ["link-check"]);
+  const carried = new Set(plan.carried.map((c) => c.angle));
+  assert.deepEqual([...carried].sort(), pool.slice(1).sort());
+  // The writer sees the resolved angles plus the carried ones; every unit over that set is wholly carried, so no dispatch unit splits one.
+  for (const unit of deriveUnits([...fixedAngles, ...carried])) assert.ok(unit.every((a) => carried.has(a)), `unit ${unit} is split`);
+});
+
+test("CLI label read: a labelled, an unlabelled and a failing gh read each resolve through the injected runner", async () => {
+  const labelled = { code: 0, stdout: JSON.stringify({ labels: [{ name: "gate:full" }] }), stderr: "" };
+  const unlabelled = { code: 0, stdout: JSON.stringify({ labels: [] }), stderr: "" };
+  const calls = [];
+  const resolved = async (run) => {
+    const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+      optionalAngles: ["link-check", "contract-surface", "correctness"],
+      perAngle: [{ angle: "link-check", reviewer: "review-a" }, { angle: "correctness", reviewer: "review-b" }],
+      mutate: async (root) => { await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8"); },
+    });
+    try {
+      git(repoRoot, ["update-ref", "refs/remotes/origin/main", prevHead]);
+      return await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot, run });
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  };
+  const reasonOfLinkCheck = (result) => result.mustRerun.find((m) => m.angle === "link-check")?.reason;
+  for (const answer of [labelled, unlabelled, { code: 1, stdout: "", stderr: "boom" }]) {
+    const result = await resolved(async (...args) => { calls.push(args); return answer; });
+    assert.equal(result.ok, true);
+    // The read goes through the injected runner with a bounded timeout, never a live gh.
+    assert.equal(calls.at(-1)[4].timeoutMs > 0, true);
+    if (answer !== unlabelled) assert.equal(reasonOfLinkCheck(result), "base_unit_rerun");
+  }
+  assert.equal(calls.length, 3);
+});
+
+test("readFullLabel reads the label: unlabelled is false, labelled is true, an ENOENT runner fails closed with the error", async () => {
+  const answer = (labels) => async () => ({ code: 0, stdout: JSON.stringify({ labels }), stderr: "" });
+  assert.deepEqual(await readFullLabel({ repo: "o/n", pr: 7 }, { run: answer([]) }), { fullLabel: false });
+  assert.deepEqual(await readFullLabel({ repo: "o/n", pr: 7 }, { run: answer([{ name: "gate:full" }]) }), { fullLabel: true });
+  const missing = Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" });
+  const closed = await readFullLabel({ repo: "o/n", pr: 7 }, { run: async () => { throw missing; } });
+  assert.equal(closed.fullLabel, true);
+  assert.equal(closed.error, missing);
+  for (const code of ["EACCES", "EAGAIN"]) {
+    const spawnError = Object.assign(new Error(`spawn gh ${code}`), { code });
+    const failed = await readFullLabel({ repo: "o/n", pr: 7 }, { run: async () => { throw spawnError; } });
+    assert.equal(failed.fullLabel, true, code);
+    assert.equal(failed.error, spawnError);
+  }
+  await assert.rejects(readFullLabel({ repo: "o/n", pr: 7 }, { run: async () => { throw new ReferenceError("x is not defined"); } }), ReferenceError);
+});
+
+test("CLI label read: a timed-out gh read fails closed to labelled and a non-gh error propagates", async () => {
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    optionalAngles: ["link-check", "contract-surface", "correctness"],
+    perAngle: [{ angle: "link-check", reviewer: "review-a" }, { angle: "correctness", reviewer: "review-b" }],
+    mutate: async (root) => { await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8"); },
+  });
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", prevHead]);
+    const argv = ["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha];
+    const timedOut = await runMain(argv, { repoRoot, run: async () => ({ code: null, stdout: "", stderr: "", timedOut: true }) });
+    assert.equal(timedOut.mustRerun.find((m) => m.angle === "link-check")?.reason, "base_unit_rerun");
+    for (const [code, message] of [["RATE_LIMITED", "gh command failed: secondary rate limit"], ["GH_THROTTLE_UNAVAILABLE", "gh throttle unavailable: slot timeout"], ["ENOENT", "spawn gh ENOENT"]]) {
+      const closed = await runMain(argv, { repoRoot, run: async () => { throw Object.assign(new Error(message), { code }); } });
+      assert.equal(closed.mustRerun.find((m) => m.angle === "link-check")?.reason, "base_unit_rerun", code);
+    }
+    const badJson = await runMain(argv, { repoRoot, run: async () => ({ code: 0, stdout: "not json", stderr: "" }) });
+    assert.equal(badJson.mustRerun.find((m) => m.angle === "link-check")?.reason, "base_unit_rerun");
+    const failed = await runMainRaw(argv, { repoRoot, run: async () => { throw new TypeError("not a gh failure"); } });
+    assert.equal(failed.exitCode, 1);
+    assert.match(failed.stderr, /not a gh failure/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI size-budget read: a throwing size-budget read does not abort the resolver", async () => {
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    optionalAngles: ["link-check", "contract-surface", "correctness"],
+    perAngle: [{ angle: "link-check", reviewer: "review-a" }, { angle: "correctness", reviewer: "review-b" }],
+    mutate: async (root) => { await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8"); },
+  });
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", prevHead]);
+    let asked = 0;
+    const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot, evaluateSize: async () => { asked++; throw new Error("size read failed"); } });
+    assert.equal(asked, 1);
+    assert.equal(result.ok, true);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
   }
 });
 
@@ -519,7 +745,7 @@ test("CLI carries code angles + Copilot convergence across an integrate-only bas
     git(repoRoot, ["init", "-q", "-b", "main"]);
     git(repoRoot, ["config", "user.email", "test@example.com"]);
     git(repoRoot, ["config", "user.name", "Test"]);
-    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\ngates:\n  draft: {}\n", "utf8");
+    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\ngates:\n  fanout:\n    maxAnglesPerGroup: 1\n  draft: {}\n", "utf8");
     await mkdir(path.join(repoRoot, "src"), { recursive: true });
     await mkdir(path.join(repoRoot, "docs"), { recursive: true });
     await writeFile(path.join(repoRoot, "src/foo.mjs"), "export const foo = 1;\n", "utf8");
@@ -582,7 +808,7 @@ test("CLI excludes against the CONFIGURED base branch, not a hardcoded origin/ma
     git(repoRoot, ["init", "-q", "-b", "release-1"]);
     git(repoRoot, ["config", "user.email", "test@example.com"]);
     git(repoRoot, ["config", "user.name", "Test"]);
-    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\nworkflow:\n  baseBranch: release-1\ngates:\n  draft: {}\n", "utf8");
+    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\nworkflow:\n  baseBranch: release-1\ngates:\n  fanout:\n    maxAnglesPerGroup: 1\n  draft: {}\n", "utf8");
     await mkdir(path.join(repoRoot, "src"), { recursive: true });
     await mkdir(path.join(repoRoot, "docs"), { recursive: true });
     await writeFile(path.join(repoRoot, "src/other.mjs"), "export const other = 1;\n", "utf8");
@@ -1508,8 +1734,9 @@ for (const [name, conflict, decision] of [["same-file line shift", false, "parti
       const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot });
       assert.equal(result.baseMergeCarry, decision);
       assert.deepEqual(result.rerunPaths, ["src/foo.mjs"]);
-      assert.deepEqual(result.mustRerun.map((m) => m.angle), ["correctness"]);
-      assert.deepEqual(result.carried.map((c) => c.angle), ["docs"]);
+      // docs shares a base unit with contract-surface, which this head resolves with no prior row, so docs re-runs with it.
+      assert.deepEqual(result.mustRerun.map((m) => `${m.angle}:${m.reason === "base_unit_rerun"}`), ["correctness:false", "docs:true"]);
+      assert.deepEqual(result.carried, []);
       assert.deepEqual(result.resolutionDeltaPaths, conflict ? ["src/foo.mjs"] : undefined);
       assert.equal(conflict ? result.resolutionDeltaMerges?.length : result.resolutionDeltaMerges, conflict ? 1 : undefined);
       assert.deepEqual(result.resolutionDeltaFullPaths, conflict ? [] : undefined);

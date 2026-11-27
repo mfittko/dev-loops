@@ -6,7 +6,7 @@ import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 import { gateScopePrefix } from "./_gate-names.mjs";
 import { sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { HUMAN_SPEC_DECISION_OUTCOME } from "@dev-loops/core/loop/spec-authority";
-import { buildGateArtifactPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
+import { buildGateArtifactPath, buildGateEmitPlanPath,buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
 
 // Only a missing path is absent. Any other error (EACCES, ENOTDIR, EIO) could hide a verdict or a live round, so it propagates and the caller fails closed.
 const exists = (file) => access(file).then(() => true, (err) => {
@@ -50,18 +50,18 @@ export function buildRetireCommand({ gate, headSha, tmpRoot, findingsDir = null,
 
 /**
  * Retire the undispatched or finished round of one gate at one head, through retire-gate-round's logic, so a rebuilt
- * context or a re-emission mints a fresh round (GATE-EXEC-ROUND-RETIREMENT). A round with a posted verdict (a fan-in
- * ledger or a findings log at that head) is never retired: the result is a refusal with a `recovery` field. So is a round
+ * context or a re-emission mints a fresh round (GATE-EXEC-ROUND-RETIREMENT). A round with a posted verdict (a findings
+ * log at that head) is never retired: the result is a refusal with a `recovery` field. So is a round
  * with a live sentinel (no valid artifact for its unit newer than it): its reviewer may still be running. An error other
  * than ENOENT while probing the round throws, so the guards fail closed.
  *
  * `tmpRoot` holds the sentinels, dispatch records and the round's artifacts; `verdictRoots` lists the roots whose
- * fan-in ledger or findings log mark a posted verdict (the ledger may live under the main worktree's tmp).
+ * findings log marks a posted verdict (they may live under the main worktree's tmp).
  * `findingsTmpRoot` (default `tmpRoot`) is the root the round's findings directory and emit plan live under;
  * `recordsTmpRoot` (default `tmpRoot`) is the root the emitter wrote the dispatch records under (--tmp-root). `liveOnly` counts a
  * round as live only when it has sentinels or dispatch records, so a findings directory alone is left in place.
  * `currentSpecDigest` is the digest of the spec the builder just loaded (null when no single spec source exists): with it, a
- * round that stopped for a human spec decision (see findSpecDecisionStop) retires past its fan-in ledger. The stop also needs the
+ * round that stopped for a human spec decision (see findSpecDecisionStop) retires. The stop also needs the
  * judge plan newer than every sentinel and dispatch record of the round, and the pinned digest to differ from the issue body and
  * the PR body digest (`currentSpecDigest` and `otherSpecDigests`); the retirement reason names every candidate as the new digest. `specDecisionOnly`
  * returns `{ retiredRound: null }` for every other round, so an unchanged rebuild never refuses on an ordinary posted verdict.
@@ -85,7 +85,7 @@ async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdic
   if (!FULL_SHA_RE.test(head)) return { retiredRound: null };
   const findingsDir = buildGateReviewsDir({ repo, pr, gate, headSha: head, tmpRoot: findingsTmpRoot });
   const hasFindings = await exists(findingsDir);
-  // A verdict marker alone is not a live round: a manual retirement leaves the ledger and log in place.
+  // A verdict marker alone is not a live round: a manual retirement leaves the log in place.
   const names = await readdir(tmpRoot).catch((err) => {
     if (err?.code === "ENOENT") return [];
     throw err;
@@ -99,7 +99,9 @@ async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdic
   });
   const hasRecords = names.some((n) => n.endsWith(suffix) && n.startsWith(sentinelPrefix))
     || recordNames.some((n) => n.endsWith(suffix) && n.startsWith(recordPrefix));
-  if (!hasRecords && (liveOnly || !hasFindings)) return { retiredRound: null };
+  if (!hasRecords && (liveOnly || !hasFindings)) {
+    return { retiredRound: null };
+  }
   const roundFiles = [
     ...names.filter((n) => n.endsWith(suffix) && n.startsWith(sentinelPrefix)).map((n) => path.join(tmpRoot, n)),
     ...recordNames.filter((n) => n.endsWith(suffix) && n.startsWith(recordPrefix)).map((n) => path.join(recordsTmpRoot, n)),
@@ -109,17 +111,15 @@ async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdic
   state.stopped = stopped !== null;
   for (const root of verdictRoots) {
     const key = { repo, pr, gate, headSha: head, tmpRoot: root };
-    for (const marker of [buildGateFaninLedgerPath(key), buildLogPath(key)]) {
-      // A fan-in ledger without a findings log posted no verdict when the round stopped for a spec decision that has since changed the spec.
-      if (stopped && marker === buildGateFaninLedgerPath(key)) continue;
-      if (await exists(marker)) {
-        return {
-          refusal: {
-            error: `GATE-EXEC-ROUND-RETIREMENT: refusing to retire the ${gate} round at head ${head}: a verdict is already recorded at ${marker}. A posted verdict is never retired automatically.`,
-            recovery: `operator: confirm the verdict at ${marker} is superseded, then run \`${buildRetireCommand({ gate, headSha: head, tmpRoot, findingsDir: hasFindings ? findingsDir : null, repo, pr, reason: `operator confirmed the verdict at ${head} is superseded` })}\``,
-          },
-        };
-      }
+    // Only the findings log marks a posted verdict: the verdict comment renders only from it (ADR 0336).
+    const marker = buildLogPath(key);
+    if (await exists(marker)) {
+      return {
+        refusal: {
+          error: `GATE-EXEC-ROUND-RETIREMENT: refusing to retire the ${gate} round at head ${head}: a verdict is already recorded at ${marker}. A posted verdict is never retired automatically.`,
+          recovery: `operator: confirm the verdict at ${marker} is superseded, then run \`${buildRetireCommand({ gate, headSha: head, tmpRoot, findingsDir: hasFindings ? findingsDir : null, repo, pr, reason: `operator confirmed the verdict at ${head} is superseded` })}\``,
+        },
+      };
     }
   }
   // A sentinel is live when no valid artifact for its unit is newer than it: that reviewer is still running, and moving

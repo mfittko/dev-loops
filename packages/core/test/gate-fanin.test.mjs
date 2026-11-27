@@ -2169,7 +2169,7 @@ describe("recorded reviewer-unit bound in fan-in (missing means 5)", () => {
     // foreign: a recorded angle that no re-derived base unit holds
     assert.match(fanoutReviewerPairingError(honest, groups, [{ name: "u", angles: [...six, "zzz"] }], 10), /angle "zzz" that is not a member of any re-derived base unit/);
     // missing: a recorded unit that drops one angle of a base unit splits it
-    assert.match(fanoutReviewerPairingError(honest, groups, [{ name: "u", angles: six.slice(0, 5) }], 10), /splits base unit d\+e\+f/);
+    assert.match(fanoutReviewerPairingError(honest, groups, [{ name: "u", angles: six.slice(0, 5) }], 10), /splits base unit d\+e\+f; re-run resolve-angle-carry-forward\.mjs.*emit-fanout-dispatch\.mjs/);
     // duplicated: one angle recorded in two units
     assert.match(fanoutReviewerPairingError(honest, groups, [unit, { name: "v", angles: ["a"] }], 10), /angle "a" is recorded in more than one dispatch unit/);
     // cross-unit: one reviewer across two recorded units
