@@ -180,7 +180,22 @@ this skill dispatches the `review` agents directly.
      for the SAME round, without another fan-out. It consumes the caller's own
      same-head pending review through `/reviews/<id>/events`, preserving inline
      comments and the review id; never create a second review.
-     - **Leave pending (default):** print the review URL and how to finish it
+     - **Human-style review (list first, recommended):** draft a short, human-readable
+       opener from the round's `act` findings (on a judged round also the `defer`
+       findings, as one optional follow-up line), write it to a tmp file and show it
+       in the choice. The operator accepts it, edits it, or picks another mode. Then
+       run `--submit <comment|approve> --human-opener-file <path> --interactive-confirm`.
+       The poster submits the same-head pending draft in place with the opener visible
+       and the whole mechanical report inside a collapsed `<details>` block (markers
+       kept). It refuses with a named recovery on `--auto`, a missing
+       `--interactive-confirm`, a missing or non-comment/approve `--submit`, an empty or
+       unreadable opener file, an opener that holds an HTML comment, declaration or
+       block tag (`<details>`, `<summary>`, `<pre>`, `<script>`, `<style>`, `<textarea>`) or an unclosed code fence (edit the opener file), no same-head pending draft, or an
+       issue/PR reference in the body. With `approve`, explain that the event satisfies
+       required-approvals branch protection independently of dev-loops gates. On this gate
+       only `act` or unjudged findings are inline; `defer` and `reject` findings sit
+       in the report body.
+     - **Leave pending:** print the review URL and how to finish it
        (open the URL or re-run the helper with the submit flags below). Warn
        that the draft remains invisible to other reviewers.
      - **Submit as Comment:** `--submit comment`, event `COMMENT`.
