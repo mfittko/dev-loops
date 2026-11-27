@@ -13805,9 +13805,13 @@ const HUMAN_REFUSALS = [
   { name: "a backtick fence closed by a tilde line", opener: "Use this:\n```sh\necho ok\n~~~", text: /fence/, recovery: /edit the opener file/ },
   { name: "a long fence closed by a shorter fence", opener: "Nit:\n````\nfoo\n```", text: /fence/, recovery: /edit the opener file/ },
   { name: "an opener line with an operator-owned phrase", opener: "approve merge once CI is green", text: /OPERATOR-OWNED-LINE/, recovery: /edit the opener file to remove the operator-owned line/ },
+  { name: "an opener with a gate line", opener: "Gate: pre_approval_gate", text: /gate/i, recovery: /edit the opener file/ },
+  { name: "an opener with a bold gate line", opener: "**Gate:** draft_gate", text: /gate/i, recovery: /edit the opener file/ },
+  { name: "an opener with a bulleted gate review line", opener: "- Gate review: pre_approval_gate", text: /gate/i, recovery: /edit the opener file/ },
+  { name: "an opener with head SHA and verdict lines", opener: "Head SHA: abcdef1\nVerdict: clean", text: /gate/i, recovery: /edit the opener file/ },
   { name: "a non-review gate", gate: "draft_gate", text: /--gate review/, recovery: /pass --gate review/ },
 ];
-for (const opener of ["Looks good.", "Looks good.\n```js\nfoo()\n```", "Nit:\n~~~\nbar\n~~~", "Run:\n````\na\n```\nb\n````", "```npm test``` passes", "Use a < b here."]) {
+for (const opener of ["Looks good.", "Looks good.\n```js\nfoo()\n```", "Nit:\n~~~\nbar\n~~~", "Run:\n````\na\n```\nb\n````", "```npm test``` passes", "Use a < b here.", "Thanks, this looks good to me.", "The gate logic reads well."]) {
   test(`human-style accepts the balanced-fence opener ${JSON.stringify(opener)}`, async () => {
     await withTempDir(async (tempDir) => {
       const { run } = await runHumanStyle(tempDir, { opener });

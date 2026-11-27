@@ -3,6 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
+import { parseGateReviewCommentMarkerBody } from "@dev-loops/core/github/copilot-helpers";
 import { wrapOperatorOwnedPhrases } from "@dev-loops/core/github/operator-owned-lines";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
@@ -2928,6 +2929,9 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     // Leading indentation is kept; only trailing whitespace is dropped.
     humanOpener = humanOpener.trimEnd();
     if (/<!|<\?|<\/?(details|summary|pre|script|style|textarea)\b/i.test(humanOpener)) throw refuse("the opener holds an HTML comment, declaration or block tag that would break the wrapper.", editRecovery);
+    // The parser keeps the first column-0 match per field, so an opener gate, head SHA or verdict line would win over the review header and make the review parse as gate evidence.
+    // The marker parser needs both a gate and a head SHA, so probe each field with a synthetic partner line.
+    if (parseGateReviewCommentMarkerBody(`Head SHA: aaaaaaa\n${humanOpener}`) || parseGateReviewCommentMarkerBody(`${humanOpener}\nGate: draft_gate`)) throw refuse("the opener holds a gate, head SHA or verdict field line that the gate parser would read as evidence.", editRecovery);
     // A fence left open at the end swallows the details wrapper. CommonMark: a close needs the same character, at least the opening length and no info string.
     let openFence = null;
     for (const line of humanOpener.split("\n")) {
