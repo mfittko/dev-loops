@@ -1264,7 +1264,12 @@ export async function createGateReview({ repo, pr, headSha, body, comments, allo
     env,
     `${JSON.stringify(payload)}\n`,
   );
-  assertGhSuccess(result);
+  try {
+    assertGhSuccess(result);
+  } catch (error) {
+    // gh prints only the top-level message to stderr; the 422 detail is in the stdout body.
+    throw Object.assign(error, { stdout: result.stdout ?? "" });
+  }
   return parseReviewMutationResponse(parseJsonText(result.stdout, { label: "gh api pulls reviews (POST)" }));
 }
 
@@ -1330,6 +1335,18 @@ export async function findOwnPendingReview({ repo, pr, headSha }, { env, ghComma
     body: typeof match.body === "string" ? match.body : "",
     sameHead: commitId !== null && commitId === headSha,
   };
+}
+
+/**
+ * Find the caller's own PENDING review of any body. GitHub lists a PENDING review only to its
+ * author, so a PENDING entry in the reviews list is the caller's. `isToolDraft` marks a review
+ * that `buildDraftReviewBody` wrote (the UI review's head-pinned draft). Returns `null` when none.
+ */
+export async function findOwnPendingDraft({ repo, pr }, gh) {
+  const match = flattenPaginatedSlurp(await runGhJson(prReviewsApiArgs(repo, pr), gh))
+    .find((r) => r?.state === "PENDING" && Number.isInteger(r?.id));
+  if (!match) return null;
+  return { id: match.id, isToolDraft: typeof match.body === "string" && match.body.startsWith("Reviewer-loop draft verdict:") };
 }
 
 /**
