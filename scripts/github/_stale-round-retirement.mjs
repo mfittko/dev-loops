@@ -166,13 +166,18 @@ export const retiredLedgerName = (root, ledger) => `${createHash("sha256").updat
 // A findings log that appeared since the guard owns its ledger, so nothing moves. A destination that exists is never overwritten.
 // The ledger's `.seal` sidecar (ADR 0204) moves with it.
 async function moveFaninLedgers({ repo, pr, gate, head, verdictRoots }, retirementDir) {
-  for (const root of verdictRoots) {
-    if (await exists(buildLogPath({ repo, pr, gate, headSha: head, tmpRoot: root }))) return;
-  }
+  const logAppeared = async () => {
+    for (const root of verdictRoots) {
+      if (await exists(buildLogPath({ repo, pr, gate, headSha: head, tmpRoot: root }))) return true;
+    }
+    return false;
+  };
   for (const root of new Set(verdictRoots)) {
     const ledger = buildGateFaninLedgerPath({ repo, pr, gate, headSha: head, tmpRoot: root });
     const destination = path.join(retirementDir, retiredLedgerName(root, ledger));
     if (!await exists(ledger) || await exists(destination)) continue;
+    // Re-checked before each rename: a log written during an earlier move owns the remaining ledgers.
+    if (await logAppeared()) return;
     await rename(ledger, destination);
     if (await exists(`${ledger}.seal`)) await rename(`${ledger}.seal`, `${destination}.seal`);
   }
