@@ -93,9 +93,9 @@ Optional:
                                exceed the stdout count. Only the stdout "units"
                                are dispatched, and --expected-dispatch-units
                                takes the stdout count.
-  --retry-crashed <unit>       Repeatable, only with --pending. <unit> is the emitted unit name: the "group"
-                               value on the unit's stdout line, the angle name for a singleton, or
-                               <group>-part<n> for a split sub-unit. The unit's
+  --retry-crashed <unit>       Repeatable, only with --pending. <unit> is the emitted unit name: the angle
+                               name for a singleton, <group>-part<n> for a split sub-unit, or the
+                               packed name for a packed bin. The unit's
                                agent ended without result artifacts: its work order also passes
                                --same-head-retry to the sentinel check, so its stale sentinel is replaced.
                                A plain --pending keeps a running unit's sentinel refusal. A name that
