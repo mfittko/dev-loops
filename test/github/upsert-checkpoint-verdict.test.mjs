@@ -13933,8 +13933,9 @@ for (const gate of ["draft_gate", "pre_approval_gate"]) {
     assert.equal(error.reason, "own_pending_review_blocks_post");
     assert.equal(error.reviewId, 8101);
     assert.match(error.recovery, /8101/);
-    // Only the rejected create ran.
+    // No events call and no second create.
     assert.equal(calls.filter(isWriteCall).length, 1);
+    assert.equal(calls.some((call) => call.args.some((arg) => String(arg).endsWith("/events"))), false);
   });
 
   test(`${gate} verdict posts without an events call when the tool draft is already submitted`, async () => {
