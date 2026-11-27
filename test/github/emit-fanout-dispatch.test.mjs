@@ -1026,21 +1026,63 @@ test("emits the configured (unclamped) maxConcurrent under a non-Claude env (#19
   });
 });
 
-test("a --pending emission tells each redispatched unit to pass --same-head-retry; a full emission does not (#3642)", async () => {
-  for (const pending of [true, false]) {
+const RETRY_ARGS = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+const TWO_PENDING = {
+  groups: FANOUT.groups,
+  pendingGroups: [{ name: "contradiction-lens", angles: ["contradiction-lens"] }, { name: "design-simplicity", angles: ["dry", "kiss"] }],
+};
+
+async function composedPrompts(result) {
+  const out = {};
+  for (const unit of JSON.parse(result.stdout).units) out[unit.group ?? unit.angles[0]] = await readFile(unit.promptPath, "utf8");
+  return out;
+}
+
+test("--pending --retry-crashed <unit> tells only the named unit to pass --same-head-retry with its --scope (#3642)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: TWO_PENDING });
+    const result = runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", "contradiction-lens"], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr);
+    const prompts = await composedPrompts(result);
+    assert.match(prompts["contradiction-lens"], /--scope \S+.*--same-head-retry/);
+    assert.equal(prompts["design-simplicity"].includes("--same-head-retry"), false);
+  });
+});
+
+test("a plain --pending and a first emission tell no unit to pass --same-head-retry (#3642)", async () => {
+  for (const extra of [["--pending"], []]) {
     await withTmpDir(async (tmpDir) => {
-      await seedBundle(tmpDir);
-      const result = runEmitCli(
-        ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, ...(pending ? ["--pending"] : [])],
-        { cwd: tmpDir },
-      );
+      await seedBundle(tmpDir, { fanout: TWO_PENDING });
+      const result = runEmitCli([...RETRY_ARGS, ...extra], { cwd: tmpDir });
       assert.equal(result.status, 0, result.stderr);
-      const unit = JSON.parse(result.stdout).units.find((u) => u.scope === "pre-approval-gate-contradiction-lens");
-      const composed = await readFile(unit.promptPath, "utf8");
-      assert.ok(composed.includes(`--scope ${unit.scope}`));
-      assert.equal(composed.includes("--same-head-retry"), pending);
+      for (const text of Object.values(await composedPrompts(result))) assert.equal(text.includes("--same-head-retry"), false);
     });
   }
+});
+
+test("--retry-crashed without --pending refuses with a recovery (#3642)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli([...RETRY_ARGS, "--retry-crashed", "contradiction-lens"], { cwd: tmpDir });
+    assert.equal(result.status, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /GATE-EXEC-FANOUT-DISPATCH-EMIT.*--retry-crashed/);
+    assert.match(payload.recovery, /--pending/);
+  });
+});
+
+test("--retry-crashed naming a unit that is not pending refuses and names the pending units (#3642)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", "design-simplicity"], { cwd: tmpDir });
+    assert.equal(result.status, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /GATE-EXEC-FANOUT-DISPATCH-EMIT.*design-simplicity/);
+    assert.match(payload.recovery, /contradiction-lens/);
+    assert.match(payload.recovery, /without result artifacts/);
+  });
 });
 
 test("buildAngleNamingSuffix adds the same-head-retry instruction only when asked (#3642)", () => {

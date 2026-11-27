@@ -24,7 +24,7 @@ import { preFanoutCiObservation } from "../loop/_coordinator-handback.mjs";
 import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "../loop/_operator-focus.mjs";
 import { dispatchUnitScope, expandDispatchUnits, normalizeUnitAngles, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 
-const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--operator-focus-file <path>] [--ci-file <path>] [--tmp-root <path>] [--help]
+const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending [--retry-crashed <unit>]...] [--operator-focus-file <path>] [--ci-file <path>] [--tmp-root <path>] [--help]
 The SANCTIONED one-shot gate fan-out dispatch step: given a gate +
 head whose write-gate-context.mjs bundle is already on disk, it reads the resolved
 fan-out plan (the artifact's fanout.groups / fanout.pendingGroups, resolveFanoutGroups
@@ -88,6 +88,11 @@ Optional:
                                requires every resolved angle to be carried with
                                --carry-forward-plan-file (or --carry-forward-plan)
                                proof, or refuses zero units.
+  --retry-crashed <unit>       Repeatable, only with --pending. Names a pending unit whose agent ended
+                               without result artifacts: that unit's work order also passes
+                               --same-head-retry to the sentinel check, so its stale sentinel is replaced.
+                               A plain --pending keeps a running unit's sentinel refusal. A unit that is
+                               not pending refuses with a recovery.
                                The persisted plan also keeps the completed prior
                                units marked "resumed": true, so its count can
                                exceed the stdout count. Only the stdout "units"
@@ -246,7 +251,7 @@ export const REVIEWER_VERIFIED_ITEMS_INSTRUCTION = "Verified items: in the findi
  *   unit-scoped required reads, rendered worktree-absolute from the cwd
  * @param {{ maxModelTurns: number, maxToolCalls: number }} [budget] this unit's
  *   computed budget (computeReviewerUnitBudget); the floor when absent
- * @param {boolean} [sameHeadRetry] true for a `--pending` redispatch: the unit also passes `--same-head-retry` to the sentinel check
+ * @param {boolean} [sameHeadRetry] true for a unit named by `--pending --retry-crashed <unit>`: the unit also passes `--same-head-retry` to the sentinel check
  * @returns {string}
  */
 export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET, operatorFocus = null, unitBound = REVIEWER_UNIT_MAX_ANGLES, resolutionPaths = [], resolutionMerges = [], fullReviewPaths = [], sameHeadRetry = false) {
@@ -455,6 +460,11 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // reading the real process cwd's checkout.
   const ledgerTmpRoot = tmpRootArg ?? ledgerTmpRootDefault;
   const pendingOnly = argv.includes("--pending");
+  const retryCrashed = new Set(argv.flatMap((arg, i) => (arg === "--retry-crashed" ? [argv[i + 1] ?? ""] : [])));
+  if (retryCrashed.has("") || [...retryCrashed].some((name) => name.startsWith("-"))) {
+    process.stderr.write(`${formatCliError(parseError("--retry-crashed requires a unit name."))}\n`);
+    return 2;
+  }
   const operatorFocusArg = resolveFlagValue(argv, "--operator-focus-file");
   if (operatorFocusArg === "") {
     process.stderr.write(`${formatCliError(parseError("--operator-focus-file must not be an empty value; pass a path or omit the flag"))}\n`);
@@ -664,6 +674,14 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     units = fanout.pendingGroups;
   } else {
     units = fanout.groups;
+  }
+  if (retryCrashed.size > 0 && !pendingOnly) {
+    return finish({ ok: false, error: "GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: --retry-crashed applies only to a --pending emission", recovery: "Re-run with --pending --retry-crashed <unit name> for each unit whose agent ended without result artifacts." }, false);
+  }
+  const pendingNames = Array.isArray(units) ? units.map((unit) => unit?.name) : [];
+  const notPending = [...retryCrashed].filter((name) => !pendingNames.includes(name));
+  if (notPending.length > 0) {
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: --retry-crashed names ${notPending.map((n) => JSON.stringify(n)).join(", ")}, which is not a pending unit`, recovery: `The pending units are ${pendingNames.map((n) => JSON.stringify(n)).join(", ") || "(none)"}; name only a pending unit whose agent ended without result artifacts.` }, false);
   }
   // A zero-unit pending plan is valid only when every original angle was
   // carried. Completed-only resumes and malformed empty plans still refuse;
@@ -882,7 +900,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
-      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound, resolutionDeltaPaths, resolutionDeltaMerges, resolutionDeltaFullPaths, pendingOnly), "utf8");
+      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound, resolutionDeltaPaths, resolutionDeltaMerges, resolutionDeltaFullPaths, retryCrashed.has(unit.name)), "utf8");
     } catch (err) {
       return failAfterRetirement(err);
     }

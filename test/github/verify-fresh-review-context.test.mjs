@@ -702,6 +702,40 @@ test("--same-head-retry re-admits an interrupted reviewer when the prefix hash m
   }
 });
 
+test("a crashed unit's stale sentinel passes with --same-head-retry and leaves a sibling unit's sentinel and artifact untouched; without the flag it still refuses (#3642)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  const git = makeGit(tmpDir);
+  try {
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@t.dev"]);
+    git(["config", "user.name", "t"]);
+    await writeFile(path.join(tmpDir, "a.txt"), "1", "utf8");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "c1"]);
+    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const hash = "e".repeat(64);
+    assert.equal(runScript(["--scope", "crashed-unit", "--prefix-hash", hash], { cwd: tmpDir }).status, 0);
+    assert.equal(runScript(["--scope", "sibling-unit", "--prefix-hash", hash], { cwd: tmpDir }).status, 0);
+    const files = (await readdir(path.join(tmpDir, "tmp"))).filter((name) => name.startsWith("checkpoint-context-sentinel-sibling-unit-"));
+    assert.equal(files.length, 1);
+    const siblingSentinel = path.join(tmpDir, "tmp", files[0]);
+    const siblingArtifact = path.join(tmpDir, "tmp", "sibling-findings.json");
+    await writeFile(siblingArtifact, "{\"verdict\":\"clean\"}\n", "utf8");
+    const before = [await readFile(siblingSentinel, "utf8"), await readFile(siblingArtifact, "utf8")];
+
+    const plain = runScript(["--scope", "crashed-unit", "--prefix-hash", hash], { cwd: tmpDir });
+    assert.equal(plain.status, 1, "a running unit keeps the sentinel refusal");
+    assert.equal(JSON.parse(plain.stdout.trim()).fresh, false);
+
+    const retry = runScript(["--scope", "crashed-unit", "--prefix-hash", hash, "--same-head-retry"], { cwd: tmpDir });
+    assert.equal(retry.status, 0, retry.stderr);
+    assert.equal(JSON.parse(retry.stdout.trim()).sameHeadRetry, true);
+    assert.deepEqual([await readFile(siblingSentinel, "utf8"), await readFile(siblingArtifact, "utf8")], before);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("--same-head-retry fails closed on hash mismatch and on a hashless sentinel", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
   const git = makeGit(tmpDir);
