@@ -64,11 +64,12 @@ const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON
 // Verdict reviews posted for `postedHead` in the real marker body format.
 const verdictReviews = (postedHead, gates) => gates.map((gate, id) => ({
   id: id + 1, surface: "review", state: "COMMENTED", submitted_at: "2026-10-19T00:00:00Z", updated_at: "2026-10-19T00:00:00Z",
+  user: { login: "operator", type: "User" }, author_association: "OWNER",
   body: [`Gate review: ${gate}`, `Reviewed head SHA: ${postedHead}`, "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"),
 }));
 // A fetchVerdictMarkers seam fed by the real marker parser.
 const verdictPostedAt = (postedHead, gates = ["draft_gate", "pre_approval_gate"]) => async ({ headSha }) => summarizeGateReviewCommentMarkers(verdictReviews(postedHead, gates), { headSha });
-// A fetchReview seam: one trusted REST review carrying the draft_gate header at `head` (the shape capExitHolds reads).
+// A fetchReview seam: one trusted REST review carrying the draft_gate header at `head`.
 const capReviewsAt = (head, { round = 2, verdict = "findings_present" } = {}) => async () => [{
   id: 1, state: "COMMENTED", user: { login: "operator", type: "User" }, author_association: "OWNER",
   body: `<!-- dev-loops:gate-findings-review draft_gate ${head.slice(0, 7)} round=${round} -->\n**Verdict:** ${verdict}`,
@@ -1122,6 +1123,10 @@ test("verdict_not_posted: an act-list order refuses without a posted verdict for
     const complete = verdictReviews(head, ["draft_gate"])[0];
     const runChild = async (_gh, args) => ({ code: 0, stderr: "", stdout: JSON.stringify(args.join(" ").includes("/issues/") ? [[{ ...complete, surface: "issue_comment" }]] : [[]]) });
     await refuse({ fetchVerdictMarkers: ({ headSha }) => defaultFetchVerdictMarkers({ repo: REPO, pr: PR, headSha, runtime: { env: {}, ghCommand: "gh", runChild } }) });
+    // A forged marker review from an untrusted account is ignored (GATE-REVIEW-COMMENT-TRUST), a trusted one counts.
+    const markersFrom = (association) => ({ headSha }) => defaultFetchVerdictMarkers({ repo: REPO, pr: PR, headSha, runtime: { env: {}, ghCommand: "gh", runChild: async () => ({ code: 0, stderr: "", stdout: "[[]]" }) }, readReviews: async () => [{ ...verdictReviews(head, ["draft_gate"])[0], user: { login: "forger", type: "User" }, author_association: association }] });
+    await refuse({ fetchVerdictMarkers: markersFrom("NONE") });
+    assert.equal((await markersFrom("OWNER")({ headSha: head })).draft_gate?.verdict, "clean");
     assert.equal((await emit({ deltaResult: undefined, phase: "commit_only" })).workOrder.gate, "draft_gate");
     await writeFile(files.threads, JSON.stringify(THREADS));
     const neverCalled = async () => { throw new Error("threads source must not read verdicts"); };
@@ -1480,7 +1485,7 @@ for (const [label, severities, setup, refuses] of [
   });
 });
 
-test("GATE-EXEC-ROUND-CAP: a medium act list reaches the fixer below and at the cap round, and is refused after it (round_cap_reached)", async () => {
+test("GATE-EXEC-CAP-BRAKES: a medium act list reaches the fixer below and at the cap round, and past it needs an operator decision per fingerprint (round_cap_reached)", async () => {
   await withFixture(async ({ root, wt, head, files, emit }) => {
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
     await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
@@ -1498,12 +1503,11 @@ test("GATE-EXEC-ROUND-CAP: a medium act list reaches the fixer below and at the 
     const currentLog = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${head}.json`);
     await writeFile(currentLog, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "findings_present", findings: [] }));
     assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
-    await rm(currentLog);
-    // Closure round (count cap+1) and a further round after a blocked closure ledger (blocked never counts): refused.
+    // The scoped final round (count cap+1) and a further round after a blocked ledger (blocked never counts): every act item goes to the operator (GATE-EXEC-CAP-BRAKES). The judged round's own ledger exists by then.
     await prior("e", "findings_present");
     await assert.rejects(emit(), (e) => e.refusal === "round_cap_reached");
     await prior("f", "blocked");
-    await assert.rejects(emit(), (e) => e.refusal === "round_cap_reached" && /no fixer order follows/.test(e.message));
+    await assert.rejects(emit(), (e) => e.refusal === "round_cap_reached" && /GATE-EXEC-CAP-BRAKES.*every act item goes to the operator/.test(e.message));
   });
 });
 
@@ -1511,6 +1515,7 @@ test("GATE-EXEC-ROUND-CAP: a medium act list reaches the fixer below and at the 
 test("issue 3437: 3 closed rounds at cap 4: no cap round resolves, so the emitter skips the missing-ledger refusal for the unposted round and extend-cap-round-chain finds no chain; 4 closed rounds are the cap round for both", async () => {
   await withFixture(async ({ root, wt, head, files, emit }) => {
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
+    await writeFile(path.join(root, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
     await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
     const closed = async (sha) => {
       const file = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${sha.repeat(40)}.json`);
@@ -1541,6 +1546,7 @@ for (const [name, setup] of [
   test(`issue 3437: at the cap round ${name} refuses round_cap_reached`, async () => {
     await withFixture(async ({ root, wt, head, files, emit }) => {
       await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
+      await writeFile(path.join(root, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
       await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
       // The explicit-root case keeps the closed rounds only under that root: the main-anchored cap decision sees none.
       const otherRoot = path.join(root, "other-tmp");
@@ -1573,6 +1579,7 @@ test("issue 3437: the cap-round guard decides ledger existence once and the read
 test("issue 3437: missingCapLedgerRefusal fails closed when resolveCapRound fails closed", async () => {
   await withFixture(async ({ root, wt, head }) => {
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
+    await writeFile(path.join(root, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
     const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
     await mkdir(dir, { recursive: true });
     for (const [sha, verdict] of [["d", "findings_present"], ["e", "findings_present"], ["f", "findings_present"], ["a", "inconclusive"]]) {
@@ -3383,20 +3390,6 @@ test("issue 3105: the later-pass act-ref bound does not apply on the ADR 0197 ba
   });
 });
 
-test("ADR 0218: a base-only merge of the chain's last clearing candidate is still the cap round (PR 2992 shape)", async () => {
-  await withFixture(async (fx) => {
-    const { over } = await capRoundThenBaseMerge(fx, { fixerCommitBeforeMerge: true });
-    assert.equal((await fx.emit(over)).workOrder.source, "act-list");
-  });
-});
-
-test("ADR 0218: a chain that starts at a ledgerless base-only merge M0 of the cap-round head is still the cap round at a later base merge M", async () => {
-  await withFixture(async (fx) => {
-    const { over } = await capRoundThenBaseMerge(fx, { baseMergeBeforeFixer: true });
-    assert.equal((await fx.emit(over)).workOrder.source, "act-list");
-  });
-});
-
 test("ADR 0218: only the chain's last candidate counts; a base merge on an earlier candidate B1 of chain A->B1->B2 keeps the refusal", async () => {
   await withFixture(async (fx) => {
     const { over } = await capRoundThenBaseMerge(fx, { fixerCommitBeforeMerge: true, secondCandidate: true });
@@ -3407,14 +3400,6 @@ test("ADR 0218: only the chain's last candidate counts; a base merge on an earli
 test("ADR 0218: a PR-own change after the chain's last candidate keeps the round_cap_reached refusal", async () => {
   await withFixture(async (fx) => {
     const { over } = await capRoundThenBaseMerge(fx, { fixerCommitBeforeMerge: true, ownChangeAfterMerge: true });
-    await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
-  });
-});
-
-test("ADR 0197: an unreadable prior ledger keeps the round_cap_reached refusal after a base-only merge", async () => {
-  await withFixture(async (fx) => {
-    const { over } = await capRoundThenBaseMerge(fx, {});
-    await writeFile(path.join(fx.root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${"d".repeat(40)}.json`), "{not json");
     await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
   });
 });
@@ -3442,93 +3427,6 @@ async function capRoundFirstPassPushed(fx) {
   const at = (prHead) => ({ headSha: prHead, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: prHead, baseRefName: "main" }), fetchVerdictMarkers: verdictPostedAt(fx.head), fetchReview: capReviewsAt(fx.head) });
   return { candidate: first.candidate, at };
 }
-
-test("issue 3105: a second cap-round fixer pass emits at the first pass's pushed head, and its full phase pushes", async () => {
-  await withFixture(async (fx) => {
-    const { candidate, at } = await capRoundFirstPassPushed(fx);
-    const second = await fx.prepareFull({ baseline: candidate, emitter: (over) => fx.emit({ ...over, ...at(candidate) }) });
-    assert.equal(second.prior.workOrder.headSha, candidate);
-    const unit = await second.full(at(candidate));
-    assert.equal(unit.workOrder.headSha, second.candidate);
-    assert.equal(unit.workOrder.authority.reviewBaselineHead, candidate);
-    assert.equal(pull(unit, fx.root).status, 0);
-  });
-});
-
-// Issue 3460 AC7: the second pass at the pushed head needs the posted cap-round review, never a delta record.
-test("issue 3460 AC7: a second cap-round pass emits at the pushed head with every delta record deleted; a blocked or missing cap review refuses", async () => {
-  await withFixture(async (fx) => {
-    const { candidate, at } = await capRoundFirstPassPushed(fx);
-    await rm(path.join(fx.root, "tmp", "gate-delta"), { recursive: true, force: true });
-    const [open] = JSON.parse(await readFile(fx.files.actList));
-    const focusFile = path.join(fx.root, "tmp", "focus.json");
-    // Rejected forms: no operator-decided item (plain text, an item without a decision, an item without a fingerprint) opens no later pass.
-    const note = { replyDisposition: "deferred", replyNote: "later" };
-    for (const rejected of [{ round: "text only" }, { items: [{ fingerprint: open.fingerprint, ...note }] }, { items: [{ threadId: "T1", ...note }] }]) {
-      await writeFile(focusFile, JSON.stringify(rejected));
-      await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate) }), (e) => e.refusal === "round_cap_reached");
-    }
-    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: open.fingerprint, decision: "Fix it in this PR" }] }));
-    const ok = await fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate) });
-    assert.equal(ok.workOrder.source, "act-list");
-    // AC3: the AC7 cap-exit check and the default verdict-marker read share one PR reviews read.
-    let reviewReads = 0;
-    const [capReview1] = await capReviewsAt(fx.head)();
-    const oneRead = await fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate), fetchVerdictMarkers: undefined,
-      fetchReview: async () => { reviewReads += 1; return [...verdictReviews(fx.head, ["draft_gate", "pre_approval_gate"]), { ...capReview1, id: 9, submitted_at: "2026-10-19T00:00:00Z" }]; } });
-    assert.equal(oneRead.workOrder.source, "act-list");
-    assert.equal(reviewReads, 1);
-    // The coordination read at the pushed head, with every delta record gone and the cap-round review posted, ends in ready.
-    const capReview = { author: { login: "operator", type: "User" }, authorAssociation: "OWNER", body: `<!-- dev-loops:gate-findings-review draft_gate ${fx.head.slice(0, 7)} round=2 -->\n**Verdict:** findings_present` };
-    const viewer = async (_cmd, args) => (args?.includes("user") ? { code: 0, stdout: JSON.stringify({ login: "agent" }), stderr: "" } : { code: 1, stdout: "", stderr: "stub" });
-    const end = await coordinationAt(fx.wt, { repo: REPO, pr: PR, head: candidate, reviews: [capReview], trustRuntime: { runChild: viewer }, draftOpenActList: { headSha: fx.head, openActCount: 1, blockers: [] } });
-    assert.equal(end.fixed, true);
-    assert.equal(end.nextAction, "mark_ready_for_review");
-    const refused = (over) => assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate), ...over }), (e) => e.refusal === "round_cap_reached");
-    await refused({ fetchReview: async () => [] });
-    await refused({ fetchReview: capReviewsAt(fx.head, { verdict: "blocked" }) });
-    // The one cap-exit predicate: a posted review at the cap-round head that carries another round number is no cap review.
-    await refused({ fetchReview: capReviewsAt(fx.head, { round: 1 }) });
-    // A malformed focus file refuses under GATE-EXEC-OPERATOR-FOCUS at the pushed head, never as round_cap_reached.
-    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: open.fingerprint, decision: "  " }] }));
-    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile, ...at(candidate) }), /GATE-EXEC-OPERATOR-FOCUS/);
-  });
-});
-
-test("issue 3105: a later cap-round pass emits only the cap round's act refs; an extra act item refuses round_cap_reached", async () => {
-  await withFixture(async (fx) => {
-    const { candidate, at } = await capRoundFirstPassPushed(fx);
-    const capList = JSON.parse(await readFile(fx.files.actList));
-    const extra = withFp({ ...ACT[0], severity: "medium", summary: "new finding after the cap round", judgeFix: "fix it" });
-    await writeFile(fx.files.actList, JSON.stringify([...capList, extra]));
-    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, ...at(candidate) }), (e) => e.refusal === "round_cap_reached" && /not a finding of the cap-round ledger/.test(e.message));
-    await writeFile(fx.files.actList, JSON.stringify(capList));
-    const ok = await fx.emit({ phase: "commit_only", deltaResult: undefined, ...at(candidate) });
-    assert.deepEqual(ok.workOrder.siteCoverage.map((r) => r.fingerprint), capList.map((f) => f.fingerprint));
-  });
-});
-
-test("issue 3105: a later cap-round pass refuses an act item that the cap-round ledger closed with a judge reject", async () => {
-  await withFixture(async (fx) => {
-    const { candidate, at } = await capRoundFirstPassPushed(fx);
-    const [item] = JSON.parse(await readFile(fx.files.actList));
-    const ledger = path.join(fx.root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${fx.head}.json`);
-    const written = JSON.parse(await readFile(ledger));
-    await writeFile(ledger, JSON.stringify({ ...written, findings: [{ ...item, judgeDisposition: "reject" }] }));
-    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, ...at(candidate) }), (e) => e.refusal === "round_cap_reached" && /not a finding of the cap-round ledger/.test(e.message));
-  });
-});
-
-test("issue 3105: a foreign commit after the first cap-round pass keeps round_cap_reached and names the chain-extension remedy", async () => {
-  await withFixture(async (fx) => {
-    const { at } = await capRoundFirstPassPushed(fx);
-    git(fx.wt, "commit", "-q", "--allow-empty", "-m", "foreign commit");
-    const foreign = git(fx.wt, "rev-parse", "HEAD");
-    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, ...at(foreign) }), (e) => e.refusal === "round_cap_reached" && /gate extend-cap-round-chain --repo/.test(e.message));
-    // Under Claude the remedy renders in the dev-loops-run launcher form (WORKTREE-SCRIPT-LAUNCHER-CWD).
-    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, harness: "claude", ...at(foreign) }), (e) => e.refusal === "round_cap_reached" && /dev-loops-run [^;]*extend-cap-round-chain --repo/.test(e.message));
-  });
-});
 
 test("issue 3105: a chain candidate head that does not descend from the cap-round head refuses round_cap_reached", async () => {
   await withFixture(async (fx) => {
@@ -3809,20 +3707,6 @@ function stripExecution({ execution, ...marker }) {
   assert.ok(execution.workOrderRef && execution.outputRef);
   return marker;
 }
-
-test("ADR 0218 / issue 3105: a sealed chain that ends at the head is the cap round; without the seal the head does not read as a base-only merge (round_cap_reached)", async () => {
-  await withFixture(async (fx) => {
-    const { merged, over } = await capRoundThenBaseMerge(fx, { ownChangeAfterMerge: true });
-    // A sealed record head -> merged makes the chain end equal to the head: the PR-own change in that range is a sealed cap-round fix.
-    const text = JSON.stringify({ reviewBaselineHead: fx.head, candidateHead: merged, nextStep: "push_to_gate", outcome: "locally_clear", items: [] });
-    await mkdir(path.join(fx.root, "tmp", "gate-delta"), { recursive: true });
-    await writeFile(path.join(fx.root, "tmp", "gate-delta", `${fx.head}.json`), text);
-    await writeFile(path.join(fx.root, "tmp", "gate-delta", `${fx.head}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
-    assert.equal((await fx.emit(over)).workOrder.source, "act-list");
-    await rm(path.join(fx.root, "tmp", "gate-delta", `${fx.head}.json.seal`));
-    await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
-  });
-});
 
 test("review source: a non-array review list, a missing commit_id, an empty id and a null user refuse with a next action", async () => {
   await withFixture(async ({ head, emit }) => {
@@ -4998,7 +4882,7 @@ test("an emit that reaches both baseRefName reads calls fetchPr once for them, a
   });
 });
 
-// Issue 3460 AC8 (GATE-EXEC-ROUND-CAP-EXIT): at the cap-round head an operator focus item with a decision binds an act finding of the cap ledger that the recurrence escalation withheld.
+// Issue 3460 AC8 (GATE-EXEC-OPERATOR-FOCUS): at the cap-round head an operator focus item with a decision binds an act finding of the cap ledger that the recurrence escalation withheld.
 test("AC8: an escalated cap-ledger act finding binds as operator focus and joins the fixer act list; an unknown fingerprint still refuses", async () => {
   const escalated = { severity: "medium", angle: "correctness", summary: "escalated guard", file: "src/b.mjs", line: 9, judgeDisposition: "act", judgeFix: "guard it" };
   const escalatedFp = fingerprintFinding(escalated);
@@ -5034,11 +4918,11 @@ test("AC8: an escalated cap-ledger act finding binds as operator focus and joins
   await withFixture(async (fx) => {
     const focusFile = await setup(fx, [], [{ fingerprint: escalatedFp, decision: "Fix it in this PR" }]);
     await writeFile(focusFile, JSON.stringify({ round: "note" }));
-    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile }), /empty and no operator focus item bound a cap-ledger act finding \(GATE-EXEC-ROUND-CAP-EXIT\)/);
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile }), /empty and no operator focus item bound a cap-ledger act finding \(GATE-EXEC-OPERATOR-FOCUS\)/);
   });
   await withFixture(async (fx) => {
     const focusFile = await setup(fx, [], [{ fingerprint: "0123456789abcdef", decision: "Fix it in this PR" }]);
-    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile }), /empty and no operator focus item bound a cap-ledger act finding \(GATE-EXEC-ROUND-CAP-EXIT\)/);
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile }), /empty and no operator focus item bound a cap-ledger act finding \(GATE-EXEC-OPERATOR-FOCUS\)/);
   });
 });
 
@@ -5125,6 +5009,75 @@ test("a pre_approval_gate fix round after a blocked verdict with no findings cau
     const gated = { gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined };
     await assert.rejects(emit({ ...gated, fetchVerdictMarkers: blockedAt("unticked_checkboxes, ci") }), (e) => e.refusal === "blocked_without_findings" && /tick the verified PR-body checkboxes; wait for CI/.test(e.message));
     assert.equal((await emit({ ...gated, fetchVerdictMarkers: blockedAt("findings, unticked_checkboxes") })).workOrder.source, "act-list");
+  });
+});
+
+// Issue 3464 AC2 (ADR 0324): a draft_gate act list of round cap+1 (cap 2) is refused unless an operator focus decision names each act item by fingerprint.
+test("a draft_gate act list past the cap round is refused unless an operator focus decision names each act item by fingerprint", async () => {
+  await withFixture(async ({ root, head, files, emit }) => {
+    const act = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
+    await writeFile(files.actList, JSON.stringify([act]));
+    const prior = async (sha) => {
+      const file = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${sha.repeat(40)}.json`);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha.repeat(40), verdict: "findings_present", findings: [] }));
+    };
+    const gated = { gate: "draft_gate", phase: "commit_only", deltaResult: undefined };
+    await prior("d");
+    assert.equal((await emit(gated)).workOrder.source, "act-list", "the cap round reaches the fixer");
+    await prior("e");
+    // The scoped round's own ledger exists once its judged round is written.
+    await writeFile(path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${head}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "findings_present", findings: [{ ...act, judgeDisposition: "act" }] }));
+    await assert.rejects(emit(gated), (e) => e.refusal === "round_cap_reached" && /operator-focus-file/.test(e.message) && e.message.includes(act.fingerprint) && /draft_gate round past the cap/.test(e.message));
+    const focusFile = path.join(root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: act.fingerprint, replyDisposition: "deferred", replyNote: "later" }] }));
+    await assert.rejects(emit({ ...gated, operatorFocusFile: focusFile }), (e) => e.refusal === "round_cap_reached", "an item without a decision does not clear the stop");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: act.fingerprint, decision: "Fix it in this PR" }] }));
+    assert.equal((await emit({ ...gated, operatorFocusFile: focusFile })).workOrder.source, "act-list");
+  });
+});
+
+// GATE-EXEC-SOFT-CAP: at the draft_gate scoped round a ledger-only high (judge-rejected) has no focus decision to clear it: the poster composes blocked, so no fixer order follows.
+test("a draft_gate scoped round whose ledger holds a judge-closed high is refused with round_cap_reached even with an operator focus decision", async () => {
+  await withFixture(async ({ root, head, files, emit }) => {
+    const act = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
+    await writeFile(files.actList, JSON.stringify([act]));
+    const writeLedger = async (sha, findings) => {
+      const file = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${sha}.json`);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha, verdict: "findings_present", findings }));
+    };
+    await writeLedger("d".repeat(40), []);
+    await writeLedger("e".repeat(40), []);
+    await writeLedger(head, [{ ...act, judgeDisposition: "act" }, { ...ACT[0], severity: "high", summary: "ledger-only high", judgeDisposition: "reject", judgeRationale: "decided" }]);
+    const focusFile = path.join(root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: act.fingerprint, decision: "Fix it in this PR" }] }));
+    const gated = { gate: "draft_gate", phase: "commit_only", deltaResult: undefined, operatorFocusFile: focusFile };
+    await assert.rejects(emit(gated), (e) => e.refusal === "round_cap_reached" && /scoped ledger/.test(e.message) && /ledger-only high/.test(e.message));
+    await writeLedger(head, [{ ...act, judgeDisposition: "act" }]);
+    assert.equal((await emit(gated)).workOrder.source, "act-list");
+  });
+});
+
+// A --ci-file source with an act list has no verdict_not_posted check, so an unreadable verdict read refuses instead of skipping blocked_without_findings.
+test("a --ci-file source with an act list refuses when the posted verdict cannot be read", async () => {
+  await withFixture(async (fx) => {
+    await writeFile(fx.files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate", fetchVerdictMarkers: async () => { throw new Error("rate limited"); } }), (e) => e.refusal === "verdict_not_posted" && /rate limited/.test(e.message));
+  });
+});
+
+// Issue 3464 AC8: the blocked_without_findings refusal runs on draft_gate as on pre_approval_gate.
+test("a draft_gate fix round after a blocked verdict with no findings cause is refused with blocked_without_findings naming the operator step", async () => {
+  await withFixture(async ({ head, files, emit }) => {
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
+    const blockedAt = (blockedBy) => async ({ headSha }) => summarizeGateReviewCommentMarkers([{
+      id: 1, surface: "review", state: "COMMENTED", submitted_at: "2026-10-19T00:00:00Z", updated_at: "2026-10-19T00:00:00Z",
+      body: ["Gate review: draft_gate", `Reviewed head SHA: ${head}`, "Verdict: blocked", `Blocked by: ${blockedBy}`, "Findings summary: size", "Next action: stay draft and fix"].join("\n"),
+    }], { headSha });
+    const gated = { gate: "draft_gate", phase: "commit_only", deltaResult: undefined };
+    await assert.rejects(emit({ ...gated, fetchVerdictMarkers: blockedAt("size_budget, ci") }), (e) => e.refusal === "blocked_without_findings" && /grant a size waiver or split the PR; wait for CI/.test(e.message));
+    assert.equal((await emit({ ...gated, fetchVerdictMarkers: blockedAt("findings, ci") })).workOrder.source, "act-list");
   });
 });
 
@@ -5220,6 +5173,59 @@ test("a pre_approval_gate act list at a base-only merge below the cap does not r
     // The carry seam refuses through fixerEmitCarryAccepts (main edited a PR-touched blob).
     const { origin, over } = await mergedPreApprovalScenario(fx, { mainEditsPrFile: true, earlierRounds: [] });
     await assert.rejects(fx.emit(over(origin)), (e) => e.refusal === "verdict_not_posted");
+  });
+});
+
+// A draft_gate ledger-less base-merged head (cap 2, pre_approval cap `preApprovalCap`). The carry seam refuses (main edits pr.md and the merge keeps the PR side), so only the cap guard can read the cap-round head.
+// `forcedFirst`: the round before the cap round is itself a base-merge-forced round (h1 -> h2 is a base-only merge), so the raw round count of the merged head is one above the effective count.
+async function mergedDraftScenario({ root, wt, head, files }, { preApprovalCap = 2, forcedFirst = false, capFindings } = {}) {
+  await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 }, preApproval: { maxReviewRounds: preApprovalCap } } }));
+  const rounds = [];
+  if (forcedFirst) {
+    rounds.push(head);
+    await writeFile(path.join(root, "main-first.md"), "main first\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "main moves first");
+    git(root, "update-ref", "refs/remotes/origin/main", "main");
+    git(wt, "merge", "-q", "--no-ff", "-m", "merge origin/main first", "origin/main");
+  }
+  await writeFile(path.join(wt, "pr.md"), "pr content\n");
+  git(wt, "add", "pr.md");
+  git(wt, "commit", "-q", "-m", "pr change");
+  const origin = git(wt, "rev-parse", "HEAD");
+  const act = withFp({ ...ACT[0], severity: capFindings?.severity ?? "medium", ...(capFindings?.judgeFix === null ? {} : { judgeFix: "guard the deref" }) });
+  await writeFile(files.actList, JSON.stringify([act]));
+  const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
+  await mkdir(dir, { recursive: true });
+  const closed = forcedFirst ? [head, git(wt, "rev-parse", "HEAD~1"), origin] : ["d".repeat(40), origin];
+  for (const [i, sha] of closed.entries()) {
+    await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: sha === origin ? [act] : [] }));
+  }
+  await writeFile(path.join(root, "pr.md"), "main content\n");
+  git(root, "add", "-A");
+  git(root, "commit", "-q", "-m", "main moves");
+  git(root, "update-ref", "refs/remotes/origin/main", "main");
+  git(wt, "merge", "-q", "--no-ff", "-X", "ours", "-m", "merge origin/main", "origin/main");
+  const merged = git(wt, "rev-parse", "HEAD");
+  return { origin, merged, over: { gate: "draft_gate", phase: "commit_only", deltaResult: undefined, headSha: merged, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: merged, baseRefName: "main" }), fetchVerdictMarkers: verdictPostedAt(origin) } };
+}
+
+// GATE-REVIEW-SIBLING-SWEEP: baseMergeCapHead compares the round count with the cap of the gate being emitted, not the pre_approval cap.
+test("a draft_gate act list at a ledgerless base-merged head reads the cap-round head by the draft cap, not the pre_approval cap", async () => {
+  await withFixture(async (fx) => {
+    const { origin, over } = await mergedDraftScenario(fx, { preApprovalCap: 3 });
+    const probed = [];
+    const fetchVerdictMarkers = (a) => { probed.push(a.headSha); return over.fetchVerdictMarkers(a); };
+    assert.equal((await fx.emit({ ...over, fetchVerdictMarkers })).workOrder.source, "act-list");
+    assert.equal(probed[1], origin, "the cap guard reads the verdict at the cap-round head under the draft cap of 2 (the pre_approval cap of 3 would not)");
+  });
+});
+
+// GATE-EXEC-ROUND-CAP: an earlier base-merge-forced round never counts, so the merged head of the effective cap round (cap 2: h1, forced h2, cap round h3, then a base-only merge) still gets the cap-round blocker check.
+test("a draft_gate cap round with a high act item and no judgeFix refuses round_cap_reached at its ledgerless base-merged head after an earlier base-merge-forced round", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await mergedDraftScenario(fx, { forcedFirst: true, capFindings: { severity: "high", judgeFix: null } });
+    await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached" && /GATE-EXEC-SOFT-CAP/.test(e.message));
   });
 });
 

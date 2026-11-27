@@ -5,10 +5,10 @@ import { test } from "bun:test";
 // ADR 0208 (#2462 slice 8): GATE-EXEC-ROUND-CAP states the cap round fixed goes ready; the closure round (count cap+1) is gone from the rule.
 const read = (rel) => readFile(new URL(`../../${rel}`, import.meta.url), "utf8");
 
-test("GATE-EXEC-ROUND-CAP states the cap-round fix, the ready transition and the round N+1 refusal", async () => {
+test("GATE-EXEC-ROUND-CAP states the cap-round fix and defers the round after the cap to GATE-EXEC-CAP-BRAKES", async () => {
   const contract = await read("skills/docs/gate-review-sub-loop-contract.md");
   const rule = contract.split("<!-- rule: GATE-EXEC-ROUND-CAP -->")[1].split("\n")[1];
-  for (const text of ["composes `findings_present`", "Rounds 1 to N run, including the cap round N", "Round N+1 never runs", "refuses a `draft_gate` post whose count is above the cap with `round_cap_reached`", "`mark_ready_for_review` and never a further draft round", "`resolveCapRoundFixed`", "`ready-for-review.mjs` accepts this \"cap round fixed\" state in place of a clean current-head verdict", "CI, size, ADR tripwire and spec conditions stay fail-closed", "post-cap `blocked` draft verdict", "no marker, cap raise or supersede", "`scope.capRoundResidue`", "ADR 0208", "`GATE-EXEC-SOFT-CAP` states the cap-round blocker set (ADR 0251)", "an act list holding a `low` and a mixed list follow `GATE-EXEC-SOFT-CAP`, and an all-`nit` list follows `GATE-EXEC-LOW-FIX-UNTIL-CAP`", "A judge's own `low` defer or reject at the draft cap round is cap-closed under this rule"]) {
+  for (const text of ["composes `findings_present`", "Rounds 1 to N run, including the cap round N", "The round after the cap round is decided by `GATE-EXEC-CAP-BRAKES` (ADR 0324)", "A draft PR goes ready only on clean current-head `draft_gate` evidence (ADR 0324)", "`resolveCapRoundFixed`", "CI, size, ADR tripwire and spec conditions stay fail-closed", "post-cap `blocked` draft verdict", "no marker, cap raise or supersede", "`scope.capRoundResidue`", "ADR 0208", "`GATE-EXEC-SOFT-CAP` states the cap-round blocker set (ADR 0251)", "an act list holding a `low` and a mixed list follow `GATE-EXEC-SOFT-CAP`, and an all-`nit` list follows `GATE-EXEC-LOW-FIX-UNTIL-CAP`", "A judge's own `low` defer or reject at the draft cap round is cap-closed under this rule"]) {
     assert.ok(rule.includes(text), text);
   }
   assert.doesNotMatch(rule, /\b(should|may|usually)\b/i);
@@ -23,23 +23,27 @@ test("GATE-EXEC-FIXER-CYCLE-BOUND names the draft_gate round cap and no closure 
   assert.ok(!/closure/i.test(line));
 });
 
-test("the judge brief names the draft closure round as superseded by ADR 0208 and the pre_approval_gate scoped final round", async () => {
+test("the judge brief names the round after cap round N on draft_gate and pre_approval_gate as the scoped final round", async () => {
   const judge = await read("agents/judge.agent.md");
-  assert.match(judge, /`draft_gate` closure round stays superseded by ADR 0208 \(`GATE-EXEC-ROUND-CAP`\)/);
-  assert.match(judge, /scoped final round \(work order `closureRound: true`, `GATE-EXEC-CAP-BRAKES`\)/);
+  assert.match(judge, /A round after cap round N on `draft_gate` and on `pre_approval_gate` is the scoped final round \(work order `closureRound: true`, `GATE-EXEC-CAP-BRAKES`, ADR 0324\)/);
+  assert.doesNotMatch(judge, /superseded by ADR 0208/);
   assert.doesNotMatch(judge, /In a closure round/);
 });
 
-// Issue 3460 AC8, AC9, AC11: the cap exit rule, the escalation third outcome and the low-nit cap sentence.
-test("GATE-EXEC-ROUND-CAP-EXIT states the exit, the blocked rule, the seeding and the escalated-item binding; the low-nit sentence names the exit at the cap", async () => {
+// ADR 0324: the cap exit rule is gone; the draft exit is the clean scoped final round of GATE-EXEC-CAP-BRAKES.
+test("the draft cap exit rule is deleted and GATE-EXEC-CAP-BRAKES names the draft default 2 and the scoped draft exit; the low-nit sentence names the scoped round", async () => {
   const contract = await read("skills/docs/gate-review-sub-loop-contract.md");
-  const rule = contract.split("<!-- rule: GATE-EXEC-ROUND-CAP-EXIT -->")[1].split("\n")[1];
-  for (const text of ["`capExitHolds`", "a trusted posted `draft_gate` review exists at the cap-round head", "reads no delta record", "A blocked round never takes the exit", "`pastCapBlockers`", "seeds each open act item of the cap round as a finding", "`cap:<fingerprint>`", "blocks a clean `pre_approval_gate` verdict unless the judge rejects it", "names by fingerprint, with a `decision`", "choose a third outcome", "ADR 0320"]) assert.ok(rule.includes(text), text);
-  assert.ok(contract.includes("for one of three outcomes") && contract.includes("The third outcome, at the cap round"), "the escalation rule names the fix in this PR");
-  for (const doc of [contract, await read("skills/copilot-pr-followup/SKILL.md")]) assert.match(doc, /any refusal keeps the full round, except at the cap: a `locally_clear` delta result that carries a new low finding ends in ready through the cap exit \(`GATE-EXEC-ROUND-CAP-EXIT`\)/i);
+  assert.ok(!contract.includes(["GATE-EXEC-ROUND-CAP", "EXIT"].join("-")), "the cap exit rule and every reference are gone");
+  const brakes = contract.split("<!-- rule: GATE-EXEC-CAP-BRAKES -->")[1].split("\n")[1];
+  for (const text of ["(default 2, `0` disables the cap)", "(2) Growth:"]) assert.ok(brakes.includes(text), text);
+  // AC4: the rule carries no ADR 0324 sentence; GATE-EXEC-ROUND-CAP states the draft exit and the enforcementNote carries the growth-read detail.
+  assert.ok(!brakes.includes("ADR 0324"), "GATE-EXEC-CAP-BRAKES carries no ADR 0324 sentence");
+  assert.ok(contract.includes("A draft PR goes ready only on clean current-head `draft_gate` evidence (ADR 0324)."), "GATE-EXEC-ROUND-CAP states the draft exit");
+  assert.ok((await read("skills/docs/required-rules.json")).includes("forecastWlocs in spec-lint.mjs"), "the growth-read detail lives in the enforcementNote");
+  assert.ok(!brakes.includes("slice 2"), "no slice sentence is left");
+  for (const doc of [contract, await read("skills/copilot-pr-followup/SKILL.md")]) assert.match(doc, /any refusal keeps the full round, except at the cap: a `locally_clear` delta result that carries a new low finding ends in the scoped final round after the push \(`GATE-EXEC-CAP-BRAKES`\)/i);
   assert.ok(!contract.includes("Any refusal keeps the full round."), "the unqualified sentence is gone");
   assert.ok(!(await read("skills/copilot-pr-followup/SKILL.md")).includes("Below the cap a refusal keeps the full round"), "the duplicated sentence is gone");
-  const adr = await read("docs/decisions/0320-cap-exit-from-the-posted-cap-review.md");
-  assert.ok(adr.includes("Amends ADR 0208, ADR 0218, ADR 0250 and ADR 0317"));
-  assert.ok(adr.includes("applies `pastCapBlockers` to the seeded items unless the judge rejects it"));
+  const adr = await read("docs/decisions/0324-draft-cap-two-and-scoped-draft-exit.md");
+  assert.ok(adr.includes("Amends ADR 0322, ADR 0320 and ADR 0208"));
 });

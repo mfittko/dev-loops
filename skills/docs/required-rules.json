@@ -501,7 +501,8 @@
     },
     {
       "id": "GATE-EXEC-OPERATOR-FOCUS",
-      "enforcement": "runtime"
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by emit-fixer-work-order.mjs (item validation, the fingerprint and thread binding, and the capLedgerActs bind of a recurrence-escalated cap-ledger act finding that refuses an empty act list with no bound finding), emit-fanout-dispatch.mjs and emit-judge-work-order.mjs; the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE",
@@ -564,22 +565,12 @@
     {
       "id": "GATE-EXEC-CAP-BRAKES",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by decideCapRound in packages/core/src/loop/review-round-cap.mjs, called by resolveScopedFinalRound in write-gate-context.mjs (refuses the scoped final round context) and by evaluatePrGateCoordination (the round_cap_reached and growth stops, facts from resolveCapBrakes in detect-pr-gate-coordination-state.mjs); upsert-checkpoint-verdict.mjs composes the scoped round blockers via pastCapBlockers and emit-fixer-work-order.mjs refuses an act list past the cap without an operator focus decision; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+      "enforcementNote": "Enforced by decideCapRound in packages/core/src/loop/review-round-cap.mjs, called by resolveScopedFinalRound in write-gate-context.mjs (refuses the scoped final round context) and by evaluatePrGateCoordination (the draft cap and the growth_past_forecast stop, facts from resolveCapBrakes in detect-pr-gate-coordination-state.mjs, which reads the forecast from loadRefinementArtifact (forecastWloc, built on forecastWlocs in spec-lint.mjs) and wholeLogicLoc from evaluatePrSizeBudget only at a judged round with an open act item, and gives capBrakesWarning when no forecast exists); upsert-checkpoint-verdict.mjs composes the scoped round blockers via pastCapBlockers and emit-fixer-work-order.mjs refuses an act list past the cap without an operator focus decision; the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-ROUND-CAP",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by upsert-checkpoint-verdict.mjs (choke point, count, past-cap composition via pastCapBlockers in packages/core/src/loop/gate-fanin.mjs) and countCompletedRounds and resolveCapRoundFixed in write-gate-context.mjs (the cap-round-fixed ready transition, also read by ready-for-review.mjs and detect-pr-gate-coordination-state.mjs), and capClosedFor at write-gate-findings-log.mjs, and emit-fixer-work-order.mjs (refuses round_cap_reached after the cap round and at a blocked cap round); the rule body in gate-review-sub-loop-contract.md owns the clauses"
-    },
-    {
-      "id": "GATE-EXEC-ROUND-CAP-WAIVER-PROOF",
-      "enforcement": "runtime",
-      "enforcementNote": "Enforced by waive-adr-tripwire.mjs, which calls resolveCapRoundFixed from write-gate-context.mjs as ready-for-review.mjs does; the rule body in gate-review-sub-loop-contract.md owns the clauses"
-    },
-    {
-      "id": "GATE-EXEC-ROUND-CAP-EXIT",
-      "enforcement": "runtime",
-      "enforcementNote": "Enforced by capExitHolds and resolveCapExitRound in write-gate-context.mjs, called by ready-for-review.mjs, waive-adr-tripwire.mjs, detect-checkpoint-evidence.mjs and emit-fixer-work-order.mjs (resolveDraftCapRoundFact calls capExitHolds directly); seeded by consolidate-fanin.mjs and blocked by upsert-checkpoint-verdict.mjs at pre_approval_gate; the escalated-item binding lives in emit-fixer-work-order.mjs (tests: test/github/cap-exit.test.mjs, test/contracts/round-cap-closure-contract.test.mjs); the rule body in gate-review-sub-loop-contract.md owns the clauses"
+      "enforcementNote": "Enforced by upsert-checkpoint-verdict.mjs (choke point, count, past-cap composition via pastCapBlockers in packages/core/src/loop/gate-fanin.mjs) and resolveDraftRoundCap in write-gate-context.mjs (refuses round_cap_base_unresolved when no gate-context artifact records the PR base; remedy --context-tmp-root) and resolveCapRoundFixed in write-gate-context.mjs, (the cap-round-fixed ready transition, also read by detect-pr-gate-coordination-state.mjs), with refusesPastScopedRound (the poster and detector refusal past the scoped final round), and capClosedFor at write-gate-findings-log.mjs, and emit-fixer-work-order.mjs (refuses round_cap_reached at a blocked cap round, and past the cap unless an operator focus decision names each act fingerprint); the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-NO-DEAD-END",

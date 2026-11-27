@@ -554,7 +554,7 @@
               "description": "Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class."
             },
             "maxReviewRounds": {
-              "description": "Round cap for the draft and pre-approval gates: a round whose count of completed judged rounds reaches this number is past the cap, and at the cap round only a named human decision blocks with round_cap_reached (GATE-EXEC-SOFT-CAP); other act items go to the fixer, and on draft a round after the cap round is refused. On preApproval the round after the cap round runs as the scoped final round within gates.capFixMaxLines (GATE-EXEC-CAP-BRAKES). 0 disables the cap. Default 4 on draft, 2 on preApproval.",
+              "description": "Round cap for the draft and pre-approval gates: a round whose count of completed judged rounds reaches this number is past the cap, and at the cap round only a named human decision blocks with round_cap_reached (GATE-EXEC-SOFT-CAP); other act items go to the fixer, and on both gates the round after the cap round runs as the scoped final round within gates.capFixMaxLines (GATE-EXEC-CAP-BRAKES). 0 disables the cap. Default 2.",
               "type": "integer",
               "minimum": 0
             }
@@ -807,7 +807,7 @@
               "description": "Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class."
             },
             "maxReviewRounds": {
-              "description": "Round cap for the draft and pre-approval gates: a round whose count of completed judged rounds reaches this number is past the cap, and at the cap round only a named human decision blocks with round_cap_reached (GATE-EXEC-SOFT-CAP); other act items go to the fixer, and on draft a round after the cap round is refused. On preApproval the round after the cap round runs as the scoped final round within gates.capFixMaxLines (GATE-EXEC-CAP-BRAKES). 0 disables the cap. Default 4 on draft, 2 on preApproval.",
+              "description": "Round cap for the draft and pre-approval gates: a round whose count of completed judged rounds reaches this number is past the cap, and at the cap round only a named human decision blocks with round_cap_reached (GATE-EXEC-SOFT-CAP); other act items go to the fixer, and on both gates the round after the cap round runs as the scoped final round within gates.capFixMaxLines (GATE-EXEC-CAP-BRAKES). 0 disables the cap. Default 2.",
               "type": "integer",
               "minimum": 0
             }

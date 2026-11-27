@@ -107,6 +107,18 @@ test("every body-only act list block is typed, with and without a blocker", () =
   assert.equal(removedRemedy, 1);
 });
 
+test("a blocked draft verdict routes the fixer only when the act list is operator-cleared", () => {
+  const FULL = "a".repeat(40);
+  const blocked = gate(FULL, "blocked");
+  const route = (operatorCleared) => evaluatePrGateCoordination({
+    pr: 7, repo: "o/r", currentHeadSha: FULL, prDraft: true, lifecycleState: STATE.PR_DRAFT_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "success", maxCopilotRounds: 2, draftGate: blocked, draftGateMarker: blocked,
+    draftOpenActList: { headSha: FULL, openActCount: 1, blockers: [], ...(operatorCleared ? { operatorCleared: true } : {}) },
+  });
+  assert.equal(route(true).nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+  assert.notEqual(route(false).nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+});
+
 test("the predicate flags a typed result with its remedy stripped", () => {
   const input = { pr: 7, repo: "o/r", currentHeadSha: HEAD, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, prTitle: "WIP: x", draftGate: CLEAN, draftGateMarker: CLEAN, ciStatus: "success", maxCopilotRounds: 0 };
   const typed = evaluatePrGateCoordination(input);
@@ -207,7 +219,7 @@ test("a repo that is not a plain slug or a non-positive pr names the operator", 
 // and every remedy text the cap-round tools print names a command in the CLI registry.
 const COMMAND_PATTERN = /(?:dev-loops|cli\/index\.mjs|\$\{CLI\}) (gate|loop|pr) ([a-z][a-z-]*)/g;
 
-test("every cap-round block is typed: a command that parses on the extension route, or the operator", () => {
+test("every draft cap-round block is typed: the operator decision, never a chain-extension command (ADR 0324)", () => {
   const failures = [undefined, ...Object.keys(CAP_ROUND_REFUSAL)];
   let commands = 0;
   for (const draftCapRoundFailure of failures) {
@@ -222,7 +234,7 @@ test("every cap-round block is typed: a command that parses on the extension rou
     assert.ok(SUBCOMMAND_ROUTES[group]?.[sub], `${command} is not a CLI command`);
     assert.doesNotThrow(() => (sub === "upsert-verdict" ? parseUpsertCheckpointVerdictCliArgs : parseExtendCapRoundChainCliArgs)(args), command);
   }
-  assert.ok(commands >= 4);
+  assert.equal(commands, 0, "a draft cap block names the operator decision, never a chain-extension command (ADR 0324)");
 });
 
 test("the remedy texts of the cap-round tools name only CLI commands that exist", () => {

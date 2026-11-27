@@ -2862,7 +2862,7 @@ describe("role resolution", () => {
         additiveAngles: false,
         blockCleanOnFindingSeverities: ["high"],
         mediumFixWindow: 3,
-        maxReviewRounds: 4,
+        maxReviewRounds: 2,
         inlineSeverityFloor: "medium",
         tiers: [],
         angleCategoryBindings: {},
@@ -2886,7 +2886,7 @@ describe("role resolution", () => {
         additiveAngles: false,
         blockCleanOnFindingSeverities: ["high"],
         mediumFixWindow: 3,
-        maxReviewRounds: 4,
+        maxReviewRounds: 2,
         inlineSeverityFloor: "medium",
         tiers: [],
         angleCategoryBindings: {},
@@ -3308,8 +3308,8 @@ describe("role resolution", () => {
       );
     });
 
-    test("resolveGateConfig resolves maxReviewRounds: default 4, override, 0 kill switch", () => {
-      assert.equal(resolveGateConfig({ version: 1 }, "draft").maxReviewRounds, 4);
+    test("resolveGateConfig resolves maxReviewRounds: default 2, override, 0 kill switch", () => {
+      assert.equal(resolveGateConfig({ version: 1 }, "draft").maxReviewRounds, 2);
       assert.equal(resolveGateConfig({ version: 1, gates: { draft: { maxReviewRounds: 6 } } }, "draft").maxReviewRounds, 6);
       assert.equal(resolveGateConfig({ version: 1, gates: { draft: { maxReviewRounds: 0 } } }, "draft").maxReviewRounds, 0);
       assert.equal(resolveGateConfig({ version: 1, gates: { draft: { maxReviewRounds: 0 } } }, "preApproval").maxReviewRounds, 2);

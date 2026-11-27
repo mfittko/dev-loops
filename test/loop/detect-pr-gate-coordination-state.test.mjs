@@ -2987,6 +2987,24 @@ test("loadRefinementArtifact: #1951 matrix-miss linked issue (checklist-only bod
   }
 });
 
+// Issue 3464 AC5: loadRefinementArtifact returns the largest forecast wloc of the first present linked issue body, for a draft and a ready PR.
+test("loadRefinementArtifact: forecastWloc is the largest wloc of the first present linked issue body", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "dev-loops-forecast-wloc-"));
+  try {
+    const body = "## Acceptance criteria\n\n- [ ] Round count resets on new head\n\n## AC / DoD matrix\n\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the round count resets on a new head | a focused test proves the reset on a new head |\n\n## Non-goals\n\n- None.\n\n## Size forecast\n\n- forecast: slice=1 wloc=120 files=a.mjs\n- forecast: slice=2 wloc=380 files=b.mjs\n";
+    for (const prDraft of [true, false]) {
+      const { env } = await writeGhStubHelper(tmp, [{ stdout: JSON.stringify({ body }) + "\n" }]);
+      const result = await loadRefinementArtifact({ repo: "owner/repo", prData: { number: 12, closingIssuesReferences: [{ number: 900 }], body: "Closes #900\n" }, prDraft, prClosed: false, prMerged: false }, { env });
+      assert.equal(result.forecastWloc, 380, `prDraft ${prDraft}`);
+    }
+    const { env } = await writeGhStubHelper(tmp, [{ stdout: JSON.stringify({ body: body.split("## Size forecast")[0] }) + "\n" }]);
+    const none = await loadRefinementArtifact({ repo: "owner/repo", prData: { number: 12, closingIssuesReferences: [{ number: 900 }], body: "Closes #900\n" }, prDraft: true, prClosed: false, prMerged: false }, { env });
+    assert.equal(none.forecastWloc, null, "no forecast line gives null");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("loadRefinementArtifact: #1951 malformed-matrix linked issue surfaces malformed_ac_dod_matrix", async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
   try {
@@ -4508,14 +4526,14 @@ async function seedCapFixedRepo(repoRoot, { headSha, seal = true, record: record
 }
 
 // threads: -1 seeds one gate thread whose login lookup fails, so the gate thread count is unreadable (-1).
-async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, files, threads = 0, reviews = [] }) {
+async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, files, threads = 0, reviews = [], linkedIssueBody, failedLaterIssue = false }) {
   const threadNodes = Array.from({ length: Math.abs(threads) }, (_, i) => ({ id: `PRRT_${i}`, isResolved: false, isOutdated: false, path: "src/scope.mjs", line: 4, comments: { nodes: [{ id: `PRRC_${i}`, databaseId: 9000 + i, body: `${buildFindingMarker({ fp: String(i).repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why?`, author: { login: "dev-loops-gate[bot]", __typename: "Bot" } }] } }));
   return writeGhStub(tempDir, [
     {
       stdout: JSON.stringify({
         number: 10, state: "OPEN", isDraft, headRefOid: headSha, baseRefName: "main", mergeStateStatus: "CLEAN", ...(files ? { files: files.map((p) => ({ path: p })) } : {}),
         body: "## Objective\n\nShip.\n\n## In scope\n\n- x\n\n## Explicit non-goals\n\n- y\n\n## Acceptance criteria\n\n- [ ] x\n\n## Definition of done\n\n- [ ] tests pass\n\n## Open questions/risks\n\n- none\n",
-        closingIssuesReferences: [], reviews, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        closingIssuesReferences: linkedIssueBody === undefined ? [] : [{ number: 900 }, ...(failedLaterIssue ? [{ number: 901 }] : [])], reviews, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
       }) + "\n",
     },
     { stdout: "{\"users\":[]}\n" },
@@ -4525,13 +4543,14 @@ async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, f
     { stdout: jsonLine([[{ id: 11, body: draftGateBody, html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }]]) },
     { stdout: "[]\n" },
     { assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: "\n" },
+    // The detector reads the review-request status before the linked issue body.
+    ...(linkedIssueBody === undefined ? [] : [{ assertArgs: ["issue", "view", "900", "--repo", "owner/repo", "--json", "body"], ...(linkedIssueBody === null ? { stdout: "", exitCode: 1, stderr: "HTTP 502" } : { stdout: JSON.stringify({ body: linkedIssueBody }) + "\n" }) }]),
+    ...(failedLaterIssue ? [{ assertArgs: ["issue", "view", "901", "--repo", "owner/repo", "--json", "body"], stdout: "", exitCode: 1, stderr: "HTTP 502" }] : []),
   ]);
 }
 
 for (const { name, isDraft, seal, expected } of [
-  { name: "a draft PR with a cleared sealed cap-round delta and a blocked round 5 goes mark_ready_for_review", isDraft: true, seal: true, expected: PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW },
   { name: "a ready PR with a cleared sealed cap-round delta never reconciles the draft gate (goes to the Copilot cycle)", isDraft: false, seal: true, expected: PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW },
-  { name: "a draft PR whose delta record is unsealed is not cap-round-fixed and reports blocked (round N+1 never runs)", isDraft: true, seal: false, expected: PR_CHECKPOINT_ACTION.REPORT_BLOCKED },
 ]) {
   test(`detect-pr-gate-coordination-state (ADR 0208): ${name}`, async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-fixed-"));
@@ -4548,69 +4567,6 @@ for (const { name, isDraft, seal, expected } of [
     }
   });
 }
-
-// ADR 0218: a rejecting resolveCapRoundFixed (injected through the runtime) reaches the detector rejection handler, which reports cap_round_unresolved.
-test("detect-pr-gate-coordination-state (ADR 0218): a rejecting resolveCapRoundFixed reports cap_round_unresolved", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-throws-"));
-  try {
-    const headSha = "abc1234567".repeat(4);
-    await seedCapFixedRepo(tempDir, { headSha, seal: true });
-    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
-    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
-    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, resolveCapRoundFixed: async () => { throw new Error("resolver failed"); } }));
-    assert.equal(result.ok, true);
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
-    assert.ok(result.reason.includes("Condition cap_round_unresolved:"), result.reason);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-for (const { name, chained, expected } of [
-  { name: "a draft PR whose later push is covered by a chain of sealed cap-round delta records goes mark_ready_for_review", chained: true, expected: PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW },
-  { name: "a draft PR whose later push has no record in the chain reports blocked", chained: false, expected: PR_CHECKPOINT_ACTION.REPORT_BLOCKED },
-]) {
-  test(`detect-pr-gate-coordination-state (ADR 0208 chain): ${name}`, async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-chain-"));
-    try {
-      const fixerHead = "abc1234567".repeat(4);
-      const laterHead = "def7654321".repeat(4);
-      await seedCapFixedRepo(tempDir, { headSha: fixerHead, seal: true });
-      if (chained) {
-        const record = `${JSON.stringify({ reviewBaselineHead: fixerHead, candidateHead: laterHead, nextStep: "push", outcome: "locally_clear" })}\n`;
-        const deltaDir = path.join(tempDir, "tmp", "gate-delta");
-        await writeFile(path.join(deltaDir, `${fixerHead}.json`), record, "utf8");
-        await writeFile(path.join(deltaDir, `${fixerHead}.json.seal`), `${createHash("sha256").update(record).digest("hex")}\n`, "utf8");
-      }
-      const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha: laterHead, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
-      const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha: laterHead, draftGateBody: body });
-      const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
-      assert.equal(result.ok, true);
-      assert.equal(result.nextAction, expected, result.reason);
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
-  });
-}
-
-// ADR 0218: an unreadable in-range cap-round ledger still counts toward the cap, so the refusal stands, but it names cap_round_unresolved and not a clearing record that was never evaluated.
-test("detect-pr-gate-coordination-state (ADR 0218): an unreadable cap-round ledger reports cap_round_unresolved, not no_clearing_record", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-unresolved-"));
-  try {
-    const headSha = "abc1234567".repeat(4);
-    await seedCapFixedRepo(tempDir, { headSha, seal: true });
-    await writeFile(path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10", `draft_gate-${"c".repeat(40)}.json`), "not json", "utf8");
-    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
-    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
-    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
-    assert.equal(result.ok, true);
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
-    assert.ok(result.reason.includes("Condition cap_round_unresolved:"), result.reason);
-    assert.ok(!result.reason.includes("no_clearing_record"), result.reason);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
 
 // Issue 2787 C11: a ci-failure fixer plan has no thread to verify, so the ADR 0155 advisory check skips it.
 for (const [source, advisory] of [["ci-failure", false], ["threads", true]]) test(`an active full ${source} plan ${advisory ? "raises" : "raises no"} unverified_active_fixer advisory`, async () => {
@@ -4630,35 +4586,13 @@ for (const [source, advisory] of [["ci-failure", false], ["threads", true]]) tes
   }
 });
 
-// Issue 3460 AC5: with the cap exit true at the cap-round head, the detector still loads the open act list, so the fixer runs before ready.
-test("detect-pr-gate-coordination-state (3460 AC5): a cap-round head with a trusted posted review and an open act item routes the fixer, not ready", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-act-"));
-  try {
-    const headSha = "abc1234567".repeat(4);
-    await seedCapFixedRepo(tempDir, { headSha, seal: false });
-    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
-    await rm(path.join(findings, `draft_gate-${"c".repeat(40)}.json`));
-    const act = { severity: "medium", summary: "fix x", file: "src/x.mjs", line: 3, judgeDisposition: "act" };
-    await writeFile(path.join(findings, `draft_gate-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z", findings: [act] }), "utf8");
-    const reviews = [{ author: { login: "operator", type: "User" }, authorAssociation: "OWNER", body: `<!-- dev-loops:gate-findings-review draft_gate ${headSha.slice(0, 7)} round=4 -->\n**Verdict:** findings_present` }];
-    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 medium", nextAction: "fix" });
-    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body, reviews });
-    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
-    assert.equal(result.ok, true);
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
 test("detect-pr-gate-coordination-state (#3080): a live current-head draft ledger at the cap round counts toward the round refusal", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-live-round-"));
   try {
     const headSha = "abc1234567".repeat(4);
     await seedCapFixedRepo(tempDir, { headSha, seal: false });
     const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
-    await rm(path.join(findings, `draft_gate-${"c".repeat(40)}.json`));
-    await writeFile(path.join(findings, `draft_gate-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z", findings: [] }), "utf8");
+    await writeFile(path.join(findings, `draft_gate-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z", findings: [{ severity: "medium", summary: "open act", judgeDisposition: "act", judgeFix: "fix it", file: "a.mjs", line: 1 }] }), "utf8");
     const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
     const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
     const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
@@ -4731,6 +4665,35 @@ test("3105 AC15: the detector derives the open act list from the current-head le
   }
 });
 
+test("GATE-EXEC-CAP-BRAKES: a draft round forced by a base merge never counts, so the real round after it is the cap round the detector routes to the fixer", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-draft-forced-"));
+  try {
+    initGitFixture(dir, { branch: "main" });
+    const git = (...a) => runGitFixture(dir, a).trim();
+    const commit = async (file, msg) => { await writeFile(path.join(dir, file), msg, "utf8"); git("add", "-A"); git("commit", "-q", "-m", msg); return git("rev-parse", "HEAD"); };
+    git("checkout", "-q", "-b", "pr");
+    const h1 = await commit("b.txt", "b");
+    git("checkout", "-q", "main");
+    const main = await commit("c.txt", "c");
+    git("checkout", "-q", "pr");
+    git("merge", "-q", "--no-ff", "-m", "merge main", "main");
+    const h2 = git("rev-parse", "HEAD");
+    git("update-ref", "refs/remotes/origin/main", main);
+    const h3 = await commit("d.txt", "d");
+    const findingsDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findingsDir, { recursive: true });
+    for (const [head, day] of [[h1, 1], [h2, 2], [h3, 3]]) {
+      await writeSealed(path.join(findingsDir, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${day}T00:00:00.000Z`, findings: head === h3 ? [ACT] : [ACT, { ...ACT, summary: "fix y", line: 9 }] }));
+    }
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha: h3, verdict: "findings_present", findingsSummary: "1 medium", nextAction: "fix" });
+    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(await capFixedDetectorEnv(dir, { isDraft: true, headSha: h3, draftGateBody: body }), { repoRoot: dir, evaluateEarlySurface: PASS_EARLY_SURFACE, checkBaseFreshness: async () => STALE }));
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
+    assert.match(result.agentRemedy.command, new RegExp(`--head-sha ${h3} `));
+    assert.deepEqual(await resolveDraftOpenActList({ repo: "owner/repo", pr: 10, currentHeadSha: h3, prData: { baseRefName: "main" } }, { repoRoot: dir, cap: 2 }), { headSha: h3, openActCount: 1, blockers: [] });
+    assert.equal(await resolveDraftOpenActList({ repo: "owner/repo", pr: 10, currentHeadSha: h3 }, { repoRoot: dir, cap: 2 }), null, "without the PR base the raw round 3 is past the cap");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test("3105 AC15: a head-matching marker without a next action reruns the draft gate at the stale head", async () => {
   const fixture = await actListFixture({ "": { findings: [ACT] } }, { nextAction: "" });
   try {
@@ -4782,7 +4745,7 @@ test("3309: a base-only merge head keeps the cap-round body-only list of the cap
     assert.deepEqual(seen, [fixture.headSha]);
     // Merge-then-post: the detector's list plus the findings_present marker still at the cap head A name the post at the merge head (the marker never carries).
     const marker = { visible: true, headSha: fixture.headSha, verdict: "findings_present", contractComplete: true };
-    const result = evaluatePrGateCoordination({ pr: 10, repo: "owner/repo", currentHeadSha: merged, prDraft: true, lifecycleState: "pr_draft", loopDisposition: "action_required", ciStatus: "success", mergeStateStatus: "CLEAN", mergeable: "MERGEABLE", draftGate: marker, draftGateMarker: marker, draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record", draftOpenActList: list });
+    const result = evaluatePrGateCoordination({ pr: 10, repo: "owner/repo", currentHeadSha: merged, prDraft: true, lifecycleState: "pr_draft", loopDisposition: "action_required", ciStatus: "success", mergeStateStatus: "CLEAN", mergeable: "MERGEABLE", draftGate: marker, draftGateMarker: marker, draftOpenActList: list });
     assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
     assert.match(result.agentRemedy.command, new RegExp(`--head-sha ${fixture.headSha} .*fixerCommit \\(${fixture.headSha}\\)`));
     assert.equal(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 1, baseOnlyMerge: merge(false) }), null);
@@ -5176,7 +5139,6 @@ for (const { name, isDraft, seal, verdict, threads = 0, seed = true, satisfied, 
   { name: "ready with an unsealed record (unsealed_record)", isDraft: false, seal: false, verdict: "blocked", satisfied: false, condition: "unsealed_record" },
   { name: "ready with no delta record (no_clearing_record)", isDraft: false, seal: false, verdict: "blocked", satisfied: false, condition: "no_clearing_record", fixture: { record: "none" } },
   { name: "ready with a record that does not cover the act refs (items_do_not_cover)", isDraft: false, seal: true, verdict: "blocked", satisfied: false, condition: "items_do_not_cover", fixture: { capFindings: [AC1_ACT] } },
-  { name: "draft with a chain that ends before the head (chain_does_not_reach_head)", isDraft: true, seal: true, verdict: "blocked", satisfied: false, condition: "chain_does_not_reach_head", fixture: { candidate: "d".repeat(40) } },
   { name: "ready with an orphaned cap-round head (baseline_orphaned)", isDraft: false, seal: true, verdict: "blocked", satisfied: false, condition: "baseline_orphaned", fixture: { orphaned: true, record: "none" } },
   { name: "ready with an unreadable cap-round ledger (cap_round_unresolved)", isDraft: false, seal: true, verdict: "blocked", satisfied: false, condition: "cap_round_unresolved", fixture: { unreadable: true } },
   { name: "ready with no cap-round ledger (below the cap, no failure)", isDraft: false, seal: true, verdict: "blocked", seed: false, satisfied: false },
@@ -5523,9 +5485,33 @@ test("resolveCapBrakes returns the round facts and the named items of the head's
     assert.deepEqual({ gate: pre.gate, round: pre.round, cap: pre.cap, items: pre.items.length }, { gate: "pre_approval_gate", round: 4, cap: 2, items: 2 });
     assert.match(pre.items[0], /^[0-9a-f]{16} \[medium\] defect \d$/);
     const draft = await resolveCapBrakes(ctx(heads[1], true), { repoRoot: tempDir, config: { version: 1 } });
-    assert.deepEqual({ gate: draft.gate, round: draft.round, cap: draft.cap }, { gate: "draft_gate", round: 3, cap: 0 });
+    assert.deepEqual({ gate: draft.gate, round: draft.round, cap: draft.cap }, { gate: "draft_gate", round: 3, cap: 2 });
     // A head with no judged round of its own carries no facts.
     assert.equal(await resolveCapBrakes(ctx("9".repeat(40), false), { repoRoot: tempDir, config: { version: 1 } }), null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// Issue 3464 AC5, AC6: the growth numbers ride the brake facts only with a forecast; no forecast gives a warning and no wholeLogicLoc read.
+test("resolveCapBrakes carries forecastWloc and the wholeLogicLoc of the head, and reads no size without a forecast", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-growth-"));
+  try {
+    const head = "1".repeat(40);
+    const file = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-12", `draft_gate-${head}.json`);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 12, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-11-01T00:00:00.000Z", findings: [{ severity: "medium", angle: "correctness", summary: "d", files: ["a.mjs"], line: 1, judgeDisposition: "act", judgeTitle: "d", judgeFix: "f" }] }), "utf8");
+    const reads = [];
+    const evaluateSize = async (args) => { reads.push(args); return { wholeLogicLoc: 761 }; };
+    const ctx = (refinementArtifact) => ({ repo: "owner/repo", pr: 12, currentHeadSha: head, prData: { isDraft: true, baseRefName: "main" }, refinementArtifact });
+    const grown = await resolveCapBrakes(ctx({ forecastWloc: 380 }), { repoRoot: tempDir, config: { version: 1 }, evaluateSize });
+    assert.deepEqual({ forecastWloc: grown.forecastWloc, wholeLogicLoc: grown.wholeLogicLoc }, { forecastWloc: 380, wholeLogicLoc: 761 });
+    assert.deepEqual(reads, [{ base: "origin/main", head, repoRoot: tempDir }]);
+    // A failed growth read keeps the other brake facts and names the failure instead of dropping every brake.
+    const failed = await resolveCapBrakes(ctx({ forecastWloc: 380 }), { repoRoot: tempDir, config: { version: 1 }, evaluateSize: async () => { throw new Error("git diff failed"); } });
+    assert.deepEqual({ round: failed.round, hasLoc: "wholeLogicLoc" in failed, growthReadError: failed.growthReadError }, { round: grown.round, hasLoc: false, growthReadError: "git diff failed" });
+    const bare =await resolveCapBrakes(ctx({ linkedIssue: null }), { repoRoot: tempDir, config: { version: 1 }, evaluateSize });
+    assert.deepEqual({ forecastWloc: bare.forecastWloc, hasLoc: "wholeLogicLoc" in bare, reads: reads.length }, { forecastWloc: null, hasLoc: false, reads: 1 });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -5610,6 +5596,129 @@ async function detectWithPriorLedger(headSummary, { tamper = false, corrupt = fa
   }
 }
 
+// Issue 3464 AC6: a linked issue with no forecast line gets a warning that names it, and no cap brake stops the lane.
+test("a linked issue without a forecast line sets capBrakesWarning naming the issue and does not stop the lane", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-cap-brakes-no-forecast-"));
+  try {
+    initGitFixture(tempDir, { branch: "main" });
+    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1 }));
+    const headSha = "abc1234567".repeat(4);
+    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findings, { recursive: true });
+    await writeSealed(path.join(findings, `draft_gate-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha, verdict: "findings_present", loggedAt: "2026-11-16T00:00:00.000Z", findings: [{ severity: "medium", summary: "x", file: "src/x.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix x" }] }));
+    const issueBody = "## Acceptance criteria\n\n- [ ] Round count resets on new head\n- [ ] No reset on same head\n\n## AC / DoD matrix\n\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the round count resets on a new head | a focused test proves the reset on a new head |\n\n## Non-goals\n\n- None.\n";
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body, linkedIssueBody: issueBody });
+    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+    assert.match(result.capBrakesWarning, /linked issue #900 has no `- forecast: slice=<id> wloc=<n> files=<paths>` line with wloc above 0 under `## Size forecast`/);
+    assert.doesNotMatch(result.reason, /growth_past_forecast|round_cap_reached/, "no cap-brake stop");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// Issue 3464 AC5: the linked issue's `## Size forecast` lines reach resolveCapBrakes through the detector, which stops at twice the largest forecast wloc.
+async function detectWithForecast({ evaluateSize, checkBaseFreshness }) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-cap-brakes-growth-"));
+  try {
+    initGitFixture(tempDir, { branch: "main" });
+    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1 }));
+    const headSha = "abc1234567".repeat(4);
+    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findings, { recursive: true });
+    await writeSealed(path.join(findings, `draft_gate-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha, verdict: "findings_present", loggedAt: "2026-11-16T00:00:00.000Z", findings: [{ severity: "medium", summary: "x", file: "src/x.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix x" }] }));
+    const issueBody = "## Acceptance criteria\n\n- [ ] Round count resets on new head\n\n## AC / DoD matrix\n\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the round count resets on a new head | a focused test proves the reset on a new head |\n\n## Non-goals\n\n- None.\n\n## Simplest design\n\nMinimal.\n\n## Size forecast\n\n- forecast: slice=1 wloc=120 files=a.mjs\n- forecast: slice=2 wloc=380 files=b.mjs\n";
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body, linkedIssueBody: issueBody });
+    return await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, evaluateSize, ...(checkBaseFreshness ? { checkBaseFreshness } : {}) }));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("a linked issue forecast of wloc 120 and 380 stops the lane at wholeLogicLoc 761 with growth_past_forecast and does not stop at 760", async () => {
+  const stopped = await detectWithForecast({ evaluateSize: async () => ({ wholeLogicLoc: 761 }) });  assert.equal(stopped.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(stopped.reason, /growth_past_forecast: wholeLogicLoc 761 is above 2 times the forecast wloc 380/);
+  const atThreshold = await detectWithForecast({ evaluateSize: async () => ({ wholeLogicLoc: 760 }) });
+  assert.notEqual(atThreshold.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, atThreshold.reason);
+  assert.doesNotMatch(atThreshold.reason, /growth_past_forecast/);
+});
+
+test("the growth read refreshes origin/<base> first: a stale ref that reads 761 does not stop once the fetch refreshed it, and a failed fetch leaves the limit unevaluated", async () => {
+  const calls = [];
+  let fresh = false;
+  const refreshed = await detectWithForecast({
+    checkBaseFreshness: async ({ base }) => { calls.push(`fetch ${base}`); fresh = true; return { ok: true, status: "base_current", base }; },
+    evaluateSize: async () => { calls.push("size"); return { wholeLogicLoc: fresh ? 700 : 761 }; },
+  });
+  assert.deepEqual(calls, ["fetch main", "size"]);
+  assert.doesNotMatch(refreshed.reason, /growth_past_forecast/);
+  const failed = await detectWithForecast({
+    checkBaseFreshness: async () => ({ ok: false, error: "base_fetch_failed", message: "network down" }),
+    evaluateSize: async () => { throw new Error("the size read must not run after a failed fetch"); },
+  });
+  assert.match(failed.capBrakesWarning, /the growth limit could not be evaluated \(base_fetch_failed: network down\)/);
+  assert.doesNotMatch(failed.capBrakesWarning, /next gate round is still refused by write-gate-context/, "write-gate-context does not enforce growth");
+  // AC7: with a forecast, a failed read stops the lane; no fixer pass follows and only a rerun or an operator decision clears it.
+  assert.equal(failed.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.equal(failed.blockedOn, "operator_decision");
+  assert.match(failed.reason, /growth_unread: .*could not be read \(base_fetch_failed: network down\).*rerun.*--operator-focus-file/);
+  assert.doesNotMatch(failed.reason, /growth_past_forecast/);
+});
+
+test("a growth size read that throws with a forecast stops the lane instead of routing the fixer", async () => {
+  const failed = await detectWithForecast({ evaluateSize: async () => { throw new Error("git diff failed"); } });
+  assert.equal(failed.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(failed.reason, /growth_unread: .*\(git diff failed\)/);
+});
+
+// Issue 3464 AC5/AC6/AC9: a failed linked-issue body fetch (null body) leaves the forecast unread, so the lane stops with growth_unread instead of warning "no forecast line".
+{
+  const isDraft = false;
+  test(`a failed linked-issue body fetch on a ready PR stops the lane with growth_unread and names the failed read`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-cap-brakes-forecast-unread-"));
+    try {
+      initGitFixture(tempDir, { branch: "main" });
+      await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1 }));
+      const headSha = "abc1234567".repeat(4);
+      const gate = isDraft ? "draft_gate" : "pre_approval_gate";
+      const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+      await mkdir(findings, { recursive: true });
+      await writeSealed(path.join(findings, `${gate}-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate, headSha, verdict: "findings_present", loggedAt: "2026-11-16T00:00:00.000Z", findings: [{ severity: "medium", summary: "x", file: "src/x.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix x" }] }));
+      const body = renderGateReviewCommentBody({ gate, headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
+      const env = await capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody: body, linkedIssueBody: null });
+      const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, evaluateSize: async () => { throw new Error("no size read without a forecast"); } }));
+      assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+      assert.match(result.reason, /growth_unread: .*could not be read \(.*linked issue #900 could not be fetched\)/);
+      assert.match(result.capBrakesWarning, /linked issue #900 could not be fetched/);
+      assert.doesNotMatch(result.capBrakesWarning, /has no `- forecast:/);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
+// A failed fetch of issue #901 listed after the fetched #900 (ACs, no forecast line) cannot be the forecast source: AC6 warns and does not stop.
+test("a failed linked-issue fetch listed after a fetched issue with ACs and no forecast line warns and does not stop with growth_unread", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-cap-brakes-later-failed-"));
+  try {
+    initGitFixture(tempDir, { branch: "main" });
+    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1 }));
+    const headSha = "abc1234567".repeat(4);
+    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findings, { recursive: true });
+    await writeSealed(path.join(findings, `pre_approval_gate-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "pre_approval_gate", headSha, verdict: "findings_present", loggedAt: "2026-11-16T00:00:00.000Z", findings: [{ severity: "medium", summary: "x", file: "src/x.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix x" }] }));
+    const issueBody = "## Acceptance criteria\n\n- [ ] Round count resets on new head\n\n## AC / DoD matrix\n\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the round count resets on a new head | a focused test proves the reset on a new head |\n\n## Non-goals\n\n- None.\n";
+    const body = renderGateReviewCommentBody({ gate: "pre_approval_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: false, headSha, draftGateBody: body, linkedIssueBody: issueBody, failedLaterIssue: true });
+    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+    assert.doesNotMatch(result.reason, /growth_unread/, result.reason);
+    assert.match(result.capBrakesWarning, /linked issue #900 has no `- forecast:/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("detectPrGateCoordinationState forwards --operator-focus-file into the cap brakes: a full file clears the round_cap_reached stop", async () => {
   const stopped = await detectWithPriorLedger("x", { pastCap: true });
   assert.equal(stopped.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
@@ -5619,9 +5728,110 @@ test("detectPrGateCoordinationState forwards --operator-focus-file into the cap 
   assert.notEqual(cleared.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, cleared.reason);
 });
 
+// Issue 3464: a draft PR past the scoped final round is cleared by a focus file deciding every act fingerprint of the latest judged round.
+async function detectPastScopedRound({ withFocusFile }) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-scoped-final-clear-"));
+  try {
+    initGitFixture(tempDir, { branch: "main" });
+    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 1 } } }));
+    const headSha = "abc1234567".repeat(4);
+    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findings, { recursive: true });
+    const act = (k) => ({ severity: "medium", summary: `defect ${k}`, file: `src/${k}.mjs`, line: 1, judgeDisposition: "act", judgeFix: "fix it" });
+    const ledger = (head, loggedAt, list) => writeSealed(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt, findings: list }));
+    await ledger("1".repeat(40), "2026-11-14T00:00:00.000Z", [act("a")]);
+    await ledger("2".repeat(40), "2026-11-15T00:00:00.000Z", [act("b")]);
+    await ledger(headSha, "2026-11-16T00:00:00.000Z", [act("c")]);
+    let operatorFocusFile;
+    if (withFocusFile) {
+      const { items } = await resolveCapBrakes({ repo: "owner/repo", pr: 10, currentHeadSha: headSha, prData: { isDraft: true } }, { repoRoot: tempDir, config: { version: 1, gates: { draft: { maxReviewRounds: 1 } } } });
+      operatorFocusFile = path.join(tempDir, "focus.json");
+      await writeFile(operatorFocusFile, JSON.stringify({ items: items.map((item) => ({ fingerprint: item.slice(0, 16), decision: "fix it" })) }), "utf8");
+    }
+    // The poster composes blocked for a scoped round with act items.
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "1 finding", nextAction: "stop" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    return await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10, operatorFocusFile }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("an operator focus file deciding every act fingerprint clears the scoped-final-round stop of a draft PR", async () => {
+  const stopped = await detectPastScopedRound({ withFocusFile: false });
+  assert.equal(stopped.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  const cleared = await detectPastScopedRound({ withFocusFile: true });
+  assert.equal(cleared.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, cleared.reason);  assert.match(JSON.stringify(cleared.agentRemedy), /emit-fixer-work-order\.mjs.* --operator-focus-file <operator focus file>/);
+});
+
+// Issue 3464 (GATE-EXEC-CAP-BRAKES): one operator-clear predicate and one once-per-set predicate feed the refusal, the notClearable fact and the fixer route of a draft PR.
+// `sets` are the act keys of each round, one head per entry; with `forcedLast` the last head is a pure base merge of the one before, so it is a forced round (effective latest set: the one before).
+async function detectDraftPastScope({ sets, forcedLast = false, decide }) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-draft-past-scope-"));
+  try {
+    initGitFixture(tempDir, { branch: "main", commit: null });
+    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 1 } } }));
+    const commit = async (file, text, msg) => {
+      await mkdir(path.dirname(path.join(tempDir, file)), { recursive: true });
+      await writeFile(path.join(tempDir, file), text, "utf8");
+      runGitFixture(tempDir, ["add", "-A"]);
+      runGitFixture(tempDir, ["commit", "-q", "-m", msg]);
+      return runGitFixture(tempDir, ["rev-parse", "HEAD"]).trim();
+    };
+    const baseSha = await commit("src/base.mjs", "export const b = 0;\n", "base");
+    const heads = [];
+    for (let i = 0; i < sets.length - (forcedLast ? 1 : 0); i += 1) heads.push(await commit("src/changed.mjs", `export const a = ${i + 1};\n`, `pr change ${i}`));
+    if (forcedLast) {
+      const prHead = heads.at(-1);
+      runGitFixture(tempDir, ["checkout", "-q", "-b", "mainline", baseSha]);
+      const mainSha = await commit("src/other.mjs", "export const o = 1;\n", "main advances");
+      runGitFixture(tempDir, ["checkout", "-q", "--detach", prHead]);
+      runGitFixture(tempDir, ["merge", "--no-ff", "--no-commit", mainSha]);
+      runGitFixture(tempDir, ["commit", "-q", "-m", "merge main"]);
+      heads.push(runGitFixture(tempDir, ["rev-parse", "HEAD"]).trim());
+      runGitFixture(tempDir, ["update-ref", "refs/remotes/origin/main", mainSha]);
+    }
+    const headSha = heads.at(-1);
+    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findings, { recursive: true });
+    const act = (k) => ({ severity: "medium", angle: "correctness", summary: `defect ${k}`, files: [`src/${k}.mjs`], line: 1, judgeDisposition: "act", judgeTitle: `defect ${k}`, judgeFix: "fix it" });
+    for (const [i, head] of heads.entries()) await writeSealed(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-1${i}T00:00:00.000Z`, findings: sets[i].map(act) }));
+    const ctx = { repo: "owner/repo", pr: 10, currentHeadSha: headSha, prData: { isDraft: true, baseRefName: "main" } };
+    const brakes = await resolveCapBrakes(ctx, { repoRoot: tempDir, config: { version: 1, gates: { draft: { maxReviewRounds: 1 } } } });
+    const fingerprints = brakes.items.map((item) => item.slice(0, 16));
+    let operatorFocusFile;
+    if (decide) {
+      operatorFocusFile = path.join(tempDir, "focus.json");
+      await writeFile(operatorFocusFile, JSON.stringify({ items: decide(fingerprints).map((fingerprint) => ({ fingerprint, decision: "fix it" })) }), "utf8");
+    }
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "1 finding", nextAction: "stop" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    return { result: await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10, operatorFocusFile }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE })), fingerprints };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("a draft act set that already had its one re-open stays refused with the one-re-open reason, whatever a focus file decides", async () => {
+  const { result } = await detectDraftPastScope({ sets: [["a"], ["c"], ["c"]], decide: (fps) => fps });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+  assert.match(result.reason, /already had its one re-open/);
+});
+
+test("a base-merge-forced latest draft round past the scoped round is cleared only when the focus file decides the forced and the effective latest set", async () => {
+  const sets = [["a"], ["b"], ["c"], ["d"]];
+  // fingerprints: the forced latest set (d) first, then the effective latest set (c).
+  const partial = await detectDraftPastScope({ sets, forcedLast: true, decide: (fps) => fps.slice(0, 1) });
+  assert.equal(partial.result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, partial.result.reason);
+  assert.match(partial.result.reason, /round_cap_reached/);
+  const union = await detectDraftPastScope({ sets, forcedLast: true, decide: (fps) => fps });
+  assert.equal(union.result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, union.result.reason);
+});
+
 test("a cap-brakes read that throws a non-tamper error sets capBrakesWarning and keeps the route", async () => {
   const healthy = await detectWithPriorLedger("x");
-  assert.equal(healthy.capBrakesWarning, undefined);
+  assert.match(healthy.capBrakesWarning, /the growth limit is not evaluated because the PR has no linked issue/);
+  assert.doesNotMatch(healthy.capBrakesWarning, /could not be evaluated/);
   // A summary object whose own `toString` is not callable makes the brakes read throw while formatting the item text.
   const broken = await detectWithPriorLedger({ toString: 1 });
   assert.match(broken.capBrakesWarning, /^GATE-EXEC-CAP-BRAKES \(advisory\): the cap brakes could not be evaluated \(/);
@@ -5711,7 +5921,7 @@ test("resolveCapBrakes: the once-per-set rule holds past the cap on pre_approval
 
 // pre_approval_gate drops the base-merge round from the effective rounds; draft_gate has no such filter, so the direct file decides it.
 // The third case runs at cap 1 (round_cap_reached): the forced latest round clears from the full file there too.
-for (const [gate, expected, config] of [["pre_approval_gate", undefined, { version: 1 }], ["draft_gate", true, { version: 1 }], ["pre_approval_gate", undefined, { version: 1, gates: { preApproval: { maxReviewRounds: 1 } } }]]) test(`resolveCapBrakes: a focus file that decides only a base-merge current-head round ${expected ? "clears" : "does not clear"} the ${gate} stop at cap ${config.gates?.preApproval?.maxReviewRounds ?? "default"}`, async () => {
+for (const [gate, expected, config] of [["pre_approval_gate", undefined, { version: 1 }], ["draft_gate", undefined, { version: 1 }], ["pre_approval_gate", undefined, { version: 1, gates: { preApproval: { maxReviewRounds: 1 } } }]]) test(`resolveCapBrakes: a focus file that decides only a base-merge current-head round ${expected ? "clears" : "does not clear"} the ${gate} stop at cap ${config.gates?.preApproval?.maxReviewRounds ?? "default"}`, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "cap-brakes-forced-"));
   try {
     initGitFixture(dir, { branch: "main", commit: null });

@@ -4,9 +4,6 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { deletePrGateCoordinationSnapshot } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchDraftGateEvidence } from "./_gate-finding-surface.mjs";
-import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
-import { cleanCapVerdictUnposted, resolveCapExitRound } from "./write-gate-context.mjs";
-import { CAP_ROUND_REFUSAL } from "@dev-loops/core/loop/pr-gate-coordination";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { loadDevLoopConfigStrict, resolveGateConfig } from "@dev-loops/core/config";
@@ -207,7 +204,7 @@ async function postSizeBudgetWaiverComment({ repo, pr, headSha, sizeBudget, reas
 // `skipCiPrecondition` is a runtime-only seam (no CLI flag on this script):
 // restore-ready.mjs calls readyForReview() directly with it set, so the CI
 // precondition can never be skipped through this script's own CLI surface.
-export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild: runChildImpl = runChild, syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire, verifyPolicyChangeApproval: verifyPolicyChangeApprovalFn = verifyPolicyChangeApproval, evaluateCommentDiscipline: evaluateCommentDisciplineFn = realEvaluateCommentDiscipline, skipCiPrecondition = false, resolveCapRoundFixed: resolveCapRoundFixedFn = realResolveCapRoundFixed, coordinationSnapshotRoot } = {}) {
+export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild: runChildImpl = runChild, syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire, verifyPolicyChangeApproval: verifyPolicyChangeApprovalFn = verifyPolicyChangeApproval, evaluateCommentDiscipline: evaluateCommentDisciplineFn = realEvaluateCommentDiscipline, skipCiPrecondition = false, coordinationSnapshotRoot } = {}) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const requireCi = draftGateConfig?.requireCi !== false && skipCiPrecondition !== true;
@@ -231,18 +228,8 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   // SHA and is not contract-complete. Ordinary ready-for-review
   // (skipCiPrecondition=false) keeps accepting either.
   const gateHeadClean = skipCiPrecondition === true ? gate.currentHeadClean : gate.effectiveHeadClean;
-  // ADR 0208: the cap round's fixer pass landed and its delta cleared: no further draft_gate round runs, so this stands in for a clean current-head verdict. CI and every check below stay.
-  // Issue 3460: the cap exit (a posted, unblocked cap review at the cap-round head) decides before the chain proof.
-  const capRound = !gateHeadClean && skipCiPrecondition !== true
-    ? await resolveCapExitRound({ repo: options.repo, pr: options.pr, headSha }, { repoRoot, postedHeads: gate.draftGatePostedHeads ?? [] }) ?? await resolveCapRoundFixedFn({ repo: options.repo, pr: options.pr, headSha, baseRefName: prState.baseRefName }, { repoRoot })
-    : null;
-  // A clean cap round proven only by its local ledger is no evidence CI can read: refuse until its verdict is posted.
-  if (capRound && cleanCapVerdictUnposted(capRound, gate.draftGatePostedHeads ?? [])) throw new Error(`PR #${options.pr} cap round is clean but its draft_gate verdict is not posted on GitHub (${CAP_ROUND_REFUSAL.clean_cap_verdict_unposted})`);
-  const capRoundFixed = Boolean(capRound);
-  // The restore path never accepts the cap-round proof (it was never CI-checked at this head): name the remedy.
-  const capRestoreRemedy = skipCiPrecondition === true ? "; a cap-round-fixed PR (ADR 0208) leaves draft through ready-for-review.mjs once CI is green" : "";
-  if (!capRoundFixed && !gate.cleanEvidenceExists && !gateHeadClean) throw new Error(`No visible clean draft_gate evidence on ${headSha.slice(0,7)}${capRestoreRemedy}`);
-  if (!capRoundFixed && !gateHeadClean) { const mv = gate.draftGateMarker?.visible; const mh = gate.draftGateMarker?.headSha; throw new Error(mv && mh ? `PR #${options.pr} draft_gate marker does not match current head ${headSha.slice(0,7)}. Re-run draft gate.${capRestoreRemedy}` : `PR #${options.pr} draft_gate marker is missing or incomplete on current head ${headSha.slice(0,7)}. Re-run draft gate.${capRestoreRemedy}`); }
+  if (!gate.cleanEvidenceExists && !gateHeadClean) throw new Error(`No visible clean draft_gate evidence on ${headSha.slice(0,7)}`);
+  if (!gateHeadClean) { const mv = gate.draftGateMarker?.visible; const mh = gate.draftGateMarker?.headSha; throw new Error(mv && mh ? `PR #${options.pr} draft_gate marker does not match current head ${headSha.slice(0,7)}. Re-run draft gate.` : `PR #${options.pr} draft_gate marker is missing or incomplete on current head ${headSha.slice(0,7)}. Re-run draft gate.`); }
   // #1585: a clean verdict is not enough — every gate-authored review thread
   // (high, medium, low, question, AND nit) must be resolved before the
   // PR leaves draft. The disposition pass (close-gate-findings) + fixer triage
@@ -346,7 +333,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   } catch (err) {
     boardSync = [{ ok: true, skipped: true, reason: err?.message ?? "board sync failed" }];
   }
-  return { ok: true, action: "marked_ready", repo: options.repo, pr: options.pr, headSha, capRoundFixed, draftGateSatisfied: (gateHeadClean || capRoundFixed) && gate.unresolvedGateThreadCount === 0, unresolvedGateThreadCount: gate.unresolvedGateThreadCount, sizeBudget, adrTripwire, prBodySpec, boardSync };
+  return { ok: true, action: "marked_ready", repo: options.repo, pr: options.pr, headSha, draftGateSatisfied: gateHeadClean && gate.unresolvedGateThreadCount === 0, unresolvedGateThreadCount: gate.unresolvedGateThreadCount, sizeBudget, adrTripwire, prBodySpec, boardSync };
 }
 
 export async function main(argv = process.argv.slice(2), runtime = {}) {

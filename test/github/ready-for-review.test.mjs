@@ -23,7 +23,6 @@ function passingCommentDiscipline() {
 }
 
 import { describeUnresolvedGateThreadReasons, parseReadyForReviewCliArgs, readyForReview } from "../../scripts/github/ready-for-review.mjs";
-import { resolveCapRoundFixed as realResolveCapRoundFixed } from "../../scripts/github/write-gate-context.mjs";
 import { verifyPolicyChangeApproval as realVerifyPolicyChangeApproval } from "../../scripts/github/_policy-change-approval.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
@@ -1007,64 +1006,16 @@ function capRoundGhStub(tempDir, { bucket, withCi = true, head = "abc123def456",
     { stdout: "" },
   ]);
 }
-const capRoundRuntime = (env, tempDir, capRoundFixed, resolverCalls = []) => ({ env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: async () => ({ ok: true, skipped: true }), evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire, evaluateCommentDiscipline: passingCommentDiscipline, resolveCapRoundFixed: async (...args) => { resolverCalls.push(args); return capRoundFixed ? { log: {}, residue: [] } : null; } });
+const draftRuntime = (env, tempDir) => ({ env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: async () => ({ ok: true, skipped: true }), evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire, evaluateCommentDiscipline: passingCommentDiscipline });
 
-test("a cap round fixed state stands in for a clean current-head verdict, and red CI still refuses (ADR 0208)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-cap-fixed-"));
+// ADR 0324 (AC3): a draft PR goes ready only on clean current-head draft_gate evidence; the draft_gate review at the stubbed head is findings_present, so no cap-round proof flips it.
+test("ready-for-review refuses a draft PR with no clean current-head draft_gate verdict and never flips it", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-no-clean-"));
   try {
-    const green = await capRoundGhStub(tempDir, { bucket: "pass" });
-    const resolverCalls = [];
-    const ready = await readyForReview({ repo: "owner/repo", pr: 17 }, capRoundRuntime(green.env, tempDir, true, resolverCalls));
-    assert.equal(ready.action, "marked_ready");
-    assert.equal(ready.capRoundFixed, true);
-    // The resolver runs once for the current head with no anyHead: a draft PR keeps the exact candidate-head check.
-    assert.equal(resolverCalls.length, 1);
-    assert.deepEqual(resolverCalls[0][0], { repo: "owner/repo", pr: 17, headSha: "abc123def456", baseRefName: "main" });
-    assert.equal(resolverCalls[0][0].anyHead, undefined);
-    const ghCalls = await readGhCalls(green.ghLogPath);
-    assert.equal(ghCalls.filter((c) => c[0] === "pr" && c[1] === "ready").length, 1, `gh pr ready runs once: ${JSON.stringify(ghCalls)}`);
-    const red = await capRoundGhStub(tempDir, { bucket: "fail" });
-    await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, capRoundRuntime(red.env, tempDir, true)), /blocking CI/);
-    const unfixed = await capRoundGhStub(tempDir, { bucket: "pass" });
-    await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, capRoundRuntime(unfixed.env, tempDir, false)), /draft_gate marker does not match|No visible clean draft_gate/);
-  } finally { await rm(tempDir, { recursive: true, force: true }); }
-});
-
-test("the restore path never accepts the cap round fixed proof and its refusal names ready-for-review on green CI (ADR 0208)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-restore-cap-fixed-"));
-  try {
-    for (const bucket of ["pass", "fail"]) {
-      const stub = await capRoundGhStub(tempDir, { bucket, withCi: false });
-      const calls = [];
-      await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, { ...capRoundRuntime(stub.env, tempDir, true, calls), skipCiPrecondition: true }), /ready-for-review\.mjs once CI is green/);
-      assert.equal(calls.length, 0, "the resolver is never consulted under skipCiPrecondition");
-    }
-  } finally { await rm(tempDir, { recursive: true, force: true }); }
-});
-
-// ADR 0218: the real cap-round resolver, called with the head M of a base-only merge since the chain's last clearing candidate B.
-test("ready-for-review accepts a base-only merge M of the chain's last clearing candidate through the real resolver, and refuses a merge that is not base-only (ADR 0218)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-chain-"));
-  try {
-    const [A, B, M] = ["a", "b", "c"].map((c) => c.repeat(40));
-    execFileSync("git", ["init", "-q", tempDir]);
-    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
-    const ledgers = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-17");
-    await mkdir(ledgers, { recursive: true });
-    for (const [i, head] of ["1".repeat(40), "2".repeat(40), A].entries()) {
-      await writeFile(path.join(ledgers, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [] }));
-    }
-    const deltaDir = path.join(tempDir, "tmp", "gate-delta");
-    await mkdir(deltaDir, { recursive: true });
-    const text = JSON.stringify({ reviewBaselineHead: A, candidateHead: B, nextStep: "push_to_gate", outcome: "locally_clear", items: [] });
-    await writeFile(path.join(deltaDir, `${A}.json`), text);
-    await writeFile(path.join(deltaDir, `${A}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
-    const runtime = (stub, merged) => ({ ...capRoundRuntime(stub.env, tempDir, true), resolveCapRoundFixed: (options, deps) => realResolveCapRoundFixed(options, { ...deps, baseOnlyMerge: async ({ fromHead, head }) => merged && fromHead === B && head === M }) });
-    const ready = await readyForReview({ repo: "owner/repo", pr: 17 }, runtime(await capRoundGhStub(tempDir, { bucket: "pass", head: M }), true));
-    assert.equal(ready.action, "marked_ready");
-    assert.equal(ready.capRoundFixed, true);
-    const refusedStub = await capRoundGhStub(tempDir, { bucket: "pass", head: M });
-    await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, runtime(refusedStub, false)), /draft_gate marker does not match|No visible clean draft_gate/);
+    const stub = await capRoundGhStub(tempDir, { bucket: "pass" });
+    await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, draftRuntime(stub.env, tempDir)), /draft_gate marker does not match|No visible clean draft_gate/);
+    const ghCalls = await readGhCalls(stub.ghLogPath);
+    assert.equal(ghCalls.filter((c) => c[0] === "pr" && c[1] === "ready").length, 0, `gh pr ready never runs: ${JSON.stringify(ghCalls)}`);
   } finally { await rm(tempDir, { recursive: true, force: true }); }
 });
 
@@ -1089,49 +1040,4 @@ test("refuses a PR carrying the spike no-merge marker (ADR 0293)", async () => {
   }
 });
 
-// PR 3281 shape: the cap round is clean in a local ledger and no draft_gate review of it is posted.
-test("ready-for-review refuses a clean cap round whose verdict is not posted, and never flips the PR", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-cap-unposted-"));
-  try {
-    const stub = await capRoundGhStub(tempDir, { bucket: "pass" });
-    await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, cleanCapRuntime(stub, tempDir)), /clean but its draft_gate verdict is not posted.*--post-sealed-cap-round/);
-    const ghCalls = await readGhCalls(stub.ghLogPath);
-    assert.equal(ghCalls.filter((c) => c[0] === "pr" && c[1] === "ready").length, 0);
-  } finally { await rm(tempDir, { recursive: true, force: true }); }
-});
 
-// The stubbed cap round carries round 4, so only a posted header at that head and round proves it.
-const cleanCapRuntime = (stub, tempDir) => ({ ...capRoundRuntime(stub.env, tempDir, true), resolveCapRoundFixed: async () => ({ log: { verdict: "clean", headSha: "abc123def456".padEnd(40, "0"), findings: [] }, residue: [], round: 4 }) });
-const postedHeader = (round) => `<!-- dev-loops:gate-findings-review draft_gate abc123d round=${round} -->\nGate review: draft_gate`;
-
-test("ready-for-review flips the PR once a trusted posted draft_gate review carries the clean cap round, and not for another round", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-cap-posted-"));
-  try {
-    const trusted = { user: { login: "owner", type: "User" }, author_association: "OWNER" };
-    const posted = await capRoundGhStub(tempDir, { bucket: "pass", comment: { ...trusted, body: postedHeader(4) } });
-    const ready = await readyForReview({ repo: "owner/repo", pr: 17 }, cleanCapRuntime(posted, tempDir));
-    assert.equal(ready.action, "marked_ready");
-    const wrongRound = await capRoundGhStub(tempDir, { bucket: "pass", comment: { ...trusted, body: postedHeader(3) } });
-    await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, cleanCapRuntime(wrongRound, tempDir)), /clean but its draft_gate verdict is not posted/);
-  } finally { await rm(tempDir, { recursive: true, force: true }); }
-});
-
-// Issue 3460 AC3: ready-for-review reads the cap exit (a posted unblocked cap review, here a findings round) before the chain proof, with no delta record on disk.
-test("ready-for-review flips the PR for a findings cap round whose review is posted, with no delta record and no chain (GATE-EXEC-ROUND-CAP-EXIT)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-cap-exit-"));
-  try {
-    const { buildLogPath } = await import("../../scripts/github/_gate-artifact-paths.mjs");
-    const capHead = "abc123def456".padEnd(40, "0");
-    for (const [i, headSha] of ["1", "2", "3"].map((c) => c.repeat(40)).concat(capHead).entries()) {
-      const file = path.resolve(tempDir, buildLogPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha, tmpRoot: path.join(tempDir, "tmp") }));
-      await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha, verdict: i === 3 ? "findings_present" : "clean", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: i === 3 ? [{ severity: "medium", summary: "guard missing", files: ["src/a.mjs"], line: 3, angle: "correctness", judgeDisposition: "act", judgeFix: "add it" }] : [] }));
-    }
-    const trusted = { user: { login: "owner", type: "User" }, author_association: "OWNER" };
-    const runtime = (stub) => ({ ...capRoundRuntime(stub.env, tempDir, false) });
-    const posted = await capRoundGhStub(tempDir, { bucket: "pass", comment: { ...trusted, body: `${postedHeader(4)}\n**Verdict:** findings_present` } });
-    assert.equal((await readyForReview({ repo: "owner/repo", pr: 17 }, runtime(posted))).action, "marked_ready");
-    const blocked = await capRoundGhStub(tempDir, { bucket: "pass", comment: { ...trusted, body: `${postedHeader(4)}\n**Verdict:** blocked` } });
-    await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, runtime(blocked)), /draft_gate marker does not match|No visible clean draft_gate/);
-  } finally { await rm(tempDir, { recursive: true, force: true }); }
-});

@@ -63,7 +63,7 @@ import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, bui
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { draftGatePostedHeads, fingerprintFinding, resolveTrustedEvidencePredicate } from "./_gate-finding-surface.mjs";
 import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
-import { decideCapRound, describeCapStop, isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
+import { decideCapRound, describeCapStop } from "@dev-loops/core/loop/review-round-cap";
 import { workOrderDigest } from "@dev-loops/core/loop/work-order-digest";
 import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, isClearingCoverRecord, listGateDeltaRecords, readGateDeltaRecord, readSealedCoverRecord, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
@@ -119,8 +119,8 @@ export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied
 /**
  * The one cap-round-fixed fact of a PR coordination context (issue 3139): `{ capRoundFixed, failure }`, `failure` the typed `resolveCapRoundFixed` `onFailure` condition
  * (`cap_round_unresolved` on a throw or a cap reached with an unreadable ledger; a PR below the cap reports `failure: null`), or `clean_cap_verdict_unposted` for a clean cap round with no posted draft_gate review at its head (read from `prData.reviews`, trusted authors only).
- * `requirePostedCleanCap` (default true) turns the posted-verdict check off and also skips the cap exit (GATE-EXEC-ROUND-CAP-EXIT, `capExitHolds`: a posted, non-blocked draft_gate review at the cap-round head reaches `capRoundFixed` with no delta record); `trustRuntime` is the runtime the trusted-evidence predicate reads. The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
- * A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cap exit or the cleared delta at the current head.
+ * `requirePostedCleanCap` (default true) turns the posted-verdict check off; `trustRuntime` is the runtime the trusted-evidence predicate reads. The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
+ * A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); the detector reads this fact for a ready PR (a draft PR goes ready on clean current-head draft_gate evidence, ADR 0324), and the verdict poster's gate check and sealed cap-round catch-up post read it too.
  * @param {{ repo: string, pr: number, currentHeadSha: string, prData?: { isDraft?: boolean, baseRefName?: string, reviews?: object[] } }} context
  */
 export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = resolveCapRoundFixed, requirePostedCleanCap = true, trustRuntime = {} }) {
@@ -131,11 +131,6 @@ export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = re
   // The trust predicate costs a `gh api user` call: it runs only once a cap round exists.
   let postedMemo;
   const postedHeads = () => postedMemo ??= resolveTrustedEvidencePredicate(restShaped, trustRuntime).then((isTrusted) => draftGatePostedHeads(restShaped.filter(isTrusted).map((r) => r.body)));
-  // Issue 3460 AC1: the cap exit decides before the chain proof; when it does not hold, the chain proof decides unchanged.
-  if (requirePostedCleanCap) {
-    const exitRound = await resolveCapRound({ repo: context.repo, pr: context.pr, headSha: context.currentHeadSha }, { repoRoot }).catch(() => null);
-    if (exitRound && capExitHolds(exitRound, await postedHeads())) return { capRoundFixed: true, failure: null };
-  }
   const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
   const capRound = await resolve(
     { repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName, anyHead: context.prData?.isDraft !== true },
@@ -155,23 +150,6 @@ const postedAtCapHead = (capRound, postedHeads) => {
   const head = String(capRound?.log?.headSha ?? "").toLowerCase();
   return postedHeads.filter((posted) => head.startsWith(posted.head) && posted.round === capRound.round);
 };
-
-/**
- * The cap exit (issue 3460 AC1, AC3, AC4): pure over the cap round and the trusted posted heads. True when a posted draft_gate review exists at the cap-round head with the cap round number,
- * for a clean and for a findings round, and the round is not blocked: no posted `blocked` verdict at that head and no `pastCapBlockers` blocker in the cap ledger. It reads no delta record and no commit ancestry.
- * The chain proof (`resolveCapRoundFixed`) decides when the exit does not hold.
- */
-export const capExitHolds = (capRound, postedHeads) => {
-  if (!capRound) return false;
-  const posted = postedAtCapHead(capRound, postedHeads);
-  return posted.length > 0 && !posted.some((p) => p.verdict === "blocked") && pastCapBlockers(capRound.log.findings, { round: capRound.round, cap: capRound.round }).length === 0;
-};
-
-/** The cap round when the cap exit holds for it, else null. A config or ledger error reads as no exit; the chain proof then reports it. */
-export async function resolveCapExitRound(options, { repoRoot, postedHeads }) {
-  const capRound = await resolveCapRound(options, { repoRoot }).catch(() => null);
-  return capExitHolds(capRound, postedHeads) ? capRound : null;
-}
 
 // Map the artifact gate name (draft_gate | pre_approval_gate) to the config
 // gate key understood by resolveGateAnglesDynamic (draft | preApproval).
@@ -2179,14 +2157,33 @@ export async function countCompletedRounds(options, { repoRoot, includeLiveCurre
 /**
  * Round-cap state of the round being posted (GATE-EXEC-ROUND-CAP). This resolves the draft_gate cap only, so any
  * other gate is never past it; the pre_approval_gate cap lives in countCapRounds and decideCapRound (GATE-EXEC-CAP-BRAKES). One resolver for the judge pass, the ledger writer and the fixer emitter.
+ * The round is a {@link countCapRounds} count, so a base-merge-forced round never counts. The PR base is `prBase`, else the base the head's gate-context artifact (under `contextTmpRoot`) recorded; with neither it refuses when a merge commit lies between two round heads or the merge probe fails (an unknown head, a shallow clone, a timeout); `prBase: null` keeps the raw count.
  * @returns {Promise<{ pastCap: boolean, round: number, cap: number, lowFixCapped: boolean }>}
  */
-export async function resolveDraftRoundCap(options, { repoRoot, includeLiveCurrentHead = false }) {
+export async function resolveDraftRoundCap(options, { repoRoot, includeLiveCurrentHead = false, prBase, contextTmpRoot }) {
   // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate defers a low in every round; its round count is countCapRounds, not this resolver.
   if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0, lowFixCapped: options.gate === "pre_approval_gate" };
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
   const cap = resolveGateConfig(config, "draft").maxReviewRounds;
-  const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead });
+  // The context artifact may sit under the explicit root, the ledger tmp root (main-anchored) or the checkout's own tmp; the first one that records a base wins, so the round never depends on the caller's checkout.
+  let base = prBase;
+  for (const root of prBase !== undefined ? [] : [...new Set([contextTmpRoot, options.tmpRoot, undefined])]) {
+    const recorded = (await readGateContext({ ...options, tmpRoot: root }, { repoRoot }).catch(() => null))?.baseFreshness?.base;
+    if (typeof recorded === "string") { base = recorded; break; }
+  }
+  // With no base, a base-merge-forced round cannot be ruled out whenever a merge commit lies between two consecutive round heads: refuse instead of counting it.
+  if (base === undefined) {
+    const heads = [...(await readClosedPriorRoundLogs(options, { repoRoot })).map((l) => String(l.headSha).trim().toLowerCase()), String(options.headSha).trim().toLowerCase()];
+    const unresolved = (why) => new Error(`round_cap_base_unresolved: no gate-context artifact under --context-tmp-root, the ledger tmp root or the checkout tmp records the PR base, so a base-merge-forced round cannot be told from a real one${why}; pass --context-tmp-root (the tmp root that holds this head's gate-context artifact) (GATE-EXEC-ROUND-CAP).`);
+    for (let i = 1; i < heads.length; i += 1) {
+      if (heads[i - 1] === heads[i]) continue;
+      // Only exit 0 with empty stdout rules a merge out; a nonzero exit, a spawn error or a timeout (an unknown head, a shallow clone) is unresolved.
+      const merges = await runGitCommand(["rev-list", "--merges", "--max-count=1", `${heads[i - 1]}..${heads[i]}`], { repoRoot, timeout: 30_000 }).catch((error) => ({ code: null, stderr: String(error?.message ?? error) }));
+      if (merges.code !== 0) throw unresolved(` (the merge probe ${heads[i - 1]}..${heads[i]} failed: ${String(merges.stderr ?? "").trim() || `exit ${merges.code}`}; fetch the missing commit)`);
+      if (merges.stdout.trim().length > 0) throw unresolved("");
+    }
+  }
+  const round = await countCapRounds(options, { repoRoot, prBase: base, includeLiveCurrentHead });
   const pastCap = isPastRoundCap(round, cap);
   // The draft gate fixes a low at the cap round; only pre_approval_gate defers it.
   return { pastCap, round, cap, lowFixCapped: false };
@@ -2229,12 +2226,12 @@ async function isBaseMergeRound({ fromHead, head, mainRef, repoRoot }) {
 }
 
 /**
- * Round count for the cap (GATE-EXEC-CAP-BRAKES): {@link countCompletedRounds}, except that on pre_approval_gate a round forced by a base merge
+ * Round count for the cap (GATE-EXEC-CAP-BRAKES): {@link countCompletedRounds}, except that on both gates a round forced by a base merge
  * (its head follows the previous round head by merges only) never counts. Needs `prBase`; without it the raw count stands.
  */
 export async function countCapRounds(options, { repoRoot, prBase, includeLiveCurrentHead = false }) {
   const raw = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead });
-  if (options.gate !== "pre_approval_gate" || !prBase) return raw;
+  if (!prBase) return raw;
   const heads = [...(await readClosedPriorRoundLogs(options, { repoRoot })).map((l) => String(l.headSha).trim().toLowerCase()), String(options.headSha).trim().toLowerCase()];
   let forced = 0;
   for (let i = 1; i < heads.length; i += 1) if (await isBaseMergeRound({ fromHead: heads[i - 1], head: heads[i], mainRef: `origin/${prBase}`, repoRoot })) forced += 1;
@@ -2247,8 +2244,12 @@ export async function capFixBudgetFacts({ fromHead, headSha, prBase, repoRoot, r
   if (!own.reduced) throw new Error(`closure_delta_no_pr_own_change: the PR-own delta since ${fromHead} is unproven (origin/${prBase} does not resolve); the fix budget cannot be measured (GATE-EXEC-CAP-BRAKES).`);
   // An empty PR-own delta is refused later with its own reason (closure_delta_no_pr_own_change).
   if (own.changedFiles.length === 0) return { logicLoc: 0, addedFiles: 0 };
-  const { wholeLogicLoc } = await evaluatePrSizeBudget({ base: fromHead, head: headSha, repoRoot, paths: own.changedFiles });
-  const added = await runGit(["diff", "--name-status", "--diff-filter=A", `${fromHead}..${headSha}`, "--", ...own.changedFiles], { repoRoot });
+  // The delta starts at fromHead merged with the current base, so what a base merge brought is not a fix; a failed merge-tree (exit 128 or older git) keeps fromHead, an over-count.
+  const mergedBase = await runGit(["merge-base", headSha, `origin/${prBase}`], { repoRoot, timeout: 30_000 });
+  const virtual = mergedBase.code === 0 ? await runGit(["merge-tree", "--write-tree", "--no-messages", fromHead, mergedBase.stdout.trim()], { repoRoot, timeout: 30_000 }) : { code: 128 };
+  const from = virtual.code === 0 || virtual.code === 1 ? virtual.stdout.split("\n")[0].trim() || fromHead : fromHead;
+  const { wholeLogicLoc } = await evaluatePrSizeBudget({ base: from, head: headSha, repoRoot, paths: own.changedFiles, twoDot: true });
+  const added = await runGit(["diff", "--name-status", "--diff-filter=A", `${from}..${headSha}`, "--", ...own.changedFiles], { repoRoot });
   // runGitCommand resolves on a nonzero exit: an unmeasured added-file count refuses like an unproven PR-own delta, never reads as zero.
   if (added.code !== 0) throw new Error(`closure_delta_added_files_unmeasured: git diff --diff-filter=A since ${fromHead} exited ${added.code} (${String(added.stderr ?? "").trim()}); the fix budget cannot be measured (GATE-EXEC-CAP-BRAKES).`);
   return { logicLoc: wholeLogicLoc, addedFiles: added.stdout.split("\n").filter(Boolean).length };
@@ -2286,47 +2287,99 @@ export async function operatorDecidedLatestRound(options, { repoRoot, latest, la
 }
 
 /**
- * The operator clear of a pre_approval_gate round past the scoped round (GATE-EXEC-CAP-BRAKES). The latest closed round's act items count as cleared when the direct
- * operator focus file or the issued fixer plan (bound to that round's head, to pre_approval_gate and to its digest) holds an operator focus decision for each fingerprint. A set already held by an
+ * The one once-per-set predicate (GATE-EXEC-CAP-BRAKES): whether the latest of the closed `logs` holds an act set that an earlier effective round (`effective`, see {@link effectiveRounds})
+ * already held from the round after the cap round on, so no focus file re-opens it. The detector's notClearable fact and its refusal reason both read it.
+ */
+export function actSetHeld({ logs, effective, cap }) {
+  const latest = logs.at(-1), last = latest ? actFingerprintSet(latest) : [];
+  return last.length > 0 && effective.slice(cap).some((log) => log !== latest && actFingerprintSet(log).join() === last.join());
+}
+
+/** {@link actSetHeld} over the closed round logs of `options`. */
+export async function actSetAlreadyHeld(options, { repoRoot, cap, prBase, includeLiveCurrentHead = false }) {
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead });
+  return actSetHeld({ logs: closed, effective: await effectiveRounds(closed, { prBase, repoRoot }), cap });
+}
+
+/**
+ * GATE-EXEC-CAP-BRAKES: the one operator-clear predicate of the cap stops. Whether an operator decision (`options.operatorFocusFile` or the issued fixer plan) covers every act fingerprint of the
+ * latest closed round; a base-merge-forced latest round clears from the issued plan, or from the direct file when it decides the forced set and the effective latest set.
+ */
+export async function operatorClearsCapStop(options, { repoRoot, logs, effective }) {
+  const last = logs.at(-1), fingerprints = actFingerprintSet(last);
+  if (effective.at(-1) === last) return operatorDecidedLatestRound(options, { repoRoot, latest: last, last: fingerprints });
+  if (await operatorDecidedLatestRound({ ...options, operatorFocusFile: undefined }, { repoRoot, latest: last, last: fingerprints })) return true;
+  return operatorDecidedLatestRound(options, { repoRoot, latest: last, last: [...new Set([...fingerprints, ...actFingerprintSet(effective.at(-1))])] });
+}
+
+/**
+ * The operator clear of a draft_gate or pre_approval_gate round past the scoped round (GATE-EXEC-CAP-BRAKES). The latest closed round's act items count as cleared when the direct
+ * operator focus file or the issued fixer plan (bound to that round's head, to `options.gate` and to its digest) holds an operator focus decision for each fingerprint. A set already held by an
  * earlier round from the round after the effective cap round on was re-opened once: it stays with the operator.
  * Returns the scoped round input `{ fromHead, priorActItems }`, or null.
  */
-async function resolveOperatorClearedRound(options, { repoRoot, cap, prBase }) {
-  const closed = await readClosedPriorRoundLogs(options, { repoRoot });
+async function resolveOperatorClearedRound(options, { repoRoot, cap, prBase, includeLiveCurrentHead = false, requireActItems = false }) {
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead });
   if (closed.length === 0) return null;
-  const latest = closed.at(-1);
-  const last = actFingerprintSet(latest);
-  // A latest round with no act items has nothing to decide: the next round is the scoped round over the PR-own delta (the exit after a clean round).
-  if (last.length > 0) {
-    if ((await effectiveRounds(closed, { prBase, repoRoot })).slice(cap).some((log) => log !== latest && actFingerprintSet(log).join() === last.join())) return null;
-    if (!(await operatorDecidedLatestRound(options, { repoRoot, latest, last }))) return null;
-  }
+  // A latest round with no act items has nothing to decide: the next round is the scoped round over the PR-own delta (the exit after a clean round); an over-budget fix has no such exit.
+  if (actFingerprintSet(closed.at(-1)).length > 0) {
+    const effective = await effectiveRounds(closed, { prBase, repoRoot });
+    if (actSetHeld({ logs: closed, effective, cap })) return null;
+    if (!(await operatorClearsCapStop(options, { repoRoot, logs: closed, effective }))) return null;
+  } else if (requireActItems) return null;
   return { fromHead: closureFromHeadOf(closed), priorActItems: await listPriorActItems(options, { repoRoot }) };
 }
 
 /**
- * The scoped final round of a pre_approval_gate (GATE-EXEC-CAP-BRAKES): the one cap decision of the context writer.
+ * Whether `round` of a gate with cap `cap` is past the scoped final round and not cleared by the operator (GATE-EXEC-CAP-BRAKES): the shared refusal
+ * of the draft_gate poster and detector, so the round cap+1 is never refused. `round` is a {@link countCapRounds} count.
+ */
+export async function refusesPastScopedRound(options, { repoRoot, prBase, cap, round, includeLiveCurrentHead = false }) {
+  const decision = decideCapRound({ round, cap, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 } });
+  return decision.reason === "round_cap_reached" && !(await resolveOperatorClearedRound(options, { repoRoot, cap, prBase, includeLiveCurrentHead }));
+}
+
+/**
+ * The scoped final round of a draft_gate or pre_approval_gate (GATE-EXEC-CAP-BRAKES): the one cap decision of the context writer.
  * Returns `{ fromHead, priorActItems }` for the scoped round, null for a full round, and throws the policy reason (with a `recovery` stop route) when the round goes to the operator.
  */
 export async function resolveScopedFinalRound(options, { repoRoot, prBase, config }) {
-  const cap = resolveGateConfig(config, "preApproval").maxReviewRounds;
+  const cap = resolveGateConfig(config, mapGateToConfigKey(options.gate)).maxReviewRounds;
   if (!(cap > 0)) return null;
   const round = await countCapRounds(options, { repoRoot, prBase, includeLiveCurrentHead: true });
   const closure = round === cap + 1 ? await resolveClosureRound(options, { repoRoot, cap, round }) : null;
   const facts = closure ? await capFixBudgetFacts({ fromHead: closure.fromHead, headSha: options.headSha, prBase, repoRoot }) : { logicLoc: 0, addedFiles: 0 };
   const fixBudget = { ...facts, maxLines: resolveCapFixMaxLines(config) };
   let decision = decideCapRound({ round, cap, fixBudget });
-  if (decision.action === "operator" && decision.reason === "round_cap_reached") {
+  if (decision.action === "operator" && ["round_cap_reached", "cap_fix_over_budget"].includes(decision.reason)) {
     // GATE-EXEC-CAP-BRAKES: an operator clear of the latest round's act items opens one more scoped round, once per distinct act-item set.
-    const cleared = await resolveOperatorClearedRound(options, { repoRoot, cap, prBase });
+    // An over-budget fix needs act items to decide: with none, only a smaller fix or a larger budget exits.
+    const overBudget = decision.reason === "cap_fix_over_budget";
+    const cleared = await resolveOperatorClearedRound(options, { repoRoot, cap, prBase, requireActItems: overBudget });
+    if (cleared && overBudget) return cleared;
     if (cleared) {
       const clearedFacts = await capFixBudgetFacts({ fromHead: cleared.fromHead, headSha: options.headSha, prBase, repoRoot });
       decision = decideCapRound({ round: cap + 1, cap, fixBudget: { ...clearedFacts, maxLines: fixBudget.maxLines } });
+      // The operator decision clears an over-budget fix at round cap+2 as it clears round_cap_reached.
       if (decision.action === "scoped_final_round") return cleared;
+      // An act-free latest round has nothing to decide, so only decided act items clear the over-budget fix.
+      if (decision.reason === "cap_fix_over_budget") {
+        const decided = await resolveOperatorClearedRound(options, { repoRoot, cap, prBase, requireActItems: true });
+        if (decided) return decided;
+      }
     }
   }
   if (decision.action === "operator") {
-    throw Object.assign(new Error(`${describeCapStop(decision)}. Report blocked with blockedOn operator_decision.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); the operator clears it with an operator focus item whose decision names the act items by fingerprint (GATE-EXEC-CAP-BRAKES)` });
+    // The refusal names the open act items of the latest closed round; an over-budget fix also keeps its smaller-fix and raised-budget exits.
+    const closed = await readClosedPriorRoundLogs(options, { repoRoot });
+    // A base-merge-forced latest round needs the union of its own and the effective latest set decided (operatorClearsCapStop), so the refusal names the union.
+    const effectiveLatest = closed.length > 0 ? (await effectiveRounds(closed, { prBase, repoRoot })).at(-1) : undefined;
+    const fingerprints = closed.length > 0 ? [...new Set([...actFingerprintSet(closed.at(-1)), ...actFingerprintSet(effectiveLatest)])] : [];
+    const clear = "the operator clears it with an operator focus item whose decision names the act items by fingerprint";
+    const shrink = `shrink the fix to at most ${fixBudget.maxLines} PR-own logic LOC with no added file, or the operator raises gates.capFixMaxLines`;
+    const clearedBy = decision.reason !== "cap_fix_over_budget" ? clear : fingerprints.length > 0 ? `${clear}; or ${shrink}` : shrink;
+    const named = fingerprints.length > 0 ? ` Open act items: ${fingerprints.join(", ")}.` : "";
+    throw Object.assign(new Error(`${describeCapStop(decision, { clearable: decision.reason !== "cap_fix_over_budget" || fingerprints.length > 0 })}.${named} Report blocked with blockedOn operator_decision.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); ${clearedBy} (GATE-EXEC-CAP-BRAKES)` });
   }
   return decision.action === "scoped_final_round" ? closure : null;
 }
@@ -4845,12 +4898,6 @@ export async function main(
     // never fall back to defaults.
     const { config } = await loadDevLoopConfigStrict({ repoRoot });
     options.config = config;
-    // GATE-EXEC-ROUND-CAP (ADR 0208): round N+1 never runs; refuse its context. The findings ledger is main-anchored: read it from its own root, not the (possibly relocated) context --tmp-root.
-    const cap = resolveGateConfig(config, "draft").maxReviewRounds ?? 0;
-    if (options.gate === "draft_gate") {
-      const round = await countCompletedRounds({ ...options, tmpRoot: undefined }, { repoRoot, includeLiveCurrentHead: true });
-      if (isRoundRefused(round, cap)) throw new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs; after the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`. When every open act item is a PR-body item, edit the PR body and post \`upsert-checkpoint-verdict.mjs --converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`);
-    }
     // AC6 (issue 2885): every dispatch runs the freshness check against the PR's own base branch (baseRefName),
     // whatever --base is (absent, SHA, revision, remote ref). pre_approval_gate refuses (no artifact) on anything but base_current; draft_gate records base_stale_integrate_first and continues; the review gate records any status and continues; base_unresolved refuses on every gate.
     let prBase;
@@ -4879,8 +4926,8 @@ export async function main(
       const more = freshness.newerCommits.length > 5 ? ` (+${freshness.newerCommits.length - 5} more)` : "";
       throw new Error(`${freshness.error}: origin/${freshness.base} has ${freshness.newerCommits.length} commit(s) the PR head lacks (${shown}${more}); files differing only because of the stale base: ${freshness.foreignFiles.join(", ") || "none"}. ${freshness.remedy}`);
     }
-    // GATE-EXEC-CAP-BRAKES: a pre_approval_gate round past the cap is the scoped final round, or refuses with the policy reason. The findings ledger is main-anchored.
-    if (options.gate === "pre_approval_gate") {
+    // GATE-EXEC-CAP-BRAKES: a draft_gate or pre_approval_gate round past the cap is the scoped final round, or refuses with the policy reason. The findings ledger is main-anchored.
+    if (options.gate === "draft_gate" || options.gate === "pre_approval_gate") {
       options.closureRound = await resolveScopedFinalRound({ ...options, tmpRoot: undefined }, { repoRoot, prBase, config }) ?? undefined;
     }
     let diff = null;

@@ -14,7 +14,6 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
-import { CAP_ROUND_REFUSAL } from "@dev-loops/core/loop/pr-gate-coordination";
 import { extractClosingIssueNumbers } from "@dev-loops/core/github/closing-ref-guard";
 import { detectAcDodMatrix, readNonGoalItems, stripFencesAndCodeSpans } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { computeSpecDigest, normalizeCriterionText, requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
@@ -29,12 +28,10 @@ import { fetchDraftGateEvidence as realFetchDraftGateEvidence } from "./_gate-fi
 import { buildLogPath } from "./_gate-artifact-paths.mjs";
 import { readSealed } from "./_gate-artifact-seal.mjs";
 import { editPr as realEditPr } from "./edit-pr.mjs";
-import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
-import { cleanCapVerdictUnposted, resolveCapExitRound } from "./write-gate-context.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 function noProofRefusal({ repo, pr, headSha }) {
-  return refuse("no_clean_draft_gate", `GATE-EXEC-ROUND-CAP-WAIVER-PROOF: no clean draft_gate or pre_approval_gate checkpoint verdict and no cap-round-fixed proof on the current head ${headSha.slice(0, 7)}. For a cap-round PR whose later commits are docs and tests only, or code that a locally_clear pre-push delta covers (ADR 0254), run: node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo ${repo} --pr ${pr}. Otherwise run: node <dev-loops-package-root>/cli/index.mjs loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
+  return refuse("no_clean_draft_gate", `no clean draft_gate or pre_approval_gate checkpoint verdict on the current head ${headSha.slice(0, 7)}. Run: node <dev-loops-package-root>/cli/index.mjs loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
 }
 
 const USAGE = `Usage: waive-adr-tripwire.mjs --repo <owner/name> --pr <number>
@@ -50,9 +47,7 @@ create-pr.mjs refuse a hand-written one. It applies the waiver only when:
     pr_body path;
   - the ADR tripwire blocks, and every trigger is a skills/docs/*-contract.md path;
   - every triggering path appears, backticked, in a row of the linked issue's AC / DoD matrix;
-  - the current head has a clean draft_gate or pre_approval_gate verdict, or the
-    cap-round-fixed proof (GATE-EXEC-ROUND-CAP-WAIVER-PROOF, the predicate
-    ready-for-review.mjs uses), whose recorded specDigest equals the specDigest of
+  - the current head has a clean draft_gate or pre_approval_gate verdict, whose recorded specDigest equals the specDigest of
     the linked issue's current body. A differing digest is also accepted when the
     issue's edit history holds the body that digest was computed from and the two
     bodies differ only by added backticked trigger skills/docs/*-contract.md paths as one contiguous run
@@ -223,7 +218,6 @@ export async function waiveAdrTripwire(options, {
   evaluateAdrTripwire = realEvaluateAdrTripwire,
   fetchDraftGateEvidence = realFetchDraftGateEvidence,
   readRecordedSpecDigest = defaultReadRecordedSpecDigest,
-  resolveCapRoundFixed = realResolveCapRoundFixed,
   editPr = realEditPr,
 } = {}) {
   const { repo, pr } = options;
@@ -326,21 +320,6 @@ export async function waiveAdrTripwire(options, {
       const head = name === "draft_gate" ? sourceHead : headSha;
       return { name, head, read: () => readRecordedSpecDigest({ repo, pr, headSha: head, repoRoot, gate: name }) };
     });
-  // GATE-EXEC-ROUND-CAP-WAIVER-PROOF: with no clean verdict, the cap-round-fixed proof that ready-for-review.mjs accepts also qualifies.
-  if (sources.length === 0) {
-    // A config or ledger error fails closed here and in ready-for-review.mjs; only a null proof means "no proof".
-    let capRound;
-    try {
-      capRound = await resolveCapExitRound({ repo, pr, headSha }, { repoRoot, postedHeads: gate?.draftGatePostedHeads ?? [] }) ?? await resolveCapRoundFixed({ repo, pr, headSha, baseRefName: prState.baseRefName }, { repoRoot });
-    } catch (error) {
-      return refuse("cap_round_unresolved", `${error instanceof Error ? error.message : String(error)}. ${CAP_ROUND_REFUSAL.cap_round_unresolved}`);
-    }
-    // A clean cap round proven only by its local ledger is no evidence CI can read (same refusal as ready-for-review.mjs).
-    if (capRound && cleanCapVerdictUnposted(capRound, gate?.draftGatePostedHeads ?? [])) {
-      return refuse("clean_cap_verdict_unposted", CAP_ROUND_REFUSAL.clean_cap_verdict_unposted);
-    }
-    if (capRound) sources.push({ name: "cap-round-fixed proof", read: async () => (typeof capRound.log?.specAuthority?.specDigest === "string" ? capRound.log.specAuthority.specDigest : null) });
-  }
   if (sources.length === 0) {
     return noProofRefusal({ repo, pr, headSha });
   }

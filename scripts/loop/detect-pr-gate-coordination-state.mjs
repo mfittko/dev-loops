@@ -17,6 +17,8 @@ import { isBlockedActItem, isDeltaBodyItem } from "@dev-loops/core/loop/pre-push
 import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
 import { buildSnapshotFromPrFacts, DISPOSITION, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateEarlySurface } from "./early-surface-checks.mjs";
+import { evaluatePrSizeBudget } from "./check-size-budget.mjs";
+import { forecastWlocs } from "./spec-lint.mjs";
 import { checkBaseFreshness } from "./pre-write-remote-freshness-guard.mjs";
 import { CONFLICT_FORBIDDEN_ACTIONS, buildAdrTripwireField, buildSizeBudgetField, evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
 import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -32,10 +34,9 @@ import {
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { convergedCarryAccepts } from "../github/_carried-verdict.mjs";
-import { actFingerprintSet, capRoundActList, countCapRounds, countCompletedRounds, effectiveRounds, operatorDecidedLatestRound, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { actSetAlreadyHeld, actSetHeld, capRoundActList, countCapRounds, effectiveRounds, operatorClearsCapStop, readClosedPriorRoundLogs, refusesPastScopedRound, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
 import { readOperatorFocusFile } from "./_operator-focus.mjs";
 import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
-import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { loadDeliveredHandoff, verifyFixerDisposition } from "../github/verify-fixer-disposition.mjs";
@@ -612,6 +613,7 @@ async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand
     // actually resolves. Paths follow the `tmp/refinement/*.md` convention,
     // anchored to the repo root (see docAnchor above).
     evaluated.push({
+      forecastWloc: Math.max(0, ...forecastWlocs(body)) || null,
       issue,
       artifact: detectIssueRefinementArtifact({
         body,
@@ -626,7 +628,11 @@ async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand
   const firstPresent = evaluated.find((e) => e.artifact && e.artifact.hasACs === true);
   const firstFetched = evaluated.find((e) => e.artifact !== null);
   const allFailed = evaluated.every((e) => e.artifact === null);
-  return { evaluated, refinedIssues, firstPresent, firstFetched, allFailed };
+  // A failed body fetch leaves the forecast unread only when that issue could be the forecast source: one listed before the first issue with ACs, or any failed issue when none has ACs. With no forecast, that is a read error and never a missing forecast line.
+  const sourceIndex = firstPresent ? evaluated.indexOf(firstPresent) : evaluated.length;
+  const failedIssues = evaluated.filter((e, i) => e.artifact === null && i < sourceIndex).map((e) => `#${e.issue}`);
+  const forecastReadFor = (forecastWloc) => (forecastWloc > 0 || failedIssues.length === 0 ? {} : { forecastReadError: `the body of linked issue ${failedIssues.join(", ")} could not be fetched` });
+  return { evaluated, refinedIssues, firstPresent, firstFetched, allFailed, forecastReadFor };
 }
 
 export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerged, expectedIssue = null }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
@@ -660,7 +666,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     // pre_approval_gate refuses a `clean` verdict while unticked AC items
     // remain, reading exactly this field. `_onlyEnforcedWhenDraft: false`
     // keeps the draft-gate missing-enforcement off for ready PRs.
-    const { evaluated, refinedIssues, firstPresent, firstFetched, allFailed } =
+    const { evaluated, refinedIssues, firstPresent, firstFetched, allFailed, forecastReadFor } =
       await evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand, runChild });
     const base = {
       status: "unknown",
@@ -692,6 +698,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       return {
         ...base,
         ...prBodyUncheckedFields,
+        ...forecastReadFor(null),
         reason: `Linked issue(s) ${scopeLabel} detected (${linkedIssues.length}); refinement enforcement is a draft-gate boundary and the PR is not draft. Failed to fetch issue bodies, so the spec-of-record AC data is unavailable.`,
       };
     }
@@ -717,6 +724,9 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     return {
       ...base,
       linkedIssue: (firstPresent ?? firstFetched).issue,
+      // The forecast comes from the issue `linkedIssue` names, so the capBrakesWarning names the right gap.
+      forecastWloc: (firstPresent ?? firstFetched).forecastWloc ?? null,
+      ...forecastReadFor((firstPresent ?? firstFetched).forecastWloc),
       source: a.source,
       acItems: unionAc.length > 0 ? unionAc : a.acItems,
       uncheckedAcItems: unionUnchecked,
@@ -730,7 +740,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       finding: null,
     };
   }
-  const { evaluated, refinedIssues, firstPresent, firstFetched, allFailed } =
+  const { evaluated, refinedIssues, firstPresent, firstFetched, allFailed, forecastReadFor } =
     await evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand, runChild });
 
   if (firstPresent) {
@@ -738,6 +748,8 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     return {
       status: "present",
       linkedIssue: firstPresent.issue,
+      forecastWloc: firstPresent.forecastWloc,
+      ...forecastReadFor(firstPresent.forecastWloc),
       linkedIssues,
       specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE,
       refinedIssues,
@@ -769,6 +781,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
         linkedIssues,
         specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE,
         refinedIssues,
+        ...forecastReadFor(null),
         reason: `Failed to fetch body for linked issue(s) ${scopeLabel}; draft gate cannot verify a refinement artifact, treating as missing.`,
         finding: "missing_refinement_artifact",
       };
@@ -778,6 +791,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       linkedIssue: linkedIssues.length === 1 ? linkedIssues[0] : firstEvaluated.issue,
       linkedIssues,
       refinedIssues,
+      ...forecastReadFor(null),
       reason: `Failed to fetch body for linked issue(s) ${scopeLabel}; refinement status is unknown.`,
     };
   }
@@ -789,6 +803,8 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
   return {
     status: "missing",
     linkedIssue: firstFetched.issue,
+    forecastWloc: firstFetched.forecastWloc ?? null,
+    ...forecastReadFor(firstFetched.forecastWloc),
     linkedIssues,
     specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE,
     refinedIssues,
@@ -1406,13 +1422,13 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
 
 /**
  * Issue 3105 AC15 (ADR 0288): the open act list of the current head's live draft_gate ledger, or null.
- * Null when the head has no live ledger with an open act item, past the cap (cap > 0 and round > cap), and when every open item is a nit outside draft round 1.
+ * Null when the head has no live ledger with an open act item, past the cap (cap > 0 and round > cap) unless `operatorCleared` (then `{ operatorCleared: true }`, which routes the fixer with `--operator-focus-file`), and when every open item is a nit outside draft round 1.
  * At every round up to the cap an all-PR-body list is `{ bodyOnly: true }`: its exit is the body-only converged post (GATE-EXEC-NO-DEAD-END, ADR 0332).
  * A head with no live ledger that is a base-only merge of the reviewed head carries that list as `carriedToHead` at every round up to the cap (ADR 0294, ADR 0332 decision 4).
  * `blockers` are the GATE-EXEC-SOFT-CAP blockers: those past the round cap, plus the blocked items of a body-only list at any round; below the cap every other act item goes to the fixer.
  * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
  */
-export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnlyMerge = ({ fromHead, head, mainRef, repoRoot: root }) => convergedCarryAccepts({ originHead: fromHead, headSha: head, baseRef: mainRef, repoRoot: root }) }) {
+export async function resolveDraftOpenActList(context, { repoRoot, cap, operatorCleared = false, baseOnlyMerge = ({ fromHead, head, mainRef, repoRoot: root }) => convergedCarryAccepts({ originHead: fromHead, headSha: head, baseRef: mainRef, repoRoot: root }) }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
   const options = { repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: head };
@@ -1437,45 +1453,27 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnly
     }
   }
   if (open.length === 0) return null;
-  // countCompletedRounds counts the round being posted, so the live ledger's round is one less.
-  const round = await countCompletedRounds({ ...options, headSha: ledgerHead }, { repoRoot, includeLiveCurrentHead: true }) - 1;
+  // countCapRounds (countCompletedRounds without the base-merge-forced rounds) counts the round being posted, so the live ledger's round is one less; a base-merge-forced round never counts, as in the poster and the emitter.
+  const round = await countCapRounds({ ...options, headSha: ledgerHead }, { repoRoot, prBase: baseRefName, includeLiveCurrentHead: true }) - 1;
   // The emitter refuses an all-PR-body act list (delta_body_only_act_set): its only exit is the ADR 0271 body-only converged post at every round up to the cap (ADR 0332); past the cap the earlier routing holds.
   if (open.every(isDeltaBodyItem)) return !(cap > 0 && round > cap) ? { headSha: ledgerHead, ...(ledgerHead !== head ? { carriedToHead: head } : {}), openActCount: open.length, blockers: [...pastCapBlockers(log.findings, { round, cap }), ...open.filter(isBlockedActItem).map((f) => ({ kind: "round_cap_reached", reason: f.resurfaces ? "resurfaced" : "new_act", item: `[${normalizeSeverity(f.severity)}] ${String(f.summary ?? "").trim()} (blocked_item)` }))], bodyOnly: true } : null;
   // A carried list (a base-only merge of the reviewed head) is body-only or nothing.
   if (ledgerHead !== head) return null;
-  // Past the cap the emitter refuses every act list (round_cap_reached), so that round keeps the earlier routing.
-  if (cap > 0 && round > cap) return null;
+  // Past the cap the act list belongs to the operator (GATE-EXEC-CAP-BRAKES): this route offers the fixer only once an operator decision cleared the stop.
+  if (cap > 0 && round > cap) return operatorCleared ? { headSha: head, openActCount: open.length, blockers: [], operatorCleared: true } : null;
   // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so that list keeps the earlier routing.
   const severities = open.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity]));
   if (round !== 1 && severities.every((s) => normalizeSeverity(s) === "nit")) return null;
   return { headSha: head, openActCount: open.length, blockers: isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [] };
 }
 
-// The once-per-set rule: with the cap on and the round past the scoped final round, the latest act set already had its one re-open.
-function setAlreadyHeld({ logs, effective, round, cap }) {
-  const last = logs.at(-1), fingerprints = actFingerprintSet(last).join();
-  return cap > 0 && round > cap + 1 && effective.slice(cap).some((log) => log !== last && actFingerprintSet(log).join() === fingerprints);
-}
-
-/**
- * GATE-EXEC-CAP-BRAKES: whether an operator decision (`--operator-focus-file` or the issued fixer plan) covers every act fingerprint of the latest judged round.
- */
-async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, effective }) {
-  const last = logs.at(-1), fingerprints = actFingerprintSet(last);
-  const base = { repo: context.repo, pr: context.pr, gate };
-  if (effective.at(-1) === last) return operatorDecidedLatestRound({ ...base, operatorFocusFile }, { repoRoot, latest: last, last: fingerprints });
-  // A base-merge-forced latest round clears from the issued fixer plan, or from the direct file when it decides the forced set and the effective latest set (resolveOperatorClearedRound reads the same file).
-  if (await operatorDecidedLatestRound(base, { repoRoot, latest: last, last: fingerprints })) return true;
-  return operatorDecidedLatestRound({ ...base, operatorFocusFile }, { repoRoot, latest: last, last: [...new Set([...fingerprints, ...actFingerprintSet(effective.at(-1))])] });
-}
-
 /**
  * GATE-EXEC-CAP-BRAKES: the facts of the gate whose judged round is posted at the current head (draft_gate while the PR is draft, else pre_approval_gate),
  * or null when that head holds no judged round with an open act item. The evaluator applies the one policy (decideCapRound) to them.
- * The draft round cap keeps its own routing until its exit moves to the scoped final round, so draft_gate carries cap 0 and only the growth brake applies.
+ * It also carries the growth numbers: `forecastWloc` of the linked issue now (null with no linked issue or forecast line) and `wholeLogicLoc` of the head.
  * It adds `operatorCleared: true` when an operator focus decision covers every act fingerprint of that round (see operatorClearsCapStop), which routes past the stop.
  */
-export async function resolveCapBrakes(context, { repoRoot, config, operatorFocusFile }) {
+export async function resolveCapBrakes(context, { repoRoot, config, operatorFocusFile, evaluateSize = evaluatePrSizeBudget, refreshBase = null }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
   const gate = context.prData?.isDraft === true ? "draft_gate" : "pre_approval_gate";
@@ -1485,24 +1483,39 @@ export async function resolveCapBrakes(context, { repoRoot, config, operatorFocu
   if (!last || String(last.headSha).trim().toLowerCase() !== head) return null;
   const open = listOpenActItems(last.findings);
   if (open.length === 0) return null;
-  const effective = await effectiveRounds(logs, { prBase: gate === "pre_approval_gate" ? context.prData?.baseRefName : undefined, repoRoot });
+  const forecastWloc = context.refinementArtifact?.forecastWloc ?? null;
+  // A failed growth read leaves the growth limit unevaluated (the caller warns); the other brakes still stand.
+  // A failed linked-issue body fetch left the forecast unread: it is the same stop as a failed size read, never a missing forecast line.
+  let growth = {}, growthReadError = forecastWloc > 0 ? undefined : context.refinementArtifact?.forecastReadError;
+  if (forecastWloc > 0) {
+    try {
+      // The growth diff is `origin/<base>...head`: a stale local ref counts every base commit a merge brought as PR logic, so the ref is fetched first (a stale head is fine, a failed fetch is not).
+      const refreshed = refreshBase ? await refreshBase(context.prData?.baseRefName, head) : { ok: true };
+      if (!refreshed.ok && ["base_fetch_failed", "base_not_origin_branch"].includes(refreshed.error)) throw new Error(`${refreshed.error}: ${refreshed.message ?? "origin/<base> was not refreshed"}`);
+      growth = { wholeLogicLoc: (await evaluateSize({ base: `origin/${context.prData?.baseRefName}`, head, repoRoot })).wholeLogicLoc };
+    } catch (error) { growthReadError = error?.message ?? String(error); }
+  }
+  const effective = await effectiveRounds(logs, { prBase: context.prData?.baseRefName, repoRoot });
   const effectiveLatest = effective.at(-1);
   const round = await countCapRounds({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, prBase: context.prData?.baseRefName, includeLiveCurrentHead: true });
-  const cap = gate === "pre_approval_gate" ? resolveGateConfig(config, "preApproval").maxReviewRounds : 0;
+  const cap = resolveGateConfig(config, gate === "draft_gate" ? "draft" : "preApproval").maxReviewRounds;
   const facts = {
     gate,
     // A base-merge-forced round never counts (countCapRounds), as in the poster and the emitter.
     round,
     cap,
+    forecastWloc,
+    ...growth,
+    ...(growthReadError === undefined ? {} : { growthReadError }),
     // One item per acted cluster: the emitter binds an operator focus item only to an act-list fingerprint (GATE-EXEC-CAP-BRAKES).
     // A base-merge-forced latest round also lists the effective latest round's items: the direct file must decide both sets.
     // Both rounds can hold one fingerprint (it is head-independent) and a focus file refuses a repeated item, so the list keeps the first of each.
     items: [...new Map([...capRoundActList(last.findings, last.headSha), ...(effectiveLatest && effectiveLatest !== last ? capRoundActList(effectiveLatest.findings, effectiveLatest.headSha) : [])].map((a) => [a.fingerprint, a])).values()].map((a) => `${a.fingerprint} [${normalizeSeverity(a.severity)}] ${String(a.summary ?? "").trim()}`),
   };
   // A set that already had its one re-open is not clearable by any focus file: the reason names the operator-only step (GATE-EXEC-NO-DEAD-END).
-  if (setAlreadyHeld({ logs, effective, round, cap })) return { ...facts, notClearable: true };
+  if (cap > 0 && round > cap + 1 && actSetHeld({ logs, effective, cap })) return { ...facts, notClearable: true };
   // Fail closed: a focus file that fails to read here clears nothing, and the cap stop stays.
-  return await operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, effective }).catch(() => false) ? { ...facts, operatorCleared: true } : facts;
+  return await operatorClearsCapStop({ repo: context.repo, pr: context.pr, gate, operatorFocusFile }, { repoRoot, logs, effective }).catch(() => false) ?{ ...facts, operatorCleared: true } : facts;
 }
 
 // Builds the exact input object passed to evaluatePrGateCoordination.
@@ -1521,6 +1534,7 @@ export function buildGateCoordinationEvaluatorInput({
   earlySurface = null,
   draftCapRoundFixed = false,
   draftRoundRefused = false,
+  draftSetHeld = false,
   draftCapRoundFailure = null,
   draftCapRoundDetail = null,
   draftOpenActList = null,
@@ -1589,6 +1603,7 @@ export function buildGateCoordinationEvaluatorInput({
     postConvergenceSignificantChange,
     draftCapRoundFixed,
     draftRoundRefused,
+    draftSetHeld,
     draftCapRoundFailure,
     ...(draftCapRoundDetail ? { draftCapRoundDetail } : {}),
     draftOpenActList,
@@ -1675,16 +1690,24 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
         prBody: typeof context.prData?.body === "string" ? context.prData.body : "",
         repoRoot,
       });
-  // ADR 0208: a PR whose cap round is fixed never runs draft_gate again; fail closed when the evidence is unreadable.
-  // A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
-  const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure, failureDetail: draftCapRoundDetail } = await resolveDraftCapRoundFact(context, { repoRoot, resolve: runtime.resolveCapRoundFixed ?? resolveCapRoundFixed, trustRuntime: { env: runtime.env, ghCommand: runtime.ghCommand, runChild: runtime.runChild } });
-  const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
-    && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot, includeLiveCurrentHead: true }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
-  const draftOpenActList = context.prData?.isDraft === true
-    ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0 }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
-    : null;
+  // ADR 0208: only a ready PR reads the cap-round-fixed proof (the ready-PR fold); a draft PR goes ready on clean current-head draft_gate evidence (ADR 0324).
+  const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure, failureDetail: draftCapRoundDetail } = context.prData?.isDraft === true
+    ? { capRoundFixed: false, failure: null }
+    : await resolveDraftCapRoundFact(context, { repoRoot, resolve: runtime.resolveCapRoundFixed ?? resolveCapRoundFixed, trustRuntime: { env: runtime.env, ghCommand: runtime.ghCommand, runChild: runtime.runChild } });
+  // GATE-EXEC-CAP-BRAKES: the round after the scoped final round is refused unless the operator cleared it; round cap+1 is the scoped round.
+  const draftRound = { repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha, operatorFocusFile };
+  const draftRoundRefused = context.prData?.isDraft === true
+    && await countCapRounds(draftRound, { repoRoot, prBase: prBaseRefName, includeLiveCurrentHead: true })
+      .then((round) => refusesPastScopedRound(draftRound, { repoRoot, prBase: prBaseRefName, cap: draftGateConfig.maxReviewRounds ?? 0, round, includeLiveCurrentHead: true }), () => false);
+  // A refused round whose act set already had its one re-open is not clearable by any focus file (GATE-EXEC-NO-DEAD-END): the evaluator's reason drops the clear claim.
+  const draftSetHeld = draftRoundRefused && await actSetAlreadyHeld(draftRound, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0, prBase: prBaseRefName, includeLiveCurrentHead: true }).catch(() => false);
   let capBrakesError = null;
-  const capBrakes = await resolveCapBrakes(context, { repoRoot, config, operatorFocusFile }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; capBrakesError = error; return null; });
+  const baseRefresher = runtime.checkBaseFreshness ?? (runtime.runChild ? null : checkBaseFreshness);
+  const refreshBase = baseRefresher ? (base, head) => baseRefresher({ base, head, cwd: repoRoot, env: runtime.env ?? process.env, trusted: true }).catch(() => ({ ok: false, error: "base_fetch_failed", recovery: "retry the detector; fix the network or git remote access if the fetch keeps failing" })) : null;
+  const capBrakes = await resolveCapBrakes(context, { repoRoot, config, operatorFocusFile, evaluateSize: runtime.evaluateSize, refreshBase }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; capBrakesError = error; return null; });
+  const draftOpenActList = context.prData?.isDraft === true
+    ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0, operatorCleared: capBrakes?.operatorCleared === true }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
+    : null;
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,
@@ -1702,6 +1725,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     earlySurface,
     draftCapRoundFixed,
     draftRoundRefused,
+    draftSetHeld,
     draftCapRoundFailure,
     draftCapRoundDetail,
     draftOpenActList,
@@ -1809,7 +1833,10 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // ADR 0238: all-untrusted open threads are non-blocking but visible, with authors and the remedy.
   if (context.skippedUntrusted?.length > 0) result.skippedUntrusted = context.skippedUntrusted;
   // GATE-EXEC-CAP-BRAKES: an unreadable ledger leaves the brakes unevaluated; the warning keeps that visible (the context writer still refuses the round).
-  if (capBrakesError) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the cap brakes could not be evaluated (${capBrakesError.message}); the next gate round is still refused by write-gate-context.mjs when a brake applies.`;
+  if (capBrakesError) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the cap brakes could not be evaluated (${capBrakesError.message}); write-gate-context.mjs still refuses the round-count brake of the next gate round, but only this detector evaluates the growth limit.`;
+  // GATE-EXEC-CAP-BRAKES: a judged round with no forecast to compare has no growth limit; the warning names the gap and the lane does not stop.
+  else if (capBrakes?.growthReadError !== undefined) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the growth limit could not be evaluated (${capBrakes.growthReadError}); the lane stops until a rerun reads it or an operator decision clears it, and the other cap brakes still apply.`;
+  else if (capBrakes && !(capBrakes.forecastWloc > 0)) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the growth limit is not evaluated because ${context.refinementArtifact?.linkedIssue ? `linked issue #${context.refinementArtifact.linkedIssue} has no \`- forecast: slice=<id> wloc=<n> files=<paths>\` line with wloc above 0 under \`## Size forecast\`` : "the PR has no linked issue"}.`;
   // ADR 0155: an incomplete fixer disposition is a visible warning, never a block.
   if (context.fixerDisposition?.warning) {
     result.fixerDispositionWarning = { warning: context.fixerDisposition.warning, incomplete: context.fixerDisposition.incomplete };

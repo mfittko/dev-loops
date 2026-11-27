@@ -1259,7 +1259,8 @@ async function ciFailedCapFixture({ closedRounds = 4 } = {}) {
   const act = { severity: "medium", summary: "guard missing", files: ["src/a.mjs"], line: 1, angle: "correctness", judgeDisposition: "act", judgeTitle: "Guard", judgeFix: "add" };
   const { root, A, B } = await capFixture({ findings: [act] });
   const tmp = path.join(root, "tmp");
-  // capFixture writes four closed rounds (the default cap of 4 resolves a cap round); fewer leave the cap round unclosed.
+  writeFileSync(path.join(root, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 4\n");
+  // capFixture writes four closed rounds (cap 4 resolves a cap round); fewer leave the cap round unclosed.
   for (const n of ["3", "2", "1"].slice(0, 4 - closedRounds)) rmSync(path.join(tmp, "gate-findings", "owner-repo", `pr-${PR}`, `draft_gate-${n.repeat(40)}.json`), { force: true });
   rmSync(gateDeltaRecordPath(tmp, A), { force: true });
   rmSync(`${gateDeltaRecordPath(tmp, A)}.seal`, { force: true });
@@ -1505,19 +1506,6 @@ test("issue 3437: the PR 3433 state with fewer closed rounds than the cap routes
     assert.match(trace.join("\n"), /recovery: .*loop gate-coordination --repo owner\/repo --pr 70$/mu, trace.join("\n"));
     assert.equal(before.nextAction, end.nextAction);
     assert.equal(end.nextAction, "run_draft_gate", `${end.reason}\n${trace.join("\n")}`);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("issue 3437 ac:2: the state a ci_failed full-phase fixer leaves continues to the next gate through the recovery the refusals name, with no operator step", async () => {
-  const { root, A, B, head } = await ciFailedCapFixture();
-  try {
-    const ledgerPath = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`, `draft_gate-${A}.json`);
-    const before = await coordinationAt(root, { repo: REPO, pr: PR, head });
-    assert.equal(before.nextAction, "report_blocked");
-    const { trace, end } = await followRemedy(root, { repo: REPO, pr: PR, head, baseline: B, ledgerPath });
-    assert.ok(["mark_ready_for_review", "run_pre_approval_gate"].includes(end.nextAction), `${end.failure}: ${end.reason}\n${trace.join("\n")}`);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

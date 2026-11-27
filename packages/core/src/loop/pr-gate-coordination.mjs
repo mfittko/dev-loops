@@ -1,5 +1,5 @@
 import { DISPOSITION, isCopilotRoundCapReached, STATE } from "./copilot-loop-state.mjs";
-import { CAP_ROUND_FIXED_NEXT_ACTION, decideCapRound, describeCapStop } from "./review-round-cap.mjs";
+import { decideCapRound, describeCapStop } from "./review-round-cap.mjs";
 import { findBlockingTitleMarkers, stripBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { evaluateUiE2eScoping } from "./ui-e2e-scoping.mjs";
 import { evaluateUiDesignerReviewScoping } from "./ui-designer-review-scoping.mjs";
@@ -1286,10 +1286,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // A base-merge carried verdict (ADR 0186) proves the review, not the new head's CI.
   const draftGateCarried = draftGate.currentHeadClean && trimmedOrNull(input.draftGateMarker?.carriedFrom) !== null;
   const draftGateAlreadySatisfied = !prDraft && (draftGate?.cleanEvidenceExists ?? false);
-  // ADR 0208: the caller proved the cap round's fixer pass landed and its pre-push delta cleared, so draft_gate never runs again.
-  const capRoundFixed = input.draftCapRoundFixed === true && !draftGate.currentHeadClean;
-  const capFixedReady = capRoundFixed && input.unresolvedGateThreadCount === 0;
-  const draftReady = draftGate.currentHeadClean || capFixedReady;
+  // A draft PR goes ready only on clean current-head draft_gate evidence; the cap-round-fixed proof serves ready PRs only (issue 3464).
+  const draftReady = draftGate.currentHeadClean;
 
   const allowedNextActions = [];
   const forbiddenActions = [];
@@ -1335,15 +1333,18 @@ function evaluatePrGateCoordinationCore(input = {}) {
     && carriedMarker.verdict === "findings_present" && carriedMarker.headSha !== null && String(actList.headSha ?? "").toLowerCase().startsWith(carriedMarker.headSha.toLowerCase());
   // The one head binding of the open act list: a full current head SHA that the list names as its head or its carried head.
   const actListHeadBound = /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase());
-  // Issue 3460 AC5: at the cap exit the open act list loads before ready, also once the gate threads are resolved.
-  const headActList = (!draftReady || capRoundFixed) && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"))
+  const headActList = !draftReady && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete
+    // The poster writes blocked for a scoped round with act items, so an operator-cleared list accepts that verdict too.
+    && (draftGate.verdict === "findings_present" || (draftGate.verdict === "blocked" && actList?.operatorCleared === true))))
     && actListHeadBound
     && Number.isInteger(actList.openActCount) && actList.openActCount > 0
-    // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.
-    && (input.draftRoundRefused !== true || input.draftCapRoundFailure === "no_clearing_record");
+    && input.draftRoundRefused !== true;
   // ADR 0271: a round of PR-body items only has no fixer route; its exit is the body-only converged post, named in the cap refusal below.
   const bodyOnlyList = headActList && actList.bodyOnly === true;
-  if (capStop?.action === "operator" && input.capBrakes.operatorCleared !== true) {
+  // AC7: a forecast with a failed growth read stops the lane like a growth stop, so a transient read failure never clears it; only an operator decision does.
+  const growthUnread = input.capBrakes?.growthReadError !== undefined && input.capBrakes.operatorCleared !== true;
+  const capStopApplies = capStop?.action === "operator" && input.capBrakes.operatorCleared !== true;
+  if (capStopApplies || growthUnread) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
     pushUnique(forbiddenActions, [
       PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
@@ -1367,7 +1368,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
       forbiddenActions,
       nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
       blockedOn: BLOCKED_ON.OPERATOR_DECISION,
-      reason: `${describeCapStop(capStop, { clearable: input.capBrakes.notClearable !== true })} (${input.capBrakes.gate}).${named}${input.capBrakes.notClearable === true ? " This act set already had its one re-open, so a focus file does not clear it and the decision stays with the operator." : " Clear it with --operator-focus-file <path> on loop gate-coordination."}`,
+      reason: capStopApplies
+        ? `${describeCapStop(capStop, { clearable: input.capBrakes.notClearable !== true })} (${input.capBrakes.gate}).${named}${input.capBrakes.notClearable === true ? " This act set already had its one re-open, so a focus file does not clear it and the decision stays with the operator." : " Clear it with --operator-focus-file <path> on loop gate-coordination."}`
+        : `growth_unread: the growth limit${input.capBrakes.forecastWloc > 0 ? ` against forecast wloc ${input.capBrakes.forecastWloc}` : ""} could not be read (${input.capBrakes.growthReadError}) (${input.capBrakes.gate}).${named} A rerun of loop gate-coordination after a successful read re-evaluates growth. Or clear the stop with --operator-focus-file <path> on loop gate-coordination.`,
       mergeStateStatus,
       conflictFiles,
       refinementArtifact,
@@ -1601,10 +1604,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // reply_resolve_review_threads (FEEDBACK_RESOLUTION) is reused as-is —
     // resolving the thread (reject-close or fixer triage) is exactly what
     // this action already means on the post-draft path.
-    const capFixedThreadsUnreadable = capRoundFixed && input.unresolvedGateThreadCount === -1;
-    // An open act list without a blocker routes to the fixer below (AC5), which also allows ready once the threads are resolved.
-    const capActListToFixer = headActList && actList.bodyOnly !== true && actBlockers.length === 0;
-    if (draftGate.markerCleanThreadsUnresolved || (capRoundFixed && !capFixedReady && !capFixedThreadsUnreadable && !capActListToFixer)) {
+
+    if (draftGate.markerCleanThreadsUnresolved) {
       pushUnique(allowedNextActions, [
         PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
         // The reason text names "stop for the operator" as the remedy for an
@@ -1630,9 +1631,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
-        reason: (capRoundFixed && !draftGate.markerCleanThreadsUnresolved
-          ? "The PR is still draft and the `draft_gate` cap round's fixer pass landed (ADR 0208), but"
-          : "The PR is still draft and this round's draft_gate verdict is clean, but")
+        reason: "The PR is still draft and this round's draft_gate verdict is clean, but"
           + " a gate-authored review thread is still unresolved (ADR 0088) — reply/resolve it rather than re-running the draft gate. An open defect thread is resolved via fixer fix-close, or a close-gate-findings rerun once the judge has deferred it or disposed it act with an evidence-only remedy (ADR 0144); an open judge-act thread with remedyKind pr_body is closed by a close-gate-findings rerun after the PR-body edit is applied (the live PR body digest differs from the one recorded at the verdict head); a judge-rejected medium, low or nit defect thread is reject-closed by a close-gate-findings rerun (ADR 0144), and a judge-rejected high needs an operator decision. A question thread's remedy depends on the judge's disposition: unanswered — post an answer reply, then rerun close-gate-findings, which reject-closes it if the judge disposed it reject; answered and judge-disposed reject — rerun close-gate-findings to reject-close it; answered and judge-disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied — closed by a close-gate-findings rerun; any other judge-disposed act question — resolved by the fixer's own answer-and-resolve path; ambiguous/unrecorded disposition — needs an operator decision, no automated path.",
         mergeStateStatus,
         conflictFiles,
@@ -1647,7 +1646,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // no known thread to resolve. MARK_READY_FOR_REVIEW stays forbidden
     // either way (draftReviewForbidden); reply_resolve_review_threads is
     // reused as-is rather than adding a new action for "retry the read".
-    if (draftGate.markerCleanThreadStateUnreadable || capFixedThreadsUnreadable) {
+    if (draftGate.markerCleanThreadStateUnreadable) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS]);
       pushUnique(forbiddenActions, [
         PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
@@ -1666,9 +1665,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
-        reason: (capFixedThreadsUnreadable
-          ? "The PR is still draft and the `draft_gate` cap round's fixer pass landed (ADR 0208), but"
-          : "The PR is still draft and this round's draft_gate verdict is clean, but")
+        reason: "The PR is still draft and this round's draft_gate verdict is clean, but"
           + " this round's gate-authored review-thread count could not be read (API failure) — could not read review-thread state; re-run when API connectivity is restored, rather than treating an unreadable count as either clean or a real dangling thread.",
         mergeStateStatus,
         conflictFiles,
@@ -1737,7 +1734,6 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // Issue 3105 AC15 (ADR 0288): a posted findings_present verdict at the current head with an open act list goes to the fixer, not to another round.
     if (headActList && !bodyOnlyList && actBlockers.length === 0) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK]);
-      if (capFixedReady) pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW]);
       pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, ...draftReviewForbidden]);
       return buildResult({
         repo: input.repo ?? null,
@@ -1753,7 +1749,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK,
         ...remedyOrOperator(input, (r, n) => ({
-          command: `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo ${r} --pr ${n} --head-sha ${currentHeadSha} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`,
+          command: `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo ${r} --pr ${n} --head-sha ${currentHeadSha} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>${actList.operatorCleared === true ? " --operator-focus-file <operator focus file>" : ""}`,
           summary: "Emit the fixer work order for the open act list (the judge-pass --out file of this head's round) and dispatch it.",
         })),
         reason: `The PR is still draft and the current head carries a posted \`draft_gate\` \`findings_present\` verdict with ${actList.openActCount} open act item(s) and no round-cap blocker, so the fixer runs before any further round or base integration.`,
@@ -1763,9 +1759,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
       });
     }
 
-    // ADR 0208: the next draft_gate round is past the cap and the cap round is not proven fixed; the context writer refuses it, so never route to it.
+    // GATE-EXEC-CAP-BRAKES: the next draft_gate round is past the scoped final round; the context writer refuses it, so never route to it.
     // ADR 0332: an all-PR-body act list takes this route at every round up to the cap, so run_draft_gate (refused at the same head) is never offered.
-    if ((input.draftRoundRefused === true || bodyOnlyList) && !draftReady) {
+    if ((input.draftRoundRefused === true || actBlockers.length > 0 || bodyOnlyList) && !draftReady) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
       pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, ...draftReviewForbidden]);
       return buildResult({
@@ -1784,20 +1780,21 @@ function evaluatePrGateCoordinationCore(input = {}) {
         ...(actBlockers.length > 0 ? { blockedOn: BLOCKED_ON.OPERATOR_DECISION } : bodyOnlyList ? remedyOrOperator(input, (r, n) => ({
           command: `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo ${r} --pr ${n} --gate draft_gate --verdict clean --head-sha ${actList.headSha} --findings-ledger '<draft_gate ledger of the act list round>' --findings-summary '<text>' --next-action "mark ready for review" --execution-mode fanout_fanin --converged-json '<path to a file holding { fixerCommit${actList.carriedToHead ? ` (${actList.headSha})` : ""}, actList, bodyOnly: true }>'`,
           summary: "Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (ADR 0271, ADR 0332); that verdict is the proof for ready-for-review and the ADR waiver.",
-        })) : capRoundExit(input.draftCapRoundFailure, input)),
+        })) : { blockedOn: BLOCKED_ON.OPERATOR_DECISION }),
         reason: actBlockers.length > 0
           ? `The PR is still draft at or below the round cap (ADR 0208) and the current head's act list names a human decision (GATE-EXEC-SOFT-CAP): ${actBlockers.map((b) => b?.item).join("; ")}. No further draft_gate round runs for it.`
           : bodyOnlyList
             ? `The PR is still draft at or below the round cap and every open act item of the current head is a PR-body item (ADR 0271, ADR 0332). Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true). No further draft_gate round runs for it.`
-          : `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but ${input.draftCapRoundFailure === "clean_cap_verdict_unposted" ? "the clean cap round's draft_gate verdict is not posted" : "the cap round's fixer pass is not proven landed with a cleared pre-push delta"}. ${capRoundRefusalText(input)} Round N+1 never runs.`,
+          : "The PR is still draft and the next `draft_gate` round is past the scoped final round of the round cap (`round_cap_reached`, GATE-EXEC-CAP-BRAKES). Report blocked with blockedOn operator_decision; " + (input.draftSetHeld === true
+            ? "this act set already had its one re-open, so a focus file does not clear it and the decision stays with the operator."
+            : "the operator clears it with an operator focus item whose decision names the open act items by fingerprint, passed as --operator-focus-file <path> on loop gate-coordination."),
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,
       });
     }
 
-    if (capRoundFixed) pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE]);
-    else pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE]);
+    pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE]);
     if (draftReady) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW]);
     }
@@ -1815,10 +1812,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
       preApprovalGate,
       allowedNextActions,
       forbiddenActions,
-      nextAction: capFixedReady ? CAP_ROUND_FIXED_NEXT_ACTION : (draftReady ? PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW : PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE),
-      reason: capFixedReady
-        ? "The PR is still draft, the `draft_gate` cap round's fixer pass landed and its pre-push delta cleared (ADR 0208), so no further `draft_gate` round runs and `dev-loops pr ready-for-review` is now legal. `pre_approval_gate` judges what remains."
-        : draftGate.currentHeadClean
+      nextAction: draftReady ? PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW : PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+      reason: draftGate.currentHeadClean
         ? "The PR is still draft, and current-head clean `draft_gate` evidence exists, so `dev-loops pr ready-for-review` is now legal."
         : (draftGateRequireCi
           ? "The PR is still draft, current-head CI is green, and `draft_gate` is now the legal gate boundary before `dev-loops pr ready-for-review`."

@@ -479,10 +479,10 @@ export function computeSizeBudget({
  * scripts/github/write-gate-context.mjs) so the byte-for-byte diff/LOC counts
  * a run produces don't depend on the operator's local git config.
  */
-function captureSizeBudgetDiff({ base, head = "HEAD", workingTree = false, repoRoot = process.cwd(), maxBuffer = 64 * 1024 * 1024, paths = [] }) {
+function captureSizeBudgetDiff({ base, head = "HEAD", workingTree = false, repoRoot = process.cwd(), maxBuffer = 64 * 1024 * 1024, paths = [], twoDot = false }) {
   base = anchorBaseRef(base, { repoRoot });
-  // workingTree diffs `base` against the working tree (committed plus uncommitted).
-  const range = workingTree ? base : `${base}...${head}`;
+  // workingTree diffs `base` against the working tree (committed plus uncommitted); twoDot lets `base` be a tree (no merge base to take).
+  const range = workingTree ? base : `${base}${twoDot ? ".." : "..."}${head}`;
   // `paths` narrows the diff to those files (the PR-own files of a cap fix budget).
   const pathspec = paths.length > 0 ? ["--", ...paths] : [];
   // Shared byte-identical flag set (see captureDiffFromBase in
@@ -529,10 +529,11 @@ export async function evaluatePrSizeBudget({
   waived = false,
   approvedBy = null,
   paths = [],
+  twoDot = false,
 } = {}) {
   const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
   const sizeConfig = config?.gates?.size ?? {};
-  const { nameStatusOutput, diffOutput, numstatOutput } = captureSizeBudgetDiff({ base, head, repoRoot, paths });
+  const { nameStatusOutput, diffOutput, numstatOutput } = captureSizeBudgetDiff({ base, head, repoRoot, paths, twoDot });
   return computeSizeBudget({ nameStatusOutput, diffOutput, numstatOutput, sizeConfig, configErrors, waived, approvedBy, rules: resolveClassifyRules(config) });
 }
 
