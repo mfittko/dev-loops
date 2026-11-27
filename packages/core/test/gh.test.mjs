@@ -512,9 +512,15 @@ describe("secondary rate limit backoff", () => {
     assert.equal(runs, 2);
     assert.deepEqual(sleeps, [30000]);
     runs = 0;
-    const original = transport();
-    await assert.rejects(() => withSecondaryLimitBackoff(async () => { runs += 1; throw original; }, opts), (error) => error === original && error.code !== "RATE_LIMITED");
+    const errors = [transport(), transport()];
+    await assert.rejects(() => withSecondaryLimitBackoff(async () => { throw errors[runs++]; }, opts), (error) => error === errors[1] && error.code !== "RATE_LIMITED");
     assert.equal(runs, 2);
+    runs = 0;
+    sleeps.length = 0;
+    const results = [{ code: 1, stderr: "dial tcp 1.2.3.4:443: i/o timeout" }, { code: 0 }];
+    assert.deepEqual(await withSecondaryLimitBackoff(async () => results[runs++], opts), { code: 0 });
+    assert.equal(runs, 2);
+    assert.deepEqual(sleeps, [30000]);
   });
 
   test("withSecondaryLimitBackoff reads a thrown error's stderr only when it has one: accepted and rejected forms", async () => {

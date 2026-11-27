@@ -50,7 +50,7 @@ export function ghCommandFailed(err) {
 
 /**
  * Run one gh child. Pacing lives in the default runChild (each attempt takes a
- * slot there). A secondary rate limit backs off once and retries. A second one
+ * slot there). A secondary rate limit or a pre-send transport failure backs off once and retries. A second secondary limit
  * returns the limited result with `rateLimited: true`, so the caller throws
  * RATE_LIMITED with its own message prefix.
  */
@@ -68,7 +68,7 @@ async function runWithBackoff(runChild, command, args, env, { sleep, timeoutMs }
   return runChild(command, args, env);
 }
 
-// A thrown error or a resolved `{ code, stderr }` result that carries a secondary limit.
+// A thrown error or a resolved `{ code, stderr }` result that carries a secondary limit (isTransportFailed covers the transport case).
 // An error with a `stderr` property is read by stderr only: its message carries the whole gh argv (ADR 0305).
 function isSecondaryLimited(outcome) {
   if (outcome instanceof Error) return isSecondaryRateLimitError(outcome.stderr === undefined ? outcome : String(outcome.stderr));
@@ -85,7 +85,7 @@ function isTransportFailed(outcome) {
  * slot and runs gh once, either throwing an error that carries the gh stderr or
  * resolving `{ code, stderr }`. A secondary rate limit backs off once and
  * retries, and a second one throws RATE_LIMITED. A pre-send transport failure
- * retries the same way, and a second one rethrows the original error. Streaming sites that inherit
+ * retries the same way, and the second attempt's error is rethrown unchanged. Streaming sites that inherit
  * stderr cannot see the limit and stay paced only.
  */
 export async function withSecondaryLimitBackoff(attempt, { sleep = realSleep } = {}) {
@@ -255,7 +255,7 @@ export function isSecondaryRateLimitError(error) {
   return /secondary rate limit/i.test(message);
 }
 
-// A failure before the request reaches GitHub (dial or TLS handshake timeout), so a retry cannot repeat a mutation.
+// A failure before the request reaches GitHub (dial or TLS handshake timeout), so the request never reached GitHub.
 export function isGhTransportError(stderr) {
   return /dial tcp [^\n]*i\/o timeout|TLS handshake timeout/i.test(String(stderr ?? ""));
 }

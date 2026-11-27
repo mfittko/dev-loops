@@ -208,7 +208,7 @@ const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),
 
 /**
  * `execFileSync` that takes a slot first when the command is `gh`. A secondary
- * rate limit backs off once and retries, and a second one throws `RATE_LIMITED`.
+ * rate limit or a pre-send transport failure backs off once and retries; a second secondary limit throws `RATE_LIMITED`.
  * The last argument is a test seam.
  */
 export function ghExecFileSync(command, args, options, { execFile = execFileSync, takeSlotSync = takeGhSlotSync, backoff = sleepSync } = {}) {

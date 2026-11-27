@@ -158,7 +158,7 @@ export function parseAllowedRefsCsv(value, flag, parseError = null) {
 // runChild its tests already stub.
 // `timeoutMs` is optional and additive: when set, spawn kills the child at the bound, so the close handler settles with a signal exit and `timedOut: true`.
 // Every default-runner `gh` call takes a gh-throttle slot first.
-// A secondary rate limit backs off once, retakes a slot and retries; a second one throws RATE_LIMITED.
+// A secondary rate limit or pre-send transport failure backs off once, retakes a slot and retries; a second one throws RATE_LIMITED.
 // `sleep` is a test seam. gh-throttle and gh are imported lazily to avoid an import cycle.
 export async function runChild(command, args, env = process.env, stdinText = undefined, { timeoutMs, sleep } = {}) {
   const once = async () => {
@@ -218,7 +218,7 @@ export async function resolveBodyOrFile({ body, bodyFile, allowStdin = false, al
   return content;
 }
 
-// Same gh pacing and one-retry secondary-limit backoff as runChild; `sleep` is the only test seam.
+// Same gh pacing and one-retry secondary-limit and transport backoff as runChild; `sleep` is the only test seam.
 export async function runCommand(command, args, { cwd = process.cwd(), env = process.env, sleep } = {}) {
   const once = async () => {
     if (command === "gh") await (await import("../github/gh-throttle.mjs")).takeGhSlot({ env, cwd });

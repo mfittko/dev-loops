@@ -228,6 +228,14 @@ describe("gh-throttle", () => {
     assert.deepEqual(backoffs, [30000]);
   });
 
+  test("ghExecFileSync rethrows the second error after two transport failures", () => {
+    const errors = [1, 2].map(() => Object.assign(new Error("failed"), { stderr: "dial tcp 1.2.3.4:443: i/o timeout" }));
+    let runs = 0;
+    const execFile = () => { throw errors[runs++]; };
+    assert.throws(() => ghExecFileSync("gh", ["x"], {}, { execFile, takeSlotSync: () => {}, backoff: () => {} }), (error) => error === errors[1] && error.code !== "RATE_LIMITED");
+    assert.equal(runs, 2);
+  });
+
   test("ghExecFileSync classifies a limit on stderr only: accepted and rejected forms", () => {
     const run = (error) => {
       let runs = 0;
