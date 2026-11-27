@@ -4380,7 +4380,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     if (!ownDraft.isToolDraft) {
       const recovery = `submit or discard your pending review ${ownDraft.id} on the pull request, then rerun the post`;
       throw Object.assign(
-        new Error(`Cannot post the ${options.gate} verdict for ${options.repo}#${options.pr}: your own pending review ${ownDraft.id} blocks it. Recovery: ${recovery}.`),
+        new Error(`Cannot post the ${options.gate} verdict for ${options.repo}#${options.pr}: your own pending review ${ownDraft.id} blocks it (own_pending_review_blocks_post). Recovery: ${recovery}.`),
         { reason: "own_pending_review_blocks_post", reviewId: ownDraft.id, recovery },
       );
     }

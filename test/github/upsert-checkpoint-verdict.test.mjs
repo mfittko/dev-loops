@@ -13933,6 +13933,11 @@ for (const gate of ["draft_gate", "pre_approval_gate"]) {
     assert.equal(error.reason, "own_pending_review_blocks_post");
     assert.equal(error.reviewId, 8101);
     assert.match(error.recovery, /8101/);
+    // The CLI prints only error and recovery, so the reason and id must be in the printed error text.
+    const printed = JSON.parse(formatCliError(error));
+    assert.match(printed.error, /own_pending_review_blocks_post/);
+    assert.match(printed.error, /8101/);
+    assert.ok(printed.recovery);
     // No events call and no second create.
     assert.equal(calls.filter(isWriteCall).length, 1);
     assert.equal(calls.some((call) => call.args.some((arg) => String(arg).endsWith("/events"))), false);
