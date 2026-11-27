@@ -133,7 +133,7 @@ export function planDispatchRetry(attempt, errorClass) {
  * @param {{ name: string, angles: string[] }[]} dispatchGroups — cap-split dispatch units (`expandDispatchUnits` of `resolveFanoutGroups` output: fresh angles + re-verifications); carried angles are stripped per angle from each unit and an emptied unit is dropped
  * @param {number|null} [availableReviewers] — harness remaining reviewer budget; null/non-finite = unknown/unexposed
  * @param {{ completedAngles?: Iterable<string>, carriedAngles?: Iterable<string> }} [options] — angle names
- *   already resolved for THIS head: `completedAngles` have a clean per-angle artifact stamped for it,
+ *   already resolved for THIS head: `completedAngles` have a terminal (clean or findings_present) per-angle artifact stamped for it,
  *   `carriedAngles` are proven carried forward from a prior clean head (that carry-forward runs AFTER this
  *   preflight, so a head-bump re-gate must feed its result back in). A unit whose angles are ALL
  *   complete-or-carried is excluded from the required count and `pendingGroups`; a carried angle in a
