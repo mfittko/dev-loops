@@ -9,7 +9,8 @@
  */
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { copyFile, mkdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 export const OUT_OF_BAND_WRITE = "gate_artifact_out_of_band_write";
 const sealPath = (file) => `${file}.seal`;
@@ -74,4 +75,12 @@ export async function claimRetainedRound(fullPath, retained) {
   }
   await unlink(fullPath);
   await unlink(`${fullPath}.seal`).catch((err) => { if (err?.code !== "ENOENT") throw err; });
+}
+
+/** The next free `<stem>.round-<n>.json` beside a live ledger: the one naming rule of every retained-round writer. */
+export async function nextRetainedPath(fullPath) {
+  const dir = path.dirname(fullPath);
+  const stem = path.basename(fullPath, ".json");
+  const taken = (await readdir(dir)).map((n) => Number((n.startsWith(`${stem}.round-`) ? /\.round-(\d+)\.json$/.exec(n)?.[1] : undefined) ?? 0));
+  return path.join(dir, `${stem}.round-${Math.max(0, ...taken.filter(Number.isSafeInteger)) + 1}.json`);
 }

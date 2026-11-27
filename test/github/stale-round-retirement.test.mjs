@@ -652,6 +652,16 @@ test("with two verdict roots that each hold a superseded ledger, both ledgers be
   });
 });
 
+test("one verdict root named as a relative and an absolute path claims its ledger once and still retires only the body-reading units", async () => {
+  await withPostedRound("pre_approval_gate", [{ ...bodyItem, file: "README.md" }], async ({ key, tmpRoot, log, prefix, bodyReadingUnits }) => {
+    const result = await retireStaleRound({ ...key, tmpRoot, verdictRoots: [tmpRoot, path.relative(process.cwd(), tmpRoot)], currentPrBodySha256: NEW_BODY, bodyReadingUnits });
+    assert.equal(result.refusal, undefined);
+    assert.deepEqual(result.bodyOnlyScopes, [`${prefix}-scope`]);
+    assert.equal(existsSync(log.replace(/\.json$/, ".round-1.json")), true);
+    assert.equal(existsSync(log.replace(/\.json$/, ".round-2.json")), false);
+  });
+});
+
 test("a posted round with a non-PR-body open act item, no open act item, an unchanged, malformed or missing body digest still refuses with the operator recovery", async () => {
   const cases = [
     { findings: [bodyItem, codeItem], digest: NEW_BODY },
@@ -660,6 +670,10 @@ test("a posted round with a non-PR-body open act item, no open act item, an unch
     // Every open item closed: the only PR-body item is not act-disposed, so nothing is open.
     { findings: [{ ...bodyItem, judgeDisposition: "reject" }], digest: NEW_BODY },
     { findings: [bodyItem], digest: "not-a-hex-digest" },
+    // A fileless item, or one that is not remedyKind pr_body, is a code finding that a body edit cannot fix.
+    { findings: [{ ...bodyItem, remedyKind: undefined }], digest: NEW_BODY },
+    { findings: [{ ...bodyItem, remedyKind: undefined, file: null }], digest: NEW_BODY },
+    { findings: [{ ...bodyItem, remedyKind: "code" }], digest: NEW_BODY },
   ];
   for (const { findings, digest } of cases) {
     await withPostedRound("pre_approval_gate", findings, async ({ key, tmpRoot, log, bodyReadingUnits }) => {

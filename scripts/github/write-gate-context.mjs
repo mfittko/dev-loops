@@ -2151,7 +2151,9 @@ export async function countCompletedRounds(options, { repoRoot, includeLiveCurre
   // Only a strict toISOString-form UTC timestamp earlier than the cutoff is skipped; any other value counts (fails toward the cap).
   // The calendar round trip rejects values Date.parse normalizes (2026-02-30, T24:00:00); at most 3 fraction digits.
   const preCap = (loggedAt) => typeof loggedAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(loggedAt) && Number.isFinite(Date.parse(loggedAt)) && new Date(loggedAt).toISOString().slice(0, 19) === loggedAt.slice(0, 19) && Date.parse(loggedAt) < cutoff;
-  return closed.filter((log) => !preCap(log.loggedAt)).length + unreadable + 1;
+  // GATE-EXEC-BODY-ONLY-RERUN: a ledger written at the same head right after a body-only superseded round is that round's rerun, no cap round; the superseded round itself counts.
+  const isBodyOnlyRerunLog = (log, i) => i > 0 && String(closed[i - 1].headSha).trim().toLowerCase() === String(log.headSha).trim().toLowerCase() && bodyOnlySupersededDigest(closed[i - 1], log.prBodySha256) !== null;
+  return closed.filter((log, i) => !preCap(log.loggedAt) && !isBodyOnlyRerunLog(log, i)).length + unreadable + 1;
 }
 
 /**
@@ -2367,7 +2369,7 @@ export async function refusesPastScopedRound(options, { repoRoot, prBase, cap, r
 }
 
 /** Whether the head's latest ledger (live, or retained once the automatic retirement moved it) is a round of PR-body act items that read a PR body other than `bodySha256` (default: `options.prBody`'s digest; GATE-EXEC-BODY-ONLY-RERUN). */
-async function isBodyOnlyRerun(options, { repoRoot, bodySha256 = typeof options.prBody === "string" ? prBodySha256(options.prBody) : null, includeLiveCurrentHead = true }) {
+async function isBodyOnlyRerun(options, { repoRoot, bodySha256 = prBodySha256(options.prBody), includeLiveCurrentHead = true }) {
   if (typeof bodySha256 !== "string") return false;
   const head = String(options.headSha).trim().toLowerCase();
   const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead });

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { OUT_OF_BAND_WRITE, claimRetainedRound, readSealed, writeSealed } from "./_gate-artifact-seal.mjs";
+import { OUT_OF_BAND_WRITE, claimRetainedRound, nextRetainedPath, readSealed, writeSealed } from "./_gate-artifact-seal.mjs";
 import path from "node:path";
 import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
 import { expandDispatchUnits } from "./_dispatch-units.mjs";
@@ -1365,13 +1365,9 @@ async function retainSameHeadLedger(fullPath, logPath, roundIdentity) {
   if (live?.roundIdentity?.completed === true && roundIdentity.completed !== true && (same(live.roundIdentity.roundId, roundIdentity.roundId) || same(live.roundIdentity.judgeExecution, roundIdentity.judgeExecution))) {
     throw parseError(`the live ledger ${logPath} is already a completed write of this round; an unjudged write of the same round is refused (completed-round-unjudged-rewrite)`);
   }
-  const dir = path.dirname(fullPath);
-  const stem = path.basename(fullPath, ".json");
-  const roundOf = (n) => (n.startsWith(`${stem}.round-`) ? /\.round-(\d+)\.json$/.exec(n)?.[1] : undefined);
-  const taken = (await readdir(dir)).map((n) => Number(roundOf(n) ?? 0));
-  const next = Math.max(0, ...taken.filter(Number.isSafeInteger)) + 1;
-  await claimRetainedRound(fullPath, path.join(dir, `${stem}.round-${next}.json`));
-  return logPath.replace(/\.json$/, `.round-${next}.json`);
+  const retained = await nextRetainedPath(fullPath);
+  await claimRetainedRound(fullPath, retained);
+  return logPath.replace(/\.json$/, `.${/round-\d+\.json$/.exec(retained)[0]}`);
 }
 async function main() {
   let options;

@@ -2,7 +2,7 @@ import { access, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { listOpenActItems, validateAngleResult } from "@dev-loops/core/loop/gate-fanin";
 import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
-import { claimRetainedRound, readSealed } from "./_gate-artifact-seal.mjs";
+import { claimRetainedRound, nextRetainedPath, readSealed } from "./_gate-artifact-seal.mjs";
 import { retireGateRound } from "./retire-gate-round.mjs";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 import { gateScopePrefix } from "./_gate-names.mjs";
@@ -97,14 +97,8 @@ async function readBodyOnlySupersededDigest(ledgerPath, currentPrBodySha256) {
 export function bodyOnlySupersededDigest(log, currentPrBodySha256) {
   if (!/^[0-9a-f]{64}$/.test(String(currentPrBodySha256)) || !/^[0-9a-f]{64}$/.test(String(log?.prBodySha256)) || log.prBodySha256 === currentPrBodySha256) return null;
   const open = listOpenActItems(log.findings);
-  return open.length > 0 && open.every(isDeltaBodyItem) ? log.prBodySha256 : null;
-}
-
-// The next free `<gate>-<sha>.round-<n>.json` beside the live ledger, as the writer names a retained round.
-function nextRetainedPath(ledgerPath, siblings) {
-  const stem = path.basename(ledgerPath, ".json");
-  const taken = siblings.map((name) => (name.startsWith(`${stem}.round-`) ? Number(/\.round-(\d+)\.json$/.exec(name)?.[1] ?? 0) : 0));
-  return path.join(path.dirname(ledgerPath), `${stem}.round-${Math.max(0, ...taken) + 1}.json`);
+  // `remedyKind: "pr_body"` is required: isDeltaBodyItem also accepts a fileless code finding, which a body edit cannot fix.
+  return open.length > 0 && open.every((item) => isDeltaBodyItem(item) && item.remedyKind === "pr_body") ?log.prBodySha256 : null;
 }
 
 // `otherSpecDigests` are further digests the spec source could have; the stop needs the pinned digest to differ from all of them and from `currentSpecDigest`.
@@ -138,10 +132,14 @@ async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdic
   if (specDecisionOnly && !stopped) return { retiredRound: null };
   state.stopped = stopped !== null;
   const supersededBodies = [];
+  const seenMarkers = new Set();
   for (const root of verdictRoots) {
     const key = { repo, pr, gate, headSha: head, tmpRoot: root };
     // Only the findings log marks a posted verdict: the verdict comment renders only from it (ADR 0336).
     const marker = buildLogPath(key);
+    // One directory named as a relative and an absolute root is one ledger: claim it once.
+    if (seenMarkers.has(path.resolve(marker))) continue;
+    seenMarkers.add(path.resolve(marker));
     if (await exists(marker)) {
       // GATE-EXEC-ROUND-RETIREMENT: a round whose open act items are all PR-body items and whose body digest is stale retires; the ledger stays as a retained round.
       // The scoped rerun needs the caller's body-reading units; a caller that names none keeps the refusal.
@@ -169,8 +167,8 @@ async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdic
       },
     };
   }
-  // The ledger moves first: a crash after it leaves a round with no live ledger, which the next rebuild retires as an ordinary stale round.
-  for (const { marker } of supersededBodies) await claimRetainedRound(marker, nextRetainedPath(marker, await readdir(path.dirname(marker))));
+  // The ledger moves first: a crash after it leaves a round with no live ledger, which the next rebuild retires as an ordinary stale round that reruns every unit (GATE-EXEC-BODY-ONLY-RERUN).
+  for (const { marker } of supersededBodies) await claimRetainedRound(marker, await nextRetainedPath(marker));
   const reason = supersededBodies.length > 0
     ? `automatic: GATE-EXEC-BODY-ONLY-RERUN, every open act item is a PR-body item and the PR body changed (prBodySha256 ${shortDigest(supersededBodies[0].priorBody)} to ${shortDigest(currentPrBodySha256)}); the ledger is kept as a retained round`
     : stopped

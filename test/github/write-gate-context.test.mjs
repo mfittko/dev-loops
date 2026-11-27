@@ -12092,6 +12092,29 @@ test("resolveScopedFinalRound runs a body-only rerun as a full round past the ca
   }
 });
 
+// Issue 3604: an emptied PR body is a body edit too (the emitter hashes the empty read), and the rerun's own ledger is no completed round.
+test("a body-only rerun past the cap: an emptied PR body runs a full round, and the rerun ledger adds no round to the count", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    const oldBody = "Original body";
+    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-68");
+    await mkdir(dir, { recursive: true });
+    const ledger = (head, i, extra) => JSON.stringify({ repo: "owner/repo", pr: 68, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-${String(i).padStart(2, "0")}T00:00:00.000Z`, findings: [], ...extra });
+    const bodyRound = { prBodySha256: prBodySha256(oldBody), findings: [{ angle: "scope", severity: "medium", summary: "body", judgeDisposition: "act", remedyKind: "pr_body" }] };
+    for (const [i, c] of ["1", "2", "3", "4", "5", "6", "7", "8"].entries()) await writeFile(path.join(dir, `draft_gate-${c.repeat(40)}.json`), ledger(c.repeat(40), i + 1), "utf8");
+    const options = { repo: "owner/repo", pr: 68, gate: "draft_gate", headSha };
+    await writeFile(path.join(dir, `draft_gate-${headSha}.json`), ledger(headSha, 9, bodyRound), "utf8");
+    assert.equal(await resolveScopedFinalRound({ ...options, prBody: null }, { repoRoot, prBase: "main", config: {} }), null);
+    // The emitter moved the superseded ledger to a retained round; the rerun's own ledger is written beside it.
+    await rename(path.join(dir, `draft_gate-${headSha}.json`), path.join(dir, `draft_gate-${headSha}.round-1.json`));
+    const before = await countCapRounds(options, { repoRoot, prBase: "main", includeLiveCurrentHead: true });
+    await writeFile(path.join(dir, `draft_gate-${headSha}.json`), ledger(headSha, 10, { prBodySha256: prBodySha256("Edited body") }), "utf8");
+    assert.equal(await countCapRounds(options, { repoRoot, prBase: "main", includeLiveCurrentHead: true }), before);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("capFixBudgetFacts refuses when the added-file git diff exits nonzero, never counting zero added files", async () => {
   const { repoRoot, baseSha } = await makeBaseDiffRepo();
   try {

@@ -859,7 +859,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     }
   }
   // Issue 3416: a full emission mints a new round, so the undispatched or partial round at this head is retired first
-  // (GATE-EXEC-ROUND-RETIREMENT). A --pending emission resumes the round and keeps it. A posted verdict is never retired.
+  // (GATE-EXEC-ROUND-RETIREMENT). A --pending emission resumes the round and keeps it. A posted verdict is never retired, except a round of PR-body act items whose body changed (issue 3604, GATE-EXEC-BODY-ONLY-RERUN).
   if (!pendingOnly) {
     let stale;
     try {

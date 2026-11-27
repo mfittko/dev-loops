@@ -278,6 +278,8 @@ test("past the cap the poster accepts the rerun of a retained body-only round an
     }
     // Round 5 posted at A with one PR-body act item; the automatic retirement moved its ledger to a retained round.
     await writeFile(path.join(dir, `draft_gate-${A}.round-1.json`), JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z", prBodySha256: prBodySha256(DEFAULT_TEST_PR_BODY), findings: [{ ...bodyFinding("medium", 1), remedyKind: "pr_body", judgeFix: "edit the PR body", file: "README.md", line: 1 }] }), "utf8");
+    // The --pending path: the emitter never moved the superseded ledger, so the findings-log writer retained it and wrote the rerun's live ledger, which the poster must not read as the superseded round.
+    await writeFile(path.join(dir, `draft_gate-${A}.json`), JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, verdict: "findings_present", loggedAt: "2026-11-06T00:00:00.000Z", prBodySha256: prBodySha256(EDITED_BODY), findings: [{ ...bodyFinding("medium", 1), remedyKind: "pr_body", judgeFix: "edit the PR body", file: "README.md", line: 1 }] }), "utf8");
     try {
       const findings = [finding("low", 1), finding("nit", 2)];
       for (const [body, refused] of [[DEFAULT_TEST_PR_BODY, true], [EDITED_BODY, false]]) {
