@@ -2219,10 +2219,13 @@ export async function resolveClosureRound(options, { repoRoot, cap, round }) {
   return { fromHead: closureFromHeadOf(closed), priorActItems: await listPriorActItems(options, { repoRoot }) };
 }
 
-/** `head` is reached from `fromHead` by a base-only merge: merges only and an empty PR-own delta, so a merge resolution that carries PR-own changes is a real round. */
-async function isBaseMergeRound({ fromHead, head, mainRef, repoRoot }) {
+/** `head` is reached from `fromHead` by merges only (no non-merge commit outside the base), so a conflicted merge resolution is a forced round too. */
+async function isBaseMergeRound({ fromHead, head, mainRef, repoRoot, runGit = runGitCommand }) {
   if (!fromHead || !head || fromHead === head) return false;
-  return isBaseOnlyMergeSince({ fromHead, head, mainRef, repoRoot });
+  const ancestor = await runGit(["merge-base", "--is-ancestor", fromHead, head], { repoRoot });
+  if (ancestor.code !== 0) return false;
+  const nonMerges = await runGit(["rev-list", "--no-merges", "--count", `${fromHead}..${head}`, `^${mainRef}`], { repoRoot });
+  return nonMerges.code === 0 && nonMerges.stdout.trim() === "0";
 }
 
 /**
@@ -2247,7 +2250,9 @@ export async function capFixBudgetFacts({ fromHead, headSha, prBase, repoRoot, r
   // The delta starts at fromHead merged with the current base, so what a base merge brought is not a fix; a failed merge-tree (exit 128 or older git) keeps fromHead, an over-count.
   const mergedBase = await runGit(["merge-base", headSha, `origin/${prBase}`], { repoRoot, timeout: 30_000 });
   const virtual = mergedBase.code === 0 ? await runGit(["merge-tree", "--write-tree", "--no-messages", fromHead, mergedBase.stdout.trim()], { repoRoot, timeout: 30_000 }) : { code: 128 };
-  const from = virtual.code === 0 || virtual.code === 1 ? virtual.stdout.split("\n")[0].trim() || fromHead : fromHead;
+  // A conflicted merge of the base has no fix budget: its resolution is not a fix.
+  if (virtual.code === 1) return { logicLoc: 0, addedFiles: 0 };
+  const from = virtual.code === 0 ? virtual.stdout.split("\n")[0].trim() || fromHead : fromHead;
   const { wholeLogicLoc } = await evaluatePrSizeBudget({ base: from, head: headSha, repoRoot, paths: own.changedFiles, twoDot: true });
   const added = await runGit(["diff", "--name-status", "--diff-filter=A", `${from}..${headSha}`, "--", ...own.changedFiles], { repoRoot });
   // runGitCommand resolves on a nonzero exit: an unmeasured added-file count refuses like an unproven PR-own delta, never reads as zero.
@@ -2262,7 +2267,8 @@ export const actFingerprintSet = (log) => capRoundActList(log.findings, log.head
 async function isCleanBaseMerge(options, { repoRoot, prBase, fromHead }) {
   const latest = (await readClosedPriorRoundLogs(options, { repoRoot })).at(-1);
   return Boolean(latest) && String(latest.headSha).trim().toLowerCase() === fromHead && isCleanCapRound({ log: latest })
-    && await isBaseMergeRound({ fromHead, head: options.headSha, mainRef: `origin/${prBase}`, repoRoot });
+    && await isBaseMergeRound({ fromHead, head: options.headSha, mainRef: `origin/${prBase}`, repoRoot })
+    && await isBaseOnlyMergeSince({ fromHead, head: options.headSha, mainRef: `origin/${prBase}`, repoRoot });
 }
 
 /** The closed round logs that count as rounds: a round forced by a base merge (see {@link countCapRounds}) is dropped. Without `prBase` every log stays. */
