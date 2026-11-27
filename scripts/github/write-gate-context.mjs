@@ -754,7 +754,7 @@ export async function dropBodyReadingCarriedAngles(carriedAngles, { repo, pr, ga
 }
 
 /**
- * The body-aware angle state both context builders read (`buildGateContext` and `main`): the angles with a clean artifact at this head and the carried
+ * The body-aware angle state both context builders read (`buildGateContext` and `main`): the angles with a terminal (clean or findings_present) artifact at this head and the carried
  * angles, each already adjusted for a changed PR body. A `--prefix-file` build carries no PR body, so it passes no digest.
  */
 async function readBodyAwareAngleState({ repo, pr, gate, headSha, tmpRoot, prefixFile, prBody, carriedAngles, config }, { repoRoot }) {
@@ -3040,7 +3040,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // before spawning any reviewer; on `false` it records the shortfall (this
   // artifact is the resumable record) and stops without dispatching. `null`
   // budget (harness does not expose one) → proceed, no shortfall proven.
-  // `completedAngles` (angles with a clean artifact already stamped at this
+  // `completedAngles` (angles with a terminal (clean or findings_present) artifact already stamped at this
   // head) drives the same-head skip-completed resume; `carriedAngles`
   // (angles the fail-closed Phase 1.2 carry-forward seam has proven carried
   // from a prior clean head — resolve-angle-carry-forward.mjs's own result,
@@ -4123,7 +4123,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
       const refuseInFlight = (scope) => {
         throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}) while unit ${scope} is in flight; wait for it to write its findings, or retire the round: ${retireCommand}`);
       };
-      // A unit whose clean artifact is stamped for this head is absent from pendingGroups, yet a re-dispatch may be in flight
+      // A unit whose terminal (clean or findings_present) artifact is stamped for this head is absent from pendingGroups, yet a re-dispatch may be in flight
       // (live sentinel newer than the artifact). Refuse on it too.
       const pendingScopes = new Set(options.fanoutDispatch.pendingGroups.map((unit) => dispatchUnitScope(options.gate, unit)));
       // Iterate the cap-split dispatch units: an oversized group runs as <name>-partN sub-units with their own sentinels.
@@ -4462,7 +4462,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // Resolve the fan-out dispatch plan (groups + wave plan +
   // knobs) so the artifact carries it for the conductor to dispatch
   // wave-by-wave. Computed from the same config + resolved angles.
-  // AC3: same-head skip-completed resume — angles with a clean artifact
+  // AC3: same-head skip-completed resume — angles with a terminal (clean or findings_present) artifact
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
   const planFanout = async (explicitCompletedAngles) => {
@@ -5103,7 +5103,7 @@ export async function main(
       // so the artifact carries the wave plan the conductor dispatches
       // wave-by-wave. Independent of --angles vs dynamic resolution and of
       // --prefix-file (config is a local file read).
-      // AC3: same-head skip-completed resume (angles with a clean artifact
+      // AC3: same-head skip-completed resume (angles with a terminal (clean or findings_present) artifact
       // at this head are excluded from the required count + pending plan).
       const planFanout = async () => {
         const angleState = await readBodyAwareAngleState({ ...options, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });

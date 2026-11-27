@@ -7175,6 +7175,31 @@ test("buildGateContext threads { repoRoot } into its own readCompletedAnglesForH
   }
 });
 
+test("buildGateContext: a findings_present unit is absent from fanout.pendingGroups while a missing-artifact unit stays pending (issue 3641)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-pending-fp-"));
+  try {
+    const repo = "owner/repo";
+    const pr = 66;
+    const gate = "draft_gate";
+    const headSha = "abc1234567890";
+    const dir = buildGateReviewsDir({ repo, pr, gate, headSha });
+    await mkdir(path.resolve(repoRoot, dir), { recursive: true });
+    await writeFile(
+      path.join(path.resolve(repoRoot, dir), "docs.json"),
+      JSON.stringify({ angle: "docs", verdict: "findings_present", headSha, findings: [{ severity: "low", summary: "x" }] }),
+      "utf8",
+    );
+    const config = draftConfig({ dynamicAngles: false, angles: ["scope", "docs"], mandatoryAngles: ["gate-evidence"] });
+    config.gates.fanout = { maxAnglesPerGroup: 1 };
+    const result = await buildGateContext({ config, gate, diff: null, repo, pr, headSha }, { repoRoot });
+    const pending = result.artifact.fanout.pendingGroups.flatMap((g) => g.angles);
+    assert.equal(pending.includes("docs"), false);
+    assert.equal(pending.includes("scope"), true);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Request plan + stable/volatile block split (#1474)
 // ---------------------------------------------------------------------------
