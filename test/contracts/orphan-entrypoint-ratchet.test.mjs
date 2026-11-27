@@ -67,7 +67,6 @@ const SKIP_DIR_NAMES = new Set(["node_modules", ".git", "vendor", "site", "tmp",
 const ORPHAN_ALLOWLIST = new Map([
   ["scripts/github/audit-gate-evidence.mjs", "standalone — post-drive gate-evidence audit step (issue #1729), agent-invoked to scan both verdict surfaces"],
   ["scripts/github/audit-review-marker-presence.mjs", "standalone — advisory review-gate marker-presence audit (issue #1899), agent/operator-invoked, never gate-wired"],
-  ["scripts/github/close-gate-findings.mjs", "standalone — gate fan-in close step, invoked by gate procedure subagents, not code/CI wired"],
   ["scripts/github/create-label.mjs", "standalone — operator tool for one-off label creation"],
   ["scripts/github/manage-sub-issues.mjs", "standalone — agent/operator sub-issue tree command (documented in scripts/README)"],
   ["scripts/github/withdraw-copilot-review-request.mjs", "standalone — Copilot review withdrawal step, agent-invoked"],

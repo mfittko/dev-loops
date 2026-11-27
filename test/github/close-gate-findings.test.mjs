@@ -2500,7 +2500,7 @@ test("the fixed-act close leaves a prior-act question thread open", async () => 
   const fp = fingerprintFinding(FIXED_ACT_FINDING);
   const body = `${buildFindingMarker({ fp, severity: "question", angle: "perf", round: 1 })}\n**question** (\`perf\`): why is the cache stale?`;
   const thread = threadNode({ id: "THREAD_D", isResolved: false, path: "src/cache.mjs", line: 9, commentId: 6004, body, author: AUTHENTICATED_LOGIN });
-  await fixedActCase({ threads: [thread] }, { closes: false, assert: (result) => { assert.equal(result.fixedActClosed, 0); assert.equal(result.unresolvedGateThreadCount, 1); } });
+  await fixedActCase({ threads: [thread] }, { closes: false, assert: (result) => { assert.equal(result.fixedActClosed, 0); assert.equal(result.unresolvedGateThreadCount, 1); assert.equal(result.dispositionFailures, undefined, "no reply is attempted for a question"); } });
 });
 
 test("the fixed-act close leaves a merged thread open when one member is raised again", async () => {

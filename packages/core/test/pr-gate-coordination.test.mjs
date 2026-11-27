@@ -5265,3 +5265,30 @@ test("cap brakes: notClearable keeps the Items list and says a focus file does n
   assert.doesNotMatch(stopped.reason, /Clear it with --operator-focus-file/);
   assert.doesNotMatch(stopped.reason, /clears it with an operator focus item/);
 });
+
+// A fix pass moved the head past a gate round whose judge-act threads are all that is open: the round itself is next, not the fixer.
+const staleRoundInput = (extra = {}) => ({
+  pr: 266,
+  currentHeadSha: "abc123456789",
+  prDraft: false,
+  lifecycleState: STATE.UNRESOLVED_FEEDBACK_PRESENT,
+  loopDisposition: DISPOSITION.UNRESOLVED_FEEDBACK,
+  draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+  draftGateMarker: gate({ visible: false }),
+  preApprovalGate: gate({ visible: false }),
+  preApprovalGateMarker: gate({ visible: false }),
+  copilotReviewOnCurrentHead: true,
+  ...extra,
+});
+
+test("ready PR whose only open threads are judge-act threads from an older ancestor head runs the pre_approval_gate", () => {
+  const result = evaluatePrGateCoordination(staleRoundInput({ staleGateRoundThreadsOnly: true }));
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK));
+});
+
+test("ready PR with a Copilot, human or same-head thread among the open threads still routes to the fixer", () => {
+  const result = evaluatePrGateCoordination(staleRoundInput({ staleGateRoundThreadsOnly: false }));
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+});

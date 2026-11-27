@@ -41,7 +41,8 @@ import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { loadDeliveredHandoff, verifyFixerDisposition } from "../github/verify-fixer-disposition.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
-import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "../github/_gate-finding-surface.mjs";
+import { collectFingerprints, countUnresolvedGateAuthoredThreadsFromRawNodes, findJudgeDispositionForFingerprint, parseFindingMarker } from "../github/_gate-finding-surface.mjs";
+import { isStrictAncestor } from "../github/close-gate-findings.mjs";
 import { resolveAuthenticatedLogin } from "../github/post-gate-findings.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
@@ -1076,6 +1077,38 @@ async function countUnresolvedGateThreads(threadsPayload, runtime) {
   }
 }
 
+// GATE-EXEC-THREAD-DISPOSITION: true when at least one thread is open and every open thread is a judge-act code thread whose
+// recording round (draft_gate or pre_approval_gate) ran at a strict ancestor of the current head. The caller has already shown every
+// open thread is gate-authored (equal gate and total counts). A question, an ambiguous ledger or a failed read fails closed to false,
+// which keeps the fixer route.
+async function onlyStaleGateRoundThreadsOpen({ threadsPayload, repo, pr, currentHeadSha, runtime }) {
+  try {
+    const open = threadsPayload.filter((node) => !node?.isResolved);
+    if (open.length === 0) return false;
+    const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
+    const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
+    for (const node of open) {
+      const first = node?.comments?.nodes?.[0];
+      const body = typeof first?.body === "string" ? first.body : "";
+      const marker = parseFindingMarker(body);
+      if (!marker || marker.severity === "question") return false;
+      const fps = new Set([marker.fp]);
+      collectFingerprints(body, fps);
+      for (const fp of fps) {
+        let stale = false;
+        for (const gate of ["draft_gate", "pre_approval_gate"]) {
+          const prior = await findJudgeDispositionForFingerprint({ repo, pr, gate, headSha: currentHeadSha, tmpRoot, repoRoot, fp });
+          if (prior && !prior.ambiguous && prior.disposition === "act" && !prior.remedyKind && prior.headSha && isStrictAncestor(prior.headSha, currentHeadSha, repoRoot)) stale = true;
+        }
+        if (!stale) return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** One live thread read: the generic and the gate-authored unresolved counts. */
 export async function fetchLiveThreadCounts(options, runtime = {}) {
   const threadsPayload = await fetchGithubReviewThreadsPayload(options, runtime);
@@ -1321,6 +1354,8 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     skippedUntrusted: parsedThreads.skippedUntrusted,
     gateEvidence,
     unresolvedGateThreadCount,
+    staleGateRoundThreadsOnly: unresolvedGateThreadCount > 0 && snapshot.unresolvedThreadCount === unresolvedGateThreadCount
+      && await onlyStaleGateRoundThreadsOpen({ threadsPayload, repo: options.repo, pr: options.pr, currentHeadSha, runtime }),
     interpretation,
     disposition,
     copilotBodyConvergence,
@@ -1578,6 +1613,7 @@ export function buildGateCoordinationEvaluatorInput({
     // detector's MARK_READY_FOR_REVIEW decision with detect-checkpoint-
     // evidence.mjs's own unresolved-thread report for the same PR state.
     unresolvedGateThreadCount: context.unresolvedGateThreadCount ?? null,
+    staleGateRoundThreadsOnly: context.staleGateRoundThreadsOnly === true,
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
     copilotConvergenceOk: context.copilotBodyConvergence?.ok === true,
     // Current-head Copilot review evidence, fed alongside sameHeadCleanConverged so

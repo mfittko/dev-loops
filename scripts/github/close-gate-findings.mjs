@@ -709,7 +709,7 @@ async function runEvidenceOnlyClosePass({ repo, pr, gate, headSha, round, thread
 }
 
 // True when ancestor is a different commit that the repo's history places strictly before head (any git error fails closed).
-function isStrictAncestor(ancestor, head, repoRoot) {
+export function isStrictAncestor(ancestor, head, repoRoot) {
   if (ancestor.toLowerCase() === head.toLowerCase()) return false;
   try {
     execFileSync("git", ["merge-base", "--is-ancestor", ancestor, head], { cwd: repoRoot, env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_COMMON_DIR: undefined }, stdio: "ignore" });

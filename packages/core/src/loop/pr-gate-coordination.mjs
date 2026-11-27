@@ -1997,6 +1997,36 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
+  // GATE-EXEC-THREAD-DISPOSITION: every open thread is a judge-act gate thread from a round at a strict ancestor of this head, so the fix pass already ran; the fixed-act close needs a newer round's ledger, so the round itself is next.
+  if (effectiveLifecycleState === STATE.UNRESOLVED_FEEDBACK_PRESENT && input.staleGateRoundThreadsOnly === true) {
+    pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE]);
+    pushUnique(forbiddenActions, [
+      PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+      PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+      PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+      PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+    ]);
+    return buildResult({
+      repo: input.repo ?? null,
+      pr: Number.isInteger(input.pr) ? input.pr : null,
+      currentHeadSha,
+      lifecycleState: effectiveLifecycleState,
+      loopDisposition: loopDisposition ?? DISPOSITION.UNRESOLVED_FEEDBACK,
+      gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+      draftGateAlreadySatisfied,
+      draftGate,
+      preApprovalGate,
+      allowedNextActions,
+      forbiddenActions,
+      nextAction: PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+      reason: "Every open thread is a gate-authored judge-act thread from a gate round at an earlier head, and a fix pass moved the head past that round, so the gate round itself is next: a round that no longer raises the finding closes its thread, and one that raises it again routes to the fixer.",
+      mergeStateStatus,
+      conflictFiles,
+      refinementArtifact,
+      copilotReviewRoundCount,
+    });
+  }
+
   if (effectiveLifecycleState === STATE.UNRESOLVED_FEEDBACK_PRESENT) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK]);
     pushUnique(forbiddenActions, postDraftForbidden);
