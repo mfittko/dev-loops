@@ -1310,7 +1310,7 @@ A base unit (the `resolveFanoutGroups` unit, before any cap-split) carries whole
 Dispatch is computed per cap-split unit: a unit whose angles are all complete or carried is skipped, and a carried angle (head-bump only) is stripped from a mixed unit; a completed angle in a mixed unit is not stripped.
 
 <!-- rule: GATE-EXEC-RERUN-ANGLE -->
-`GATE-EXEC-RERUN-ANGLE` (issue 2895): pass `--rerun-angle <angle>` (repeatable) to `resolve-angle-carry-forward.mjs` to move a named angle into `mustRerun` with reason `operator_rerun`; use it for a carried finding the judge rejected in consecutive rounds, or when code changed the finding's premise. An angle absent from the prior log is refused and no plan is written.
+`GATE-EXEC-RERUN-ANGLE` (issue 2895): pass `--rerun-angle <angle>` (repeatable) to `resolve-angle-carry-forward.mjs` to move a named angle into `mustRerun` with reason `operator_rerun`; use it for a carried finding the judge rejected in consecutive rounds, or when code changed the finding's premise. The name must equal a `provenance.perAngle` row or an orphan finding angle exactly; any other name is refused with `unknown_rerun_angle` and no plan is written.
 
 Eligibility is decided PER ANGLE by the delta against that angle's review surface: `clean` OR `findings_present` both carry when the delta provably misses the surface. The prior round's overall verdict never gates carry-forward, and a re-gate NEVER skips the resolver. The one and only skip is a gate's genuine FIRST round (no prior findings-log at any head); every subsequent head bump runs the resolver, enforced below.
 
