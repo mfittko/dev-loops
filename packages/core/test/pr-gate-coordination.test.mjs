@@ -4803,7 +4803,7 @@ test("3105 AC15: a posted findings_present draft_gate verdict with an open act l
   const refused = evaluatePrGateCoordination({ ...base, draftRoundRefused: true, draftOpenActList: open });
   assert.deepEqual({ next: refused.nextAction, on: refused.blockedOn, remedy: refused.agentRemedy }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION, remedy: undefined });
   assert.match(refused.reason, /operator focus item whose decision names the open act items by fingerprint, passed as --operator-focus-file <path> on loop gate-coordination/);
-  const held = evaluatePrGateCoordination({ ...base, draftRoundRefused: true, draftOpenActList: open, capBrakes: { gate: "draft_gate", round: 4, cap: 2, actCounts: [3, 3], items: [], notClearable: true } });
+  const held = evaluatePrGateCoordination({ ...base, draftRoundRefused: true, draftOpenActList: open, draftSetHeld: true });
   assert.deepEqual({ next: held.nextAction, on: held.blockedOn }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION });
   assert.match(held.reason, /already had its one re-open, so a focus file does not clear it/);
   assert.doesNotMatch(held.reason, /operator clears it/);

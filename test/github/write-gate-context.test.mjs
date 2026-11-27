@@ -31,6 +31,7 @@ import {
   buildValidationResultsPath,
   captureDiffFromBase,
   capFixBudgetFacts,
+  actSetAlreadyHeld,
   refusesPastScopedRound,
   refuseNonConvergence,
   collapsePureSubstitutionRuns,
@@ -12108,6 +12109,8 @@ test("refusesPastScopedRound, the draft poster and detector refusal, refuses rou
     const workOrder = { gate: "draft_gate", headSha, operatorFocus: { items: [{ fingerprint: fingerprintFinding(act), decision: "fix it" }] } };
     await writeFile(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder) }), "utf8");
     assert.equal(await refuses(4), false, "an operator decision on the act item clears round cap+2");
+    // The detector's no-clear fact: the latest set repeats a round from the effective cap round on only when a round follows the cap.
+    assert.equal(await actSetAlreadyHeld(options, { repoRoot, prBase: baseSha, cap: 2 }), false);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

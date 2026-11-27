@@ -2287,6 +2287,15 @@ export async function operatorDecidedLatestRound(options, { repoRoot, latest, la
 }
 
 /**
+ * Whether the latest closed round's act set was already held by an earlier round from the round after the effective cap round on: no focus file re-opens it (GATE-EXEC-CAP-BRAKES).
+ */
+export async function actSetAlreadyHeld(options, { repoRoot, cap, prBase, includeLiveCurrentHead = false }) {
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead });
+  const latest = closed.at(-1), last = latest ? actFingerprintSet(latest) : [];
+  return last.length > 0 && (await effectiveRounds(closed, { prBase, repoRoot })).slice(cap).some((log) => log !== latest && actFingerprintSet(log).join() === last.join());
+}
+
+/**
  * The operator clear of a draft_gate or pre_approval_gate round past the scoped round (GATE-EXEC-CAP-BRAKES). The latest closed round's act items count as cleared when the direct
  * operator focus file or the issued fixer plan (bound to that round's head, to `options.gate` and to its digest) holds an operator focus decision for each fingerprint. A set already held by an
  * earlier round from the round after the effective cap round on was re-opened once: it stays with the operator.
@@ -2299,7 +2308,7 @@ async function resolveOperatorClearedRound(options, { repoRoot, cap, prBase, inc
   const last = actFingerprintSet(latest);
   // A latest round with no act items has nothing to decide: the next round is the scoped round over the PR-own delta (the exit after a clean round).
   if (last.length > 0) {
-    if ((await effectiveRounds(closed, { prBase, repoRoot })).slice(cap).some((log) => log !== latest && actFingerprintSet(log).join() === last.join())) return null;
+    if (await actSetAlreadyHeld(options, { repoRoot, cap, prBase, includeLiveCurrentHead })) return null;
     if (!(await operatorDecidedLatestRound(options, { repoRoot, latest, last }))) return null;
   }
   return { fromHead: closureFromHeadOf(closed), priorActItems: await listPriorActItems(options, { repoRoot }) };

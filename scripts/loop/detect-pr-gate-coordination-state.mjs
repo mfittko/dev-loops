@@ -34,7 +34,7 @@ import {
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { convergedCarryAccepts } from "../github/_carried-verdict.mjs";
-import { actFingerprintSet, capRoundActList, countCapRounds, effectiveRounds, operatorDecidedLatestRound, readClosedPriorRoundLogs, refusesPastScopedRound, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { actFingerprintSet, actSetAlreadyHeld, capRoundActList, countCapRounds, effectiveRounds, operatorDecidedLatestRound, readClosedPriorRoundLogs, refusesPastScopedRound, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
 import { readOperatorFocusFile } from "./_operator-focus.mjs";
 import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
@@ -1542,6 +1542,7 @@ export function buildGateCoordinationEvaluatorInput({
   earlySurface = null,
   draftCapRoundFixed = false,
   draftRoundRefused = false,
+  draftSetHeld = false,
   draftCapRoundFailure = null,
   draftCapRoundDetail = null,
   draftOpenActList = null,
@@ -1610,6 +1611,7 @@ export function buildGateCoordinationEvaluatorInput({
     postConvergenceSignificantChange,
     draftCapRoundFixed,
     draftRoundRefused,
+    draftSetHeld,
     draftCapRoundFailure,
     ...(draftCapRoundDetail ? { draftCapRoundDetail } : {}),
     draftOpenActList,
@@ -1705,6 +1707,8 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const draftRoundRefused = context.prData?.isDraft === true
     && await countCapRounds(draftRound, { repoRoot, prBase: prBaseRefName, includeLiveCurrentHead: true })
       .then((round) => refusesPastScopedRound(draftRound, { repoRoot, prBase: prBaseRefName, cap: draftGateConfig.maxReviewRounds ?? 0, round, includeLiveCurrentHead: true }), () => false);
+  // A refused round whose act set already had its one re-open is not clearable by any focus file (GATE-EXEC-NO-DEAD-END): the evaluator's reason drops the clear claim.
+  const draftSetHeld = draftRoundRefused && await actSetAlreadyHeld(draftRound, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0, prBase: prBaseRefName, includeLiveCurrentHead: true }).catch(() => false);
   let capBrakesError = null;
   const baseRefresher = runtime.checkBaseFreshness ?? (runtime.runChild ? null : checkBaseFreshness);
   const refreshBase = baseRefresher ? (base, head) => baseRefresher({ base, head, cwd: repoRoot, env: runtime.env ?? process.env, trusted: true }).catch(() => ({ ok: false, error: "base_fetch_failed", recovery: "retry the detector; fix the network or git remote access if the fetch keeps failing" })) : null;
@@ -1729,6 +1733,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     earlySurface,
     draftCapRoundFixed,
     draftRoundRefused,
+    draftSetHeld,
     draftCapRoundFailure,
     draftCapRoundDetail,
     draftOpenActList,
