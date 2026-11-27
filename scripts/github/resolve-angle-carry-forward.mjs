@@ -31,7 +31,7 @@ import { parseArgs } from "node:util";
 
 import { isDevLoopConfigSourcePath } from "@dev-loops/core/analysis/diff-analyzer";
 import { validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-verdict-carry";
-import { loadDevLoopConfigStrict, resolveBaseBranch, resolveClassifyRules, resolveFanoutGroups, resolveGateAngleContract, resolveGateAnglesDynamic } from "@dev-loops/core/config";
+import { GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveBaseBranch, resolveClassifyRules, resolveFanoutGroups, resolveGateAngleContract, resolveGateAnglesDynamic } from "@dev-loops/core/config";
 import {
   angleReviewSurface,
   RENAME_ONLY_ANGLES,
@@ -52,6 +52,9 @@ import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHead
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { COPILOT_BODY_ANGLE } from "./_copilot-body-disposition.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
+import { seamFirstRoundFor } from "./write-gate-context.mjs";
+import { viewPr } from "./view-pr.mjs";
 import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
 import {
   buildCarryForwardPlanPath,
@@ -583,7 +586,17 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     let resolvedAngles = [];
     // `reduced` proves the base ref resolves; without it only the prior and always-re-run angles count, and the writer's split refusal stays the backstop.
     if (reduced) {
-      resolvedAngles = (await resolveGateAnglesDynamic(config, mapGateToConfigKey(options.gate), { diff: captureDiffFromBase(mainRef, { repoRoot }), hasFullLabel: false })).recommendedAngles ?? [];
+      // Mirror the writer's resolution inputs: the live gate:full label (fail closed to labelled), the floor and size evidence, and the seam-first-round flag.
+      let fullLabel = true;
+      try {
+        const { pr } = await viewPr({ repo: options.repo, pr: options.pr, fields: "labels" });
+        fullLabel = Array.isArray(pr?.labels) && pr.labels.some((label) => (label?.name ?? label) === GATE_FULL_LABEL);
+      } catch { /* fail closed to the full static pool, like the writer */ }
+      let sizeOutcome = null;
+      try { sizeOutcome = await evaluatePrSizeBudget({ base: mainRef, head: "HEAD", repoRoot }); } catch { /* fails closed: checkFloors treats null as ambiguous */ }
+      resolvedAngles = (await resolveGateAnglesDynamic(config, mapGateToConfigKey(options.gate), {
+        diff: captureDiffFromBase(mainRef, { repoRoot }), hasFullLabel: fullLabel, checkFloors: true, sizeOutcome, seamFirstRound: await seamFirstRoundFor(options, repoRoot),
+      })).recommendedAngles ?? [];
     }
     const unitAngles = orderAnglesByCatalog([...new Set([...ledgerAngleNames(log.provenance?.perAngle, pool), ...alwaysRerun.map(baseAngleName), ...resolvedAngles.map(baseAngleName)])], pool);
     const baseUnits = resolveFanoutGroups(config, catalogKey, unitAngles).map((g) => g.angles);
