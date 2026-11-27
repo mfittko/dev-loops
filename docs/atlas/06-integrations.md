@@ -207,7 +207,7 @@ sequenceDiagram
 
 Type: `sequenceDiagram`
 
-The diagram shows one run of `request-copilot-review.mjs` after its suppression checks pass. The POST targets the REST `requested_reviewers` endpoint with the `[bot]` reviewer login. Only the verification read repeats, never the POST. One GraphQL cross-check runs before the delayed retries, and the retry loop stops as soon as a read observes the review. When the POST succeeded but no read observes the review, the script reports `requested` with an eventual-consistency detail instead of failing. A 422 classified as unavailable re-reads state and reports `already-requested` or `unavailable`. Derived from `scripts/github/request-copilot-review.mjs`.
+The diagram shows one run of `request-copilot-review.mjs` after its suppression checks pass. The POST targets the REST `requested_reviewers` endpoint with the `[bot]` reviewer login. Only the verification read repeats, never the POST. One GraphQL cross-check runs before the delayed retries, and the retry loop stops as soon as a read observes the review. When the POST succeeded but no read observes the review, the script reports `requested` with an eventual-consistency detail below 2 unobservable requests on the head, and `copilot_unavailable` at 2. A 422 classified as unavailable re-reads state and reports `already-requested` or `unavailable`. Derived from `scripts/github/request-copilot-review.mjs`.
 
 ```mermaid
 sequenceDiagram
@@ -231,7 +231,7 @@ sequenceDiagram
     loop up to 3 delayed re-reads, until observed
       S->>GH: verification read
     end
-    S-->>S: requested, or requested with eventual-consistency detail
+    S-->>S: requested with eventual-consistency detail, or copilot_unavailable at 2 unobservable requests
   end
 ```
 
@@ -257,7 +257,7 @@ xychart-beta
 
 Type: `mindmap`
 
-The mindmap groups the ten status values that `request-copilot-review.mjs` can return. Most statuses are suppressions that save a redundant Copilot round; only `requested` starts a new review. `blocked_by_copilot_comment` asks the operator to delete a non-Copilot comment that contains `@copilot` or `/copilot`. Derived from the `*_STATUS` constants and the usage text in `scripts/github/request-copilot-review.mjs`.
+The mindmap groups the eleven status values that `request-copilot-review.mjs` can return. Most statuses are suppressions that save a redundant Copilot round; only `requested` starts a new review. `blocked_by_copilot_comment` asks the operator to delete a non-Copilot comment that contains `@copilot` or `/copilot`. Derived from the `*_STATUS` constants and the usage text in `scripts/github/request-copilot-review.mjs`.
 
 ```mermaid
 mindmap
@@ -273,6 +273,7 @@ mindmap
       suppressed_post_convergence_docs_only
       suppressed_draft
       round_cap_reached
+      copilot_unavailable
     Blocked
       blocked_by_copilot_comment
       unavailable

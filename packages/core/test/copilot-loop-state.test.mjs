@@ -451,6 +451,22 @@ test("applyConfirmedReviewRequest clears current-head convergence without invent
   assert.equal(result.copilotReviewPresent, true);
 });
 
+test("applyConfirmedReviewRequest maps copilot_unavailable to request status none with copilotRequestNotObservable", () => {
+  const result = applyConfirmedReviewRequest({
+    prExists: true,
+    prNumber: 17,
+    copilotReviewPresent: false,
+    copilotReviewOnCurrentHead: false,
+    copilotReviewRequestStatus: "none",
+    unresolvedThreadCount: 0,
+  }, "copilot_unavailable");
+
+  assert.equal(result.copilotReviewRequestStatus, "none");
+  assert.equal(result.copilotRequestNotObservable, true);
+  assert.equal(interpretLoopState(result).state, "copilot_unavailable");
+  assert.equal(toSharedRequestStatus("copilot_unavailable"), "none");
+});
+
 test("toSharedRequestStatus keeps shared enum members and collapses non-shared request outcomes to none", () => {
   for (const shared of ["requested", "already-requested", "unavailable", "none", "failed"]) {
     assert.equal(toSharedRequestStatus(shared), shared);

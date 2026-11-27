@@ -6,7 +6,7 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION } from "@dev-loops/core/loop/public-dev-loop-routing";
-import { recordCopilotWaitTimeout, watchCopilotReview } from "../github/probe-copilot-review.mjs";
+import { watchCopilotReview } from "../github/probe-copilot-review.mjs";
 import { watchCiStatus } from "../github/probe-ci-status.mjs";
 import { runHandoff } from "./copilot-pr-handoff.mjs";
 import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
@@ -718,12 +718,7 @@ export async function runWatchCycle(
     ...handoff.watchArgs,
     timeoutMs: persistentWatchTimeoutMs,
   };
-  const watchStartedAt = now();
-  let watch = await watchCopilotReviewImpl(watchOptions, { env, ghCommand, runChild: countedRunChild });
-  // The sanctioned wait path records its timeout too, so request_not_observable can reach its threshold.
-  if (watch.status === "timeout") {
-    watch = await recordCopilotWaitTimeout(watch, { options: watchOptions, startedAt: watchStartedAt, clock: now, env, ghCommand, checkpointDir });
-  }
+  const watch = await watchCopilotReviewImpl(watchOptions, { env, ghCommand, runChild: countedRunChild });
   result.watchArgs = watchOptions;
   result.watchStatus = watch.status;
   result.watch = watch;

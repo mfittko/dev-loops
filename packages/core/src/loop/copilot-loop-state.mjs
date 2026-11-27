@@ -343,6 +343,11 @@ export function normalizeSnapshot(raw) {
 export function applyConfirmedReviewRequest(snapshot, reviewRequestStatus) {
   const s = normalizeSnapshot(snapshot);
 
+  // The wrapper reports a Copilot-unavailable record (2 unobservable requests on the head) as this status.
+  if (reviewRequestStatus === "copilot_unavailable") {
+    return normalizeSnapshot({ ...s, copilotReviewRequestStatus: "none", copilotRequestNotObservable: true });
+  }
+
   if (!ACTIVE_REQUEST_STATUSES.has(reviewRequestStatus)) {
     return normalizeSnapshot({ ...s, copilotReviewRequestStatus: reviewRequestStatus });
   }
