@@ -5205,8 +5205,11 @@ test("cap brakes: growth stops both gates above twice the forecast, with both nu
     assert.deepEqual({ next: above.nextAction, on: above.blockedOn, remedy: above.agentRemedy }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION, remedy: undefined }, gate);
     assert.match(above.reason, /growth_past_forecast.*wholeLogicLoc 761 is above 2 times the forecast wloc 380/, gate);
     assert.match(above.reason, /operator focus item whose decision names the act items by fingerprint/, gate);
-    // A cleared stop recurs at the next judged head while the head stays above twice the forecast (AC7).
-    assert.equal(evaluatePrGateCoordination({ ...base, capBrakes: brakes(900, 380) }).nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, gate);
+    // A clear at head A does not carry to the next judged head, which stops again while it stays above twice the forecast (AC7).
+    assert.doesNotMatch(evaluatePrGateCoordination({ ...base, capBrakes: { ...brakes(761, 380), operatorCleared: true } }).reason, /growth_past_forecast/, `${gate} cleared at head A`);
+    const next = evaluatePrGateCoordination({ ...base, capBrakes: brakes(900, 380) });
+    assert.equal(next.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, gate);
+    assert.match(next.reason, /growth_past_forecast/, `${gate} next judged head`);
     assert.doesNotMatch(evaluatePrGateCoordination({ ...base, capBrakes: brakes(760, 380) }).reason, /growth_past_forecast/, `${gate} at the threshold`);
     // The largest of several forecast lines is the forecast the caller passes (forecastWlocs, max), so 761 is below twice 400.
     assert.doesNotMatch(evaluatePrGateCoordination({ ...base, capBrakes: brakes(761, Math.max(120, 400, 380)) }).reason, /growth_past_forecast/, `${gate} several forecasts`);

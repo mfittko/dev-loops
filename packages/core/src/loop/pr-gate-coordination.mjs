@@ -1333,12 +1333,10 @@ function evaluatePrGateCoordinationCore(input = {}) {
     && carriedMarker.verdict === "findings_present" && carriedMarker.headSha !== null && String(actList.headSha ?? "").toLowerCase().startsWith(carriedMarker.headSha.toLowerCase());
   // The one head binding of the open act list: a full current head SHA that the list names as its head or its carried head.
   const actListHeadBound = /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase());
-  // Issue 3460 AC5: at the cap exit the open act list loads before ready, also once the gate threads are resolved.
   const headActList = !draftReady && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"))
     && actListHeadBound
     && Number.isInteger(actList.openActCount) && actList.openActCount > 0
-    // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.
-    && (input.draftRoundRefused !== true || input.draftCapRoundFailure === "no_clearing_record");
+    && input.draftRoundRefused !== true;
   // ADR 0271: a round of PR-body items only has no fixer route; its exit is the body-only converged post, named in the cap refusal below.
   const bodyOnlyList = headActList && actList.bodyOnly === true;
   // GATE-EXEC-NO-DEAD-END: the non_convergence brake (which guards the next round) skips a blocker-free all-PR-body list only when the body-only route or the satisfied-gate route answers instead.
@@ -1747,7 +1745,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK,
         ...remedyOrOperator(input, (r, n) => ({
-          command: `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo ${r} --pr ${n} --head-sha ${currentHeadSha} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`,
+          command: `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo ${r} --pr ${n} --head-sha ${currentHeadSha} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>${actList.operatorCleared === true ? " --operator-focus-file <operator focus file>" : ""}`,
           summary: "Emit the fixer work order for the open act list (the judge-pass --out file of this head's round) and dispatch it.",
         })),
         reason: `The PR is still draft and the current head carries a posted \`draft_gate\` \`findings_present\` verdict with ${actList.openActCount} open act item(s) and no round-cap blocker, so the fixer runs before any further round or base integration.`,

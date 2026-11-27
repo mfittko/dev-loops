@@ -1412,13 +1412,13 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
 
 /**
  * Issue 3105 AC15 (ADR 0288): the open act list of the current head's live draft_gate ledger, or null.
- * Null when the head has no live ledger with an open act item, past the cap (cap > 0 and round > cap), and when every open item is a nit outside draft round 1.
+ * Null when the head has no live ledger with an open act item, past the cap (cap > 0 and round > cap) unless `operatorCleared` (then `{ operatorCleared: true }`, which routes the fixer with `--operator-focus-file`), and when every open item is a nit outside draft round 1.
  * At every round up to the cap an all-PR-body list is `{ bodyOnly: true }`: its exit is the body-only converged post (GATE-EXEC-NO-DEAD-END, ADR 0332).
  * A head with no live ledger that is a base-only merge of the reviewed head carries that list as `carriedToHead` at every round up to the cap (ADR 0294, ADR 0332 decision 4).
  * `blockers` are the GATE-EXEC-SOFT-CAP blockers: those past the round cap, plus the blocked items of a body-only list at any round; below the cap every other act item goes to the fixer.
  * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
  */
-export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnlyMerge = ({ fromHead, head, mainRef, repoRoot: root }) => convergedCarryAccepts({ originHead: fromHead, headSha: head, baseRef: mainRef, repoRoot: root }) }) {
+export async function resolveDraftOpenActList(context, { repoRoot, cap, operatorCleared = false, baseOnlyMerge = ({ fromHead, head, mainRef, repoRoot: root }) => convergedCarryAccepts({ originHead: fromHead, headSha: head, baseRef: mainRef, repoRoot: root }) }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
   const options = { repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: head };
@@ -1449,8 +1449,8 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnly
   if (open.every(isDeltaBodyItem)) return !(cap > 0 && round > cap) ? { headSha: ledgerHead, ...(ledgerHead !== head ? { carriedToHead: head } : {}), openActCount: open.length, blockers: [...pastCapBlockers(log.findings, { round, cap }), ...open.filter(isBlockedActItem).map((f) => ({ kind: "round_cap_reached", reason: f.resurfaces ? "resurfaced" : "new_act", item: `[${normalizeSeverity(f.severity)}] ${String(f.summary ?? "").trim()} (blocked_item)` }))], bodyOnly: true } : null;
   // A carried list (a base-only merge of the reviewed head) is body-only or nothing.
   if (ledgerHead !== head) return null;
-  // Past the cap the act list belongs to the operator (GATE-EXEC-CAP-BRAKES), so this route does not offer the fixer.
-  if (cap > 0 && round > cap) return null;
+  // Past the cap the act list belongs to the operator (GATE-EXEC-CAP-BRAKES): this route offers the fixer only once an operator decision cleared the stop.
+  if (cap > 0 && round > cap) return operatorCleared ? { headSha: head, openActCount: open.length, blockers: [], operatorCleared: true } : null;
   // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so that list keeps the earlier routing.
   const severities = open.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity]));
   if (round !== 1 && severities.every((s) => normalizeSeverity(s) === "nit")) return null;
@@ -1481,7 +1481,7 @@ async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoo
  * It also carries the growth numbers: `forecastWloc` of the linked issue now (null with no linked issue or forecast line) and `wholeLogicLoc` of the head.
  * It adds `operatorCleared: true` when an operator focus decision covers every act fingerprint of that round (see operatorClearsCapStop), which routes past the stop.
  */
-export async function resolveCapBrakes(context, { repoRoot, config, operatorFocusFile, evaluateSize = evaluatePrSizeBudget }) {
+export async function resolveCapBrakes(context, { repoRoot, config, operatorFocusFile, evaluateSize = evaluatePrSizeBudget, refreshBase = null }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
   const gate = context.prData?.isDraft === true ? "draft_gate" : "pre_approval_gate";
@@ -1495,7 +1495,12 @@ export async function resolveCapBrakes(context, { repoRoot, config, operatorFocu
   // A failed growth read leaves the growth limit unevaluated (the caller warns); the other brakes still stand.
   let growth = {}, growthReadError;
   if (forecastWloc > 0) {
-    try { growth = { wholeLogicLoc: (await evaluateSize({ base: `origin/${context.prData?.baseRefName}`, head, repoRoot })).wholeLogicLoc }; } catch (error) { growthReadError = error?.message ?? String(error); }
+    try {
+      // The growth diff is `origin/<base>...head`: a stale local ref counts every base commit a merge brought as PR logic, so the ref is fetched first (a stale head is fine, a failed fetch is not).
+      const refreshed = refreshBase ? await refreshBase(context.prData?.baseRefName, head) : { ok: true };
+      if (!refreshed.ok && ["base_fetch_failed", "base_not_origin_branch"].includes(refreshed.error)) throw new Error(`${refreshed.error}: ${refreshed.message ?? "origin/<base> was not refreshed"}`);
+      growth = { wholeLogicLoc: (await evaluateSize({ base: `origin/${context.prData?.baseRefName}`, head, repoRoot })).wholeLogicLoc };
+    } catch (error) { growthReadError = error?.message ?? String(error); }
   }
   const effective = await effectiveRounds(logs, { prBase: context.prData?.baseRefName, repoRoot });
   const effectiveLatest = effective.at(-1);
@@ -1700,11 +1705,13 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const draftRoundRefused = context.prData?.isDraft === true
     && await countCapRounds(draftRound, { repoRoot, prBase: prBaseRefName, includeLiveCurrentHead: true })
       .then((round) => refusesPastScopedRound(draftRound, { repoRoot, prBase: prBaseRefName, cap: draftGateConfig.maxReviewRounds ?? 0, round, includeLiveCurrentHead: true }), () => false);
-  const draftOpenActList = context.prData?.isDraft === true
-    ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0 }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
-    : null;
   let capBrakesError = null;
-  const capBrakes = await resolveCapBrakes(context, { repoRoot, config, operatorFocusFile }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; capBrakesError = error; return null; });
+  const baseRefresher = runtime.checkBaseFreshness ?? (runtime.runChild ? null : checkBaseFreshness);
+  const refreshBase = baseRefresher ? (base, head) => baseRefresher({ base, head, cwd: repoRoot, env: runtime.env ?? process.env, trusted: true }).catch(() => ({ ok: false, error: "base_fetch_failed" })) : null;
+  const capBrakes = await resolveCapBrakes(context, { repoRoot, config, operatorFocusFile, evaluateSize: runtime.evaluateSize, refreshBase }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; capBrakesError = error; return null; });
+  const draftOpenActList = context.prData?.isDraft === true
+    ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0, operatorCleared: capBrakes?.operatorCleared === true }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
+    : null;
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,

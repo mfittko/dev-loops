@@ -2245,8 +2245,8 @@ export async function capFixBudgetFacts({ fromHead, headSha, prBase, repoRoot, r
   // An empty PR-own delta is refused later with its own reason (closure_delta_no_pr_own_change).
   if (own.changedFiles.length === 0) return { logicLoc: 0, addedFiles: 0 };
   // The delta starts at fromHead merged with the current base, so what a base merge brought is not a fix; a failed merge-tree (exit 128 or older git) keeps fromHead, an over-count.
-  const mergedBase = await runGit(["merge-base", headSha, `origin/${prBase}`], { repoRoot });
-  const virtual = mergedBase.code === 0 ? await runGit(["merge-tree", "--write-tree", "--no-messages", fromHead, mergedBase.stdout.trim()], { repoRoot }) : { code: 128 };
+  const mergedBase = await runGit(["merge-base", headSha, `origin/${prBase}`], { repoRoot, timeout: 30_000 });
+  const virtual = mergedBase.code === 0 ? await runGit(["merge-tree", "--write-tree", "--no-messages", fromHead, mergedBase.stdout.trim()], { repoRoot, timeout: 30_000 }) : { code: 128 };
   const from = virtual.code === 0 || virtual.code === 1 ? virtual.stdout.split("\n")[0].trim() || fromHead : fromHead;
   const { wholeLogicLoc } = await evaluatePrSizeBudget({ base: from, head: headSha, repoRoot, paths: own.changedFiles, twoDot: true });
   const added = await runGit(["diff", "--name-status", "--diff-filter=A", `${from}..${headSha}`, "--", ...own.changedFiles], { repoRoot });

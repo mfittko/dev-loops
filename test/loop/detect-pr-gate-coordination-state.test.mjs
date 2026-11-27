@@ -4542,8 +4542,9 @@ async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, f
     { stdout: jsonLine({ headRefOid: headSha }) },
     { stdout: jsonLine([[{ id: 11, body: draftGateBody, html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }]]) },
     { stdout: "[]\n" },
-    ...(linkedIssueBody === undefined ? [] : [{ assertArgs: ["issue", "view", "900", "--repo", "owner/repo", "--json", "body"], stdout: JSON.stringify({ body: linkedIssueBody }) + "\n" }]),
     { assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: "\n" },
+    // The detector reads the review-request status before the linked issue body.
+    ...(linkedIssueBody === undefined ? [] : [{ assertArgs: ["issue", "view", "900", "--repo", "owner/repo", "--json", "body"], stdout: JSON.stringify({ body: linkedIssueBody }) + "\n" }]),
   ]);
 }
 
@@ -5632,6 +5633,50 @@ test("a linked issue without a forecast line sets capBrakesWarning naming the is
   }
 });
 
+// Issue 3464 AC5: the linked issue's `## Size forecast` lines reach resolveCapBrakes through the detector, which stops at twice the largest forecast wloc.
+async function detectWithForecast({ evaluateSize, checkBaseFreshness }) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-cap-brakes-growth-"));
+  try {
+    initGitFixture(tempDir, { branch: "main" });
+    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1 }));
+    const headSha = "abc1234567".repeat(4);
+    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findings, { recursive: true });
+    await writeSealed(path.join(findings, `draft_gate-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha, verdict: "findings_present", loggedAt: "2026-11-16T00:00:00.000Z", findings: [{ severity: "medium", summary: "x", file: "src/x.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix x" }] }));
+    const issueBody = "## Acceptance criteria\n\n- [ ] Round count resets on new head\n\n## AC / DoD matrix\n\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the round count resets on a new head | a focused test proves the reset on a new head |\n\n## Non-goals\n\n- None.\n\n## Simplest design\n\nMinimal.\n\n## Size forecast\n\n- forecast: slice=1 wloc=120 files=a.mjs\n- forecast: slice=2 wloc=380 files=b.mjs\n";
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body, linkedIssueBody: issueBody });
+    return await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, evaluateSize, ...(checkBaseFreshness ? { checkBaseFreshness } : {}) }));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("a linked issue forecast of wloc 120 and 380 stops the lane at wholeLogicLoc 761 with growth_past_forecast and does not stop at 760", async () => {
+  const stopped = await detectWithForecast({ evaluateSize: async () => ({ wholeLogicLoc: 761 }) });  assert.equal(stopped.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(stopped.reason, /growth_past_forecast: wholeLogicLoc 761 is above 2 times the forecast wloc 380/);
+  const atThreshold = await detectWithForecast({ evaluateSize: async () => ({ wholeLogicLoc: 760 }) });
+  assert.notEqual(atThreshold.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, atThreshold.reason);
+  assert.doesNotMatch(atThreshold.reason, /growth_past_forecast/);
+});
+
+test("the growth read refreshes origin/<base> first: a stale ref that reads 761 does not stop once the fetch refreshed it, and a failed fetch leaves the limit unevaluated", async () => {
+  const calls = [];
+  let fresh = false;
+  const refreshed = await detectWithForecast({
+    checkBaseFreshness: async ({ base }) => { calls.push(`fetch ${base}`); fresh = true; return { ok: true, status: "base_current", base }; },
+    evaluateSize: async () => { calls.push("size"); return { wholeLogicLoc: fresh ? 700 : 761 }; },
+  });
+  assert.deepEqual(calls, ["fetch main", "size"]);
+  assert.doesNotMatch(refreshed.reason, /growth_past_forecast/);
+  const failed = await detectWithForecast({
+    checkBaseFreshness: async () => ({ ok: false, error: "base_fetch_failed", message: "network down" }),
+    evaluateSize: async () => { throw new Error("the size read must not run after a failed fetch"); },
+  });
+  assert.match(failed.capBrakesWarning, /the growth limit could not be evaluated \(base_fetch_failed: network down\)/);
+  assert.doesNotMatch(failed.reason, /growth_past_forecast/);
+});
+
 test("detectPrGateCoordinationState forwards --operator-focus-file into the cap brakes: a full file clears the non_convergence stop", async () => {
   const stopped = await detectWithPriorLedger("x", { repeatPrior: true });
   assert.equal(stopped.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
@@ -5671,7 +5716,7 @@ test("an operator focus file deciding every act fingerprint clears the scoped-fi
   const stopped = await detectPastScopedRound({ withFocusFile: false });
   assert.equal(stopped.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
   const cleared = await detectPastScopedRound({ withFocusFile: true });
-  assert.notEqual(cleared.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, cleared.reason);
+  assert.equal(cleared.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, cleared.reason);  assert.match(JSON.stringify(cleared.agentRemedy), /emit-fixer-work-order\.mjs.* --operator-focus-file <operator focus file>/);
 });
 
 test("a cap-brakes read that throws a non-tamper error sets capBrakesWarning and keeps the route", async () => {
