@@ -67,7 +67,7 @@ SLUG="$(echo "$R" | tr / -)"; G="$W/tmp/gate-context/$SLUG/pr-$N"; F="$W/tmp/gat
 A="$W/tmp/gate-judge/$SLUG/pr-$N/$GATE-$H"; mkdir -p "$F" "$A"
 \`\`\`
 
-Operator focus (GATE-EXEC-OPERATOR-FOCUS). \`FOCUS\` is the file the arguments name, else \`$F/focus.json\` holding \`{ "round": "<text>" }\`, else none. Round text plus a named file with no \`round\` field: stop, hand back the conflict. Step 3: \`draft_gate\`, \`pre_approval_gate\` only.
+Operator focus (GATE-EXEC-OPERATOR-FOCUS). \`FOCUS\` is the named file, else \`$F/focus.json\` holding \`{ "round": "<text>" }\`, else none. Round text plus a named file whose \`round\` is absent or differs: stop, hand back the conflict. Step 3: \`draft_gate\`, \`pre_approval_gate\` only.
 
 ## Steps
 

@@ -369,7 +369,7 @@ test("issue 3590: one FOCUS file feeds steps 3, 7 and 11", () => {
   for (const [from, to] of [["\n3. Context", "\n4. Spec identity"], ["\n7. Emit", "\n8. Waves"], ["\n11. Judge work order", "\n12. Dispatch the judge"]]) {
     assert.match(runbook.slice(runbook.indexOf(from), runbook.indexOf(to)), /--operator-focus-file "\$FOCUS"/, from);
   }
-  assert.match(runbook, /named file with no `round` field: stop, hand back the conflict/);
+  assert.match(runbook, /named file whose `round` is absent or differs: stop, hand back the conflict/);
   assert.equal(runbook.split("No `FOCUS`: omit it.").length - 1, 3);
   assert.doesNotMatch(runbook, /decision file/);
   assert.match(runbook, /`\$F\/focus.json` holding `\{ "round": "<text>" \}`/);
