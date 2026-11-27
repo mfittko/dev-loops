@@ -159,7 +159,7 @@ deterministic checks live in `@dev-loops/core/loop/pre-push-delta-review`; the
 dev-loop coordinator runs them through `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta`.
 
 The dev-loop coordinator owns delta mode, because it dispatches the Phase 4
-fixer and owns the push. The sequence is:
+fixer and owns the push. The sequence below is the retired `commit_only` route, which the later slices of issue 2937 delete; a gate fix pass now emits a full order (ADR 0336):
 
 1. The dev-loop coordinator emits a `commit_only` fixer work order from the act
    list with the invocation in
@@ -209,7 +209,7 @@ fixer and owns the push. The sequence is:
    head; the coordinator returns to step 2 without a fixer.
    When the `--result` check refuses a `locally_clear` result only for unaddressed stale-surface hits, the refusal arrives as `nextStep: fix_and_rereview` when the result is fresh and the invocation is below the bound (`DELTA_MAX_INVOCATIONS`). At the bound the refusal is `bounded_out` with `nextStep: push_to_gate` and step 4 applies, and a stale result follows the `rereview_current_head` rule. The case is identified when every `errors[]` entry starts with the `PRE-PUSH-DELTA-RESULT: locally_clear leaves stale-surface hits unaddressed` text. For that case this rule overrides the `fix_and_rereview` fixer dispatch of the previous sentence: the owner of the next action is the delta reviewer. The coordinator re-dispatches a fresh delta reviewer with a re-review demand to clear each hit with a `newFindings[]` entry that names its file; a skipped `siteCoverage[]` site counts only when the original fixer handback already records it. It then re-runs the `--result` check with the next invocation, keeping the original canonical `fixer-emit-plan.json` as `--fixer-plan` and the original fixer's handback as `--site-coverage`. A keyed `planPath` from a same-head re-emission, and that emission's no-commit handback, never feed step 2 or the no-commit close below. A fixer is dispatched only when the result names a fix to make. When a keyed fixer commits, HEAD moves past the original handback, and the exit is a canonical `commit_only` re-emission without `--delta-result`.
 4. On `nextStep: push` (`locally_clear`) or `nextStep: push_to_gate`
-   (`bounded_out`), it emits a `full` work order with `--delta-result <result>`
+   (`bounded_out`), it emits a `full` work order
    and dispatches the fixer to push the candidate and wait for CI. The fixer writes no handoff
    and posts no reply. `verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <plan> --construct`
    writes the handoff to the work order's outputRef, and the same command without `--construct` then replies to each
@@ -221,14 +221,13 @@ fixer and owns the push. The sequence is:
    residual threads `tackled`; its handoff disposition records them as
    `deferred`. In a full-phase order, the verifier's `--construct` step writes that
    `deferred` entry and its normal step posts the residual reply. On the thread route the emitter attaches the head's delta record
-   as a `delta-result` required read to the work order when a delta record exists for the head (always in the `full` phase; the
-   `--delta-result` flag stays refused for thread sources), so this residual-thread
+   as a `delta-result` required read to the work order when a delta record exists for the head (a retired `commit_only` route read), so this residual-thread
    rule applies to thread sources through that read.
 
    A round in which the `commit_only` fixer makes no commit writes a minimal baseline-headed
    handback at its outputRef. The coordinator still runs step 2 with the plan and handback
    to authenticate `no_commit` closure. No delta reviewer runs and no delta decision record is
-   written, and `--phase full` stays refused. The coordinator then posts each declined or deferred
+   written, and a full emission is the normal gate fix path. The coordinator then posts each declined or deferred
    thread reply directly with `reply-resolve-review-thread.mjs --disposition rejected|deferred` at the unchanged head. That
    helper refuses only a `fixed` reply, so no full-phase refusal is bypassed. The fixer's `handbackCheck` does not apply to a
    no-commit handback. When a `commit_only` fixer hands back with no commit, the coordinator runs the no-commit close of step 2 (`check-pre-push-delta.mjs` input-only with `--fixer-plan` and `--site-coverage`, outcome `no_commit`), which removes the sequence marker. No marker needs hand deletion.

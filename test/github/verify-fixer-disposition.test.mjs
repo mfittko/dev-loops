@@ -38,8 +38,8 @@ const PR = 1975;
 const HEAD_SHA = "a".repeat(40);
 const FIX_SHA = "b".repeat(40);
 const initialHistories = new Map(), completionHistories = new Map(), legacyHistory = {}, priorEmitter = {};
-// The verifier's completion path (removed by issue 2937 slice D4) consumes the delta-bound full order that the emitter stopped
-// producing in slice D1. The fixtures build that order with the emitter as it was on the commit before D1.
+// The verifier's completion path (a later deletion) consumes the delta-bound full order that the emitter no longer
+// produces. The fixtures build that order with the emitter as it was on the commit before that change.
 const PRIOR_EMITTER_COMMIT = "6baeb4ab72917690d635b01c965f52bf3bb6f898";
 const priorEmitFixerWorkOrder = (options) => {
   priorEmitter.ready ??= (async () => {

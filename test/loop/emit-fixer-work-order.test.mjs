@@ -195,7 +195,7 @@ async function withFixture(fn) {
       const restore = await syncRecordItems(over);
       try { return await emitRaw(over); } finally { await restore(); }
     };
-    // The full phase has no delta review: one full emission at the PR head (issue 2937 D1).
+    // The full phase has no delta review: one full emission at the PR head.
     const prepareFull = async ({ allowedPaths = [], emitter = emit } = {}) => ({
       candidate: head,
       full: (over = {}) => emitter({ phase: "full", deltaResult: undefined, allowedPaths, ...over }),
