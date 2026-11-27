@@ -6,7 +6,7 @@ import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 import { gateScopePrefix } from "./_gate-names.mjs";
 import { sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { HUMAN_SPEC_DECISION_OUTCOME } from "@dev-loops/core/loop/spec-authority";
-import { buildGateArtifactPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
+import { buildGateArtifactPath, buildGateEmitPlanPath,buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
 
 // Only a missing path is absent. Any other error (EACCES, ENOTDIR, EIO) could hide a verdict or a live round, so it propagates and the caller fails closed.
 const exists = (file) => access(file).then(() => true, (err) => {
