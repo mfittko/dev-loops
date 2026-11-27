@@ -630,7 +630,7 @@ test("#2381: the refusal text for an open defect (non-question) thread names the
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
     assert.equal(result.code, 1);
-    assert.match(result.stderr, /1 open defect thread\(s\).*fixer fix-close.*rerun close-gate-findings once the judge has deferred/i);
+    assert.match(result.stderr, /1 open defect thread\(s\).*rerun close-gate-findings at the next gate round once the judge has deferred.*fixed-act close/i);
     assert.doesNotMatch(result.stderr, /question thread\(s\)/i);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -651,7 +651,7 @@ function nitThreadNode({ commentId = 9003, fp = "7".repeat(16) } = {}) {
 
 // Copilot review (PR 2402): a nit is never a fixer target — the refusal
 // text must name close-gate-findings' unconditional resolve-with-rationale
-// remedy, never the fixer fix-close/defer-close text (that only applies to
+// remedy, never the defect text naming the fixed-act close (that only applies to
 // high/medium/low and cannot clear a nit).
 test("#2381: the refusal text for an open nit thread names the close-gate-findings unconditional-resolve remedy, distinct from the defect and question remedies", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-2381-nit-reason-"));
@@ -717,7 +717,7 @@ test("describeUnresolvedGateThreadReasons: names all three remedies when all buc
   assert.doesNotMatch(all, /question the judge deferred/);
   assert.match(all, /disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied, is closed by a close-gate-findings rerun, and any other judge-disposed act question is resolved by the fixer's own answer-and-resolve path/);
   assert.match(all, /an unjudged or act nit needs the fixer or a judge rerun, except a pr_body act thread, which close-gate-findings closes after the PR-body edit once the live body digest differs/);
-  assert.match(all, /an unjudged or act thread needs the fixer or a judge rerun, except a pr_body act thread/);
+  assert.match(all, /an unjudged thread needs a judge rerun, except a pr_body act thread/);
   assert.doesNotMatch(all, /left undisposed/);
   const fallback = describeUnresolvedGateThreadReasons({ question: 0, nit: 0, other: 0 }, 5);
   assert.match(fallback, /5 unresolved gate-authored review thread\(s\)/);

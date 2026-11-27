@@ -996,7 +996,7 @@ export async function resolveDraftGateAdjustedRoundCount({ repo, pr, currentHead
  * `dev-loops:finding` marker (any severity). This is the gate-close predicate
  * (GATE-EXEC-FINDING-THREADS) fetchDraftGateEvidence wires in: a clean verdict alone no longer
  * satisfies the gate — every gate-authored thread must be resolved
- * (fix-closed by the fixer, or defer-closed by the disposition pass) first.
+ * (closed by the disposition pass: defer, reject, fixed-act, evidence-only or PR-body act) first.
  *
  * When `login` is `null`, the author-identity check is skipped and the count
  * is MARKER-ONLY (any unresolved thread carrying a finding marker) — a

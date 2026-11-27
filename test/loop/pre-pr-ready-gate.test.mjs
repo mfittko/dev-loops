@@ -363,18 +363,18 @@ test("#1584 reproduction: a draft_gate with a clean verdict + an unresolved nice
   assert.match(stderrParsed.error, /unresolved gate-authored review thread/i);
   assert.match(stderrParsed.error, /close-gate-findings/);
   // dod:5 (raw `gh pr ready` path): a DEFECT (non-question) thread must be
-  // named by the fixer fix-close/defer-close remedy, never the question
+  // named by the next-round fixed-act close remedy, never the question
   // remedy text — the old assertion above (matching only /close-gate-findings/)
   // could not tell the two apart, since the question remedy text also
   // contains that substring.
-  assert.match(stderrParsed.error, /1 open defect thread\(s\).*fixer fix-close.*rerun close-gate-findings once the judge has deferred/i);
+  assert.match(stderrParsed.error, /1 open defect thread\(s\).*rerun close-gate-findings at the next gate round once the judge has deferred.*fixed-act close/i);
   assert.doesNotMatch(stderrParsed.error, /question thread\(s\)/i);
 });
 
 // A question finding thread authored by the gate's own login, unresolved,
 // answered by no one — the raw `gh pr ready` path must name the SAME
 // question-specific remedy ready-for-review.mjs's own refusal names (ADR
-// 0088), never the generic defect (fixer fix-close/defer-close) text, which
+// 0088), never the generic defect (fixed-act close) text, which
 // cannot clear a question thread at all.
 function questionThreadNode({ fp = "9".repeat(16), commentId = 9002, id = "THREAD_Q" } = {}) {
   return {
@@ -427,7 +427,7 @@ function nitThreadNode({ fp = "7".repeat(16), commentId = 9003, id = "THREAD_NIT
 
 // Copilot review (PR 2402): a nit is never a fixer target — the raw
 // `gh pr ready` path must name close-gate-findings' unconditional
-// resolve-with-rationale remedy, never the fixer fix-close/defer-close text
+// resolve-with-rationale remedy, never the defect text naming the fixed-act close
 // that only applies to high/medium/low (a nit can never be cleared by it).
 test("#2381: the raw `gh pr ready` path names the nit-specific close-gate-findings remedy for an unresolved nit thread, distinct from the defect and question remedies", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-2381-nit-repro-"));

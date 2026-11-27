@@ -59,7 +59,7 @@ test("GATE-EXEC-THREAD-DISPOSITION states the act-thread exclusion and that a ga
     ["current round's ledger", "decides first"],
     ["prior local ledgers", "decide"],
     ["Only a reject", "judge: <disposition>", "a defer needs ledger evidence"],
-    ["`act`", "no stamp", "no reply", "no resolve", "no deferral comment entry", "fixed-act close", "decline reason", "judge rerun"],
+    ["`act`", "no stamp", "no reply", "no resolve", "no deferral comment entry", "fixed-act close", "judge rerun"],
     ["A gate fix pass", "posts no reply", "resolves no thread"],
     ["`close-gate-findings.mjs`", "closes a gate-authored judge `act` thread", "evidence-only", "PR-body act close"],
   ], "GATE-EXEC-THREAD-DISPOSITION");
@@ -74,7 +74,7 @@ test("the judge-pass paragraph names the comment target, the act-thread exclusio
   assertClaims(paragraph, [
     ["`judge-pass`", "never creates an issue"],
     ["linked spec issue", "the PR itself"],
-    ["`act`", "never defer-closed", "fixer", "decline reason", "`GATE-EXEC-THREAD-DISPOSITION`"],
+    ["`act`", "never defer-closed", "judge rerun", "`GATE-EXEC-THREAD-DISPOSITION`"],
   ], "judge-pass deferral paragraph");
   assert.doesNotMatch(paragraph, /ensureFollowUpIssue|createIssue/);
 });
