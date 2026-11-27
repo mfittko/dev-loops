@@ -225,13 +225,13 @@ const CI_RED_HANDBACK = "hand back `ci_failed` with the failing check names";
 const CI_UNSETTLED_HANDBACK = "hand back `ci_pending` (`ci_unknown` when the checks cannot be read)";
 
 // The push, remote-head, CI-wait and one-line-handoff steps that end a ci-failure order, a gate fix order and a delivery-only order.
-function pushWaitHandoffSteps(workOrder, dispositionPath, push, replyStep = null) {
+function pushWaitHandoffSteps(workOrder, dispositionPath, push) {
   const { branch, wait } = branchAndWait(workOrder);
   return `Do these steps in this order; none may be skipped or reordered:
 1. ${push}
 2. Confirm the remote head equals the pushed commit: run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}; it must print the pushed commit SHA. If it does not, stop and report.
 3. Run \`${wait}\`. ${WAIT_STEP_RULES} If CI is red (\`failure\`), ${CI_RED_HANDBACK}. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, ${CI_UNSETTLED_HANDBACK}.
-${replyStep ? `4. Only when CI is green, ${replyStep}\n5.` : "4."} Only when CI is green, write the handoff \`{ "headSha": "<full pushed SHA>" }\` to \`${dispositionPath}\` with the Write tool. This is the last step.
+4. Only when CI is green, write the handoff \`{ "headSha": "<full pushed SHA>" }\` to \`${dispositionPath}\` with the Write tool. This is the last step.
 Edit rule: write file content only with the Edit and Write tools. Never write file content through Bash (heredoc, redirect, \`sed -i\`, or cp/mv onto a tracked file).`;
 }
 
@@ -243,14 +243,11 @@ function ciFailureFullTask(workOrder, dispositionPath) {
 ${pushWaitHandoffSteps(workOrder, dispositionPath, `Commit the fixes and push them to branch ${JSON.stringify(workOrder.mutationAuthority.branch)}.`)}`;
 }
 
-// A Copilot or human thread has no gate marker, so the fixer that knows each outcome posts the replies (the verifier posts none on this route).
-const THREADS_REPLY_STEP = "run `reply-resolve-review-thread.mjs --comment-id <n> --thread-id <id> --body-file <path> --disposition <fixed|deferred|rejected>` once per thread in the order, with that thread's own disposition: `fixed` citing the full pushed head SHA for a thread you fixed; `rejected` or `deferred` for a thread you declined (and for every thread after a full decline, which has no commit to cite).";
-
 // A gate fix pass (an act list or the unresolved threads) pushes in the full phase and ends like a ci-failure order: the next gate round judges the fix at the pushed head.
 function gateFixFullTask(workOrder, dispositionPath) {
   const read = workOrder.requiredReads.find((entry) => entry.kind === workOrder.source);
-  return `Fix every item the \`${workOrder.source}\` read (${JSON.stringify(read.path)}) names, per agents/fixer.agent.md.${workOrder.source === "threads" ? threadsReadSentence(workOrder) : ""} ${workOrder.source === "threads" ? "Reply to each thread only at step 4 below" : "Post no thread reply and resolve no thread"}: the next gate round judges the fix at the pushed head. When you decline every item and make no commit, run no CI wait and no push: ${workOrder.source === "threads" ? "post the step 4 \`rejected\` or \`deferred\` replies, then " : ""}write the \`{ "headSha": "<unchanged head SHA>" }\` handoff.
-${pushWaitHandoffSteps(workOrder, dispositionPath, `Commit the fixes and push them to branch ${JSON.stringify(workOrder.mutationAuthority.branch)}.`, workOrder.source === "threads" ? THREADS_REPLY_STEP : null)}`;
+  return `Fix every item the \`${workOrder.source}\` read (${JSON.stringify(read.path)}) names, per agents/fixer.agent.md.${workOrder.source === "threads" ? threadsReadSentence(workOrder) : ""} Post no thread reply and resolve no thread: the next gate round judges the fix at the pushed head. When you decline every item and make no commit, run no CI wait and no push: write the \`{ "headSha": "<unchanged head SHA>" }\` handoff.
+${pushWaitHandoffSteps(workOrder, dispositionPath, `Commit the fixes and push them to branch ${JSON.stringify(workOrder.mutationAuthority.branch)}.`)}`;
 }
 
 // The numbered full-phase steps (issue 2787 C1): push, confirm the remote head, wait for CI, --construct, verify, --check.
@@ -285,7 +282,7 @@ export function renderWorkOrder(workOrder) {
   const [dispositionPath] = workOrder.outputRefs;
   if (workOrder.operation === "complete") {
     const root = path.dirname(path.dirname(workOrder.executionRules.contract));
-    const task = `${pushWaitHandoffSteps(workOrder, dispositionPath, `Stop and report when the local HEAD is not ${workOrder.candidateHead}. Otherwise push that commit to branch ${JSON.stringify(workOrder.mutationAuthority.branch)} with this command (the refspec is shell-quoted because the branch name is PR-supplied):\n\`\`\`sh\ngit push origin ${shellQuote(`${workOrder.candidateHead}:refs/heads/${workOrder.mutationAuthority.branch}`)}\n\`\`\`\nWhen the remote head already equals ${workOrder.candidateHead}, push nothing.`, workOrder.source === "threads" ? THREADS_REPLY_STEP : null)}\nDo not read the source again or take on unrelated live threads.`;
+    const task = `${pushWaitHandoffSteps(workOrder, dispositionPath, `Stop and report when the local HEAD is not ${workOrder.candidateHead}. Otherwise push that commit to branch ${JSON.stringify(workOrder.mutationAuthority.branch)} with this command (the refspec is shell-quoted because the branch name is PR-supplied):\n\`\`\`sh\ngit push origin ${shellQuote(`${workOrder.candidateHead}:refs/heads/${workOrder.mutationAuthority.branch}`)}\n\`\`\`\nWhen the remote head already equals ${workOrder.candidateHead}, push nothing.`)}\nDo not read the source again or take on unrelated live threads.`;
     return `# Fixer delivery-only work order (ADR 0106)
 
 Operation: complete. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.
