@@ -1707,7 +1707,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
       .then((round) => refusesPastScopedRound(draftRound, { repoRoot, prBase: prBaseRefName, cap: draftGateConfig.maxReviewRounds ?? 0, round, includeLiveCurrentHead: true }), () => false);
   let capBrakesError = null;
   const baseRefresher = runtime.checkBaseFreshness ?? (runtime.runChild ? null : checkBaseFreshness);
-  const refreshBase = baseRefresher ? (base, head) => baseRefresher({ base, head, cwd: repoRoot, env: runtime.env ?? process.env, trusted: true }).catch(() => ({ ok: false, error: "base_fetch_failed" })) : null;
+  const refreshBase = baseRefresher ? (base, head) => baseRefresher({ base, head, cwd: repoRoot, env: runtime.env ?? process.env, trusted: true }).catch(() => ({ ok: false, error: "base_fetch_failed", recovery: "retry the detector; fix the network or git remote access if the fetch keeps failing" })) : null;
   const capBrakes = await resolveCapBrakes(context, { repoRoot, config, operatorFocusFile, evaluateSize: runtime.evaluateSize, refreshBase }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; capBrakesError = error; return null; });
   const draftOpenActList = context.prData?.isDraft === true
     ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0, operatorCleared: capBrakes?.operatorCleared === true }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
