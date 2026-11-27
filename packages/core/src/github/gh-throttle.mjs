@@ -16,7 +16,7 @@ import { mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { SECONDARY_RATE_LIMIT_BACKOFF_MS, isSecondaryRateLimitError, rateLimitedError } from "./gh.mjs";
+import { SECONDARY_RATE_LIMIT_BACKOFF_MS, isGhTransportError, isSecondaryRateLimitError, rateLimitedError } from "./gh.mjs";
 import { GH_STUB_ATTESTATION_ENV } from "./test-mode-write-guard.mjs";
 
 export const DEFAULT_GH_MIN_INTERVAL_MS = 500;
@@ -221,7 +221,8 @@ export function ghExecFileSync(command, args, options, { execFile = execFileSync
     return attempt();
   } catch (error) {
     // stderr only: error.message carries the whole argv, so argument text must not read as a limit.
-    if (!isSecondaryRateLimitError(String(error.stderr ?? ""))) throw error;
+    const stderr = String(error.stderr ?? "");
+    if (!isSecondaryRateLimitError(stderr) && !isGhTransportError(stderr)) throw error;
   }
   backoff(SECONDARY_RATE_LIMIT_BACKOFF_MS);
   try {

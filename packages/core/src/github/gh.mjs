@@ -75,18 +75,25 @@ function isSecondaryLimited(outcome) {
   return outcome?.code !== 0 && isSecondaryRateLimitError(String(outcome?.stderr ?? ""));
 }
 
+function isTransportFailed(outcome) {
+  if (outcome instanceof Error) return isGhTransportError(outcome.stderr);
+  return outcome?.code !== 0 && isGhTransportError(outcome?.stderr);
+}
+
 /**
  * Backoff for a direct async gh site that captures stderr. `attempt` takes a
  * slot and runs gh once, either throwing an error that carries the gh stderr or
  * resolving `{ code, stderr }`. A secondary rate limit backs off once and
- * retries, and a second one throws RATE_LIMITED. Streaming sites that inherit
+ * retries, and a second one throws RATE_LIMITED. A pre-send transport failure
+ * retries the same way, and a second one rethrows the original error. Streaming sites that inherit
  * stderr cannot see the limit and stay paced only.
  */
 export async function withSecondaryLimitBackoff(attempt, { sleep = realSleep } = {}) {
   const settle = async () => { try { return { value: await attempt() }; } catch (error) { return { error }; } };
   const unwrap = ({ value, error }) => { if (error) throw error; return value; };
   let outcome = await settle();
-  if (!isSecondaryLimited(outcome.error ?? outcome.value)) return unwrap(outcome);
+  const first = outcome.error ?? outcome.value;
+  if (!isSecondaryLimited(first) && !isTransportFailed(first)) return unwrap(outcome);
   await sleep(SECONDARY_RATE_LIMIT_BACKOFF_MS);
   outcome = await settle();
   if (isSecondaryLimited(outcome.error ?? outcome.value)) {
@@ -246,6 +253,11 @@ export function isRateLimitError(error) {
 export function isSecondaryRateLimitError(error) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   return /secondary rate limit/i.test(message);
+}
+
+// A failure before the request reaches GitHub (dial or TLS handshake timeout), so a retry cannot repeat a mutation.
+export function isGhTransportError(stderr) {
+  return /dial tcp [^\n]*i\/o timeout|TLS handshake timeout/i.test(String(stderr ?? ""));
 }
 
 // Sanity bound: a GraphQL reset further ahead than this is a bogus reading.

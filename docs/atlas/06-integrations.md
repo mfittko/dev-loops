@@ -173,7 +173,7 @@ flowchart TD
 
 Type: `sequenceDiagram`
 
-The diagram shows the shared GraphQL path. `ghGraphql` spawns `gh api graphql` and maps failures to `GH_API_ERROR` (non-zero exit) or `GRAPHQL_ERROR` (an `errors` array). A secondary rate limit makes `ghGraphql` back off 30 seconds and retry once, and a second one throws `RATE_LIMITED`. `withGraphqlRateLimitWait` acts only when the error message matches `isRateLimitError`; every other error is rethrown unchanged. It reads the GraphQL reset from `gh api rate_limit`, which spends no GraphQL points, sleeps once and retries once. It fails closed with `RATE_LIMITED` when budget remains (a REST or secondary limit) or when the reset is unknown, past, beyond `maxWaitMs` or more than 24 hours ahead. Derived from `packages/core/src/github/gh.mjs`.
+The diagram shows the shared GraphQL path. `ghGraphql` spawns `gh api graphql` and maps failures to `GH_API_ERROR` (non-zero exit) or `GRAPHQL_ERROR` (an `errors` array). A secondary rate limit or a pre-send transport failure (dial or TLS handshake timeout) makes `ghGraphql` back off 30 seconds and retry once, and a second one throws `RATE_LIMITED`. `withGraphqlRateLimitWait` acts only when the error message matches `isRateLimitError`; every other error is rethrown unchanged. It reads the GraphQL reset from `gh api rate_limit`, which spends no GraphQL points, sleeps once and retries once. It fails closed with `RATE_LIMITED` when budget remains (a REST or secondary limit) or when the reset is unknown, past, beyond `maxWaitMs` or more than 24 hours ahead. Derived from `packages/core/src/github/gh.mjs`.
 
 ```mermaid
 sequenceDiagram

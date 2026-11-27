@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll, beforeEach, describe, test } from "bun:test";
 
 import { runChild, runCommand } from "../src/cli/primitives.mjs";
-import { ghCommandFailed, ghJson, ghGraphql, isRateLimitError, isSecondaryRateLimitError, rateLimitedResult, resolveOwner, SECONDARY_RATE_LIMIT_BACKOFF_MS, withGraphqlRateLimitWait, withSecondaryLimitBackoff } from "../src/github/gh.mjs";
+import { ghCommandFailed, ghJson, ghGraphql, isGhTransportError, isRateLimitError, isSecondaryRateLimitError, rateLimitedResult, resolveOwner, SECONDARY_RATE_LIMIT_BACKOFF_MS, withGraphqlRateLimitWait, withSecondaryLimitBackoff } from "../src/github/gh.mjs";
 import { GRAPHQL_RATE_LIMIT_MAX_WAIT_MS } from "../src/loop/policy-constants.mjs";
 
 function stubRunChild(result) {
@@ -495,6 +495,26 @@ describe("secondary rate limit backoff", () => {
     await assert.rejects(() => withSecondaryLimitBackoff(async () => { runs += 1; return limited; }, opts), { code: "RATE_LIMITED" });
     assert.equal(runs, 2);
     await assert.rejects(() => withSecondaryLimitBackoff(async () => { throw new Error("not found"); }, opts), { message: "not found" });
+  });
+
+  test("isGhTransportError matches pre-send dial and TLS timeouts only", () => {
+    assert.ok(isGhTransportError('Post "https://api.github.com/graphql": dial tcp 140.82.112.6:443: i/o timeout'));
+    assert.ok(isGhTransportError("net/http: TLS handshake timeout"));
+    for (const stderr of ["read: connection reset by peer", "HTTP 502: Bad Gateway", "HTTP 404: Not Found", ""]) assert.ok(!isGhTransportError(stderr));
+  });
+
+  test("withSecondaryLimitBackoff retries a transport failure once and rethrows the original after a second", async () => {
+    const sleeps = [];
+    const opts = { sleep: async (ms) => { sleeps.push(ms); } };
+    const transport = () => Object.assign(new Error("Command failed"), { stderr: "dial tcp 140.82.112.6:443: i/o timeout" });
+    let runs = 0;
+    assert.equal(await withSecondaryLimitBackoff(async () => { runs += 1; if (runs === 1) throw transport(); return "ok"; }, opts), "ok");
+    assert.equal(runs, 2);
+    assert.deepEqual(sleeps, [30000]);
+    runs = 0;
+    const original = transport();
+    await assert.rejects(() => withSecondaryLimitBackoff(async () => { runs += 1; throw original; }, opts), (error) => error === original && error.code !== "RATE_LIMITED");
+    assert.equal(runs, 2);
   });
 
   test("withSecondaryLimitBackoff reads a thrown error's stderr only when it has one: accepted and rejected forms", async () => {
