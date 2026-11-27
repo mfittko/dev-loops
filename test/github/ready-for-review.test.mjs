@@ -715,8 +715,8 @@ test("describeUnresolvedGateThreadReasons: names all three remedies when all buc
   assert.match(all, /2 open defect thread\(s\)/);
   assert.match(all, /whose judge disposition is ambiguous or unrecorded needs an operator decision/);
   assert.doesNotMatch(all, /question the judge deferred/);
-  assert.match(all, /disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied, is closed by a close-gate-findings rerun, and any other judge-disposed act question is resolved by the fixer's own answer-and-resolve path/);
-  assert.match(all, /an unjudged or act nit needs the fixer or a judge rerun, except a pr_body act thread, which close-gate-findings closes after the PR-body edit once the live body digest differs/);
+  assert.match(all, /disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied, is closed by a close-gate-findings rerun, and any other judge-disposed act question stays open until a judge rerun at the current head changes its disposition/);
+  assert.match(all, /an unjudged or act nit needs a judge rerun, except a pr_body act thread, which close-gate-findings closes after the PR-body edit once the live body digest differs/);
   assert.match(all, /an unjudged thread needs a judge rerun, except a pr_body act thread/);
   assert.doesNotMatch(all, /left undisposed/);
   const fallback = describeUnresolvedGateThreadReasons({ question: 0, nit: 0, other: 0 }, 5);

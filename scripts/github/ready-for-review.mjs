@@ -113,7 +113,7 @@ export function describeUnresolvedGateThreadReasons(breakdown, fallbackCount) {
   const reasons = [];
   if (question > 0) {
     reasons.push(
-      `${question} question thread(s): if unanswered, post a resolving answer reply, then rerun close-gate-findings — it reject-closes an answered question the judge rejected (citing the judge's rejection rationale); an answered question the judge disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied, is closed by a close-gate-findings rerun, and any other judge-disposed act question is resolved by the fixer's own answer-and-resolve path; an answered question whose judge disposition is ambiguous or unrecorded needs an operator decision`,
+      `${question} question thread(s): if unanswered, post a resolving answer reply, then rerun close-gate-findings — it reject-closes an answered question the judge rejected (citing the judge's rejection rationale); an answered question the judge disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied, is closed by a close-gate-findings rerun, and any other judge-disposed act question stays open until a judge rerun at the current head changes its disposition; an answered question whose judge disposition is ambiguous or unrecorded needs an operator decision`,
     );
   }
   if (nit > 0) {
@@ -124,7 +124,7 @@ export function describeUnresolvedGateThreadReasons(breakdown, fallbackCount) {
     // gate-fanin.mjs) — naming the fixed-act close here would send operators to
     // a remedy that cannot clear this count.
     reasons.push(
-      `${nit} open nit thread(s): rerun close-gate-findings once the judge has rejected or deferred it (or disposed it act with an evidence-only remedy); an unjudged or act nit needs the fixer or a judge rerun, except a pr_body act thread, which close-gate-findings closes after the PR-body edit once the live body digest differs`,
+      `${nit} open nit thread(s): rerun close-gate-findings once the judge has rejected or deferred it (or disposed it act with an evidence-only remedy); an unjudged or act nit needs a judge rerun, except a pr_body act thread, which close-gate-findings closes after the PR-body edit once the live body digest differs`,
     );
   }
   if (other > 0) {
