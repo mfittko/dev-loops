@@ -2195,6 +2195,7 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
     plan.workOrder.outputRefs = [path.join(path.dirname(plan.planPath), plan.executionIdentity, "fixer-disposition.json")];
     plan.promptPath = path.join(path.dirname(plan.planPath), "work-orders", `${plan.executionIdentity}.md`);
     plan.workOrder.operation = "complete";
+    plan.workOrder.candidateHead = candidate;
     if (settings.descendant) {
       // A descendant re-entry (issue 2787 C14) emits the complete order at the live head L, ahead of the candidate.
       git("commit", "-q", "--allow-empty", "-m", "ci fix");

@@ -693,6 +693,46 @@ async function runEvidenceOnlyClosePass({ repo, pr, gate, headSha, round, thread
   return { evidenceOnlyClosed, dispositionFailures };
 }
 
+// Fixed act close (GATE-EXEC-THREAD-DISPOSITION): the full-phase fix pass posts no reply and resolves no thread, so a
+// later round closes the thread of a judge-act code finding it does not raise again. Only prior-ledger act evidence counts
+// (a marker the current ledger still carries stays with the fixer), and the two remedy kinds above keep their own passes.
+async function runFixedActClosePass({ repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, allowedRefs = [] }, { env, ghCommand, runChild }) {
+  let fixedActClosed = 0;
+  const dispositionFailures = [];
+  for (const thread of threads) {
+    if (thread.isResolved || thread.author !== login) continue;
+    const marker = parseFindingMarker(thread.body);
+    if (!marker) continue;
+    const failure = (error) => dispositionFailures.push({ commentId: thread.commentId, threadId: thread.threadId, severity: marker.severity, angle: marker.angle, error: error instanceof Error ? error.message : String(error) });
+    try {
+      const fps = new Set([marker.fp]);
+      collectFingerprints(thread.body, fps);
+      let primary = null;
+      for (const memberFp of fps) {
+        if (findings.some((f) => f && findingFingerprintMatches(f, memberFp))) { primary = null; break; }
+        const prior = await findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp: memberFp });
+        if (!prior || prior.ambiguous || prior.disposition !== "act" || prior.remedyKind) { primary = null; break; }
+        primary ??= prior;
+      }
+      if (!primary) continue;
+      if (!Number.isInteger(thread.commentId) || thread.commentId <= 0) {
+        failure(`fixed act thread ${thread.threadId} has no valid root commentId (${String(thread.commentId)}); left open`);
+        continue;
+      }
+      const summary = escapeProse(extractFindingSummary(thread.body)).replace(/"/g, "'");
+      const message = `${GATE_REJECT_CLOSE_REPLY_PREFIX}round ${round}, fingerprint ${marker.fp}, severity ${marker.severity}, angle ${marker.angle}): Examined on merits: "${summary}" was accepted by the judge in an earlier round, a fix pass pushed, and the round at head ${headSha} did not raise it again.`;
+      await replyAndMaybeResolve(
+        { repo, pr, commentId: thread.commentId, threadId: thread.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
+        { env, ghCommand, runChild },
+      );
+      fixedActClosed += 1;
+    } catch (err) {
+      failure(err);
+    }
+  }
+  return { fixedActClosed, dispositionFailures };
+}
+
 // The gate context sits in the reviewed worktree while the ledger sits in the main checkout. repoRoot is the reviewed worktree, so
 // readReviewedBodySha256 keeps its guard: a digest found only in another checkout belongs to an earlier same-head round and fails closed.
 async function readRecordedBodyDigest(options, verdictHead, repoRoot) {
@@ -996,10 +1036,14 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
     { repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, ledgerPath: options.ledgerPath, currentBodySha256: ledgerBodySha256, allowedRefs: options.allowedRefs ?? [] },
     gh,
   );
-  const unresolvedGateThreadCount = countUnresolvedGateAuthoredThreads(threads, login) - deferredResolved - rejectClosed - evidenceOnlyClosed - prBodyActClosed;
-  const combinedDispositionFailures = [...(dispositionFailures ?? []), ...(rejectCloseFailures ?? []), ...evidenceOnlyFailures, ...prBodyActFailures];
+  const { fixedActClosed, dispositionFailures: fixedActFailures } = await runFixedActClosePass(
+    { repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, allowedRefs: options.allowedRefs ?? [] },
+    gh,
+  );
+  const unresolvedGateThreadCount = countUnresolvedGateAuthoredThreads(threads, login) - deferredResolved - rejectClosed - evidenceOnlyClosed - prBodyActClosed - fixedActClosed;
+  const combinedDispositionFailures = [...(dispositionFailures ?? []), ...(rejectCloseFailures ?? []), ...evidenceOnlyFailures, ...prBodyActFailures, ...fixedActFailures];
 
-  const result = { ok: true, repo, pr, gate, headSha, round, deferredResolved, rejectClosed, evidenceOnlyClosed, prBodyActClosed, unresolvedGateThreadCount, foldedFiled };
+  const result = { ok: true, repo, pr, gate, headSha, round, deferredResolved, rejectClosed, evidenceOnlyClosed, prBodyActClosed, fixedActClosed, unresolvedGateThreadCount, foldedFiled };
   // GATE-EXEC-DEFERRAL-RECORD: only present when the round had a fileable
   // deferral — the number of the comment target (linked spec issue or PR).
   if (followUpIssueNumber !== undefined) {

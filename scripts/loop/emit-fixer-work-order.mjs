@@ -282,7 +282,7 @@ export function renderWorkOrder(workOrder) {
   const [dispositionPath] = workOrder.outputRefs;
   if (workOrder.operation === "complete") {
     const root = path.dirname(path.dirname(workOrder.executionRules.contract));
-    const task = `${pushWaitHandoffSteps(workOrder, dispositionPath, `Push the committed local HEAD to branch ${JSON.stringify(workOrder.mutationAuthority.branch)} (\`git push origin HEAD:refs/heads/${workOrder.mutationAuthority.branch}\`); when the remote head already equals the local HEAD, push nothing.`)}\nDo not read the source again or take on unrelated live threads.`;
+    const task = `${pushWaitHandoffSteps(workOrder, dispositionPath, `Stop and report when the local HEAD is not ${workOrder.candidateHead}. Otherwise push that commit to branch ${JSON.stringify(workOrder.mutationAuthority.branch)} with this command (the refspec is shell-quoted because the branch name is PR-supplied):\n\`\`\`sh\ngit push origin ${shellQuote(`${workOrder.candidateHead}:refs/heads/${workOrder.mutationAuthority.branch}`)}\n\`\`\`\nWhen the remote head already equals ${workOrder.candidateHead}, push nothing.`)}\nDo not read the source again or take on unrelated live threads.`;
     return `# Fixer delivery-only work order (ADR 0106)
 
 Operation: complete. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.
@@ -374,7 +374,8 @@ async function driftedRequiredRead(order, readBytes) {
 
 /**
  * Issue 2787 C14: re-enter an incomplete full plan for delivery only. The plan, its pull receipt, its pinned reads, the source
- * bytes, the branch and the tree are authenticated first; any drift refuses before the first write. Nothing is pushed or granted.
+ * bytes, the branch and the tree are authenticated first; any drift refuses before the first write. The emitter pushes nothing:
+ * the complete order pins the authenticated candidate SHA (`candidateHead`) and its step 1 pushes exactly that commit.
  */
 async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRoot, cwd, repo, pr, headSha, sourceKind, source, gate, prState, executionIdentity }) {
   const refuse = (reason) => { throw new Refusal(`--completion-only refused: ${reason}`); };
@@ -415,7 +416,7 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
   if (pinned.length !== 1 || pinned[0].sha256 !== source.read.sha256) refuse(`the ${sourceKind} source differs from the plan's pinned read${pinned.length === 1 && sourceKind === "act-list" ? `; pass the plan's pinned act-list copy ${pinned[0].path} as --act-list-file` : ""}`);
   assertBranchHeadClean(cwd, prState.headRefName, candidate);
   try { gitIn(cwd, "merge-base", "--is-ancestor", prior.headSha, candidate); } catch { refuse(`the local HEAD ${candidate} is not a descendant of the plan head ${prior.headSha}; run a full gate round`); }
-  const workOrder = { ...prior, operation: "complete", completesExecution: root, headSha, executionRules: { ...prior.executionRules, contract: fileURLToPath(new URL("agents/fixer.agent.md", PACKAGE_ROOT)) },mutationAuthority: { ...prior.mutationAuthority, allowedPaths: [] }, outputRefs: [path.join(dir, executionIdentity, "fixer-disposition.json")],
+  const workOrder = { ...prior, operation: "complete", completesExecution: root, headSha, candidateHead: candidate, executionRules: { ...prior.executionRules, contract: fileURLToPath(new URL("agents/fixer.agent.md", PACKAGE_ROOT)) },mutationAuthority: { ...prior.mutationAuthority, allowedPaths: [] }, outputRefs: [path.join(dir, executionIdentity, "fixer-disposition.json")],
     contracts: await Promise.all(FIXER_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) }))) };
   const invalid = completeAdmissionError(workOrder);
   if (invalid) refuse(invalid);
@@ -1026,6 +1027,7 @@ function completeAdmissionError(order) {
     || typeof order.executionRules?.contract !== "string" || typeof order.executionRules.validation !== "string") return "complete requires branch, single output and execution rules";
   if (!["act-list", "threads"].includes(order.source) || !required(order.source)
     || ofKind(order.source === "act-list" ? "threads" : "act-list").length || !digest("sourceDigest")) return "complete requires exactly one authenticated ACT or THREAD source";
+  if (!/^[0-9a-f]{40}$/.test(order.candidateHead ?? "")) return "complete requires the authenticated candidateHead";
   return null;
 }
 

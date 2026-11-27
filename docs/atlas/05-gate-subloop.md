@@ -8,7 +8,7 @@ source_commit: f6619004d3edc2caccc98edd96914a5706c5d59b
 
 ## Gate sub-loop: fan-out, fan-in, judge, fixer
 
-A `draft_gate` or `pre_approval_gate` round is a fixed pipeline of deterministic scripts around four kinds of agents. The context writer builds one neutral bundle. Independent reviewers run one dispatch unit per angle group, in bounded waves. Fan-in consolidates their per-angle artifacts without disposing any finding. A judge disposes each finding cluster as `act`, `defer` or `reject`. A fixer commits the act list without pushing (`commit_only`). A fresh delta reviewer checks that commit. Only a clear delta grants the `full` phase that pushes and replies. A new head always starts a new full round, so the loop ends on a clean verdict, a low/nit convergence at the cap round, or a typed blocker for the operator. The diagrams below are derived from the pure core modules under `packages/core/src/loop/` and the CLI scripts under `scripts/loop/` and `scripts/github/`.
+A `draft_gate` or `pre_approval_gate` round is a fixed pipeline of deterministic scripts around four kinds of agents. The context writer builds one neutral bundle. Independent reviewers run one dispatch unit per angle group, in bounded waves. Fan-in consolidates their per-angle artifacts without disposing any finding. A judge disposes each finding cluster as `act`, `defer` or `reject`. A fixer pushes the act list in the `full` phase. A new head always starts a new full round that judges the fix, so the loop ends on a clean verdict, the body-only converged post, or a typed blocker for the operator. The diagrams below are derived from the pure core modules under `packages/core/src/loop/` and the CLI scripts under `scripts/loop/` and `scripts/github/`.
 
 <a id="d60"></a>
 

@@ -7863,7 +7863,8 @@ test("renderBriefingVolatile: the known-findings line keeps the open-or-resolved
   const render = (gate) => renderBriefingVolatile({ gate, headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z", knownFindingsRead: read, worktreeRoot: "/wt" });
   for (const gate of ["draft_gate", "pre_approval_gate"]) {
     const text = render(gate);
-    assert.match(text, /Known findings \(do not re-raise what an open or resolved thread already covers\): 2 threads/);
+    assert.match(text, /Known findings \(do not duplicate an open thread\): 2 threads/);
+    assert.doesNotMatch(text, /or resolved thread already covers/);
     assert.doesNotMatch(text, /see below/);
   }
   assert.doesNotMatch(render("draft_gate"), /assess it in this full round/);

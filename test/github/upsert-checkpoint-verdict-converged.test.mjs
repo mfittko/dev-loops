@@ -193,14 +193,14 @@ test("--converged-json is refused for any gate other than draft_gate and any ver
 // ADR 0271 (GATE-EXEC-NO-DEAD-END): a round whose act items are all PR-body items clears with no commit.
 const EDITED_BODY = `${DEFAULT_TEST_PR_BODY}\nEdited for the cap round.`;
 // ledgerTmpRoot puts the findings ledger and the prior rounds under another tmp root than the cap-round context (the main checkout versus the reviewed worktree).
-async function bodyOnlyPost(tempDir, { findings, actList = findings, fixer = A, input = {}, reviewedBody = DEFAULT_TEST_PR_BODY, runChildOptions = {}, ledgerTmpRoot, priorRounds = 3, checkBaseFreshness }) {
+async function bodyOnlyPost(tempDir, { findings, actList = findings, fixer = A, input = {}, overallVerdict = "clean", reviewedBody = DEFAULT_TEST_PR_BODY, runChildOptions = {}, ledgerTmpRoot, priorRounds = 3, checkBaseFreshness }) {
   const ledgerPath = ledgerTmpRoot ? path.join(ledgerTmpRoot, "gate-findings", "owner-repo", "pr-17", "ledger.json") : undefined;
   const ctx = path.join(capOnRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
   await mkdir(path.dirname(ctx), { recursive: true });
   await writeFile(ctx, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(reviewedBody) }] }), "utf8");
   let out;
   await withPriorRounds(priorRounds, async () => {
-    out = await post(tempDir, { findings, converged: { fixerCommit: fixer, actList, bodyOnly: true, ...input }, root: capOnRoot, ledgerPath, runChildOptions: { currentHead: fixer, liveBody: EDITED_BODY, ...runChildOptions }, checkBaseFreshness });
+    out = await post(tempDir, { findings, overallVerdict, converged: { fixerCommit: fixer, actList, bodyOnly: true, ...input }, root: capOnRoot, ledgerPath, runChildOptions: { currentHead: fixer, liveBody: EDITED_BODY, ...runChildOptions }, checkBaseFreshness });
   }, ledgerTmpRoot);
   await rm(ctx, { force: true });
   return out;
@@ -211,6 +211,15 @@ test("body-only: --converged-json needs the existing draft_gate comment at A", a
     const { error } = await bodyOnlyPost(tempDir, { findings: [bodyFinding("low", 1)], runChildOptions: { existingReview: false } });
     assert.match(error, /none is the latest draft_gate comment/);
   }, { prefix: "dev-loops-converged-noexisting-" });
+});
+
+test("body-only: a ledger whose composed verdict is not clean (blocked) refuses the converged post and posts nothing", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [bodyFinding("low", 1)];
+    const { error, puts } = await bodyOnlyPost(tempDir, { findings, overallVerdict: "blocked" });
+    assert.match(error, /needs a clean composed verdict over a validated body-only act list/);
+    assert.deepEqual(puts, []);
+  }, { prefix: "dev-loops-converged-unjudged-" });
 });
 
 test("body-only: a comment at A that is already clean or already converged is not converged again", async () => {
@@ -305,7 +314,13 @@ test("an inline converged post is refused when A qualifies for inline review but
     git("add", "."); git("commit", "-q", "-m", "B");
     const headB = git("rev-parse", "HEAD");
     // The fan-out evidence stays required (the repo's own config), so the inline review is checked.
-    await writeFile(path.join(gitRepo, ".devloops"), (await readFile(path.resolve(".devloops"), "utf8")).replace("\n  draft:\n", "\n  draft:\n    maxReviewRounds: 0\n"), "utf8");
+    const liveConfig = await readFile(path.resolve(".devloops"), "utf8");
+    const capOff = liveConfig.replace("\n  draft:\n", "\n  draft:\n    maxReviewRounds: 0\n");
+    // String.replace is a silent no-op on a changed live config and doubles a key the live draft block already has.
+    assert.notEqual(capOff, liveConfig, "the live .devloops has a draft block to patch");
+    assert.equal(capOff.match(/^ {4}maxReviewRounds:/gm)?.length ?? 0, (liveConfig.match(/^ {4}maxReviewRounds:/gm)?.length ?? 0) + 1);
+    assert.equal(liveConfig.split("\n  draft:\n")[1]?.split(/\n {2}\S/)[0].includes("maxReviewRounds"), false, "the live draft block sets no maxReviewRounds of its own");
+    await writeFile(path.join(gitRepo, ".devloops"), capOff, "utf8");
     A = headA; FIX = headB;
     const ctx = path.join(gitRepo, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
     await mkdir(path.dirname(ctx), { recursive: true });

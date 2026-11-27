@@ -4,8 +4,7 @@
  * `check-pre-push-delta.mjs --result` (the last write for a baseline wins) and read by the
  * fixer work-order emitter and the fixed-reply guard. It never feeds a gate verdict, findings
  * ledger, comment or merge signal (PRE-PUSH-DELTA-NOT-GATE-EVIDENCE). An absent record means
- * "no delta decision". Two exceptions (PRE-PUSH-DELTA-NOT-GATE-EVIDENCE): ADR 0168 (the converged
- * marker) and ADR 0208 (the cap round's cleared delta lets the PR go ready); the ADR 0208 reader
+ * "no delta decision". One exception (PRE-PUSH-DELTA-NOT-GATE-EVIDENCE): ADR 0208 (the cap round's cleared delta lets the PR go ready); the ADR 0208 reader
  * is `readSealedGateDeltaRecord`, which trusts only a record carrying its sha256 seal.
  * The cover record of `check-pre-push-delta.mjs --reviewer-only --cover-uncovered --result` (ADR 0255 amendment, issue 3443) is written to
  * `<tmp-root>/gate-cover/<capHead>-<ref hash>.json` and is a third exception under the same rule: it counts as the ADR 0208 evidence of its act ref

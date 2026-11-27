@@ -927,7 +927,7 @@ test("an act-list source and a threads source emit a full-phase order with no de
   });
 });
 
-test("a full emission takes no --delta-result and a commit_only one still takes it; an all-body act list refuses in the full phase", async () => {
+test("a full emission takes no --delta-result; an all-body act list refuses in the full phase", async () => {
   await withFixture(async ({ files, emit }) => {
     await assert.rejects(emit({ phase: "full", deltaResult: files.delta }), (error) => /applies only to --phase commit_only/.test(error.message) && /Re-run without --delta-result/.test(error.recovery));
     await writeFile(files.actList, JSON.stringify([withFp({ severity: "high", angle: "correctness", summary: "PR body claims an unshipped route", judgeDisposition: "act" })]));
@@ -1847,6 +1847,7 @@ for (const source of ["act-list", "threads"]) test(`complete ${source} pulls del
       : await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     unit.workOrder.operation = "complete";
     unit.workOrder.completesExecution = { executionIdentity: unit.executionIdentity, heads: [unit.workOrder.headSha] };
+    unit.workOrder.candidateHead = unit.workOrder.headSha;
     unit.workOrder.mutationAuthority.allowedPaths = [];
     await sealBaselineUnit(unit, root);
     const result = pull(unit, wt);
@@ -1859,7 +1860,8 @@ for (const source of ["act-list", "threads"]) test(`complete ${source} pulls del
     assert.match(active, /immutable.*evidence/i);
     assert.doesNotMatch(active, /Run staging|Validation:|Regenerate:|Apply and commit|Push only|--construct|--check|verify-fixer-disposition/);
     assert.equal(active.includes(unit.workOrder.executionRules.mutation), false);
-    assert.match(active, /1\. Push the committed local HEAD to branch "issue-1"/);
+    assert.match(active, new RegExp(`1\\. Stop and report when the local HEAD is not ${unit.workOrder.candidateHead}\\. Otherwise push that commit to branch "issue-1"`));
+    assert.ok(active.includes(`git push origin '${unit.workOrder.candidateHead}:refs/heads/issue-1'`));
     assert.match(active, /2\. Confirm the remote head equals the pushed commit/);
     assert.match(active, /4\. Only when CI is green, write the handoff `\{ "headSha": "<full pushed SHA>" \}`/);
     assert.ok(result.stdout.endsWith(`${JSON.stringify(unit.workOrder, null, 2)}\n\x60\x60\x60\n`));
@@ -1876,6 +1878,7 @@ for (const defect of ["phase", "paths", "ordinaryEmpty", "source", "duplicate", 
       const order = unit.workOrder;
       order.operation = "complete";
       order.completesExecution = { executionIdentity: "f1-aaaaaaaa", heads: [order.headSha] };
+      order.candidateHead = order.headSha;
       order.mutationAuthority.allowedPaths = [];
       if (defect === "phase") order.phase = "commit_only";
       if (defect === "paths") order.mutationAuthority.allowedPaths = ["src"];
@@ -2616,6 +2619,7 @@ for (const form of ["foreign-route", "two-matching"]) test(`complete THREAD --co
     unit.workOrder.operation = "complete";
     unit.workOrder.completesExecution = { executionIdentity: unit.executionIdentity, heads: [unit.workOrder.headSha] };
     unit.workOrder.headSha = candidate;
+    unit.workOrder.candidateHead = candidate;
     unit.workOrder.mutationAuthority.allowedPaths = [];
     await sealBaselineUnit(unit, root);
     assert.equal(pull(unit, wt).status, 0);
@@ -3549,6 +3553,44 @@ test("issue 2787 C14: a descendant live head re-enters; a diverged head refuses 
     const plan = await readFile(unit.planPath);
     await assert.rejects(reenter(fx, "ACT", { headSha: diverged, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: diverged }) }), /not a descendant of the plan head/);
     assert.deepEqual(await readFile(unit.planPath), plan);
+  });
+});
+
+test("AC1b: --completion-only after a crash before the push emits at the plan head and pins the local commit for step 1", async () => {
+  await withFixture(async (fx) => {
+    const old = await pulledFull(fx, "ACT");
+    const planHead = old.workOrder.headSha, candidate = git(fx.wt, "rev-parse", "HEAD");
+    assert.notEqual(candidate, planHead);
+    const unit = await reenter(fx, "ACT", { headSha: planHead, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: planHead }) });
+    assert.equal(unit.workOrder.operation, "complete");
+    assert.equal(unit.workOrder.headSha, planHead);
+    assert.equal(unit.workOrder.candidateHead, candidate);
+    const text = renderWorkOrder(unit.workOrder);
+    assert.ok(text.includes(`1. Stop and report when the local HEAD is not ${candidate}.`));
+    assert.ok(text.includes(`git push origin '${candidate}:refs/heads/issue-1'`));
+  });
+});
+
+test("C1: --completion-only refuses a PR head that is neither the plan head nor the local HEAD, and writes nothing", async () => {
+  await withFixture(async (fx) => {
+    const old = await pulledFull(fx, "ACT");
+    const plan = await readFile(old.planPath), third = "c".repeat(40);
+    await assert.rejects(reenter(fx, "ACT", { headSha: third, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: third }) }), /is neither the plan head .* nor the local HEAD/);
+    assert.deepEqual(await readFile(old.planPath), plan);
+    assert.equal((await readdir(path.join(path.dirname(old.planPath), "work-orders"))).some((name) => name.includes(third)), false);
+  });
+});
+
+test("T8-SHELL: the complete order quotes a branch name that holds a backtick and a semicolon in the push command", async () => {
+  await withFixture(async (fx) => {
+    const old = await pulledFull(fx, "ACT");
+    const candidate = git(fx.wt, "rev-parse", "HEAD");
+    const unit = await reenter(fx, "ACT");
+    const branch = "a`;touch${IFS}x;`";
+    const text = renderWorkOrder({ ...unit.workOrder, candidateHead: candidate, mutationAuthority: { ...unit.workOrder.mutationAuthority, branch } });
+    assert.ok(text.includes(`git push origin '${candidate}:refs/heads/${branch}'`));
+    assert.equal(text.includes(`\`git push origin`), false, "the command sits in a fenced block, never in a backtick span");
+    assert.ok(old);
   });
 });
 

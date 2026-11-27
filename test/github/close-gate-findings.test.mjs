@@ -355,6 +355,7 @@ test("closeGateFindings posts no review and no comment of its own: a round with 
         rejectClosed: 0,
         evidenceOnlyClosed: 0,
         prBodyActClosed: 0,
+        fixedActClosed: 0,
         unresolvedGateThreadCount: 0,
         foldedFiled: 0,
       });
@@ -2436,6 +2437,32 @@ test("a prior-ledger act with remedyKind evidence_only is replied to and resolve
   ));
 });
 
+// A full-phase fix pass resolves no thread, so a clean next round closes the prior-round code act thread.
+test("a prior-ledger code act that the current ledger does not raise again is replied to and resolved", async () => {
+  const finding = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated" };
+  const fp = fingerprintFinding(finding);
+  const thread = openWfnThread({ commentId: 6004, fp });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      { ...postReplyEntry(6004, { id: 7004 }), assertStdinIncludes: ["did not raise it again"] },
+      resolveThreadEntry("THREAD_D"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
+      await mkdir(findingsDir, { recursive: true });
+      await writeFile(
+        path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ ...finding, judgeDisposition: "act", judgeRationale: "fix it" }] }),
+        "utf8",
+      );
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.fixedActClosed, 1);
+      assert.equal(result.unresolvedGateThreadCount, 0);
+    },
+  ));
+});
+
 // The same holds for the CURRENT ledger.
 test("a current-ledger act with remedyKind evidence_only is replied to and resolved with no stamp", async () => {
   const finding = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated" };
@@ -3028,7 +3055,8 @@ test("a pr_body act finding in the current ledger closes once the live body dige
 
 test("an act thread without a pr_body remedy is never selected by the PR-body act pass", async () => {
   const findings = [prBodyFinding("first body edit", { remedyKind: undefined })];
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  // The current ledger raises it again, so the fixed-act pass leaves it open too.
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings }), (ledgerPath) => withGhStub(
     roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: findings.map(prBodyThread) }),
     async ({ env, ghCommand, runChild, repoRoot }) => {
       await writePrBodyActFixture(repoRoot, findings);
