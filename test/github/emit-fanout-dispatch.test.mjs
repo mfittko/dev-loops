@@ -1026,6 +1026,116 @@ test("emits the configured (unclamped) maxConcurrent under a non-Claude env (#19
   });
 });
 
+const RETRY_ARGS = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+const TWO_PENDING = {
+  groups: FANOUT.groups,
+  pendingGroups: [{ name: "contradiction-lens", angles: ["contradiction-lens"] }, { name: "design-simplicity", angles: ["dry", "kiss"] }],
+};
+
+async function composedPrompts(result) {
+  const out = {};
+  for (const unit of JSON.parse(result.stdout).units) out[unit.group ?? unit.angles[0]] = await readFile(unit.promptPath, "utf8");
+  return out;
+}
+
+test("--pending --retry-crashed <unit> tells only the named unit to pass --same-head-retry with its --scope (#3642)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: TWO_PENDING });
+    const result = runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", "contradiction-lens"], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr);
+    const prompts = await composedPrompts(result);
+    assert.match(prompts["contradiction-lens"], /--scope \S+.*--same-head-retry/);
+    assert.equal(prompts["design-simplicity"].includes("--same-head-retry"), false);
+  });
+});
+
+test("a plain --pending and a first emission tell no unit to pass --same-head-retry (#3642)", async () => {
+  for (const extra of [["--pending"], []]) {
+    await withTmpDir(async (tmpDir) => {
+      await seedBundle(tmpDir, { fanout: TWO_PENDING });
+      const result = runEmitCli([...RETRY_ARGS, ...extra], { cwd: tmpDir });
+      assert.equal(result.status, 0, result.stderr);
+      for (const text of Object.values(await composedPrompts(result))) assert.equal(text.includes("--same-head-retry"), false);
+    });
+  }
+});
+
+test("--retry-crashed without --pending refuses with a recovery (#3642)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli([...RETRY_ARGS, "--retry-crashed", "contradiction-lens"], { cwd: tmpDir });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /--retry-crashed applies only to a --pending emission/);
+    assert.match(JSON.parse(result.stderr).recovery, /--pending --retry-crashed/);
+  });
+});
+
+test("--retry-crashed without --pending leaves a pre-existing keyed emit-plan file in place (#3642)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(tmpDir, "tmp") });
+    await mkdir(path.dirname(planPath), { recursive: true });
+    await writeFile(planPath, '{"keep":true}', "utf8");
+    const result = runEmitCli([...RETRY_ARGS, "--retry-crashed", "contradiction-lens"], { cwd: tmpDir });
+    assert.equal(result.status, 2);
+    assert.equal(await readFile(planPath, "utf8"), '{"keep":true}');
+  });
+});
+
+async function retryFlags(result) {
+  const out = {};
+  for (const unit of JSON.parse(result.stdout).units) out[unit.scope] = (await readFile(unit.promptPath, "utf8")).includes("--same-head-retry");
+  return out;
+}
+
+test("--retry-crashed accepts an emitted sub-unit name and refuses its raw parent name (#3642)", async () => {
+  const angles = ["srp", "soc", "ocp", "lsp", "isp", "dip"];
+  const fanout = { groups: [{ name: "big", angles }], pendingGroups: [{ name: "big", angles }] };
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout });
+    const emitted = ["big-part1", "big-part2"];
+    const ok =runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", emitted[0]], { cwd: tmpDir });
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.deepEqual(JSON.parse(ok.stdout).units.map((unit) => unit.name), emitted);
+    const flags = await retryFlags(ok);
+    assert.deepEqual(Object.values(flags), [true, false]);
+    const refused = runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", "big"], { cwd: tmpDir });
+    assert.equal(refused.status, 1);
+    assert.match(JSON.parse(refused.stdout).recovery, new RegExp(emitted[0]));
+  });
+});
+
+test("--retry-crashed refuses a name that matches two emitted units and names them (#3642)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const pending = [{ name: "dry", angles: ["kiss", "yagni"] }, { name: "dry", angles: ["dry"] }];
+    await seedBundle(tmpDir, { fanout: { groups: pending, pendingGroups: pending } });
+    const result = runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", "dry"], { cwd: tmpDir });
+    assert.equal(result.status, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.match(payload.error, /more than one emitted unit/);
+    assert.match(payload.recovery, /kiss,yagni/);
+  });
+});
+
+test("--retry-crashed naming a unit that is not pending refuses and names the pending units (#3642)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", "design-simplicity"], { cwd: tmpDir });
+    assert.equal(result.status, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /GATE-EXEC-FANOUT-DISPATCH-EMIT.*design-simplicity/);
+    assert.match(payload.recovery, /contradiction-lens/);
+    assert.match(payload.recovery, /without result artifacts/);
+  });
+});
+
+test("buildAngleNamingSuffix adds the same-head-retry instruction only when asked (#3642)", () => {
+  const unit = { name: "coverage", angles: ["coverage"] };
+  assert.doesNotMatch(buildAngleNamingSuffix(unit, "draft-gate-coverage"), /--same-head-retry/);
+  assert.match(buildAngleNamingSuffix(unit, "draft-gate-coverage", [], [], undefined, null, undefined, [], [], [], true), /--scope draft-gate-coverage.*--same-head-retry/);
+});
+
 test("--pending emits only the pendingGroups subset", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir);
@@ -1145,7 +1255,7 @@ test("a successful run persists the keyed emit-plan artifact with the full resul
     assert.equal(persisted.maxConcurrent, stdoutPayload.maxConcurrent);
     assert.deepEqual(persisted.units, stdoutPayload.units);
     for (const unit of persisted.units) {
-      assert.deepEqual(Object.keys(unit).sort(), ["angles", "budget", "budgetBasis", "dispatchPrompt", "executionIdentity", "group", "materializationHash", "promptBytes", "promptPath", "scope", "sectionBytes", "workOrder", "workOrderDigest", "workOrderRef"].sort());
+      assert.deepEqual(Object.keys(unit).sort(), ["angles", "budget", "budgetBasis", "dispatchPrompt", "executionIdentity", "group", "materializationHash", "name", "promptBytes", "promptPath", "scope", "sectionBytes", "workOrder", "workOrderDigest", "workOrderRef"].sort());
       // The seeded bundle records no diff read, so every unit gets the floor.
       assert.deepEqual(unit.budgetBasis, { scope: "none", files: 0, changedLines: 0 });
       assert.deepEqual(unit.budget, { ...REVIEWER_UNIT_BUDGET });

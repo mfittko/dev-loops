@@ -24,7 +24,7 @@ import { preFanoutCiObservation } from "../loop/_coordinator-handback.mjs";
 import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "../loop/_operator-focus.mjs";
 import { dispatchUnitScope, expandDispatchUnits, normalizeUnitAngles, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 
-const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--operator-focus-file <path>] [--ci-file <path>] [--tmp-root <path>] [--help]
+const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending [--retry-crashed <unit>]...] [--operator-focus-file <path>] [--ci-file <path>] [--tmp-root <path>] [--help]
 The SANCTIONED one-shot gate fan-out dispatch step: given a gate +
 head whose write-gate-context.mjs bundle is already on disk, it reads the resolved
 fan-out plan (the artifact's fanout.groups / fanout.pendingGroups, resolveFanoutGroups
@@ -93,6 +93,12 @@ Optional:
                                exceed the stdout count. Only the stdout "units"
                                are dispatched, and --expected-dispatch-units
                                takes the stdout count.
+  --retry-crashed <unit>       Repeatable, only with --pending. <unit> is the "name" field of an emitted
+                               stdout unit. The unit's
+                               agent ended without result artifacts: its work order also passes
+                               --same-head-retry to the sentinel check, so its stale sentinel is replaced.
+                               A plain --pending keeps a running unit's sentinel refusal. A name that
+                               matches no emitted unit, or more than one, refuses with a recovery.
   --carry-forward-plan <json>  Resolver output (or its carried array). The
                                alternative to --carry-forward-plan-file, one of
                                which is required for a zero-unit pending round;
@@ -117,7 +123,7 @@ Optional:
                                must match the write-gate-context.mjs call).
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "repo": "...", "pr": "...",
-    "pending": <true|false>, "roundId": "...", "count": <n>, "maxConcurrent": <n>, "unitBound": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>,
+    "pending": <true|false>, "roundId": "...", "count": <n>, "maxConcurrent": <n>, "unitBound": <n>, "units": [ { "name": "...", "scope": "...", "angles": ["..."], "group": <name|null>,
       "budget": { "maxToolCalls": <n>, "maxModelTurns": <n>, "maxAngles": <n> }, "budgetBasis": { "scope": "none|docs-only|full", "files": <n>, "changedLines": <n> }, "promptPath": "...",
       "workOrderRef", "workOrderDigest", "materializationHash", "executionIdentity", "dispatchPrompt",
       "promptBytes": <n>, "sectionBytes": { "prefix": <n>, "volatile": <n>, "suffix": <n> },
@@ -166,7 +172,8 @@ Exit codes:
      (the "recovery" field names the operator step), or a reviewer sentinel at the
      head has no newer valid findings artifact for its unit and the full emission
      refuses to retire a round whose reviewer may still run (resume with
-     --pending; the "recovery" field names the step)
+     --pending; the "recovery" field names the step), or a --retry-crashed
+     name matches no emitted unit or more than one
   2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, an empty,
      missing, unreadable or non-JSON --ci-file, filesystem error, or invalid
      --jq filter)`.trim();
@@ -246,9 +253,10 @@ export const REVIEWER_VERIFIED_ITEMS_INSTRUCTION = "Verified items: in the findi
  *   unit-scoped required reads, rendered worktree-absolute from the cwd
  * @param {{ maxModelTurns: number, maxToolCalls: number }} [budget] this unit's
  *   computed budget (computeReviewerUnitBudget); the floor when absent
+ * @param {boolean} [sameHeadRetry] true for a unit named by `--pending --retry-crashed <unit>`: the unit also passes `--same-head-retry` to the sentinel check
  * @returns {string}
  */
-export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET, operatorFocus = null, unitBound = REVIEWER_UNIT_MAX_ANGLES, resolutionPaths = [], resolutionMerges = [], fullReviewPaths = []) {
+export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET, operatorFocus = null, unitBound = REVIEWER_UNIT_MAX_ANGLES, resolutionPaths = [], resolutionMerges = [], fullReviewPaths = [], sameHeadRetry = false) {
   if (typeof scope !== "string" || scope.length === 0) {
     throw new TypeError(`buildAngleNamingSuffix requires a non-empty scope string, got ${JSON.stringify(scope)}`);
   }
@@ -258,7 +266,7 @@ export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unit
   const header = single
     ? `## Your review angle: ${list}`
     : `## Your review angles (dispatch unit "${unit?.name}"): ${list}`;
-  const scopeLine = `Dispatch scope: pass \`--scope ${scope}\` verbatim to the mandatory \`verify-fresh-review-context.mjs\` sentinel named in the briefing prefix above — this is your dispatch unit's exact emitted scope, never composed from the unit name.`;
+  const scopeLine = `Dispatch scope: pass \`--scope ${scope}\` verbatim to the mandatory \`verify-fresh-review-context.mjs\` sentinel named in the briefing prefix above — this is your dispatch unit's exact emitted scope, never composed from the unit name.${sameHeadRetry ? " This is a redispatch of an unfinished unit: also pass `--same-head-retry` to that check, so a sentinel left by a crashed earlier run of this unit at the same briefing is replaced (a rebuilt briefing still refuses and names retirement)." : ""}`;
   const reads = unitReads.length > 0
     ? `Unit required read. It REPLACES the shared \`evidence\` read of the prefix's \`## Required reads\` for this unit: read this scoped evidence IN FULL instead of the shared evidence file, and verify its sha256 before judgment. Every other prefix read still applies:\n${unitReads.map((read) => renderRequiredReadLine(read, process.cwd())).join("\n")}\n\n`
     : "";
@@ -454,6 +462,15 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // reading the real process cwd's checkout.
   const ledgerTmpRoot = tmpRootArg ?? ledgerTmpRootDefault;
   const pendingOnly = argv.includes("--pending");
+  const retryCrashed = new Set(argv.flatMap((arg, i) => (arg === "--retry-crashed" ? [argv[i + 1] ?? ""] : [])));
+  if (retryCrashed.has("") || [...retryCrashed].some((name) => name.startsWith("-"))) {
+    process.stderr.write(`${formatCliError(parseError("--retry-crashed requires a unit name."))}\n`);
+    return 2;
+  }
+  if (retryCrashed.size > 0 && !pendingOnly) {
+    process.stderr.write(`${formatCliError(Object.assign(parseError("--retry-crashed applies only to a --pending emission."), { recovery: "re-run with --pending --retry-crashed <unit name> for each unit whose agent ended without result artifacts" }))}\n`);
+    return 2;
+  }
   const operatorFocusArg = resolveFlagValue(argv, "--operator-focus-file");
   if (operatorFocusArg === "") {
     process.stderr.write(`${formatCliError(parseError("--operator-focus-file must not be an empty value; pass a path or omit the flag"))}\n`);
@@ -756,6 +773,17 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // well-formed by construction.
   const unitBound = resolveReviewerUnitBound(fanout.unitBound);
   const dispatchUnits = expandDispatchUnits(units, configuredGroupNames, unitBound);
+  // --retry-crashed matches only an emitted dispatch unit name (pendingGroups already holds the cap-split units).
+  const emittedNames = dispatchUnits.map((unit) => unit.name);
+  const retryEmitted = new Set(dispatchUnits.filter((unit) => retryCrashed.has(unit.name)));
+  const notPending = [...retryCrashed].filter((name) => !emittedNames.includes(name));
+  if (notPending.length > 0) {
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: --retry-crashed names ${notPending.map((n) => JSON.stringify(n)).join(", ")}, which is not a pending unit`, recovery: `The emitted units are ${emittedNames.map((n) => JSON.stringify(n)).join(", ") || "(none)"}; name only an emitted unit whose agent ended without result artifacts.` }, false);
+  }
+  const ambiguous = [...retryCrashed].filter((name) => emittedNames.filter((n) => n === name).length > 1);
+  if (ambiguous.length > 0) {
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: --retry-crashed names ${ambiguous.map((n) => JSON.stringify(n)).join(", ")}, which matches more than one emitted unit`, recovery: `The matching units are ${dispatchUnits.filter((u) => ambiguous.includes(u.name)).map((u) => `${JSON.stringify(u.name)} (angles ${u.angles.join(",")})`).join(", ")}; rename the configured group so it differs from every angle name, then re-run.` }, false);
+  }
 
   // GATE-EXEC-FANOUT-CAPACITY (emitter half): the emitted unit count is the wave
   // width the coordinator uses, so a PRESENT plan record whose EMITTED units
@@ -881,7 +909,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
-      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound, resolutionDeltaPaths, resolutionDeltaMerges, resolutionDeltaFullPaths), "utf8");
+      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound, resolutionDeltaPaths, resolutionDeltaMerges, resolutionDeltaFullPaths, retryEmitted.has(unit)), "utf8");
     } catch (err) {
       return failAfterRetirement(err);
     }
@@ -944,7 +972,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const record = JSON.parse(await readFile(recordPath, "utf8"));
     await writeFile(recordPath, `${JSON.stringify({ ...record, compactReference: identity }, null, 2)}\n`, "utf8");
     emitted.push({
-      scope, angles, group: unit.group, budget, budgetBasis, promptPath: result.promptPath, promptBytes, sectionBytes: result.sectionBytes,
+      name: unit.name, scope, angles, group: unit.group, budget, budgetBasis, promptPath: result.promptPath, promptBytes, sectionBytes: result.sectionBytes,
       ...identity, materializationHash: materializationHash(promptText), dispatchPrompt, workOrder,
     });
   }

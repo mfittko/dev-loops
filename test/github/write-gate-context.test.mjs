@@ -11641,7 +11641,7 @@ test("issue 3416: the CLI refusal for a live round at an abbreviated head carrie
   const payload = JSON.parse(err.trim().split("\n").at(-1));
   assert.equal(payload.ok, false);
   // The sentinel has no findings artifact, so its reviewer may still run: wait first, and keep the retire command behind `operator:`.
-  assert.match(payload.recovery, new RegExp(`^wait for the running reviewers .*--pending; if they crashed, operator: run \`dev-loops-run scripts/github/retire-gate-round\\.mjs --gate draft_gate --head-sha ${fullSha} --reason '[^'<>]+' --tmp-root '`));
+  assert.match(payload.recovery, new RegExp(`^wait for the running reviewers .*--pending; for a crashed unit, run emit-fanout-dispatch\\.mjs --pending with --retry-crashed and the unit name; for a rebuilt briefing, operator: run \`dev-loops-run scripts/github/retire-gate-round\\.mjs --gate draft_gate --head-sha ${fullSha} --reason '[^'<>]+' --tmp-root '`));
   assert.doesNotMatch(payload.recovery, /[<>\[\]]/);
 });
 
@@ -11706,7 +11706,7 @@ test("CLI refuses a scoped final pre_approval_gate context with the policy reaso
   }
 });
 
-test("a pre_approval_gate base-merge head with a PR-own resolution change counts as a round, while a pure base merge does not (AC6)", async () => {
+test("a pre_approval_gate merge-only head does not count toward the cap, whatever its resolution carries, and neither does a pure base merge (AC6)", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
     git(repoRoot, ["checkout", "-q", "-b", "mainline", baseSha]);
@@ -11728,7 +11728,7 @@ test("a pre_approval_gate base-merge head with a PR-own resolution change counts
     // Seed after the commits: `git add -A` would otherwise commit the ledgers into the merges.
     await seedClosedRounds(repoRoot, 67, ["1".repeat(40), baseSha, headSha], "pre_approval_gate");
     assert.equal(await countCapRounds({ repo: "owner/repo", pr: 67, gate: "pre_approval_gate", headSha: pure }, { repoRoot, prBase: "main" }), 3, "a pure base merge does not count");
-    assert.equal(await countCapRounds({ repo: "owner/repo", pr: 67, gate: "pre_approval_gate", headSha: resolved }, { repoRoot, prBase: "main" }), 4, "a merge resolution with a PR-own change counts");
+    assert.equal(await countCapRounds({ repo: "owner/repo", pr: 67, gate: "pre_approval_gate", headSha: resolved }, { repoRoot, prBase: "main" }), 3, "a merge-only head does not count, whatever its resolution carries");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -12189,7 +12189,7 @@ test("a draft_gate operator decision clears cap_fix_over_budget at round cap+2 a
   }
 });
 
-test("a draft_gate round forced by a pure base merge does not count toward the cap, while a merge resolution with a PR-own change does (ADR 0324)", async () => {
+test("a draft_gate merge-only head does not count toward the cap, whatever its resolution carries, and neither does a pure base merge (ADR 0324)", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
     git(repoRoot, ["checkout", "-q", "-b", "mainline", baseSha]);
@@ -12210,7 +12210,111 @@ test("a draft_gate round forced by a pure base merge does not count toward the c
     const resolved = await merge(true);
     await seedClosedRounds(repoRoot, 68, ["1".repeat(40), baseSha, headSha]);
     assert.equal(await countCapRounds({ repo: "owner/repo", pr: 68, gate: "draft_gate", headSha: pure }, { repoRoot, prBase: "main" }), 3, "a pure base merge does not count");
-    assert.equal(await countCapRounds({ repo: "owner/repo", pr: 68, gate: "draft_gate", headSha: resolved }, { repoRoot, prBase: "main" }), 4, "a merge resolution with a PR-own change counts");
+    assert.equal(await countCapRounds({ repo: "owner/repo", pr: 68, gate: "draft_gate", headSha: resolved }, { repoRoot, prBase: "main" }), 3, "a merge-only head does not count, whatever its resolution carries");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3630: a merge-only range is a forced round even when the merge of the base conflicts, and a conflicted merge has no fix budget.
+async function conflictedBaseMergeRepo({ mainLines = 1 } = {}) {
+  const fixture = await makeBaseDiffRepo();
+  const { repoRoot, baseSha, headSha } = fixture;
+  git(repoRoot, ["checkout", "-q", "-b", "mainline", baseSha]);
+  const changed = path.join(repoRoot, "src/changed.mjs");
+  const extra = Array.from({ length: mainLines - 1 }, (_, i) => `export const main${i} = ${i};`).join("\n");
+  await writeFile(changed, `${extra}${extra ? "\n" : ""}import { helper } from "./dep.mjs";\nexport function changed() { return helper() * 9; }\n`, "utf8");
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "main edits the same line"]);
+  const mainSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+  git(repoRoot, ["update-ref", "refs/remotes/origin/main", mainSha]);
+  // Merges mainSha into `from` with a conflict, resolved by a new PR-own line plus what main added.
+  const mergeConflicted = async (from, { ownLines = 0 } = {}) => {
+    git(repoRoot, ["checkout", "-q", "--detach", from]);
+    assert.throws(() => git(repoRoot, ["merge", "--no-ff", "--no-commit", mainSha]));
+    await writeFile(changed, `${extra}${extra ? "\n" : ""}import { helper } from "./dep.mjs";\nexport function changed() { return helper() + 3; }\n${Array.from({ length: ownLines }, (_, i) => `export const own${i} = ${i};\n`).join("")}`, "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "merge main, resolve conflict"]);
+    return git(repoRoot, ["rev-parse", "HEAD"]).trim();
+  };
+  const fix = async (from) => {
+    git(repoRoot, ["checkout", "-q", "--detach", from]);
+    await writeFile(path.join(repoRoot, "src/dep.mjs"), "export function helper() { return 2; }\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "fix"]);
+    return git(repoRoot, ["rev-parse", "HEAD"]).trim();
+  };
+  return { ...fixture, mergeConflicted, fix };
+}
+
+test("a conflicted merge-only head after the cap round does not count as a round, while a fix commit before it does (#3630 AC1)", async () => {
+  const { repoRoot, headSha, mergeConflicted, fix } = await conflictedBaseMergeRepo();
+  try {
+    const merged = await mergeConflicted(headSha);
+    const fixed = await mergeConflicted(await fix(headSha));
+    await seedClosedRounds(repoRoot, 69, ["1".repeat(40), headSha]);
+    assert.equal(await countCapRounds({ repo: "owner/repo", pr: 69, gate: "draft_gate", headSha: merged }, { repoRoot, prBase: "main" }), 2, "a conflicted merge-only head is forced");
+    assert.equal(await countCapRounds({ repo: "owner/repo", pr: 69, gate: "draft_gate", headSha: fixed }, { repoRoot, prBase: "main" }), 3, "a fix commit plus the merge counts");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a merges-only range that merges no new base content counts as a round (#3630 AC1)", async () => {
+  const { repoRoot, headSha, mergeConflicted } = await conflictedBaseMergeRepo();
+  try {
+    const merged = await mergeConflicted(headSha);
+    const reMerge = await mergeConflicted(headSha, { ownLines: 1 });
+    git(repoRoot, ["checkout", "-q", "--detach", merged]);
+    git(repoRoot, ["merge", "--no-ff", "-s", "ours", "-m", "re-merge", reMerge]);
+    const remerged = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    await seedClosedRounds(repoRoot, 69, ["1".repeat(40), merged]);
+    assert.equal(await countCapRounds({ repo: "owner/repo", pr: 69, gate: "draft_gate", headSha: remerged }, { repoRoot, prBase: "main" }), 3, "no new base commit, so the round counts");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("capFixBudgetFacts reads a conflicted base merge as no fix budget, and a clean base merge keeps the fix measured (#3630 AC2)", async () => {
+  const conflicted = await conflictedBaseMergeRepo({ mainLines: 101 });
+  try {
+    const merged = await conflicted.mergeConflicted(conflicted.headSha, { ownLines: 100 });
+    assert.deepEqual(await capFixBudgetFacts({ fromHead: conflicted.headSha, headSha: merged, prBase: "main", repoRoot: conflicted.repoRoot }), { logicLoc: 0, addedFiles: 0 });
+  } finally {
+    await rm(conflicted.repoRoot, { recursive: true, force: true });
+  }
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["checkout", "-q", "-b", "mainline", baseSha]);
+    await writeFile(path.join(repoRoot, "src/other.mjs"), "export const other = 1;\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "main advances"]);
+    const mainSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", mainSha]);
+    git(repoRoot, ["checkout", "-q", "--detach", headSha]);
+    git(repoRoot, ["merge", "--no-ff", "-q", "-m", "merge main", mainSha]);
+    const changedPath = path.join(repoRoot, "src/changed.mjs");
+    await writeFile(changedPath, `${await readFile(changedPath, "utf8")}${Array.from({ length: 70 }, (_, i) => `export const own${i} = ${i};`).join("\n")}\n`, "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "70-line fix"]);
+    const head = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    const facts = await capFixBudgetFacts({ fromHead: headSha, headSha: head, prBase: "main", repoRoot });
+    assert.equal(facts.logicLoc, 70);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a draft_gate conflicted merge-only head after cap round 2 stays a full round, and a fix plus a conflicted merge is the scoped final round (#3630 AC3)", async () => {
+  const { repoRoot, headSha, mergeConflicted, fix } = await conflictedBaseMergeRepo({ mainLines: 101 });
+  try {
+    const merged = await mergeConflicted(headSha);
+    const fixed = await mergeConflicted(await fix(headSha), { ownLines: 100 });
+    await seedClosedRounds(repoRoot, 70, ["1".repeat(40), headSha]);
+    const base = { repo: "owner/repo", pr: 70, gate: "draft_gate" };
+    assert.equal(await resolveScopedFinalRound({ ...base, headSha: merged }, { repoRoot, prBase: "main", config: {} }), null);
+    const scoped = await resolveScopedFinalRound({ ...base, headSha: fixed }, { repoRoot, prBase: "main", config: {} });
+    assert.equal(scoped.fromHead, headSha);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

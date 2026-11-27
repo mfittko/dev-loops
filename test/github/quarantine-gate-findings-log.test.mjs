@@ -29,8 +29,7 @@ async function withRepo(fn) {
   }
 }
 
-// Prior log with a finding whose angle matches no provenance.perAngle entry
-// (the PR 2838 shape), plus its keyed fan-in ledger.
+// Prior log with a finding that has no angle (an integrity failure), plus its keyed fan-in ledger.
 async function seed(dir, { valid = false, ledgerRoot = "ctx-tmp", withLedger = true, rawLog = null } = {}) {
   const logPath = path.join(dir, buildLogPath({ repo: REPO, pr: PR, gate: GATE, headSha: PRIOR, tmpRoot: "tmp" }));
   const ledgerPath = path.join(dir, buildGateFaninLedgerPath({ repo: REPO, pr: PR, gate: GATE, headSha: PRIOR, tmpRoot: ledgerRoot }));
@@ -39,7 +38,7 @@ async function seed(dir, { valid = false, ledgerRoot = "ctx-tmp", withLedger = t
   await writeFile(logPath, rawLog ?? JSON.stringify({
     headSha: PRIOR, gate: GATE, repo: REPO, pr: PR,
     verdict: "findings_present",
-    findings: [{ angle: valid ? "contradiction-lens" : "operator-residue", severity: "low", summary: "x" }],
+    findings: [{ ...(valid ? { angle: "contradiction-lens" } : {}), severity: "low", summary: "x" }],
     provenance: { perAngle: [{ angle: "contradiction-lens", reviewer: "r" }] },
   }), "utf8");
   if (withLedger) await writeFile(ledgerPath, "{}\n", "utf8");
@@ -61,7 +60,7 @@ test("quarantine moves an integrity-failing log and ledger to the audit dir with
     assert.equal(record.reason, "findings_log_integrity_failure");
     assert.equal(record.status, "complete");
     assert.equal(record.ledgerAbsent, false);
-    assert.match(record.integrityFailure, /operator-residue.*matches no provenance\.perAngle entry/);
+    assert.match(record.integrityFailure, /finding with no angle/);
   });
 });
 
