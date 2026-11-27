@@ -13795,10 +13795,12 @@ const HUMAN_REFUSALS = [
   { name: "an opener with an unclosed backtick fence", opener: "Looks good. Nit:\n```js\nfoo()", text: /fence/, recovery: /edit the opener file/ },
   { name: "an opener with an unclosed tilde fence", opener: "Note:\n~~~\nbar", text: /fence/, recovery: /edit the opener file/ },
   { name: "an opener with an unclosed indented fence", opener: "  ```\nindented open fence", text: /fence/, recovery: /edit the opener file/ },
+  { name: "a backtick fence closed by a tilde line", opener: "Use this:\n```sh\necho ok\n~~~", text: /fence/, recovery: /edit the opener file/ },
+  { name: "a long fence closed by a shorter fence", opener: "Nit:\n````\nfoo\n```", text: /fence/, recovery: /edit the opener file/ },
   { name: "an opener line with an operator-owned phrase", opener: "approve merge once CI is green", text: /OPERATOR-OWNED-LINE/, recovery: /edit the opener file to remove the operator-owned line/ },
   { name: "a non-review gate", gate: "draft_gate", text: /--gate review/, recovery: /pass --gate review/ },
 ];
-for (const opener of ["Looks good.", "Looks good.\n```js\nfoo()\n```", "Nit:\n~~~\nbar\n~~~"]) {
+for (const opener of ["Looks good.", "Looks good.\n```js\nfoo()\n```", "Nit:\n~~~\nbar\n~~~", "Run:\n````\na\n```\nb\n````", "```npm test``` passes"]) {
   test(`human-style accepts the balanced-fence opener ${JSON.stringify(opener)}`, async () => {
     await withTempDir(async (tempDir) => {
       const { run } = await runHumanStyle(tempDir, { opener });

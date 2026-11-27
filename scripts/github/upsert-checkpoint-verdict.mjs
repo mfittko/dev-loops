@@ -2928,8 +2928,18 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     // Leading indentation is kept; only trailing whitespace is dropped.
     humanOpener = humanOpener.trimEnd();
     if (/<!--|<\/?details|<\/?summary/i.test(humanOpener)) throw refuse("the opener holds an HTML comment, details or summary tag that would break the wrapper.", editRecovery);
-    // An odd count of fence lines leaves a fence open and swallows the details wrapper.
-    if ((humanOpener.match(/^ {0,3}(```|~~~)/gm) ?? []).length % 2 === 1) throw refuse("the opener holds an unclosed code fence that would swallow the wrapper.", editRecovery);
+    // A fence left open at the end swallows the details wrapper. CommonMark: a close needs the same character, at least the opening length and no info string.
+    let openFence = null;
+    for (const line of humanOpener.split("\n")) {
+      const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      if (!match) continue;
+      const [, run, info] = match;
+      if (openFence === null) {
+        if (run[0] === "`" && info.includes("`")) continue; // inline code span, not a fence
+        openFence = run;
+      } else if (run[0] === openFence[0] && run.length >= openFence.length && info.trim() === "") openFence = null;
+    }
+    if (openFence !== null) throw refuse("the opener holds an unclosed code fence that would swallow the wrapper.", editRecovery);
   }
   if (isReviewGate && reviewSubmitMode !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(reviewSubmitMode)) {
     if (options.auto) {
