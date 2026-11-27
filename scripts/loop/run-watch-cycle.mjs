@@ -520,8 +520,6 @@ export async function runWatchCycle(
     detectSessionActivity = false,
     spawnImpl = spawnRecorded,
     cwd = process.cwd(),
-    checkpointDir,
-    now = Date.now,
   } = {},
 ) {
   const leaseCwd = resolveRepoRoot(cwd);
