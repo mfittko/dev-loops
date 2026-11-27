@@ -13674,3 +13674,118 @@ test("composeBlockedBy derives the blocked-by causes for each branch", () => {
   ];
   for (const { name, input, expected } of cases) assert.deepEqual(composeBlockedBy(input), expected, name);
 });
+
+// ---------------------------------------------------------------------------
+// Human-style review: --human-opener-file wraps the same-head pending draft in
+// a collapsed details block under a visible opener and submits it in place.
+// ---------------------------------------------------------------------------
+
+const HUMAN_PENDING_BODY = "### Gate review: `review`\n\n**Next action:** read the findings, none was judged\n\n<!-- dev-loops:finding 0123456789abcdef severity=high angle=correctness round=1 -->\n- a finding";
+const HUMAN_PENDING_REVIEW = { ...OWN_PENDING_REVIEW, body: HUMAN_PENDING_BODY };
+const HUMAN_OPENER = "Thanks, this looks good. One small note on the query builder.";
+
+async function runHumanStyle(tempDir, { submit = "approve", opener = HUMAN_OPENER, extra = {}, pending = [HUMAN_PENDING_REVIEW] } = {}) {
+  const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+  const openerPath = path.join(tempDir, "opener.md");
+  if (opener !== null) await writeFile(openerPath, opener, "utf8");
+  const { runChild, calls } = makeGhMock([
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify(pending) + "\n" },
+    { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews/8001/events", "--input", "-"], stdout: '{"id":8001,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-8001"}\n' },
+  ]);
+  const run = () => upsertCheckpointVerdict({
+    repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+    nextAction: "none — informational review, no re-gate required",
+    findingsLedger: ledgerPath, executionMode: "fanout_fanin",
+    submit, humanOpenerFile: openerPath, interactiveConfirm: true, ...extra,
+  }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+  return { run, calls };
+}
+
+for (const [submit, event] of [["approve", "APPROVE"], ["comment", "COMMENT"]]) {
+  test(`human-style ${submit}: submits the same-head pending draft in place with the opener visible and the report collapsed`, async () => {
+    await withTempDir(async (tempDir) => {
+      const { run, calls } = await runHumanStyle(tempDir, { submit });
+      const result = await run();
+      assert.equal(result.action, "submitted");
+      assert.equal(result.commentId, 8001);
+      const eventsCalls = calls.filter((c) => c.args.includes("repos/owner/repo/pulls/17/reviews/8001/events"));
+      assert.equal(eventsCalls.length, 1);
+      const payload = JSON.parse(eventsCalls[0].stdinText);
+      assert.equal(payload.event, event);
+      assert.equal(payload.body, `${HUMAN_OPENER}\n\n<details>\n<summary>dev-loops review details</summary>\n\n${HUMAN_PENDING_BODY}\n\n</details>\n`);
+      assert.equal(payload.body.slice(0, payload.body.indexOf("<details>")).trim(), HUMAN_OPENER);
+      assert.match(payload.body.slice(payload.body.indexOf("<details>")), /<!-- dev-loops:finding [0-9a-f]{16} severity=high angle=correctness round=1 -->/);
+      assert.equal(calls.some((c) => c.args.includes("DELETE")), false);
+      assert.equal(calls.some((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews")), false);
+    }, { prefix: "dev-loops-upsert-human-style-" });
+  });
+}
+
+const HUMAN_REFUSALS = [
+  { name: "no --interactive-confirm", extra: { interactiveConfirm: false }, text: /interactive/i, recovery: /interactive submit choice/ },
+  { name: "--auto", extra: { auto: true }, text: /--auto/, recovery: /interactive submit choice/ },
+  { name: "--submit pending", submit: "pending", text: /--submit/, recovery: /interactive submit choice/ },
+  { name: "--submit request-changes", submit: "request-changes", text: /--submit/, recovery: /interactive submit choice/ },
+  { name: "--submit discard", submit: "discard", text: /--submit/, recovery: /interactive submit choice/ },
+  { name: "an empty opener file", opener: "  \n", text: /opener/i, recovery: /edit the opener file/ },
+  { name: "a missing opener file", opener: null, text: /opener/i, recovery: /edit the opener file/ },
+  { name: "no own same-head pending draft", pending: [], text: /pending/i, recovery: /--submit pending first/ },
+  { name: "a stale-head pending draft", pending: [{ ...HUMAN_PENDING_REVIEW, commit_id: "f".repeat(40) }], text: /pending/i, recovery: /--submit pending first/ },
+  { name: "an opener the issue/PR-id guard refuses", opener: "Fixes #123 for real.", text: /opener|issue/i, recovery: /edit the opener file/ },
+];
+for (const { name, text, recovery, ...rest } of HUMAN_REFUSALS) {
+  test(`human-style refuses ${name} before any GitHub write, naming its recovery`, async () => {
+    await withTempDir(async (tempDir) => {
+      const { run, calls } = await runHumanStyle(tempDir, rest);
+      let error;
+      try { await run(); } catch (e) { error = e; }
+      assert.ok(error, "expected a refusal");
+      assert.match(error.message, text);
+      assert.match(error.recovery, recovery);
+      assert.match(error.message, recovery);
+      assert.equal(calls.some((c) => c.args.includes("POST") || c.args.includes("DELETE")), false);
+    }, { prefix: "dev-loops-upsert-human-style-refuse-" });
+  });
+}
+
+test("review gate: an unjudged round puts every locatable finding inline", async () => {
+  await withTempDir(async (tempDir) => {
+    const at = (summary, line) => ({ severity: "must-fix", angle: "correctness", summary, files: ["src/db.mjs"], line });
+    const ledgerPath = await writeReviewGateLedger(tempDir, [at("first finding text", 2), at("second finding text", 3)], { overallVerdict: "findings_present" });
+    const { runChild, calls } = makeGhMock([
+      ...reviewGateFindingSurfaceEntries({ files: [{ filename: "src/db.mjs", patch: SINGLE_SURFACE_PATCH }] }),
+      { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":906,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-906"}\n' },
+    ]);
+    await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath, judgeSpecSource: "none", executionMode: "fanout_fanin",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    const posted = JSON.parse(calls.find((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews")).stdinText);
+    assert.equal(posted.comments.length, 2);
+  }, { prefix: "dev-loops-upsert-review-unjudged-inline-" });
+});
+
+test("review gate: a judged defer or reject finding is never inline; an act finding is", async () => {
+  await withTempDir(async (tempDir) => {
+    const at = (summary, line, judgeDisposition) => ({ severity: "must-fix", angle: "correctness", summary, files: ["src/db.mjs"], line, judgeDisposition });
+    const findings = [at("act finding text", 2, "act"), at("defer finding text", 3, "defer"), at("reject finding text", 3, "reject")];
+    const ledgerPath = await writeReviewGateLedger(tempDir, findings, { overallVerdict: "findings_present" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries({ files: [{ filename: "src/db.mjs", patch: SINGLE_SURFACE_PATCH }] }),
+      { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":905,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-905"}\n' },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath, judgeSpecSource: "issue", executionMode: "fanout_fanin",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    const posted = JSON.parse(calls.find((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews")).stdinText);
+    assert.equal(posted.comments.length, 1);
+    assert.match(posted.comments[0].body, /act finding text/);
+    assert.doesNotMatch(posted.comments.map((c) => c.body).join("\n"), /defer finding text|reject finding text/);
+    assert.match(posted.body, /defer finding text/);
+    assert.match(posted.body, /reject finding text/);
+  }, { prefix: "dev-loops-upsert-review-act-inline-" });
+});

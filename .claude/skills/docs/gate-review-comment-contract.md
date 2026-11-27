@@ -247,6 +247,21 @@ pending review regardless of head. The submit path detects the own pending revie
 the raw reviews list, because the same-head marker scan (`summarizeExistingComment`) cannot see an
 author-only review.
 
+Human-style review (part of `GATE-REVIEW-SUBMIT-MODES`): `--gate review --submit <comment|approve>
+--human-opener-file <path> --interactive-confirm` submits the own same-head pending draft in place
+(same review id, no create or discard call) with a body of two parts. The visible part is the opener
+file content, unchanged. The draft's existing body follows unchanged inside a collapsed
+`<details>` block with the summary `dev-loops review details` and a blank line after `</summary>`,
+so the gate header, head SHA, verdict, `Next action` line and every marker sit inside the block.
+A `review` verdict is never lifecycle evidence, so the kept markers stay safe. The mode is refused,
+before any GitHub write and with a named `recovery`, with `--auto`, without `--interactive-confirm`,
+with any `--submit` other than `comment` or `approve`, with an empty or missing opener file, with
+no own same-head pending draft (post `--submit pending` first), and on a body the issue/PR-id guard
+refuses (edit the opener file). On `--gate review` only, a finding takes the inline track when it
+counts as `act`: the judge disposed it `act`, or it has no judge disposition (an unjudged finding
+counts as `act`). A `defer` or `reject` finding is listed in the report body. `draft_gate` and
+`pre_approval_gate` keep their inline rules.
+
 A `fanout_fanin` verdict posted with `--findings-json` but NO `--findings-ledger` emits a
 one-line advisory warning naming `--findings-ledger` as the missing inline-comment source,
 because `--findings-json` alone files ZERO inline comments. The warning never blocks the post.

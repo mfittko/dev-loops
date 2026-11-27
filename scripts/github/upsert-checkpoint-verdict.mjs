@@ -410,6 +410,13 @@ Optional:
                                             step after a human made the choice;
                                             it is not a headless bypass and is
                                             refused together with --auto.
+  --human-opener-file <path>               SCOPED TO --gate review ONLY. Human-style
+                                            review: submit the own same-head pending
+                                            draft in place with the file's content as
+                                            the visible opener and the draft body in a
+                                            collapsed details block. Requires
+                                            --interactive-confirm and --submit
+                                            comment|approve; refused with --auto.
   --new-round                              SCOPED TO --gate review ONLY. Bypass
                                             the same-head submitted-review dedup
                                             and force a FRESH review round even
@@ -761,6 +768,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       "post-sealed-cap-round": { type: "boolean" },
       auto: { type: "boolean" },
       "interactive-confirm": { type: "boolean" },
+      "human-opener-file": { type: "string" },
       "spec-authority": { type: "string" },
       "judge-spec-source": { type: "string" },
       "judge-unavailable-reason": { type: "string" },
@@ -795,6 +803,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     postSealedCapRound: false,
     auto: false,
     interactiveConfirm: false,
+    humanOpenerFile: undefined,
     specAuthority: undefined,
     judgeSpecSource: undefined,
     judgeUnavailableReason: undefined,
@@ -968,6 +977,10 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       // --confirm: destructives stay gated unless truly asked.
       const confirmValue = token.value === undefined ? undefined : token.value.trim();
       options.interactiveConfirm = confirmValue === undefined || (confirmValue !== "" && !/^(false|0|no)$/iu.test(confirmValue));
+      continue;
+    }
+    if (token.name === "human-opener-file") {
+      options.humanOpenerFile = requireTokenValue(token, parseError).trim();
       continue;
     }
     if (token.name === "spec-authority") {
@@ -2409,8 +2422,10 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
   const commentableSet = buildCommentableLineSet(await fetchPrFiles({ repo: options.repo, pr: options.pr }, gh));
   surface.locatable = [];
   surface.nonLocatable = [];
+  // On the review gate only an act or unjudged finding takes the inline track; a defer or reject finding is listed in the body.
+  const inlineAllowed = (f) => options.gate !== "review" || !f.judgeDisposition || f.judgeDisposition === "act";
   for (const finding of nonFolded) {
-    if (isLocatableFinding(finding, commentableSet)) surface.locatable.push(finding);
+    if (inlineAllowed(finding) && isLocatableFinding(finding, commentableSet)) surface.locatable.push(finding);
     else if (visible(finding)) surface.nonLocatable.push(finding);
     else surface.folded.push(finding);
   }
@@ -2881,6 +2896,18 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   // fail-closed guard is re-enforced here structurally — never trust
   // the caller's self-identification.
   const reviewSubmitMode = isReviewGate ? (options.submit ?? DEFAULT_REVIEW_SUBMIT_MODE) : undefined;
+  // Human-style review: fail closed before any GitHub call, each refusal naming its recovery.
+  let humanOpener;
+  if (options.humanOpenerFile !== undefined) {
+    const interactiveRecovery = "run the interactive submit choice (--interactive-confirm with --submit comment or approve, never --auto)";
+    const refuse = (reason, recovery) => Object.assign(new Error(`--human-opener-file refused: ${reason} Recovery: ${recovery}.`), { recovery });
+    if (!isReviewGate) throw refuse("it is scoped to --gate review.", "pass --gate review");
+    if (options.auto) throw refuse("it is refused with --auto.", interactiveRecovery);
+    if (options.interactiveConfirm !== true) throw refuse("it requires --interactive-confirm.", interactiveRecovery);
+    if (reviewSubmitMode !== "comment" && reviewSubmitMode !== "approve") throw refuse(`--submit ${reviewSubmitMode} is not supported (only comment or approve).`, interactiveRecovery);
+    humanOpener = (await readFile(options.humanOpenerFile, "utf8").catch(() => "")).trim();
+    if (humanOpener === "") throw refuse("the opener file is missing or empty.", "edit the opener file so it holds the opener text");
+  }
   if (isReviewGate && reviewSubmitMode !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(reviewSubmitMode)) {
     if (options.auto) {
       throw new Error(
@@ -3924,6 +3951,12 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
       ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
     };
+    if (humanOpener !== undefined && !ownPending?.sameHead) {
+      throw Object.assign(
+        new Error("--human-opener-file refused: no own same-head pending review draft exists. Recovery: post --submit pending first, then run the interactive submit choice."),
+        { recovery: "post --submit pending first, then run the interactive submit choice" },
+      );
+    }
     if (reviewSubmitMode === "discard") {
       // Discard deletes the caller's own pending review (any head); with none
       // present it is a no-op (nothing to delete) and must NOT fall through to
@@ -3941,8 +3974,18 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       // comment | request-changes | approve: submit the existing same-head
       // pending review via /events with the mapped event, preserving its inline
       // comments.
+      let wrappedBody;
+      if (humanOpener !== undefined) {
+        wrappedBody = `${humanOpener}\n\n<details>\n<summary>dev-loops review details</summary>\n\n${ownPending.body}\n\n</details>\n`;
+        try {
+          guardCommentBodyNoIssuePrIds(wrappedBody, { ref: "human-style review body", allowedRefs: options.allowedRefs });
+        } catch (error) {
+          const recovery = "edit the opener file to remove the issue or PR reference";
+          throw Object.assign(new Error(`--human-opener-file refused: ${error.message} Recovery: ${recovery}.`), { recovery });
+        }
+      }
       const submitted = await submitPendingReview(
-        { repo: options.repo, pr: options.pr, reviewId: ownPending.id, event: resolveReviewSubmitEvent(reviewSubmitMode) },
+        { repo: options.repo, pr: options.pr, reviewId: ownPending.id, event: resolveReviewSubmitEvent(reviewSubmitMode), body: wrappedBody },
         gh,
       );
       return { ...baseResult, action: "submitted", commentId: submitted.reviewId, commentUrl: submitted.reviewUrl };
