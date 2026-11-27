@@ -213,9 +213,10 @@ test("buildCarryForwardPlan attributes copilot-body to configured perAngle rows 
   for (const entry of plan.mustRerun) assert.match(entry.reason, /attribution is ambiguous/);
 });
 
-test("buildCarryForwardPlan still fails closed on non-synthetic or case-drifted copilot-body angles", () => {
+test("buildCarryForwardPlan re-runs non-synthetic or case-drifted copilot-body angles", () => {
   for (const angle of ["copilot-body-x", "Copilot-Body"]) {
-    assert.throws(() => buildCarryForwardPlan({ log: withFindings(cleanLog, [bodyFinding(angle)]), changedFiles: ["docs/guide.md"] }), /matches no provenance\.perAngle entry/);
+    const plan = buildCarryForwardPlan({ log: withFindings(cleanLog, [bodyFinding(angle)]), changedFiles: ["docs/guide.md"] });
+    assert.ok(plan.mustRerun.some((m) => m.angle === angle), `${angle} must re-run`);
   }
 });
 
@@ -1419,22 +1420,43 @@ test("a prior finding on a base angle forces every case-drifted row sharing it t
   assert.ok(rerun.includes("Coverage"), "the case-drifted sibling must re-run too, not silently carry");
 });
 
-test("buildCarryForwardPlan fails closed when a prior finding's angle matches no provenance.perAngle entry", () => {
-  assert.throws(
-    () => buildCarryForwardPlan({
-      log: {
-        headSha: "aaaaaaa",
-        verdict: "clean",
-        findings: [{ angle: "typo-ed-angle", severity: "nice-to-have", summary: "open nit" }],
-        provenance: {
-          distinctReviewers: 1,
-          perAngle: [{ angle: "correctness", reviewer: "review-a" }],
-        },
-      },
-      changedFiles: ["docs/guide.md"],
-    }),
-    /matches no provenance\.perAngle entry/,
-  );
+const orphanLog = {
+  headSha: "aaaaaaa",
+  verdict: "clean",
+  findings: [{ angle: "typo-ed-angle", severity: "nice-to-have", summary: "open nit" }],
+  provenance: {
+    distinctReviewers: 1,
+    perAngle: [{ angle: "correctness", reviewer: "review-a" }],
+  },
+};
+
+test("buildCarryForwardPlan re-runs a prior finding's angle that matches no provenance.perAngle entry", () => {
+  const plan = buildCarryForwardPlan({ log: orphanLog, changedFiles: ["docs/guide.md"] });
+  const orphan = plan.mustRerun.find((m) => m.angle === "typo-ed-angle");
+  assert.ok(orphan, "the orphan angle must re-run");
+  assert.match(orphan.reason, /no provenance\.perAngle entry/);
+  assert.ok(!plan.carried.some((c) => c.angle === "typo-ed-angle"));
+});
+
+test("buildCarryForwardPlan accepts --rerun-angle for an orphan finding angle as operator_rerun", () => {
+  const plan = buildCarryForwardPlan({ log: orphanLog, changedFiles: ["docs/guide.md"], rerunAngles: ["typo-ed-angle"] });
+  assert.deepEqual(plan.mustRerun.find((m) => m.angle === "typo-ed-angle"), { angle: "typo-ed-angle", reason: "operator_rerun" });
+});
+
+test("buildCarryForwardPlan refuses --rerun-angle for a finding angle that matches a perAngle row or is the copilot-body skip", () => {
+  for (const angle of ["Correctness", "correctness-delta-at-abc1234", "copilot-body"]) {
+    const log = { ...orphanLog, findings: [{ angle, severity: "nice-to-have", summary: "x" }] };
+    assert.throws(
+      () => buildCarryForwardPlan({ log, changedFiles: ["docs/guide.md"], rerunAngles: [angle] }),
+      { code: "unknown_rerun_angle" },
+      angle,
+    );
+  }
+});
+
+test("buildCarryForwardPlan keeps the orphan angle in mustRerun on a dev-loop config-source delta", () => {
+  const plan = buildCarryForwardPlan({ log: orphanLog, changedFiles: [".devloops"], incrementalFiles: [".devloops"] });
+  assert.ok(plan.mustRerun.some((m) => m.angle === "typo-ed-angle"));
 });
 
 test("buildCarryForwardPlan fails closed when the prior log's findings field is not an array", () => {
