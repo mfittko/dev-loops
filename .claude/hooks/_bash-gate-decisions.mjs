@@ -95,7 +95,10 @@ export function normalizeAgentType(agentType) {
 
 // Intermediate tokens exclude shell separators so a compound command that only names the file is not an invocation.
 // The interpreter may carry a path prefix and follow a backtick; the script path itself also matches as a command head.
-const UNRESOLVE_INVOCATION = /(?:(?:^|[\s;&|(`])(?:[^\s;&|()`]*\/)?(?:node\s+(?:(?!(?:--check|-c)\s)[^\s;&|()`]+\s+)*?|(?:dev-loops-run|bun)\s+(?:[^\s;&|()`]+\s+)*?)|(?:^|[\n;&|(`])\s*)[^\s;&|()`]*unresolve-review-thread\.mjs(?=$|[\s;&|)`<>"'}])/;
+// `optionalExt` also matches the extensionless run form (`bun scripts/github/<stem>`); a `.test.mjs` path or a name with a suffix after the stem still fails the end lookahead.
+const scriptInvocationRe = (stem, optionalExt = false) => new RegExp(String.raw`(?:(?:^|[\s;&|(\`])(?:[^\s;&|()\`]*\/)?(?:node\s+(?:(?!(?:--check|-c)\s)[^\s;&|()\`]+\s+)*?|(?:dev-loops-run|bun)\s+(?:[^\s;&|()\`]+\s+)*?)|(?:^|[\n;&|(\`])\s*)[^\s;&|()\`]*${stem}${optionalExt ? String.raw`(?:\.mjs)?` : String.raw`\.mjs`}(?=$|[\s;&|)\`<>"'}])`);
+const UNRESOLVE_INVOCATION = scriptInvocationRe("unresolve-review-thread");
+const MERGE_INVOCATION = scriptInvocationRe("merge-pr", true);
 /** True when the command runs scripts/github/unresolve-review-thread.mjs (issue 2577). */
 export const isUnresolveInvocation = (command) => typeof command === "string" && UNRESOLVE_INVOCATION.test(command);
 
@@ -263,19 +266,20 @@ export function decideUnresolveOwnerDeny({ command, role }) {
   return null;
 }
 
-/** Whether the raw command text names `merge-pr`, in any form (`--check` included) except a merge-pr test-file path (`merge-pr<suffix>.test.mjs`), once quote and backslash characters are stripped (Bash drops them: `merge-""pr`, `merge\-pr`). */
-export const commandMentionsMergePr = (command) => typeof command === "string" && command.replace(/\$?["']|\\/g, "").search(/merge-pr\b(?![\w.-]*\.test\.mjs\b)/) !== -1;
+// Bash drops quotes and backslashes (`merge-""pr`, `merge\-pr`, `'node' <path>`), so strip them all before the run-position match. No quote pairing: an escaped quote cannot flip it.
+const normalizeForMergeMatch = (command) => command.replace(/\$(?=["'])|[\\"']/g, "");
 
 /**
- * Merge ownership (issue 2500): `merge-pr.mjs` is orchestrator-owned, so a subagent Bash command whose raw text contains `merge-pr` is denied, `--check` included.
- * A merge-pr test-file path (`merge-pr<suffix>.test.mjs`) is exempt, so every run of the merge script stays denied (docs/decisions/0297-subagent-may-run-merge-test-files.md).
+ * Merge ownership (issue 2500, ADR 0331): `merge-pr.mjs` is orchestrator-owned, so a subagent Bash command that RUNS it is denied, `--check` included.
+ * The match is the run position (`scriptInvocationRe`) on the command with every quote and backslash stripped (Bash drops them: `merge-""pr`, `merge\-pr`, `merge-"pr".mjs`), with or without the `.mjs` extension.
+ * A read-only mention (`grep`, `git show`, `sed -n`) and a `.test.mjs` path do not run the script and are allowed.
  * The top-level session (role null) keeps the script. Keys on the role name alone, like the unresolve allowlist.
- * ponytail: ceiling: a name assembled by variable or command substitution (`m=merge; ...$m-pr`), or a substitution or expansion applied to an exempt test path (`f=.../merge-pr.test.mjs; node ${f/.test/}`), is not caught; the orchestrator is the only actor allowed to run the script.
+ * ponytail: ceiling: only the listed run forms are denied and any other shell form that runs the script is uncaught, for example a brace group (`{ <path>; }`). A quoted search pattern that holds a separator and the name (`rg "foo|<name>.mjs"`, `grep -nE "(<name>.mjs|x)"`) is a fail-closed over-deny. A name assembled by variable or command substitution (`m=merge; ...$m-pr`) or by a shell glob or brace expansion of the file name (`merge-pr.m*`, `merge-pr.{mjs,}`) is not caught; the orchestrator is the only actor allowed to run the script.
  * @param {{command: string, role: string|null|undefined}} params
  * @returns {{ruleId: null, reason: string}|null}
  */
 export function decideMergePrOwnerDeny({ command, role }) {
-  if (typeof role !== "string" || !commandMentionsMergePr(command)) return null;
+  if (typeof role !== "string" || typeof command !== "string" || !MERGE_INVOCATION.test(normalizeForMergeMatch(command))) return null;
   return {
     ruleId: null,
     reason: withHookMarker("MERGE_PR_OWNER",

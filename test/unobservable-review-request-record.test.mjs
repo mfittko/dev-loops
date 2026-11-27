@@ -5,26 +5,19 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import {
-  readProbeStartedAt,
   readRequestNotObservable,
-  recordProbeStart,
   recordPath,
-  recordTimedOutProbe,
   recordUnobservableRequest,
 } from "../scripts/loop/_unobservable-review-request-record.mjs";
 
 const pr = { repo: "o/r", pr: 1 };
 
-test("two unobservable requests plus two timed-out probes on the same head reach the threshold", async () => {
+test("two unobservable requests on the same head reach the threshold", async () => {
   const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
   const read = () => readRequestNotObservable({ ...pr, headSha: "a" }, { checkpointDir });
-  assert.equal(await recordTimedOutProbe({ ...pr, headSha: "a" }, { checkpointDir }), null);
-  await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
-  await recordTimedOutProbe({ ...pr, headSha: "a" }, { checkpointDir });
-  assert.equal(await read(), false);
   await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
   assert.equal(await read(), false);
-  await recordTimedOutProbe({ ...pr, headSha: "a" }, { checkpointDir });
+  await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
   assert.equal(await read(), true);
 });
 
@@ -32,31 +25,55 @@ test("a new head resets the count and the record never applies to another head",
   const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
   for (let i = 0; i < 2; i += 1) {
     await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
-    await recordTimedOutProbe({ ...pr, headSha: "a" }, { checkpointDir });
   }
   assert.equal(await readRequestNotObservable({ ...pr, headSha: "b" }, { checkpointDir }), false);
   const fresh = await recordUnobservableRequest({ ...pr, headSha: "b" }, { checkpointDir });
-  assert.deepEqual([fresh.unobservableRequests, fresh.timedOutProbes], [1, 0]);
+  assert.equal(fresh.unobservableRequests, 1);
   assert.equal(await readRequestNotObservable({ ...pr, headSha: "a" }, { checkpointDir }), false);
 });
 
-test("a probe of another head, and a null head, never count", async () => {
+test("a threshold record at head a carries to head b only when the base-only-merge check accepts a to b", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
+  for (let i = 0; i < 2; i += 1) {
+    await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
+  }
+  const read = (accepts, extra = { baseRef: "origin/main", repoRoot: "/r" }) => {
+    const calls = [];
+    const baseOnlyMerge = async (args) => { calls.push(args); return accepts; };
+    return readRequestNotObservable({ ...pr, headSha: "b", ...extra }, { checkpointDir, baseOnlyMerge }).then((value) => ({ value, calls }));
+  };
+  const accepted = await read(true);
+  assert.equal(accepted.value, true);
+  assert.deepEqual(accepted.calls, [{ originHead: "a", headSha: "b", baseRef: "origin/main", repoRoot: "/r" }]);
+  assert.equal((await read(false)).value, false);
+  assert.equal((await read(true, {})).value, false);
+  const throwing = async () => { throw new Error("git failed"); };
+  assert.equal(await readRequestNotObservable({ ...pr, headSha: "b", baseRef: "origin/main", repoRoot: "/r" }, { checkpointDir, baseOnlyMerge: throwing }), false);
+});
+
+test("a below-threshold record never calls the base-only-merge check on another head", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
+  await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
+  let calls = 0;
+  const baseOnlyMerge = async () => { calls += 1; return true; };
+  assert.equal(await readRequestNotObservable({ ...pr, headSha: "b", baseRef: "origin/main", repoRoot: "/r" }, { checkpointDir, baseOnlyMerge }), false);
+  assert.equal(calls, 0);
+});
+
+test("a null head never counts", async () => {
   const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
   assert.equal(await recordUnobservableRequest({ ...pr, headSha: null }, { checkpointDir }), null);
   await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
-  assert.equal(await recordTimedOutProbe({ ...pr, headSha: "b" }, { checkpointDir }), null);
-  assert.equal(await recordTimedOutProbe({ ...pr, headSha: null }, { checkpointDir }), null);
   assert.equal(await readRequestNotObservable({ ...pr, headSha: null }, { checkpointDir }), false);
 });
 
 test("a non-integer or negative prior count restarts at zero", async () => {
   const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
   const file = path.join(checkpointDir, "unobservable-review-requests.json");
-  await writeFile(file, JSON.stringify({ ...pr, headSha: "a", unobservableRequests: -3, timedOutProbes: "x" }));
-  const record = await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
-  assert.deepEqual([record.unobservableRequests, record.timedOutProbes], [1, 0]);
-  await writeFile(file, JSON.stringify({ ...pr, headSha: "a", timedOutProbes: 1.5 }));
-  assert.equal((await recordTimedOutProbe({ ...pr, headSha: "a" }, { checkpointDir })).timedOutProbes, 1);
+  await writeFile(file, JSON.stringify({ ...pr, headSha: "a", unobservableRequests: -3 }));
+  assert.equal((await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir })).unobservableRequests, 1);
+  await writeFile(file, JSON.stringify({ ...pr, headSha: "a", unobservableRequests: 1.5 }));
+  assert.equal((await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir })).unobservableRequests, 1);
 });
 
 test("a failed rename removes the temp file and rethrows", async () => {
@@ -88,37 +105,3 @@ test("the default record path is the main checkout's from a linked worktree", as
   }
 });
 
-test("a probe start is stored only on a record of the same head and a new request clears it", async () => {
-  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
-  const key = { ...pr, headSha: "a" };
-  assert.equal(await recordProbeStart({ ...key, startedAt: 5 }, { checkpointDir }), null);
-  await recordUnobservableRequest(key, { checkpointDir });
-  await recordProbeStart({ ...key, startedAt: 5 }, { checkpointDir });
-  assert.equal(await readProbeStartedAt(key, { checkpointDir }), 5);
-  assert.equal(await readProbeStartedAt({ ...pr, headSha: "b" }, { checkpointDir }), null);
-  await recordUnobservableRequest(key, { checkpointDir });
-  assert.equal(await readProbeStartedAt(key, { checkpointDir }), null);
-});
-
-test("the threshold needs a timed-out probe after the latest unobservable request", async () => {
-  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
-  const key = { ...pr, headSha: "a" };
-  const read = () => readRequestNotObservable(key, { checkpointDir });
-  await recordUnobservableRequest(key, { checkpointDir });
-  await recordTimedOutProbe(key, { checkpointDir });
-  await recordTimedOutProbe(key, { checkpointDir });
-  await recordUnobservableRequest(key, { checkpointDir });
-  assert.equal(await read(), false);
-  await recordTimedOutProbe(key, { checkpointDir });
-  assert.equal(await read(), true);
-});
-
-test("a second recordTimedOutProbe with the already consumed start leaves the count unchanged", async () => {
-  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
-  const key = { ...pr, headSha: "a" };
-  await recordUnobservableRequest(key, { checkpointDir });
-  await recordProbeStart({ ...key, startedAt: 5 }, { checkpointDir });
-  assert.equal((await recordTimedOutProbe({ ...key, probeStartedAt: 5 }, { checkpointDir })).timedOutProbes, 1);
-  assert.equal(await recordTimedOutProbe({ ...key, probeStartedAt: 5 }, { checkpointDir }), null);
-  assert.equal((await recordTimedOutProbe(key, { checkpointDir })).timedOutProbes, 2);
-});

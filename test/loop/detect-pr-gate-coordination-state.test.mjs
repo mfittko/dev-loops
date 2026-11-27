@@ -13,7 +13,7 @@ import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 
 import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveCapBrakes, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
-import { recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
+import { recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
@@ -5285,7 +5285,6 @@ test("loadPrGateCoordinationContext reads the unobservable-request record into t
     const key = { repo: "owner/repo", pr: 266, headSha };
     for (let i = 0; i < 2; i += 1) {
       await recordUnobservableRequest(key, { checkpointDir });
-      await recordTimedOutProbe(key, { checkpointDir });
     }
     // No Copilot review and no review_requested event on the head: the record is the only signal.
     const entries = pathAGhEntries({ reviewBody: "unused" }).map((entry) => {
@@ -5316,6 +5315,46 @@ test("loadPrGateCoordinationContext reads the unobservable-request record into t
     assert.equal(result.gateBoundary, "draft_gate_needed");
     assert.match(result.reason, /Copilot is unavailable \(request_not_observable\)/);
     assert.doesNotMatch(result.reason, /Round-cap/);
+  } finally {
+    await rm(checkpointDir, { recursive: true, force: true });
+  }
+});
+
+test("loadPrGateCoordinationContext carries the unobservable-request record across a base-only merge", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-gate-unobservable-"));
+  try {
+    const headSha = "def56789abcdef".padEnd(40, "0");
+    const key = { repo: "owner/repo", pr: 266, headSha: "a".repeat(40) };
+    for (let i = 0; i < 2; i += 1) {
+      await recordUnobservableRequest(key, { checkpointDir });
+    }
+    const entries = pathAGhEntries({ reviewBody: "unused" }).map((entry) => {
+      if (entry.assertArgs?.includes("pr") && entry.assertArgs.includes("number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files")) {
+        return { ...entry, stdout: jsonLine({ ...JSON.parse(entry.stdout), reviews: [], baseRefName: "main" }) };
+      }
+      return entry.assertArgContains ? { ...entry, stdout: "" } : entry;
+    });
+    const carried = [];
+    const baseOnlyMerge = async (args) => { carried.push(args); return true; };
+    const context = await loadPrGateCoordinationContext(
+      { repo: "owner/repo", pr: 266 },
+      buildMockRuntime(writeGhStub(null, entries), { repoRoot: capFixtureRepoRoot, checkpointDir, baseOnlyMerge }),
+    );
+    assert.equal(context.currentHeadSha, headSha);
+    assert.equal(context.snapshot.copilotRequestNotObservable, true);
+    assert.equal(context.interpretation.state, "copilot_unavailable");
+    assert.equal(carried[0].originHead, "a".repeat(40));
+    assert.equal(carried[0].headSha, headSha);
+    assert.equal(carried[0].baseRef, "origin/main");
+    // Base current, CI green, zero unresolved threads, clean draft_gate at head B: coordination runs pre_approval_gate.
+    const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
+      context,
+      maxCopilotRounds: 2,
+      draftGateConfig: { requireCi: true },
+      preApprovalGateConfig: { requireCi: true },
+      postConvergenceSignificantChange: false,
+    }));
+    assert.equal(result.nextAction, "run_pre_approval_gate");
   } finally {
     await rm(checkpointDir, { recursive: true, force: true });
   }

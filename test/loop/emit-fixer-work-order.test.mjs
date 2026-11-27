@@ -1777,6 +1777,7 @@ test("AC5: the review-body task shares the full-phase steps, so it refuses a bra
     const text = await readFile((await emitReview(emit, [review])).promptPath, "utf8");
     assert.match(text, /hand back `ci_pending` \(`ci_unknown` when the checks cannot be read\)/);
     assert.match(text, /reports `stuck` or `changed`/);
+    assertCiPendingRecoveryStep(text);
     await assert.rejects(emitReview(emit, [review], { fetchPr: async () => ({ headRefName: "bad..branch", headRefOid: head }) }), /refusing to render a branch name git rejects/);
   });
 });
@@ -2224,6 +2225,11 @@ async function sealBaselineUnit(unit, root, render = renderWorkOrder) {
 const ciEntries = (head) => [{ assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/commits/${head}/check-runs?per_page=100`], stdout: "{\"check_runs\":[{\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"success\"}]}" }, { assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/commits/${head}/status?per_page=100`], stdout: "{\"statuses\":[]}" }];
 const writeMarked = async (file, text) => { await writeFile(file, text); await writeFile(`${file}.constructed`, sha256Hex(text)); };
 // Issue 2787 C1/C2/C4: the six numbered steps in order, the red-CI hand-back and the Edit/Write-only rule.
+// The refusal text owns the recovery commands; the order only says to follow it once.
+function assertCiPendingRecoveryStep(text) {
+  assert.match(text, /On a `ci_pending` refusal from step 5 or 6, follow its recovery once; a second `ci_pending` refusal hands back `ci_pending` with the refusal text\./);
+}
+
 function assertFullPhaseSteps(text, { push }) {
   const markers = [push, /2\. Confirm the remote head equals the candidate/, /3\. Run `[^`]*wait-pr-checks\.mjs[^`]* --timeout \d+`/,
     /4\. Run `[^`]*verify-fixer-disposition\.mjs[^`]* --construct`/, /5\. Run `[^`]*verify-fixer-disposition\.mjs[^`]*`\./, /6\. Run `[^`]* --check --report-path '[^']*fixer-disposition\.json\.report'`/];
@@ -2234,6 +2240,7 @@ function assertFullPhaseSteps(text, { push }) {
     from += match.index + match[0].length;
   }
   assert.match(text, /If CI is red \(`failure`\), resolve no thread, run no verifier step, and hand back `ci_failed` with the failing check names/);
+  assertCiPendingRecoveryStep(text);
   // Issue 3099: the wait is capped per call, so the order re-issues on `pending` and never reads raw `gh pr checks`.
   const timeout = Number(/wait-pr-checks\.mjs[^`]* --timeout (\d+)`/.exec(text)[1]);
   assert.ok(timeout > 0 && timeout <= 600, `delivery wait --timeout ${timeout} must stay at or under 600`);

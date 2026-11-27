@@ -524,7 +524,7 @@ export async function runBasePickupPreflight(
   }
 }
 
-export async function runHandoff(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot, integrateBase, execPreflight = execFileSync, ensureRunnerOwnership = ensureAsyncRunnerOwnership } = {}) {
+export async function runHandoff(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot, integrateBase, execPreflight = execFileSync, ensureRunnerOwnership = ensureAsyncRunnerOwnership, performReview = performCopilotReviewRequest } = {}) {
   // Single resolved repo root for config + runner-coordination reads/writes.
   // Defaults to the checkout's git toplevel (production); an injected repoRoot
   // keeps the whole cascade hermetic when driven in-process.
@@ -909,7 +909,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
     || interpretation.state === STATE.READY_TO_REREQUEST_REVIEW
     && interpretation.autoRerequestEligible);
   if (shouldRequestReview) {
-    const requestResult = await performCopilotReviewRequest(
+    const requestResult = await performReview(
       {
         repo: options.repo,
         pr: options.pr,
