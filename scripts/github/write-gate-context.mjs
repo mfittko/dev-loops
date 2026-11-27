@@ -2370,7 +2370,8 @@ async function isBodyOnlyRerun(options, { repoRoot }) {
   if (typeof options.prBody !== "string") return false;
   const head = String(options.headSha).trim().toLowerCase();
   const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead: true });
-  const latest = closed.filter((log) => String(log.headSha).trim().toLowerCase().startsWith(head)).at(-1);  return Boolean(latest) && bodyOnlySupersededDigest(latest, prBodySha256(options.prBody)) !== null;
+  const latest = closed.filter((log) => String(log.headSha).trim().toLowerCase().startsWith(head)).at(-1);
+  return Boolean(latest) && bodyOnlySupersededDigest(latest, prBodySha256(options.prBody)) !== null;
 }
 
 /**
