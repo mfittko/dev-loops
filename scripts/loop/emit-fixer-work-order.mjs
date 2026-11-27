@@ -23,7 +23,7 @@ import { normalizeFixerDispositionHandoff, REVIEW_NODE_ID_PATTERN } from "@dev-l
 import { readSequenceMarker, sequenceClosurePath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
-import { WorkOrderRefusal, buildDispatchPointer, fixerReportPath, materializationHash, registerWorkOrderRole, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
+import { DELIVERY_WAIT_SECONDS, WorkOrderRefusal, buildDispatchPointer, fixerReportPath, materializationHash, registerWorkOrderRole, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { OperatorFocusRefusal, bindOperatorFocusItems, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
@@ -219,8 +219,6 @@ const EDIT_RULE = "Edit rule: write file content only with the Edit and Write to
 
 const REVIEW_BODY_EDIT_RULE = "Edit rule: write file content only with the Edit and Write tools. Never write file content through Bash (heredoc, redirect, `sed -i`, or cp/mv onto a tracked file). Write the handoff only at step 4; the verifier posts the reply comment.";
 
-// Under the 600 s DEV-LOOP-PROBE-TIMEOUT-CEILING; wait-pr-checks caps each call at WAIT_CAP_MS and returns `pending` (issue 3099).
-const DELIVERY_WAIT_SECONDS = 540;
 // Step 3 wait rules shared by the ci-failure order and the numbered full-phase steps.
 const WAIT_STEP_RULES = "If it prints `outcome: \"pending\"` (exit 2), run its `reissue` command unchanged in the foreground and repeat until the outcome is no longer pending. If it exits 2 with any outcome other than pending, run the original step 3 wait command exactly once more in the foreground. If the harness moves a wait to the background, run the last printed `reissue` command (or the original wait command when none was printed) in the foreground and never read raw `gh pr checks` or run `gh run watch`, because only the wait excludes `gate-evidence`.";
 
@@ -259,6 +257,7 @@ function fullPhaseSteps(workOrder, verifier, { push, handoffStep = null }) {
 4. ${handoffStep ?? `Run \`${verifier} --construct\`. If it fails because the output exists, go to step 5. If step 5 refuses the report as hand-written, rm only this execution's refused outputRef and its corresponding stale \`<outputRef>.constructed\` marker, then re-run step 4. Preserve accepted construction evidence and unrelated files.`}
 5. Run \`${verifier}\`.
 6. Run \`${verifier} --check --report-path ${shellQuote(fixerReportPath(workOrder.outputRefs[0]))}\`. It publishes the final join report there, last; no earlier step writes it.
+On a \`ci_pending\` refusal from step 5 or 6, follow its recovery once; a second \`ci_pending\` refusal hands back \`ci_pending\` with the refusal text.
 ${handoffStep ? REVIEW_BODY_EDIT_RULE : EDIT_RULE}`;
 }
 

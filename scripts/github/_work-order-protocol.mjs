@@ -22,6 +22,9 @@ export { DISPATCH_POINTER_MAX_BYTES, EXECUTION_IDENTITY_RE, canonicalizeWorkOrde
 
 export const materializationHash = sha256Hex;
 
+// Under the 600 s DEV-LOOP-PROBE-TIMEOUT-CEILING; wait-pr-checks caps each call at WAIT_CAP_MS and returns `pending` (issue 3099).
+export const DELIVERY_WAIT_SECONDS = 540;
+
 /** The full-phase fixer join report (ADR 0223): published once per successful step-6 run, last, by verify-fixer-disposition --report-path. */
 export const fixerReportPath = (outputRef) => `${outputRef}.report`;
 
