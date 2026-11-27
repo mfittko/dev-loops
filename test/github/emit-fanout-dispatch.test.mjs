@@ -1066,7 +1066,7 @@ test("--retry-crashed without --pending refuses with a recovery (#3642)", async 
     const result = runEmitCli([...RETRY_ARGS, "--retry-crashed", "contradiction-lens"], { cwd: tmpDir });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /--retry-crashed applies only to a --pending emission/);
-    assert.match(result.stderr, /--pending/);
+    assert.match(JSON.parse(result.stderr).recovery, /--pending --retry-crashed/);
   });
 });
 
@@ -1088,31 +1088,32 @@ async function retryFlags(result) {
   return out;
 }
 
-test("--retry-crashed naming the parent of a split unit marks every sub-unit (#3642)", async () => {
+test("--retry-crashed accepts an emitted sub-unit name and refuses its raw parent name (#3642)", async () => {
+  const angles = ["srp", "soc", "ocp", "lsp", "isp", "dip"];
+  const fanout = { groups: [{ name: "big", angles }], pendingGroups: [{ name: "big", angles }] };
   await withTmpDir(async (tmpDir) => {
-    const angles = ["srp", "soc", "ocp", "lsp", "isp", "dip"];
-    await seedBundle(tmpDir, { fanout: { groups: [{ name: "big", angles }], pendingGroups: [{ name: "big", angles }] } });
-    const result = runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", "big"], { cwd: tmpDir });
-    assert.equal(result.status, 0, result.stderr);
-    const flags = Object.values(await retryFlags(result));
-    assert.equal(flags.length, 2);
-    assert.deepEqual(flags, [true, true]);
+    await seedBundle(tmpDir, { fanout });
+    const emitted = ["big-part1", "big-part2"];
+    const ok = runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", emitted[0]], { cwd: tmpDir });
+    assert.equal(ok.status, 0, ok.stderr);
+    const flags = await retryFlags(ok);
+    assert.deepEqual(Object.values(flags), [true, false]);
+    const refused = runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", "big"], { cwd: tmpDir });
+    assert.equal(refused.status, 1);
+    assert.match(JSON.parse(refused.stdout).recovery, new RegExp(emitted[0]));
   });
 });
 
-test("--retry-crashed accepts a one-angle unit by parent name and by emitted name (#3642)", async () => {
-  for (const name of ["solo-unit", "kiss"]) {
-    await withTmpDir(async (tmpDir) => {
-      const pending = [{ name: "solo-unit", angles: ["kiss"] }, { name: "other", angles: ["dry", "coverage"] }];
-      await seedBundle(tmpDir, { fanout: { groups: pending, pendingGroups: pending } });
-      const result = runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", name], { cwd: tmpDir });
-      assert.equal(result.status, 0, result.stderr);
-      const units = JSON.parse(result.stdout).units;
-      const flags = {};
-      for (const unit of units) flags[unit.angles.join(",")] = (await readFile(unit.promptPath, "utf8")).includes("--same-head-retry");
-      assert.deepEqual(flags, { kiss: true, "dry,coverage": false });
-    });
-  }
+test("--retry-crashed refuses a name that matches two emitted units and names them (#3642)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const pending = [{ name: "dry", angles: ["kiss", "yagni"] }, { name: "dry", angles: ["dry"] }];
+    await seedBundle(tmpDir, { fanout: { groups: pending, pendingGroups: pending } });
+    const result = runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", "dry"], { cwd: tmpDir });
+    assert.equal(result.status, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.match(payload.error, /more than one emitted unit/);
+    assert.match(payload.recovery, /kiss,yagni/);
+  });
 });
 
 test("--retry-crashed naming a unit that is not pending refuses and names the pending units (#3642)", async () => {

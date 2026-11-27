@@ -88,16 +88,18 @@ Optional:
                                requires every resolved angle to be carried with
                                --carry-forward-plan-file (or --carry-forward-plan)
                                proof, or refuses zero units.
-  --retry-crashed <unit>       Repeatable, only with --pending. Names a pending unit whose agent ended
-                               without result artifacts: that unit's work order also passes
-                               --same-head-retry to the sentinel check, so its stale sentinel is replaced.
-                               A plain --pending keeps a running unit's sentinel refusal. A unit that is
-                               not pending refuses with a recovery.
                                The persisted plan also keeps the completed prior
                                units marked "resumed": true, so its count can
                                exceed the stdout count. Only the stdout "units"
                                are dispatched, and --expected-dispatch-units
                                takes the stdout count.
+  --retry-crashed <unit>       Repeatable, only with --pending. <unit> is the emitted unit name: the "group"
+                               value on the unit's stdout line, the angle name for a singleton, or
+                               <group>-part<n> for a split sub-unit. The unit's
+                               agent ended without result artifacts: its work order also passes
+                               --same-head-retry to the sentinel check, so its stale sentinel is replaced.
+                               A plain --pending keeps a running unit's sentinel refusal. A name that
+                               matches no emitted unit, or more than one, refuses with a recovery.
   --carry-forward-plan <json>  Resolver output (or its carried array). The
                                alternative to --carry-forward-plan-file, one of
                                which is required for a zero-unit pending round;
@@ -171,7 +173,8 @@ Exit codes:
      (the "recovery" field names the operator step), or a reviewer sentinel at the
      head has no newer valid findings artifact for its unit and the full emission
      refuses to retire a round whose reviewer may still run (resume with
-     --pending; the "recovery" field names the step)
+     --pending; the "recovery" field names the step), or a --retry-crashed
+     name matches no emitted unit or more than one
   2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, an empty,
      missing, unreadable or non-JSON --ci-file, filesystem error, or invalid
      --jq filter)`.trim();
@@ -466,10 +469,10 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     return 2;
   }
   if (retryCrashed.size > 0 && !pendingOnly) {
-    process.stderr.write(`${formatCliError(parseError("--retry-crashed applies only to a --pending emission; re-run with --pending --retry-crashed <unit name> for each unit whose agent ended without result artifacts."))}\n`);
+    process.stderr.write(`${formatCliError(Object.assign(parseError("--retry-crashed applies only to a --pending emission."), { recovery: "re-run with --pending --retry-crashed <unit name> for each unit whose agent ended without result artifacts" }))}\n`);
     return 2;
   }
-  const operatorFocusArg =resolveFlagValue(argv, "--operator-focus-file");
+  const operatorFocusArg = resolveFlagValue(argv, "--operator-focus-file");
   if (operatorFocusArg === "") {
     process.stderr.write(`${formatCliError(parseError("--operator-focus-file must not be an empty value; pass a path or omit the flag"))}\n`);
     return 2;
@@ -771,22 +774,16 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // well-formed by construction.
   const unitBound = resolveReviewerUnitBound(fanout.unitBound);
   const dispatchUnits = expandDispatchUnits(units, configuredGroupNames, unitBound);
-  // --retry-crashed matches a raw pending unit name or an emitted dispatch unit name. Expansion is per unit and in order,
-  // so each pending unit owns the next expandDispatchUnits([unit]).length emitted units.
-  const pendingNames = Array.isArray(units) ? units.map((unit) => unit?.name) : [];
+  // --retry-crashed matches only an emitted dispatch unit name (pendingGroups already holds the cap-split units).
   const emittedNames = dispatchUnits.map((unit) => unit.name);
-  const retryEmitted = new Set();
-  let emittedAt = 0;
-  for (const unit of Array.isArray(units) ? units : []) {
-    const count = expandDispatchUnits([unit], configuredGroupNames, unitBound).length;
-    for (const emitted of dispatchUnits.slice(emittedAt, emittedAt + count)) {
-      if (retryCrashed.has(unit?.name) || retryCrashed.has(emitted.name)) retryEmitted.add(emitted);
-    }
-    emittedAt += count;
-  }
-  const notPending = [...retryCrashed].filter((name) => !pendingNames.includes(name) && !emittedNames.includes(name));
+  const retryEmitted = new Set(dispatchUnits.filter((unit) => retryCrashed.has(unit.name)));
+  const notPending = [...retryCrashed].filter((name) => !emittedNames.includes(name));
   if (notPending.length > 0) {
-    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: --retry-crashed names ${notPending.map((n) => JSON.stringify(n)).join(", ")}, which is not a pending unit`, recovery: `The pending units are ${pendingNames.map((n) => JSON.stringify(n)).join(", ") || "(none)"} and the emitted units are ${emittedNames.map((n) => JSON.stringify(n)).join(", ") || "(none)"}; name only a pending unit whose agent ended without result artifacts.` }, false);
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: --retry-crashed names ${notPending.map((n) => JSON.stringify(n)).join(", ")}, which is not a pending unit`, recovery: `The emitted units are ${emittedNames.map((n) => JSON.stringify(n)).join(", ") || "(none)"}; name only an emitted unit whose agent ended without result artifacts.` }, false);
+  }
+  const ambiguous = [...retryCrashed].filter((name) => emittedNames.filter((n) => n === name).length > 1);
+  if (ambiguous.length > 0) {
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: --retry-crashed names ${ambiguous.map((n) => JSON.stringify(n)).join(", ")}, which matches more than one emitted unit`, recovery: `The matching units are ${dispatchUnits.filter((u) => ambiguous.includes(u.name)).map((u) => `${JSON.stringify(u.name)} (angles ${u.angles.join(",")})`).join(", ")}; rename the configured group so it differs from every angle name, then re-run.` }, false);
   }
 
   // GATE-EXEC-FANOUT-CAPACITY (emitter half): the emitted unit count is the wave
