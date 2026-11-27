@@ -50,7 +50,7 @@ export function ghCommandFailed(err) {
 
 /**
  * Run one gh child. Pacing lives in the default runChild (each attempt takes a
- * slot there). A secondary rate limit backs off once and retries. A second one
+ * slot there). A secondary rate limit or a pre-send transport failure backs off once and retries. A second secondary limit
  * returns the limited result with `rateLimited: true`, so the caller throws
  * RATE_LIMITED with its own message prefix.
  */
@@ -68,25 +68,32 @@ async function runWithBackoff(runChild, command, args, env, { sleep, timeoutMs }
   return runChild(command, args, env);
 }
 
-// A thrown error or a resolved `{ code, stderr }` result that carries a secondary limit.
+// A thrown error or a resolved `{ code, stderr }` result that carries a secondary limit (isTransportFailed covers the transport case).
 // An error with a `stderr` property is read by stderr only: its message carries the whole gh argv (ADR 0305).
 function isSecondaryLimited(outcome) {
   if (outcome instanceof Error) return isSecondaryRateLimitError(outcome.stderr === undefined ? outcome : String(outcome.stderr));
   return outcome?.code !== 0 && isSecondaryRateLimitError(String(outcome?.stderr ?? ""));
 }
 
+function isTransportFailed(outcome) {
+  if (outcome instanceof Error) return isGhTransportError(outcome.stderr === undefined ? outcome.message : outcome.stderr);
+  return outcome?.code !== 0 && isGhTransportError(outcome?.stderr);
+}
+
 /**
  * Backoff for a direct async gh site that captures stderr. `attempt` takes a
  * slot and runs gh once, either throwing an error that carries the gh stderr or
  * resolving `{ code, stderr }`. A secondary rate limit backs off once and
- * retries, and a second one throws RATE_LIMITED. Streaming sites that inherit
+ * retries, and a second one throws RATE_LIMITED. A pre-send transport failure
+ * retries the same way, and the second attempt's error is rethrown unchanged. Streaming sites that inherit
  * stderr cannot see the limit and stay paced only.
  */
 export async function withSecondaryLimitBackoff(attempt, { sleep = realSleep } = {}) {
   const settle = async () => { try { return { value: await attempt() }; } catch (error) { return { error }; } };
   const unwrap = ({ value, error }) => { if (error) throw error; return value; };
   let outcome = await settle();
-  if (!isSecondaryLimited(outcome.error ?? outcome.value)) return unwrap(outcome);
+  const first = outcome.error ?? outcome.value;
+  if (!isSecondaryLimited(first) && !isTransportFailed(first)) return unwrap(outcome);
   await sleep(SECONDARY_RATE_LIMIT_BACKOFF_MS);
   outcome = await settle();
   if (isSecondaryLimited(outcome.error ?? outcome.value)) {
@@ -246,6 +253,11 @@ export function isRateLimitError(error) {
 export function isSecondaryRateLimitError(error) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   return /secondary rate limit/i.test(message);
+}
+
+// A dial or TLS handshake timeout fails before the request is sent, so a retry is safe for mutations.
+export function isGhTransportError(stderr) {
+  return /dial tcp [^\n]*i\/o timeout|TLS handshake timeout/i.test(String(stderr ?? ""));
 }
 
 // Sanity bound: a GraphQL reset further ahead than this is a bogus reading.

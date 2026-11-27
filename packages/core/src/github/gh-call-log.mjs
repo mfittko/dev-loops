@@ -115,7 +115,7 @@ function recordedExecFileSync(command, args, options) {
   }
 }
 
-/** Throttled (slot, one secondary-limit backoff) `execFileSync("gh", args, options)`; each spawn is recorded. Rethrows the original error. */
+/** Throttled (slot, one secondary-limit or transport backoff) `execFileSync("gh", args, options)`; each spawn is recorded. Rethrows the original error. */
 export function ghSync(args, options = {}) {
   return ghExecFileSync("gh", args, options, { execFile: recordedExecFileSync });
 }
@@ -127,7 +127,7 @@ export function execFileSyncRecorded(command, args, options) {
 
 const execFileAsync = promisify(execFile);
 
-/** Throttled (slot, one secondary-limit backoff) `execFile("gh", args, options)`; each spawn is recorded. Resolves `{ stdout, stderr }`, rethrows the original error. */
+/** Throttled (slot, one secondary-limit or transport backoff) `execFile("gh", args, options)`; each spawn is recorded. Resolves `{ stdout, stderr }`, rethrows the original error. */
 export function ghAsync(args, options = {}) {
   return withSecondaryLimitBackoff(async () => {
     await takeGhSlot({ env: options.env, cwd: options.cwd });
