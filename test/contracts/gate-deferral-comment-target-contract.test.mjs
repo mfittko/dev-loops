@@ -59,9 +59,9 @@ test("GATE-EXEC-THREAD-DISPOSITION states the act-thread exclusion and that a ga
     ["current round's ledger", "decides first"],
     ["prior local ledgers", "decide"],
     ["Only a reject", "judge: <disposition>", "a defer needs ledger evidence"],
-    ["`act`", "no stamp", "no reply", "no resolve", "no deferral comment entry", "fixing commit", "decline reason", "judge rerun"],
+    ["`act`", "no stamp", "no reply", "no resolve", "no deferral comment entry", "fixed-act close", "decline reason", "judge rerun"],
     ["A gate fix pass", "posts no reply", "resolves no thread"],
-    ["`close-gate-findings.mjs`", "closes a gate-authored thread", "judge `act` item"],
+    ["`close-gate-findings.mjs`", "closes a gate-authored judge `act` thread", "evidence-only", "PR-body act close"],
   ], "GATE-EXEC-THREAD-DISPOSITION");
   assert.doesNotMatch(section, /PR's tracked follow-up issue/);
 });
