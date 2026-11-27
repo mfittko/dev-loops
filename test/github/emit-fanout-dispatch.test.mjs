@@ -3093,3 +3093,32 @@ test("emit-fanout-dispatch.mjs draft_gate without --ci-file refuses with ci_file
     }
   });
 });
+
+test("a --pending --retry-crashed emit against a stale context drops finished units and keeps their identity (#3661)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const gate = "draft_gate";
+    const angles = ["srp", "soc", "pr-description"];
+    await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: { groups: angles.map((angle) => ({ name: angle, angles: [angle] })), maxAnglesPerGroup: 6 } } }), "utf8");
+    const { config } = await loadDevLoopConfig({ repoRoot });
+    const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", "Body"]);
+    await writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { maxAnglesPerGroup: 6 }) }, { repoRoot });
+    const emitArgs = ["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA];
+    const full = runEmitCli(emitArgs, { cwd: repoRoot });
+    assert.equal(full.status, 0, full.stderr || full.stdout);
+    const wave1 = JSON.parse(full.stdout).units;
+    assert.equal(wave1.length, 3);
+    const findingsDir = buildGateReviewsDir({ ...id, tmpRoot });
+    await mkdir(findingsDir, { recursive: true });
+    for (const angle of ["srp", "soc"]) await writeFile(path.join(findingsDir, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+    const retry = runEmitCli([...emitArgs, "--pending", "--retry-crashed", "pr-description"], { cwd: repoRoot });
+    assert.equal(retry.status, 0, retry.stderr || retry.stdout);
+    assert.deepEqual(JSON.parse(retry.stdout).units.map((unit) => unit.angles), [["pr-description"]]);
+    const plan = JSON.parse(await readFile(buildGateEmitPlanPath({ ...id, tmpRoot }), "utf8"));
+    assert.deepEqual(plan.units.map((unit) => unit.resumed === true), [true, true, false]);
+    for (const unit of plan.units.filter((u) => u.resumed)) {
+      assert.equal(unit.executionIdentity, wave1.find((w) => w.scope === unit.scope).executionIdentity);
+    }
+  });
+});

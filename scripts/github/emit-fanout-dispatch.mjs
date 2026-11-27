@@ -11,7 +11,7 @@ import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output
 import { gateScopePrefix, LIFECYCLE_GATES, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE, dispatchPromptLayoutRecordPath } from "./record-dispatch-prompt-layout.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, workOrderDigest, writeExecutionIndex } from "./_work-order-protocol.mjs";
-import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseDiffFileBlocks, renderRequiredReadLine } from "./write-gate-context.mjs";
+import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseDiffFileBlocks, readCompletedAnglesForHead, renderRequiredReadLine } from "./write-gate-context.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
@@ -503,7 +503,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // every successful emission: a refused run followed by a --pending run finds the latest prior units. fan-in never reads the sidecar.
   const priorPlanSidecar = `${buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot })}.prior`;
   let priorPlan = null;
+  let priorPlanMtimeMs = null;
   if (pendingOnly) {
+    priorPlanMtimeMs = (await stat(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot })).catch(() => stat(priorPlanSidecar).catch(() => null)))?.mtimeMs ?? null;
     const priorText = await readFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), "utf8").catch(() => null)
       ?? await readFile(priorPlanSidecar, "utf8").catch(() => null);
     try {
@@ -673,11 +675,18 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // plan and refuses — silently falling back would mask a broken plan and
   // re-emit the full set the caller explicitly did not ask for.
   let units;
+  let liveCompleted = new Set();
   if (pendingOnly && fanout.pendingGroups !== undefined) {
     if (!Array.isArray(fanout.pendingGroups)) {
       return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout.pendingGroups is present but not an array (malformed plan); re-run write-gate-context.mjs` }, false);
     }
     units = fanout.pendingGroups;
+    // A context older than the prior plan can list units that finished since: drop them. A context rebuilt after the
+    // emission deliberately lists body-reading angles as pending, so it is trusted as is.
+    if (priorPlanMtimeMs !== null && (await stat(contextPath)).mtimeMs < priorPlanMtimeMs) {
+      liveCompleted = new Set(await readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: process.cwd(), config }));
+      units = units.filter((unit) => !normalizeUnitAngles(unit).every((angle) => liveCompleted.has(angle)));
+    }
   } else {
     units = fanout.groups;
   }
@@ -1009,7 +1018,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
   // Units of the prior plan whose angles all completed in this round and are not re-emitted keep their fan-in
   // provenance: they stay in the persisted plan, marked resumed, but never in the dispatch list printed above.
-  const completedAngles = new Set(artifact.fanout?.preflight?.completedAngles ?? []);
+  const completedAngles = new Set([...(artifact.fanout?.preflight?.completedAngles ?? []), ...liveCompleted]);
   const emittedAngles = new Set(emitted.flatMap((unit) => unit.angles));
   const priorUnits = priorPlan?.gate === gate && priorPlan.headSha === headSha && Array.isArray(priorPlan.units) ? priorPlan.units.filter((unit) => unit !== null && typeof unit === "object") : [];
   const isResumed = (unit) => Array.isArray(unit.angles) && unit.angles.length > 0
