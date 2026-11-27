@@ -110,6 +110,18 @@ When no judge verdict is present, the findings stay unjudged. You derive no disp
    - If reply/resolve is not authorized, stop and report that the PR conversation state is still unresolved rather than implying the review loop is complete.
 12. If GitHub leaves a stray pending review or rejects an inline reply because of pending review state, inspect the current review state, delete the stray pending review, recreate the reply, and retry once.
 
+## Hard limits
+- Write tracked files only with the Edit or Write tools. Do not use `sed -i` or shell redirection into tracked files.
+- Never pass `--allow-untick` or `--allow-cross-issue`.
+- Never run the merge script. Never write or request an `approve-merge` line.
+- When a limit blocks the task, stop and report the blocker.
+
+## Stale-prose search
+For an act item about stale or contradicting prose, search before you edit.
+1. Search every site of the same claim, using its key phrases and synonyms, across `skills/`, `agents/`, `docs/` (not `docs/decisions/`), `scripts/`, `packages/core/src/` and `test/`.
+2. Fix every in-scope hit in the same pass.
+3. In the handoff, list each hit with its outcome: fixed, or out of scope with the reason.
+
 ## Output
 Return:
 - What review feedback was addressed and the rationale for each resolution
