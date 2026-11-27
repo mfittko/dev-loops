@@ -52,7 +52,7 @@ const renderRunbook = (docsDir) => String.raw`# Gate round runbook
 
 You run one \`draft_gate\`, \`pre_approval_gate\` or \`review\` round for one PR at one head (GATE-EXEC-GATE-COORDINATOR). Read only this runbook. For a rule ID named here run \`grep -n 'rule: <rule ID>' "$D"/*.md\`, then read a bounded range. The contract \`$CONTRACT\` is canonical; this runbook loosens none of its rules.
 
-On the \`review\` gate (the \`--review\` route) run no judge and no lifecycle step: skip steps 2b, 4, 5, 6 and 11 to 13, omit \`--ci-file\` (step 7), \`--spec-authority\` (steps 10 and 14) and every judge flag, and write the log from \`$F/ledger.json\` (step 14). Omit \`actList\`, \`specAuthorityIdentity\` and \`judgeSummary\` from the result.
+On the \`review\` gate run no judge and no lifecycle step: skip steps 2b, 4, 5, 6 and 11 to 13, omit \`--ci-file\` (step 7), \`--spec-authority\` (steps 10 and 14) and every judge flag, and write the log from \`$F/ledger.json\` (step 14). Omit \`actList\`, \`specAuthorityIdentity\` and \`judgeSummary\` from the result.
 
 Run every command as \`dev-loops-run --repo-root "$W" ...\` with no \`cd\` prefix (WORKTREE-SCRIPT-LAUNCHER-CWD). Repeat the variables in every Bash call; double-quote every expansion. Parse JSON only with \`jq\` or a step \`--jq\` (OPS-NO-INLINE-INTERPRETER).
 
@@ -65,9 +65,11 @@ HARNESS=<pi|claude|codex, your own harness>; BASE=<PR base branch, pr.baseRefNam
 CONTRACT="${path.join(docsDir, CONTRACT_FILE)}"; D="$(dirname "$CONTRACT")"
 SLUG="$(echo "$R" | tr / -)"; G="$W/tmp/gate-context/$SLUG/pr-$N"; F="$W/tmp/gate-fanin/$SLUG/pr-$N/$GATE-$H"
 A="$W/tmp/gate-judge/$SLUG/pr-$N/$GATE-$H"; mkdir -p "$F" "$A"
+FOCUS=<operator file, else "$F/focus.json" holding { "round": "<text>" } for round text, else unset>
 \`\`\`
 
-Operator focus (GATE-EXEC-OPERATOR-FOCUS). When the round arguments carry operator context write \`{ "round": "<text>" }\` to \`$F/focus.json\` and pass \`--operator-focus-file "$F/focus.json"\` to steps 7 and 11.
+Operator focus (GATE-EXEC-OPERATOR-FOCUS). Round text plus a named file whose \`round\` is absent or differs: stop, hand back the conflict. Step 3: not \`review\`.
+
 ## Steps
 
 0. Recheck tools after preflight: \`Agent\` (Claude), \`subagent\` (Pi), \`collaboration.spawn_agent\` (Codex). Absent: return \`FANOUT_UNAVAILABLE_MESSAGE\` (\`FANOUT_UNAVAILABLE\`) naming the tool; stop. Head or route may have changed.
@@ -79,9 +81,8 @@ Operator focus (GATE-EXEC-OPERATOR-FOCUS). When the round arguments carry operat
    On \`mode: "full_fanout"\` continue. On the inline mode run no fan-out and no judge: do steps 3 and 4, review the diff in one pass, write the findings (severity, disposition, angle, summary) as a JSON array to \`$F/inline-findings.json\` and set \`VERDICT\` to \`clean\` or \`findings_present\`. A blocking-severity finding escalates first: rerun this step with \`--inline-severities <csv>\` and continue at step 3 on \`full_fanout\`. Otherwise write the log:
    \`dev-loops-run --repo-root "$W" cli/index.mjs gate write-findings-log --repo "$R" --pr "$N" --gate "$GATE" --head-sha "$H" --verdict "$VERDICT" --execution-mode inline_single_agent --findings-file "$F/inline-findings.json" --spec-authority "$G/$GATE-$H.spec-identity.json" > "$F/findings-log.json"\`
    Return \`executionMode: inline_single_agent\`, the resolver's \`reason\` and the findings summary (the writer takes no reason flag).
-3. Context (Phase 1; GATE-EXEC-BUILD-ONCE-SEED). Build ONE bundle for every reviewer. Add \`--available-reviewers <n>\` (remaining reviewer budget) or omit it. Read \`jq -c '{ok, path}' "$F/wgc.json"\`, then \`jq -c '.artifact.fanout.preflight' <path>\` (GATE-EXEC-REVIEWER-BUDGET-PREFLIGHT). On \`dispatch: false\` spawn zero reviewers, record no verdict and stop with \`budget_shortfall\`, never \`inline_single_agent\`. Resume at this head with a new budget.
-   \`dev-loops-run --repo-root "$W" scripts/github/write-gate-context.mjs --repo "$R" --pr "$N" --gate "$GATE" --head-sha "$H" --harness "$HARNESS" --base "$BASE" --validation-results "$G/$GATE-$H.validation.json" > "$F/wgc.json"\`
-   With a decision file (focus \`items\`) add \`--operator-focus-file "<that file>"\`.
+3. Context (Phase 1; GATE-EXEC-BUILD-ONCE-SEED). Build ONE bundle for every reviewer. No \`FOCUS\`: omit it. Add \`--available-reviewers <n>\` or omit it. Read \`jq -c '{ok, path}' "$F/wgc.json"\`, then \`jq -c '.artifact.fanout.preflight' <path>\` (GATE-EXEC-REVIEWER-BUDGET-PREFLIGHT). On \`dispatch: false\` spawn zero reviewers, record no verdict and stop with \`budget_shortfall\`, never \`inline_single_agent\`. Resume at this head with a new budget.
+   \`dev-loops-run --repo-root "$W" scripts/github/write-gate-context.mjs --repo "$R" --pr "$N" --gate "$GATE" --head-sha "$H" --harness "$HARNESS" --base "$BASE" --validation-results "$G/$GATE-$H.validation.json" --operator-focus-file "$FOCUS" > "$F/wgc.json"\`
 4. Spec identity, before the resolver and dispatch (GATE-EXEC-JUDGE-PHASE). Skip on \`review\`. Take the spec source from the routed authority, \`--issue <n>\` for the single issue the gate context links, \`--pr "$N"\` only for \`pr_body\` authority. With no source or several issues, stop and hand back the ambiguity. Keep the printed \`sha256:...\` as \`DIGEST\`.
    \`dev-loops-run --repo-root "$W" scripts/loop/spec-context.mjs --repo "$R" --issue <n> --content-file "$G/$GATE-$H.diff" --head-sha "$H" --spec-out "$G/$GATE-$H.spec.json" --identity-out "$G/$GATE-$H.spec-identity.json" --jq .contentDigest\`
 5. Carry-forward (Phase 1.2). Skip on \`review\` and on the gate's first round (no prior head). Otherwise run the resolver for the latest prior head \`$PREV\`; a re-gate never skips it (GATE-EXEC-ANGLE-CARRY-FORWARD, GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED). Add \`--rerun-angle <angle>\` per GATE-EXEC-RERUN-ANGLE.
@@ -89,13 +90,13 @@ Operator focus (GATE-EXEC-OPERATOR-FOCUS). When the round arguments carry operat
    Keep \`PLAN\` = \`jq -r .carryForwardPlanPath "$F/carry.json"\` and \`CARRIED\` = \`jq -c '[.carried[].angle]' "$F/carry.json"\`. When \`CARRIED\` is not empty, rerun step 3 with \`--carried-angles "$CARRIED"\`. On a non-zero exit run \`jq -e --arg p "$PREV" '.fallback == true and .prevHead == $p' "$G/$GATE-$H.carry-forward-plan.json"\`: when the plan of this head records \`fallback\` is true, carry nothing and continue with the full dispatch. On any other non-zero exit stop and hand back the refusal.
 6. CI check. Skip on \`review\`. Re-read current-head CI just before fan-out. Step 7's emitter refuses a red or unsettled head with \`ci_not_green\` unless the gate's \`requireCi\` is false (\`gates.draft\` or \`gates.preApproval\`): stop on that refusal, and continue when \`requireCi\` is false.
    \`dev-loops-run --repo-root "$W" scripts/github/wait-pr-checks.mjs --repo "$R" --pr "$N" --timeout 0 > "$F/ci.json"\`
-7. Emit (Phase 2). Round 1 of a head uses no \`--pending\`. After a carry-forward with \`CARRIED\`, or to resume at the same head, add \`--pending\` (and \`--carry-forward-plan-file "$PLAN"\` only with carried angles). Pass \`--ci-file\` on \`draft_gate\` and \`pre_approval_gate\`.
-   \`dev-loops-run --repo-root "$W" scripts/github/emit-fanout-dispatch.mjs --repo "$R" --pr "$N" --gate "$GATE" --head-sha "$H" --ci-file "$F/ci.json" > "$F/emit.json"\`
+7. Emit (Phase 2). Round 1 of a head uses no \`--pending\`. After a carry-forward with \`CARRIED\`, or to resume at the same head, add \`--pending\` (and \`--carry-forward-plan-file "$PLAN"\` only with carried angles). Pass \`--ci-file\` on \`draft_gate\` and \`pre_approval_gate\`. No \`FOCUS\`: omit it.
+   \`dev-loops-run --repo-root "$W" scripts/github/emit-fanout-dispatch.mjs --repo "$R" --pr "$N" --gate "$GATE" --head-sha "$H" --ci-file "$F/ci.json" --operator-focus-file "$FOCUS" > "$F/emit.json"\`
    Read \`jq -c '{count, maxConcurrent}' "$F/emit.json"\` and \`jq -r '.units[] | .scope, .dispatchPrompt' "$F/emit.json"\`. A \`count\` of 0 means every angle is carried: dispatch no reviewer, skip steps 8 and 9, and continue at step 10.
-8. Waves (GATE-EXEC-FANOUT-CAPACITY, GATE-EXEC-FIRST-WAVE-RELEASE). Split the emitted units into waves of at most \`maxConcurrent\` units (\`gates.fanout.sequential: true\` means 1, GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK). Release the first wave at once, no primer. Run step 9 per wave and join it before the next.
+8. Waves (GATE-EXEC-FANOUT-CAPACITY, GATE-EXEC-FIRST-WAVE-RELEASE). Split the emitted units into waves of at most \`maxConcurrent\` units (\`gates.fanout.sequential: true\` means 1, GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK). Release the first wave at once. Run step 9 per wave and join it before the next.
 9. Dispatch and join one wave.
    Models (MAIN-CLAUDE-DISPATCH-MODEL): \`dev-loops-run --repo-root "$W" cli/index.mjs gate resolve-role --gate "$GATE" --angle <angle> --harness "$HARNESS"\` per angle of the unit. Use the common model, else the \`review\` role model (\`gate resolve-role --role review --harness "$HARNESS"\`). On Pi use \`resolveRoleModel\`, non-null.
-   Dispatch (GATE-EXEC-FANOUT-DISPATCH-EMIT): every unit of the wave in ONE message, one \`Agent\` call per unit with \`subagent_type: "dev-loops:review"\` and \`prompt\` = that unit's \`dispatchPrompt\` byte for byte. Add no prose, \`cd\` or flags. On Pi send the wave as ONE \`subagent\` call with one \`runs.all\` and a unique key per unit.
+   Dispatch (GATE-EXEC-FANOUT-DISPATCH-EMIT): every unit of the wave in ONE message, one \`Agent\` call per unit with \`subagent_type: "dev-loops:review"\` and \`prompt\` = that unit's \`dispatchPrompt\` byte for byte, with no added prose. On Pi send the wave as ONE \`subagent\` call with one \`runs.all\` and a unique key per unit.
    Collect (GATE-EXEC-COLLECTABLE-DISPATCH): reviewers write \`tmp/gate-reviews/$SLUG/pr-$N/$GATE-$H/<angle>.json\`; a killed reviewer is failed, never evidence.
    Join (GATE-EXEC-HARNESS-JOIN) in the same turn, in the foreground, with an explicit \`--timeout\` and one \`--unit <scope>\` per unit of the wave:
    \`dev-loops-run --repo-root "$W" cli/index.mjs gate wait-for-units --emit-plan "$G/$GATE-$H.emit-plan.json" --unit <scope> --timeout 540\`
@@ -104,12 +105,12 @@ Operator focus (GATE-EXEC-OPERATOR-FOCUS). When the round arguments carry operat
 10. Fan-in (Phase 3; GATE-EXEC-ARTIFACT-HEAD-STAMP). \`--expected-dispatch-units\` is the emitter's stdout \`count\`. At a \`count\` of 0 omit \`--expected-dispatch-units\`. On a carry-forward round add \`--carried-angles "$CARRIED" --carry-forward-plan-file "$PLAN"\`. A non-zero exit stops the round.
     \`dev-loops-run --repo-root "$W" cli/index.mjs gate consolidate-fanin --repo "$R" --pr "$N" --findings-dir "$W/tmp/gate-reviews/$SLUG/pr-$N/$GATE-$H" --head-sha "$H" --gate "$GATE" --expected-dispatch-units <n> --out "$F/findings.json" --ledger-out "$F/ledger.json" --spec-authority "$G/$GATE-$H.spec-identity.json" --emit-plan "$G/$GATE-$H.emit-plan.json" > "$F/fanin-result.json"\`
     Read \`jq -c '{overallVerdict, severityCounts}' "$F/fanin-result.json"\`.
-11. Judge work order (Phase 3.5; GATE-EXEC-JUDGE-PHASE, GATE-EXEC-JUDGE-NOT-FRESH). Pass no \`--round\`: the emitter derives it. For each head in \`$PRIORS\` add \`--prior-verdict <that head's judge-verdict path>\`, read from its \`judge-emit-plan.json\` \`.workOrder.outputRefs\`.
-    \`dev-loops-run --repo-root "$W" scripts/loop/emit-judge-work-order.mjs --repo "$R" --pr "$N" --gate "$GATE" --head-sha "$H" --findings-file "$F/ledger.json" --spec-file "$G/$GATE-$H.spec.json" --identity-file "$G/$GATE-$H.spec-identity.json" --tmp-root "$W/tmp" > "$F/judge-emit.json"\`
-    When it returns \`judgeSkipped\`, dispatch no judge, run no \`judge-pass\`, join no judge, write the log with step 14, and return \`judgeSkipped\` and \`scopeDrift\` in place of the judge summary with no act-list path.
+11. Judge work order (Phase 3.5; GATE-EXEC-JUDGE-PHASE, GATE-EXEC-JUDGE-NOT-FRESH). Pass no \`--round\`: the emitter derives it. For each head in \`$PRIORS\` add \`--prior-verdict <that head's judge-verdict path>\`, read from its \`judge-emit-plan.json\` \`.workOrder.outputRefs\`. No \`FOCUS\`: omit it.
+    \`dev-loops-run --repo-root "$W" scripts/loop/emit-judge-work-order.mjs --repo "$R" --pr "$N" --gate "$GATE" --head-sha "$H" --findings-file "$F/ledger.json" --spec-file "$G/$GATE-$H.spec.json" --identity-file "$G/$GATE-$H.spec-identity.json" --tmp-root "$W/tmp" --operator-focus-file "$FOCUS" > "$F/judge-emit.json"\`
+    When it returns \`judgeSkipped\`, run no judge or \`judge-pass\`, write the log with step 14, and return \`judgeSkipped\` and \`scopeDrift\` in place of the judge summary with no act-list path.
 12. Dispatch the judge. Read \`jq -r '.planPath, .dispatchPrompt' "$F/judge-emit.json"\`. One \`Agent\` call, \`subagent_type: "dev-loops:judge"\`, \`prompt\` = \`dispatchPrompt\` byte for byte, model per MAIN-CLAUDE-DISPATCH-MODEL (\`gate resolve-role --role judge --harness "$HARNESS"\`). Join it as in step 9:
     \`dev-loops-run --repo-root "$W" cli/index.mjs gate wait-for-units --judge-plan <planPath> --timeout 540\`
-    On a judge failure, emit and dispatch once more at the same head; a second failure stops the round.
+    On a judge failure, emit and dispatch once more at the same head.
 13. Judge pass (GATE-EXEC-RECURRENCE-ESCALATION). The judge outputs (\`judge-verdict.json\`, \`spec-authority-verdict.json\`, directory \`J\`) are \`jq -r '.workOrder.outputRefs[]' <planPath>\`. On re-entry add \`--prior-approvals "$W/tmp/gate-judge/$SLUG/pr-$N/$GATE-<head>/approvals.json"\` for the latest head in \`$PRIORS\` whose file exists. When none exists (fresh approval chain) omit it and the \`--changed-paths\`/\`--coverage-map\` pair. On a fixer-push re-entry with a coverage map pass \`--changed-paths <file> --coverage-map <file>\` together (paths: \`scripts/loop/spec-context.mjs changed-paths --base <approvals head> --head "$H"\`).
     \`dev-loops-run --repo-root "$W" cli/index.mjs gate judge-pass --repo "$R" --pr "$N" --gate "$GATE" --head-sha "$H" --findings-file "$F/ledger.json" --judge-verdict "$J/judge-verdict.json" --judge-plan <planPath> --out "$A/act-list.json" --ledger-out "$F/enriched-ledger.json" --approvals-out "$A/approvals.json" --spec-file "$G/$GATE-$H.spec.json" --content-digest "$DIGEST" --spec-authority-verdict "$J/spec-authority-verdict.json" > "$F/judge-pass.json"\`
     When it fails with \`humanDecisionRequired\` (exit 1), stop at once at the human spec decision and hand back its output. On any other failure rerun steps 11 to 13 once at the same head; stop on a second failure. Read \`jq -c '{counts, scopeDrift, escalations, escalationsSkipped, overridden}' "$F/judge-pass.json"\`. Add escalations, escalationsSkipped and overridden to the result; an escalation withholds its cluster siblings (\`clusterFingerprints[]\`).
@@ -123,8 +124,7 @@ Return the typed observation, not the result, when: step 0 finds no dispatch too
 
 ## Boundary
 
-No verdict comment, no ready flip, no push, no merge, no fixer dispatch, no tracked-file edit. Write only under \`$W/tmp/\` and the ledger root. Telemetry (GATE-EXEC-EXECUTION-RECORD): optional.
-
+No verdict comment, no ready flip, no push, no merge, no fixer dispatch, no tracked-file edit. Write only under \`$W/tmp/\` and the ledger root. Telemetry: GATE-EXEC-EXECUTION-RECORD.
 ## Typed round result
 
 Return once, after step 14 or at a stop condition. Never hand back an interim result while a dispatched unit is pending (GATE-EXEC-HARNESS-JOIN).

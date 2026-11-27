@@ -47,8 +47,8 @@ The work order's two verdict outputRefs sit under that directory's <roundId>/ se
 A --prior-verdict named judge-verdict.json also pins the spec-authority-verdict.json beside it when that file exists.
 --tmp-root must be a listed checkout's tmp directory (the default is <checkout root>/tmp).
 Dispatch the judge with the compact dispatchPrompt only; each run supersedes the
-previous emission for this PR and gate at any head. The only operator input is --operator-focus-file, a JSON file { round?: string } that
-renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
+previous emission for this PR and gate at any head. The only operator input is --operator-focus-file, a JSON file { round?: string, items?: [...] } whose round
+renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS). Items are validated and not used.
 It accepts no other brief or summary input. When the body holds exactly one closing reference and its number is named by a reopen line in the body or spec Non-goals, the work order carries "sliceLinkage" and "sliceLinkageIssues" (SPEC-SLICE-PR-KEEPS-CLOSING-REF) and renders it.
 The pinned pr-body read must match the live PR body (GATE-EXEC-BODY-ONLY-RERUN); a body edited after the round refuses with pr_body_stale and names both digests, so rebuild the round context. A live PR body that cannot be read refuses with pr_body_unreadable, because the pin cannot be compared.
 Exit codes: 0 emitted, 1 refused (missing or inconsistent source), 2 usage/IO error, 3 comment trust config refused (stderr JSON with a state field).`;
@@ -231,7 +231,8 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   const findingsRead = parseSource(findings);
   const copilotBodyClusterId = (Array.isArray(findingsRead) ? findingsRead : findingsRead?.findings ?? []).length;
   // Read before the skip check so a bad --operator-focus-file refuses on both branches.
-  const operatorFocus = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined);
+  const focusFile = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined);
+  const operatorFocus = focusFile?.round !== undefined ? { round: focusFile.round } : null;
   // A well-formed empty ledger with no pinned Copilot body has nothing to dispose (GATE-EXEC-JUDGE-PHASE); write no plan, work order or index entry.
   const ledgerFindings = Array.isArray(findingsRead) ? findingsRead : findingsRead?.findings;
   if (Array.isArray(ledgerFindings) && ledgerFindings.length === 0 && !copilotBody) {

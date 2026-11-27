@@ -638,8 +638,13 @@ test("operator focus: the round renders before the required reads and is pinned;
     assert.match(text, /Round: Round 8: no churn on docs lows/);
     // The two emits use different roundIds, so a digest inequality is vacuous; assert the pinned content.
     assert.deepEqual(plan.workOrder.operatorFocus, { round: "Round 8: no churn on docs lows" });
+    // Items are validated and not used (issue 3590): the work order keeps only `round`.
+    await writeFile(focusFile, JSON.stringify({ round: "r", items: [{ fingerprint: "f", decision: "d" }] }));
+    const withRound = await emitJudgeWorkOrder({ ...sources, operatorFocusFile: focusFile, roundId: "j1790000000002-cccccccc" });
+    assert.deepEqual(withRound.workOrder.operatorFocus, { round: "r" });
     await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "f", decision: "d" }] }));
-    await assert.rejects(() => emitJudgeWorkOrder({ ...sources, operatorFocusFile: focusFile, roundId: "j1790000000002-cccccccc" }), /fixer only/);
+    const itemsOnly = await emitJudgeWorkOrder({ ...sources, operatorFocusFile: focusFile, roundId: "j1790000000003-dddddddd" });
+    assert.equal("operatorFocus" in itemsOnly.workOrder, false);
   });
 });
 
@@ -671,11 +676,11 @@ test("operator focus CLI: an empty --operator-focus-file is a usage error (exit 
   });
 });
 
-test("operator focus CLI: a refusing focus file (items on the judge) exits 1 with a GATE-EXEC-OPERATOR-FOCUS error", async () => {
+test("operator focus CLI: a malformed focus file exits 1 with a GATE-EXEC-OPERATOR-FOCUS error", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
     const focusFile = path.join(root, "focus.json");
-    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "f", decision: "d" }] }));
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "f", decision: "d", extra: 1 }] }));
     const { code, stdout } = await runJudgeMain(root, sources, ["--operator-focus-file", focusFile]);
     const body = JSON.parse(stdout);
     assert.equal(code, 1);
