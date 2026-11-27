@@ -1094,6 +1094,15 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   // required approvals / blocking merge) independent of any dev-loops gate,
   // so automation must never reach them — they are reachable only via the
   // review skill's interactive multiple-choice.
+  // Human-style refusals come first so they carry the human-style wording and a `recovery`.
+  if (options.humanOpenerFile !== undefined) {
+    const interactiveRecovery = "run the interactive submit choice (--interactive-confirm with --submit comment or approve, never --auto)";
+    const refuseHuman = (reason, recovery) => Object.assign(parseError(`--human-opener-file refused: ${reason} Recovery: ${recovery}.`), { recovery });
+    if (options.gate !== "review") throw refuseHuman("it is scoped to --gate review.", "pass --gate review");
+    if (options.auto) throw refuseHuman("it is refused with --auto.", interactiveRecovery);
+    if (!options.interactiveConfirm) throw refuseHuman("it requires --interactive-confirm.", interactiveRecovery);
+    if (options.submit !== undefined && options.submit !== "comment" && options.submit !== "approve") throw refuseHuman(`--submit ${options.submit} is not supported (only comment or approve).`, interactiveRecovery);
+  }
   if (options.gate === "review" && options.auto && options.submit !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(options.submit)) {
     throw parseError(
       `--submit ${options.submit} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes/discard are reachable only via the interactive submit choice.`,
@@ -2905,8 +2914,16 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     if (options.auto) throw refuse("it is refused with --auto.", interactiveRecovery);
     if (options.interactiveConfirm !== true) throw refuse("it requires --interactive-confirm.", interactiveRecovery);
     if (reviewSubmitMode !== "comment" && reviewSubmitMode !== "approve") throw refuse(`--submit ${reviewSubmitMode} is not supported (only comment or approve).`, interactiveRecovery);
-    humanOpener = (await readFile(options.humanOpenerFile, "utf8").catch(() => "")).trim();
-    if (humanOpener === "") throw refuse("the opener file is missing or empty.", "edit the opener file so it holds the opener text");
+    const editRecovery = "edit the opener file";
+    try {
+      humanOpener = await readFile(options.humanOpenerFile, "utf8");
+    } catch (error) {
+      throw refuse(`the opener file cannot be read (${error?.code ?? "unknown error"}).`, editRecovery);
+    }
+    if (humanOpener.trim() === "") throw refuse("the opener file is empty.", "edit the opener file so it holds the opener text");
+    // Leading indentation is kept; only trailing whitespace is dropped.
+    humanOpener = humanOpener.trimEnd();
+    if (/<!--|<\/?details|<\/?summary/i.test(humanOpener)) throw refuse("the opener holds an HTML comment, details or summary tag that would break the wrapper.", editRecovery);
   }
   if (isReviewGate && reviewSubmitMode !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(reviewSubmitMode)) {
     if (options.auto) {
@@ -3980,7 +3997,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
         try {
           guardCommentBodyNoIssuePrIds(wrappedBody, { ref: "human-style review body", allowedRefs: options.allowedRefs });
         } catch (error) {
-          const recovery = "edit the opener file to remove the issue or PR reference";
+          const recovery = "edit the opener file to remove the issue or PR reference, or repeat the original --allowed-refs";
           throw Object.assign(new Error(`--human-opener-file refused: ${error.message} Recovery: ${recovery}.`), { recovery });
         }
       }

@@ -65,7 +65,7 @@ const upsertCheckpointVerdict = async (options, deps = {}) => {
 // summarizers' machine-artifact filter has to recognize the same line the
 // producer renders.
 import { GATE_REVIEW_COMMENT_HEADER_RE, isGateMachineArtifactBody, matchGateReviewCommentHeader, parseGateReviewCommentBody, summarizeGateReviewComments } from "@dev-loops/core/github/copilot-helpers";
-import { buildFindingMarker, findOwnSubmittedReview, fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { buildFindingMarker, FINDING_MARKER_RE, findOwnSubmittedReview, fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 
 const scriptPath = path.resolve("scripts/github/upsert-checkpoint-verdict.mjs");
 
@@ -13684,16 +13684,17 @@ const HUMAN_PENDING_BODY = "### Gate review: `review`\n\n**Next action:** read t
 const HUMAN_PENDING_REVIEW = { ...OWN_PENDING_REVIEW, body: HUMAN_PENDING_BODY };
 const HUMAN_OPENER = "Thanks, this looks good. One small note on the query builder.";
 
-async function runHumanStyle(tempDir, { submit = "approve", opener = HUMAN_OPENER, extra = {}, pending = [HUMAN_PENDING_REVIEW] } = {}) {
-  const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+async function runHumanStyle(tempDir, { submit = "approve", opener = HUMAN_OPENER, extra = {}, pending = [HUMAN_PENDING_REVIEW], findings = [], ledger = { verdict: "clean", overallVerdict: "clean" }, openerIsDir = false, gate = "review" } = {}) {
+  const ledgerPath = await writeReviewGateLedger(tempDir, findings, ledger);
   const openerPath = path.join(tempDir, "opener.md");
-  if (opener !== null) await writeFile(openerPath, opener, "utf8");
+  if (openerIsDir) await mkdir(openerPath);
+  else if (opener !== null) await writeFile(openerPath, opener, "utf8");
   const { runChild, calls } = makeGhMock([
     { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify(pending) + "\n" },
     { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews/8001/events", "--input", "-"], stdout: '{"id":8001,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-8001"}\n' },
   ]);
   const run = () => upsertCheckpointVerdict({
-    repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+    repo: "owner/repo", pr: 17, gate, headSha: SINGLE_SURFACE_HEAD,
     nextAction: "none — informational review, no re-gate required",
     findingsLedger: ledgerPath, executionMode: "fanout_fanin",
     submit, humanOpenerFile: openerPath, interactiveConfirm: true, ...extra,
@@ -13714,12 +13715,66 @@ for (const [submit, event] of [["approve", "APPROVE"], ["comment", "COMMENT"]]) 
       assert.equal(payload.event, event);
       assert.equal(payload.body, `${HUMAN_OPENER}\n\n<details>\n<summary>dev-loops review details</summary>\n\n${HUMAN_PENDING_BODY}\n\n</details>\n`);
       assert.equal(payload.body.slice(0, payload.body.indexOf("<details>")).trim(), HUMAN_OPENER);
-      assert.match(payload.body.slice(payload.body.indexOf("<details>")), /<!-- dev-loops:finding [0-9a-f]{16} severity=high angle=correctness round=1 -->/);
+      assert.match(payload.body.slice(payload.body.indexOf("<details>")), FINDING_MARKER_RE);
       assert.equal(calls.some((c) => c.args.includes("DELETE")), false);
       assert.equal(calls.some((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews")), false);
     }, { prefix: "dev-loops-upsert-human-style-" });
   });
 }
+
+// Matrix rows 2 and 3: a judged ledger with findings and an inlineReason round both submit the same review id once, wrapped.
+const HUMAN_LEDGER_ROUNDS = [
+  {
+    name: "a judged ledger with findings",
+    findings: [
+      { severity: "must-fix", angle: "correctness", summary: "act finding text", files: ["src/db.mjs"], line: 2, judgeDisposition: "act" },
+      { severity: "low", angle: "correctness", summary: "defer finding text", files: ["src/db.mjs"], line: 3, judgeDisposition: "defer" },
+    ],
+    ledger: { overallVerdict: "findings_present" },
+    extra: { judgeSpecSource: "issue" },
+  },
+  {
+    name: "an inlineReason round with no judge dispositions",
+    findings: [{ severity: "must-fix", angle: "correctness", summary: "unjudged finding text", files: ["src/db.mjs"], line: 2 }],
+    ledger: { overallVerdict: "findings_present" },
+    extra: { executionMode: "inline_single_agent", inlineReason: "single-agent inline review (test)", judgeSpecSource: "none" },
+  },
+];
+for (const { name, ...round } of HUMAN_LEDGER_ROUNDS) {
+  test(`human-style approve over ${name} submits the same review once, wrapped`, async () => {
+    await withTempDir(async (tempDir) => {
+      const { run, calls } = await runHumanStyle(tempDir, round);
+      const result = await run();
+      assert.equal(result.action, "submitted");
+      assert.equal(result.commentId, 8001);
+      const eventsCalls = calls.filter((c) => c.args.includes("repos/owner/repo/pulls/17/reviews/8001/events"));
+      assert.equal(eventsCalls.length, 1);
+      const payload = JSON.parse(eventsCalls[0].stdinText);
+      assert.equal(payload.event, "APPROVE");
+      assert.equal(payload.body, `${HUMAN_OPENER}\n\n<details>\n<summary>dev-loops review details</summary>\n\n${HUMAN_PENDING_BODY}\n\n</details>\n`);
+    }, { prefix: "dev-loops-upsert-human-style-ledger-" });
+  });
+}
+
+test("human-style keeps the opener's leading indentation and drops only trailing whitespace", async () => {
+  await withTempDir(async (tempDir) => {
+    const { run, calls } = await runHumanStyle(tempDir, { opener: "    indented opener\n\n" });
+    await run();
+    const payload = JSON.parse(calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews/8001/events")).stdinText);
+    assert.ok(payload.body.startsWith("    indented opener\n\n<details>"));
+  }, { prefix: "dev-loops-upsert-human-style-indent-" });
+});
+
+test("parseUpsertCheckpointVerdictCliArgs refuses --human-opener-file combinations with a recovery before the generic guards", () => {
+  const base = ["--repo", "owner/repo", "--pr", "7", "--head-sha", "a".repeat(40), "--gate", "review", "--verdict", "clean", "--findings-summary", "none", "--inline-reason", "test", "--human-opener-file", "f"];
+  for (const extra of [["--auto", "--submit", "approve"], ["--submit", "approve"], ["--interactive-confirm", "--submit", "discard"], ["--interactive-confirm", "--submit", "pending"]]) {
+    let error;
+    try { parseUpsertCheckpointVerdictCliArgs([...base, ...extra]); } catch (e) { error = e; }
+    assert.ok(error, extra.join(" "));
+    assert.match(error.message, /--human-opener-file refused/);
+    assert.match(error.recovery, /interactive submit choice/);
+  }
+});
 
 const HUMAN_REFUSALS = [
   { name: "no --interactive-confirm", extra: { interactiveConfirm: false }, text: /interactive/i, recovery: /interactive submit choice/ },
@@ -13728,10 +13783,15 @@ const HUMAN_REFUSALS = [
   { name: "--submit request-changes", submit: "request-changes", text: /--submit/, recovery: /interactive submit choice/ },
   { name: "--submit discard", submit: "discard", text: /--submit/, recovery: /interactive submit choice/ },
   { name: "an empty opener file", opener: "  \n", text: /opener/i, recovery: /edit the opener file/ },
-  { name: "a missing opener file", opener: null, text: /opener/i, recovery: /edit the opener file/ },
+  { name: "a missing opener file", opener: null, text: /ENOENT/, recovery: /edit the opener file/ },
   { name: "no own same-head pending draft", pending: [], text: /pending/i, recovery: /--submit pending first/ },
   { name: "a stale-head pending draft", pending: [{ ...HUMAN_PENDING_REVIEW, commit_id: "f".repeat(40) }], text: /pending/i, recovery: /--submit pending first/ },
-  { name: "an opener the issue/PR-id guard refuses", opener: "Fixes #123 for real.", text: /opener|issue/i, recovery: /edit the opener file/ },
+  { name: "an opener the issue/PR-id guard refuses", opener: "Fixes #123 for real.", text: /opener|issue/i, recovery: /edit the opener file.*--allowed-refs/ },
+  { name: "an opener path that is a directory", openerIsDir: true, text: /EISDIR/, recovery: /edit the opener file/ },
+  { name: "an opener with an HTML comment", opener: "Hi <!-- hidden -->", text: /opener/i, recovery: /edit the opener file/ },
+  { name: "an opener with a details tag", opener: "Hi </details> there", text: /opener/i, recovery: /edit the opener file/ },
+  { name: "an opener with a summary tag", opener: "<summary>x</summary>", text: /opener/i, recovery: /edit the opener file/ },
+  { name: "a non-review gate", gate: "draft_gate", text: /--gate review/, recovery: /pass --gate review/ },
 ];
 for (const { name, text, recovery, ...rest } of HUMAN_REFUSALS) {
   test(`human-style refuses ${name} before any GitHub write, naming its recovery`, async () => {
@@ -13743,7 +13803,7 @@ for (const { name, text, recovery, ...rest } of HUMAN_REFUSALS) {
       assert.match(error.message, text);
       assert.match(error.recovery, recovery);
       assert.match(error.message, recovery);
-      assert.equal(calls.some((c) => c.args.includes("POST") || c.args.includes("DELETE")), false);
+      assert.equal(calls.some((c) => ["POST", "PATCH", "PUT", "DELETE"].some((m) => c.args.includes(m))), false);
     }, { prefix: "dev-loops-upsert-human-style-refuse-" });
   });
 }
@@ -13768,8 +13828,8 @@ test("review gate: an unjudged round puts every locatable finding inline", async
 
 test("review gate: a judged defer or reject finding is never inline; an act finding is", async () => {
   await withTempDir(async (tempDir) => {
-    const at = (summary, line, judgeDisposition) => ({ severity: "must-fix", angle: "correctness", summary, files: ["src/db.mjs"], line, judgeDisposition });
-    const findings = [at("act finding text", 2, "act"), at("defer finding text", 3, "defer"), at("reject finding text", 3, "reject")];
+    const at = (summary, line, judgeDisposition, severity = "must-fix") => ({ severity, angle: "correctness", summary, files: ["src/db.mjs"], line, judgeDisposition });
+    const findings = [at("act finding text", 2, "act"), at("defer finding text", 3, "defer"), at("reject finding text", 3, "reject"), at("nit defer finding text", 3, "defer", "low")];
     const ledgerPath = await writeReviewGateLedger(tempDir, findings, { overallVerdict: "findings_present" });
     const entries = [
       ...reviewGateFindingSurfaceEntries({ files: [{ filename: "src/db.mjs", patch: SINGLE_SURFACE_PATCH }] }),
@@ -13785,6 +13845,7 @@ test("review gate: a judged defer or reject finding is never inline; an act find
     assert.equal(posted.comments.length, 1);
     assert.match(posted.comments[0].body, /act finding text/);
     assert.doesNotMatch(posted.comments.map((c) => c.body).join("\n"), /defer finding text|reject finding text/);
+    assert.match(posted.body, /nit defer finding text/);
     assert.match(posted.body, /defer finding text/);
     assert.match(posted.body, /reject finding text/);
   }, { prefix: "dev-loops-upsert-review-act-inline-" });
