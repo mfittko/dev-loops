@@ -34,5 +34,6 @@ test("agents/fixer.agent.md states the stale-prose search rule", async () => {
     assert.ok(text.includes(root), `missing search root ${root}`);
   }
   assert.match(text, /Fix every in-scope hit in the same pass/);
-  assert.match(text, /out of scope with the reason/);
+  assert.match(text, /siteCoverage\[\]\.sites\[\]/);
+  assert.match(text, /out-of-scope reason/);
 });
