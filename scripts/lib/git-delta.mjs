@@ -32,9 +32,9 @@ const GIT_DIFF = [...GIT_ISOLATION, "diff", "--no-ext-diff", "--ignore-submodule
  * @param {string} input.repoRoot
  * @returns {Promise<{ changedFiles: string[], hasRename: boolean }>}
  */
-export function runGitCommand(args, { repoRoot, env = gitEnvWithoutDirOverrides(), spawnImpl = spawn } = {}) {
+export function runGitCommand(args, { repoRoot, env = gitEnvWithoutDirOverrides(), spawnImpl = spawn, timeout } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawnImpl("git", args, { cwd: repoRoot, env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnImpl("git", args, { cwd: repoRoot, env, stdio: ["ignore", "pipe", "pipe"], ...(timeout ? { timeout } : {}) });
     const stdoutDecoder = new StringDecoder("utf8");
     const stderrDecoder = new StringDecoder("utf8");
     let stdout = "";

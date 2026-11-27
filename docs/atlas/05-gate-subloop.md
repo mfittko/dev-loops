@@ -275,12 +275,16 @@ stateDiagram-v2
 
 Type: `flowchart`
 
-How a `draft_gate` round ends under the round cap. Rounds 1 to the cap run, a clean round stops early, and round cap+1 is refused. Below the cap, act items go to the fixer and the next full round runs. At the cap, only a named human decision blocks (`pastCapBlockers`); a low/nit act list may converge without a new full round. A body-only act list converges through the body-only post at every round up to the cap, and a blocker in it blocks at any round. A cap of 0 disables the cap, because `isRoundRefused` and `isCapRound` both require `cap > 0`. The default cap of 4 was read with `grep -n "maxReviewRounds ?? 4" packages/core/src/config/config.mjs`. The fixer-cycle stop on size-band growth past the forecast in `GATE-EXEC-FIXER-CYCLE-BOUND` is spec-only: `grep -rln forecast packages/core/src/loop scripts/loop` lists only `plan-file-refine-contract.mjs` and `spec-lint.mjs`, and neither stops a fixer cycle. Derived from `packages/core/src/loop/review-round-cap.mjs`, `pastCapBlockers` in `packages/core/src/loop/gate-fanin.mjs`, `composeConvergedDraftGate` and `composeBodyOnlyConvergedDraftGate` in `packages/core/src/loop/pre-push-delta-review.mjs`, and `countCompletedRounds` in `scripts/github/write-gate-context.mjs`.
+How a `draft_gate` round ends under the round cap. Rounds 1 to the cap run and a clean round stops early. Round cap+1 is the scoped final round of `GATE-EXEC-CAP-BRAKES`, and its clean verdict is the only draft exit after the cap round. A later round goes to the operator. Below the cap, act items go to the fixer and the next full round runs. At the cap, only a named human decision blocks (`pastCapBlockers`); a low/nit act list may converge without a new full round. A body-only act list converges through the body-only post at every round up to the cap, and a blocker in it blocks at any round. A cap of 0 disables the cap, because `isRoundRefused` and `isCapRound` both require `cap > 0`. The growth stop (`growth_past_forecast`) is enforced: `resolveCapBrakes` reads the forecast and `decideCapRound` stops the lane. Derived from `packages/core/src/loop/review-round-cap.mjs`, `pastCapBlockers` in `packages/core/src/loop/gate-fanin.mjs`, `composeConvergedDraftGate` and `composeBodyOnlyConvergedDraftGate` in `packages/core/src/loop/pre-push-delta-review.mjs`, and `countCompletedRounds` in `scripts/github/write-gate-context.mjs`.
 
 ```mermaid
 flowchart TD
   N["Round n posted<br/>(n = closed rounds + 1)"] --> RF{"n greater than cap?"}
-  RF -->|yes| REF["Refused"]
+  RF -->|"yes, n = cap+1"| SCP["Scoped final round"]
+  RF -->|"yes, later round"| HUM
+  SCP --> SCL{"Posted clean?"}
+  SCL -->|yes| RDY
+  SCL -->|no| HUM
   RF -->|no| CLN{"Posted clean?"}
   CLN -->|yes| PASS["Stop early: gate passes"]
   CLN -->|no| CAP{"n equals cap?"}
@@ -294,8 +298,8 @@ flowchart TD
   BODY -->|no| CFIX["Fixer on cap-round items"]
   CONV --> RDY["mark_ready_for_review,<br/>then pre_approval_gate"]
   BCONV --> RDY
-  CFIX --> RDY
-  SPEC["Size-band growth stop<br/>(spec-only)"] -.-> HUM
+  CFIX --> SCP
+  GROW["Growth stop<br/>(growth_past_forecast)"] --> HUM
 ```
 
 <a id="d70"></a>

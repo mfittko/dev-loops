@@ -11,7 +11,7 @@ import { afterEach, test } from "bun:test";
 import { runCli } from "../../cli/index.mjs";
 import { pathsMissingFromMatrix } from "../../scripts/github/waive-adr-tripwire.mjs";
 import { detectSimplicityReview } from "@dev-loops/core/loop/refinement-grill-state";
-import { indexDecisionRecords, lintContractDocsInMatrix, lintRuleOwnerDocsInMatrix, lintSimplestDesign, lintSizeForecast, lintSpec, lintStateRecoveryRows, main } from "../../scripts/loop/spec-lint.mjs";
+import { forecastWlocs, indexDecisionRecords, lintContractDocsInMatrix, lintRuleOwnerDocsInMatrix, lintSimplestDesign, lintSizeForecast, lintSpec, lintStateRecoveryRows, main } from "../../scripts/loop/spec-lint.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const tempDirs = [];
@@ -332,13 +332,13 @@ test("only cli/index.mjs wires the spec-lint lint surface; other files may reuse
   // wiring. If spec-lint's entry export is ever renamed, update the `lintSpec` token here
   // together with the export.
   const consumer = /lintSpec\b|["'`](?:[^"'`\s]*\/)?spec-lint(?:\.mjs)?["'`]|\b(?:dev-loops\s+)?loop\s+spec-lint\b|cli\/index\.mjs\s+loop\s+spec-lint\b/u;
-  // The one declared pure-helper consumer: it may import only these parsers, never the
+  // The declared pure-helper consumers (the implementation brief and the cap-brakes growth read): they may import only these parsers, never the
   // entry points `lintSpec` or `main`, and its comments may name the subcommand.
-  const HELPER_CONSUMER = "scripts/loop/implementation-brief.mjs";
-  const PURE_HELPERS = new Set(["citedAdrNumbers", "indexDecisionRecords", "inForceAmenders", "loadKnownRuleIds"]);
+  const HELPER_CONSUMERS = new Set(["scripts/loop/implementation-brief.mjs", "scripts/loop/detect-pr-gate-coordination-state.mjs"]);
+  const PURE_HELPERS = new Set(["citedAdrNumbers", "forecastWlocs", "indexDecisionRecords", "inForceAmenders", "loadKnownRuleIds"]);
   const IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*"\.\/spec-lint\.mjs";/u;
   const wired = (f, source) => {
-    if (f !== HELPER_CONSUMER) return consumer.test(source);
+    if (!HELPER_CONSUMERS.has(f)) return consumer.test(source);
     const imported = (IMPORT_RE.exec(source)?.[1] ?? "").split(",").map((n) => n.trim()).filter(Boolean);
     if (imported.some((n) => !PURE_HELPERS.has(n))) return true;
     const code = source.replace(/^\s*\/\*[\s\S]*?\*\//gmu, "").replace(/^\s*\/\/.*$/gmu, "").replace(IMPORT_RE, "");
@@ -350,11 +350,11 @@ test("only cli/index.mjs wires the spec-lint lint surface; other files may reuse
     assert.match(form, consumer, form);
   }
   // The helper-consumer carve-out stays narrow: an entry-point import or an invocation is flagged.
-  assert.ok(wired(HELPER_CONSUMER, 'import { main } from "./spec-lint.mjs";'));
-  assert.ok(wired(HELPER_CONSUMER, 'import { citedAdrNumbers } from "./spec-lint.mjs";\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
-  assert.ok(wired(HELPER_CONSUMER, 'import { citedAdrNumbers } from "./spec-lint.mjs";\nconst USAGE = `skills/docs/*-contract.md`;\n/** doc */\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
-  assert.ok(!wired(HELPER_CONSUMER, '/** runs `loop spec-lint` */\n  /* indented `loop spec-lint` */\nimport { citedAdrNumbers } from "./spec-lint.mjs";'));
-  assert.ok(!wired(HELPER_CONSUMER, '// runs `loop spec-lint`\nimport { citedAdrNumbers } from "./spec-lint.mjs";'));
+  assert.ok(wired("scripts/loop/implementation-brief.mjs", 'import { main } from "./spec-lint.mjs";'));
+  assert.ok(wired("scripts/loop/implementation-brief.mjs", 'import { citedAdrNumbers } from "./spec-lint.mjs";\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
+  assert.ok(wired("scripts/loop/implementation-brief.mjs", 'import { citedAdrNumbers } from "./spec-lint.mjs";\nconst USAGE = `skills/docs/*-contract.md`;\n/** doc */\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
+  assert.ok(!wired("scripts/loop/implementation-brief.mjs", '/** runs `loop spec-lint` */\n  /* indented `loop spec-lint` */\nimport { citedAdrNumbers } from "./spec-lint.mjs";'));
+  assert.ok(!wired("scripts/loop/implementation-brief.mjs", '// runs `loop spec-lint`\nimport { citedAdrNumbers } from "./spec-lint.mjs";'));
   assert.doesNotMatch("// the grill (refine-plan-file, spec-lint) reads it", consumer);
 });
 
@@ -625,4 +625,10 @@ test("state_recovery_rows_missing: lintSpec and the CLI report the finding", asy
 
 test("state_recovery_rows_missing: an empty row yields no finding", () => {
   assert.deepEqual(lintStateRecoveryRows(recoverySpec(["", "unit test"])), []);
+});
+
+test("forecastWlocs returns the wloc of every forecast line under Size forecast, in order, and nothing outside it (GATE-EXEC-CAP-BRAKES growth)", () => {
+  assert.deepEqual(forecastWlocs("## Size forecast\n\n- forecast: slice=1 wloc=120 files=a.mjs\n- forecast: slice=2 wloc=380 files=b.mjs,c.mjs\n"), [120, 380]);
+  assert.deepEqual(forecastWlocs("## Problem\n\n- forecast: slice=1 wloc=999 files=a.mjs\n"), []);
+  assert.deepEqual(forecastWlocs("## Size forecast\n\n```\n- forecast: slice=1 wloc=50 files=a.mjs\n```\n"), []);
 });

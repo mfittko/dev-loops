@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
-import { DEFAULT_TEST_PR_BODY, makeGhMock as makeGhMockRaw, runIdFreeEnv, runNode as runNodeHelper, trustCommentFixtures, trustGhEntries, withTempDir, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { DEFAULT_TEST_PR_BODY, initGitFixture, makeGhMock as makeGhMockRaw, runGitFixture, runIdFreeEnv, runNode as runNodeHelper, trustCommentFixtures, trustGhEntries, withTempDir, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
   assertGateValidationArtifact,
@@ -8468,6 +8468,59 @@ test("upsert-checkpoint-verdict --findings-ledger labels a ledger finding pr_bod
   }
 });
 
+// GATE-EXEC-ROUND-CAP, AC2: the converged post counts the draft round with countCapRounds and the PR base, so a base-merge-forced round never counts toward the cap.
+test("upsert-checkpoint-verdict --converged-json refuses below the cap when the second round is forced by a base merge", async () => {
+  await withTempDir(async (tempDir) => {
+    const git = (...args) => runGitFixture(tempDir, args);
+    initGitFixture(tempDir, { branch: "main", commit: null });
+    await writeFile(path.join(tempDir, "a.txt"), "a", "utf8");
+    git("add", "a.txt"); git("commit", "-q", "-m", "m0");
+    git("checkout", "-q", "-b", "feature");
+    await writeFile(path.join(tempDir, "own.txt"), "own", "utf8");
+    git("add", "own.txt"); git("commit", "-q", "-m", "own");
+    const ownHead = git("rev-parse", "HEAD");
+    git("checkout", "-q", "main");
+    await writeFile(path.join(tempDir, "b.txt"), "b", "utf8");
+    git("add", "b.txt"); git("commit", "-q", "-m", "m1");
+    git("update-ref", "refs/remotes/origin/main", "main");
+    git("checkout", "-q", "feature");
+    git("merge", "-q", "--no-ff", "-m", "merge main", "main");
+    const mergeHead = git("rev-parse", "HEAD");
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n  draft:\n    maxReviewRounds: 2\n", "utf8");
+    const low = { severity: "low", angle: "docs", summary: "a low finding", files: ["src/a.mjs"], judgeDisposition: "act" };
+    const ledgerDir = path.join(tempDir, "gate-findings", "owner-repo", "pr-17");
+    await mkdir(ledgerDir, { recursive: true });
+    const ledgerBase = { repo: "owner/repo", pr: 17, gate: "draft_gate", verdict: "findings_present", overallVerdict: "findings_present", findings: [low] };
+    await writeFile(path.join(ledgerDir, `draft_gate-${ownHead}.json`), JSON.stringify({ ...ledgerBase, headSha: ownHead, loggedAt: "2026-11-01T00:00:00.000Z" }), "utf8");
+    const ledgerPath = path.join(ledgerDir, `draft_gate-${mergeHead}.json`);
+    await writeFile(ledgerPath, JSON.stringify({ ...ledgerBase, headSha: mergeHead, loggedAt: "2026-11-02T00:00:00.000Z" }), "utf8");
+    const convergedPath = path.join(tempDir, "converged.json");
+    await writeFile(convergedPath, JSON.stringify({ fixerCommit: mergeHead, actList: [{ severity: "low", summary: low.summary, files: low.files }] }), "utf8");
+    const entries = singleSurfaceLeadingEntries().map((e) => ({
+      ...e,
+      ...(e.stdout ? { stdout: e.stdout.replaceAll(SINGLE_SURFACE_HEAD, mergeHead).replace('"state":"OPEN"', '"state":"OPEN","baseRefName":"main"') } : {}),
+    }));
+    const { runChild } = makeGhMock(entries);
+    // The file-level git stub on PATH answers every git call empty; the round count needs the real git.
+    const stubbedPath = process.env.PATH;
+    process.env.PATH = originalPath;
+    const err = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: mergeHead,
+      verdict: "clean",
+      findingsLedger: ledgerPath,
+      convergedJson: convergedPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }).then(() => null, (e) => e).finally(() => { process.env.PATH = stubbedPath; });
+    // The raw count is 2 (the cap); the forced round does not count, so the effective round is 1 and the converged post is below the cap.
+    assert.match(String(err?.message ?? ""), /converged verdict applies only at the cap round or later \(round 1, cap 2\)/);
+  }, { prefix: "dev-loops-upsert-converged-base-merge-" });
+});
+
 // ---------------------------------------------------------------------------
 // #2263: inlineSeverityFloor — locatable low/nit findings fold into the
 // verdict body's collapsed <details> block instead of posting inline, at the
@@ -11588,6 +11641,17 @@ test("#2389: collectPreApprovalGateBlockers yields no blockers outside pre_appro
   assert.equal(collectPreApprovalGateBlockers("pre_approval_gate", artifact).length, 3);
 });
 
+test("AC8: a posted blocked verdict names size_budget when --size-budget-json escalates without a waiver", async () => {
+  await withTempDir(async (tempDir) => {
+    const sizeBudgetPath = path.join(tempDir, "size-budget.json");
+    await writeFile(sizeBudgetPath, JSON.stringify({ ok: false, outcome: "escalate", wholeLogicLoc: 620, t1SliceLoc: 0, waiver: { requested: false, t1Valid: false, defaultValid: false } }), "utf8");
+    await withCompositionRound({ overallVerdict: "clean", prBody: COMPOSITION_UNCHECKED_DOD_PR_BODY }, async ({ post, postedBody }) => {
+      await post({ sizeBudgetJson: sizeBudgetPath });
+      assert.match(postedBody(), /\*\*Blocked by:\*\* unticked_checkboxes, size_budget\n/);
+    });
+  }, { prefix: "dev-loops-upsert-size-budget-blocked-by-" });
+});
+
 test("#2389 regression: a clean ledger plus an unchecked PR-body DoD item posts blocked at the current head with no --verdict, before any fix", async () => {
   await withCompositionRound({ overallVerdict: "clean", prBody: COMPOSITION_UNCHECKED_DOD_PR_BODY }, async ({ post, postedBody, calls }) => {
     const result = await post();
@@ -13659,6 +13723,8 @@ test("deriveEffectiveNextAction names the operator step when no blockedBy cause 
   assert.equal(deriveEffectiveNextAction("blocked", "pre_approval_gate", [], false, ["size_budget", "ci"]), "operator step: grant a size waiver or split the PR; wait for CI");
   assert.equal(deriveEffectiveNextAction("blocked", "pre_approval_gate", [], false, ["findings", "ci"]), "rerun gate");
   assert.equal(deriveEffectiveNextAction("blocked", "draft_gate", [], false, []), "stay draft and fix");
+  assert.equal(deriveEffectiveNextAction("blocked", "draft_gate", [], false, ["size_budget"]), "operator step: grant a size waiver or split the PR");
+  assert.equal(deriveEffectiveNextAction("blocked", "draft_gate", [], false, ["ci"]), "operator step: wait for CI");
 });
 
 // AC9/AC10: composeBlockedBy keeps `findings` in a mixed block, or the emitter refuses a legitimate fix round with blocked_without_findings.
@@ -13671,6 +13737,15 @@ test("composeBlockedBy derives the blocked-by causes for each branch", () => {
     { name: "a non-checkbox blocker only", input: { verdict: "blocked", blockers: [{ kind: "round_cap_reached", item: "x" }] }, expected: ["findings"] },
     { name: "no blockers at all falls back to findings", input: { verdict: "blocked" }, expected: ["findings"] },
     { name: "a non-blocked verdict", input: { verdict: "findings_present", blockers: [unticked], hasActItems: true }, expected: [] },
+    { name: "an escalated size outcome without a waiver", input: { verdict: "blocked", sizeOutcome: "escalate" }, expected: ["size_budget"] },
+    { name: "a block size outcome without a waiver", input: { verdict: "blocked", sizeOutcome: "block" }, expected: ["size_budget"] },
+    { name: "an escalated size outcome with a valid waiver", input: { verdict: "blocked", sizeOutcome: "escalate", sizeWaiverGranted: true }, expected: ["findings"] },
+    { name: "a passing size outcome", input: { verdict: "blocked", sizeOutcome: "pass" }, expected: ["findings"] },
+    { name: "failing CI", input: { verdict: "blocked", ciStatus: "failure" }, expected: ["ci"] },
+    { name: "pending CI", input: { verdict: "blocked", ciStatus: "pending" }, expected: ["ci"] },
+    { name: "green CI", input: { verdict: "blocked", ciStatus: "success" }, expected: ["findings"] },
+    { name: "act items, unticked boxes, size and CI together", input: { verdict: "blocked", blockers: [unticked], hasActItems: true, sizeOutcome: "block", ciStatus: "failure" }, expected: ["findings", "unticked_checkboxes", "size_budget", "ci"] },
+    { name: "size and CI causes on a non-blocked verdict", input: { verdict: "clean", sizeOutcome: "block", ciStatus: "failure" }, expected: [] },
   ];
   for (const { name, input, expected } of cases) assert.deepEqual(composeBlockedBy(input), expected, name);
 });

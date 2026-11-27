@@ -41,9 +41,9 @@ export async function reviewerOnlyRoute(root, { baseline, head, ledgerPath, stat
 
 /** The coordinator's view of a draft PR at `head`: the proof as detect-pr-gate-coordination-state computes it, then the real evaluator. */
 export async function coordinationAt(root, { repo, pr, head, ready = false, reviews, trustRuntime, draftOpenActList }) {
-  // Without `reviews` these scenarios exercise the chain-extension exits, not the posted-verdict check or the cap exit; with `reviews` (the PR's posted reviews) the cap exit decides first.
+  // Without `reviews` these scenarios exercise the chain-extension exits, not the posted-verdict check; `reviews` (the PR's posted reviews) turns that check on.
   const { capRoundFixed: fixed, failure, failureDetail } = await resolveDraftCapRoundFact({ repo, pr, currentHeadSha: head, prData: { isDraft: !ready, baseRefName: "main", ...(reviews ? { reviews } : {}) } }, { repoRoot: root, requirePostedCleanCap: reviews !== undefined, ...(trustRuntime ? { trustRuntime } : {}) });
-  const { round, cap } = await resolveDraftRoundCap({ repo, pr, gate: "draft_gate", headSha: head }, { repoRoot: root, includeLiveCurrentHead: true });
+  const { round, cap } = await resolveDraftRoundCap({ repo, pr, gate: "draft_gate", headSha: head }, { repoRoot: root, includeLiveCurrentHead: true, prBase: "main" });
   const marker = { visible: true, headSha: "abc1234", verdict: "blocked", contractComplete: true };
   const result = evaluatePrGateCoordination({
     pr, repo, currentHeadSha: head, prDraft: !ready, lifecycleState: ready ? STATE.READY_TO_REREQUEST_REVIEW : STATE.PR_DRAFT_NO_FEEDBACK, loopDisposition: ready ? DISPOSITION.CLEAN_CONVERGED : DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
