@@ -25,7 +25,7 @@ import {
   upsertCheckpointVerdict as upsertWithCap,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { formatCliError } from "../../scripts/lib/format-cli-error.mjs";
-import { recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
+import { recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../../scripts/loop/_stale-runner-detection.mjs";
 import { writeRunContext } from "@dev-loops/core/loop/run-context";
@@ -2356,7 +2356,6 @@ test("upsert-checkpoint-verdict posts a clean pre_approval_gate verdict with the
   try {
     for (let i = 0; i < 2; i += 1) {
       await recordUnobservableRequest(key, { checkpointDir });
-      await recordTimedOutProbe(key, { checkpointDir });
     }
     await withTempDir(async (tempDir) => {
       const env = await writeGhStub(tempDir, [

@@ -20,7 +20,7 @@ import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/lo
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveCopilotReviewRequestStatus } from "../loop/_copilot-review-request-status.mjs";
-import { recordUnobservableRequest } from "../loop/_unobservable-review-request-record.mjs";
+import { REQUEST_NOT_OBSERVABLE_THRESHOLD, recordUnobservableRequest } from "../loop/_unobservable-review-request-record.mjs";
 import { getLastCopilotReviewHeadSha, resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../loop/_copilot-convergence-carry.mjs";
 import { resolveCurrentHeadBodyFeedback } from "./_copilot-body-disposition.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
@@ -65,13 +65,15 @@ Verification:
   Copilot review that the REST reads above can miss (#1980). If the POST
   succeeded (exit 0) but nothing is observable via either surface within the
   window, this reports "requested" with an eventually-consistent detail
+  below 2 unobservable requests on the head and "copilot_unavailable" at 2 or
+  more (gate coordination then continues to pre_approval_gate without Copilot)
   instead of failing — a genuine 422 (Copilot truly unavailable) still fails
   as "unavailable".
 Debug:
   DEVLOOPS_DEBUG=1      Emit stderr traces when best-effort same-head clean
                             convergence detection falls back to unsuppressed behavior
 Output (stdout, JSON):
-  { "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_post_convergence"|"suppressed_post_convergence_docs_only"|"suppressed_draft",
+  { "ok": true, "status": "requested"|"already-requested"|"unavailable"|"copilot_unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_post_convergence"|"suppressed_post_convergence_docs_only"|"suppressed_draft",
     "repo": "...", "pr": N, "reviewer": "Copilot", "detail"?: "...",
     "warning"?: "<why the unobservable request could not be recorded; the request itself succeeded>",
     "sameHeadCleanConverged"?: true, "violationCommentIds"?: [N], "completedRounds"?: N, "maxRounds"?: N,
@@ -83,6 +85,7 @@ Request statuses:
   requested                     Copilot review was successfully requested
   already-requested             Copilot review was already observably in progress; no new request needed
   unavailable                   Copilot review is not enabled/requestable and no in-progress evidence was found
+  copilot_unavailable           2 requests on this head were accepted but never observable (request_not_observable); continue to pre_approval_gate without Copilot
   suppressed_same_head_clean    Current head is already clean-converged; no new request is made
   blocked_by_copilot_comment    A non-Copilot PR comment contains @copilot or /copilot; delete the comment(s) first
   round_cap_reached             Maximum Copilot review rounds reached; no further re-requests will be made
@@ -134,7 +137,7 @@ alone — every non-"requested" status (including blocked_by_copilot_comment)
 is a caller-must-branch outcome, not a silent success.
 --silent exit code: 0 only when status is "requested" (a new request was just
 placed this run); non-zero for every other status, including
-already-requested/suppressed_same_head_clean/unavailable/blocked_by_copilot_comment/
+already-requested/copilot_unavailable/suppressed_same_head_clean/unavailable/blocked_by_copilot_comment/
 round_cap_reached/no_changes_since_last_review/suppressed_post_convergence/suppressed_post_convergence_docs_only/
 suppressed_draft. Without
 --silent the JSON body always prints regardless of status. --jq combined with
@@ -1039,13 +1042,22 @@ async function performRequest(
     // report Copilot unavailable after repeated unobservable requests.
     // The POST already succeeded, so a failed record write is a warning, not a failure.
     let recordWarning = null;
+    let unobservableRequests = 0;
     try {
-      await recordUnobservableRequest(
+      const record = await recordUnobservableRequest(
         { repo: options.repo, pr: options.pr, headSha: currentHeadSha },
         { checkpointDir: runtime.checkpointDir },
       );
+      unobservableRequests = record?.unobservableRequests ?? 0;
     } catch (error) {
       recordWarning = `could not record the unobservable request: ${error?.message ?? error}`;
+    }
+    if (unobservableRequests >= REQUEST_NOT_OBSERVABLE_THRESHOLD) {
+      return ({
+        ...requestResult,
+        status: "copilot_unavailable",
+        detail: `request_not_observable: ${unobservableRequests} Copilot review requests on this head were accepted but never observable; gate coordination continues to pre_approval_gate without Copilot.`,
+      });
     }
     return ({
       ...requestResult,

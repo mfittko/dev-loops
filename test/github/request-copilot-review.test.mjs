@@ -2980,7 +2980,19 @@ test("a request POSTed but never observable records one unobservable request for
   assert.equal(result.status, "requested");
   assert.match(result.detail, /not yet observable/);
   const record = JSON.parse(await readFile(path.join(checkpointDir, "unobservable-review-requests.json"), "utf8"));
-  assert.deepEqual([record.headSha, record.unobservableRequests, record.timedOutProbes], [UNOBSERVABLE_HEAD, 1, 0]);
+  assert.deepEqual([record.headSha, record.unobservableRequests], [UNOBSERVABLE_HEAD, 1]);
+});
+
+test("a second unobservable request on the same head returns copilot_unavailable", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "request-unobservable-"));
+  const opts = { delayImpl: async () => {}, checkpointDir };
+  const first = await runInProcess(["--repo", "owner/repo", "--pr", "17"], neverObservableEntries(), opts);
+  assert.equal(first.result.status, "requested");
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], neverObservableEntries(), opts);
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "copilot_unavailable");
+  assert.match(result.detail, /request_not_observable: 2 /);
+  assert.match(result.detail, /pre_approval_gate/);
 });
 
 test("a failed unobservable-request record write keeps status requested and adds a warning", async () => {

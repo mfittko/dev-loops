@@ -1,6 +1,6 @@
 import { test, mock } from "bun:test";
 import assert from "node:assert/strict";
-import { recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
+import { recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { mergePr, parseMergePrCliArgs, main, defaultReadMergeDiff, defaultIsAncestor, defaultComputePatchId, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
 import { extractYesApproval, buildApprovalQuestion, writeApprovalRecord, buildApprovalComment } from "@dev-loops/core/github/ask-merge-approval";
 import { runChild } from "../../scripts/_cli-primitives.mjs";
@@ -462,7 +462,6 @@ test("no current-head Copilot review with an unobservable-request record merges 
   const pr = { repo: "mfittko/dev-loops", pr: 5 };
   for (let i = 0; i < 2; i += 1) {
     await recordUnobservableRequest({ ...pr, headSha: HEAD }, { checkpointDir });
-    await recordTimedOutProbe({ ...pr, headSha: HEAD }, { checkpointDir });
   }
   const { runtime } = makeRuntime({ maxCopilotRounds: 3 });
   const result = await mergePr(baseOptions(), { ...runtime, checkpointDir });
@@ -476,7 +475,6 @@ test("an unobservable-request record refuses via copilot_convergence below the t
     const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "merge-unobservable-refuse-"));
     for (let i = 0; i < rounds; i += 1) {
       await recordUnobservableRequest({ ...pr, headSha }, { checkpointDir });
-      await recordTimedOutProbe({ ...pr, headSha }, { checkpointDir });
     }
     return checkpointDir;
   };
