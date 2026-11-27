@@ -7067,22 +7067,20 @@ test("readCompletedAnglesForHead: collects a clean per-angle artifact stamped at
   }
 });
 
-test("readCompletedAnglesForHead: a findings_present artifact at this head is NOT counted as complete (mutation pin: dropping the verdict === \"clean\" guard must fail this test)", async () => {
+test("readCompletedAnglesForHead: a findings_present artifact at this head is complete; a blocked or missing one stays pending (mutation pin: dropping findings_present from the terminal verdicts must fail this test)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
   try {
     const tmpRoot = path.join(repoRoot, "tmp");
     const dir = buildGateReviewsDir({ repo: "owner/repo", pr: 63, gate: "draft_gate", headSha: "abc1234", tmpRoot });
     await mkdir(dir, { recursive: true });
-    // Open findings at THIS head — must never be treated as complete, or a
-    // dispatch group with unresolved findings would be silently excluded
-    // from requiredReviewers/pendingGroups and never re-reviewed.
+    await writeFile(path.join(dir, "docs.json"), JSON.stringify({ angle: "docs", verdict: "blocked", headSha: "abc1234", findings: [] }), "utf8");
     await writeFile(
       path.join(dir, "correctness.json"),
       JSON.stringify({ angle: "correctness", verdict: "findings_present", headSha: "abc1234", findings: [{ severity: "high", summary: "bug" }] }),
       "utf8",
     );
     const completed = await readCompletedAnglesForHead({ repo: "owner/repo", pr: 63, gate: "draft_gate", headSha: "abc1234", tmpRoot });
-    assert.deepEqual(completed, []);
+    assert.deepEqual(completed, ["correctness"]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -10712,6 +10710,26 @@ test("readCompletedAnglesForHead drops the always-surface angles only when the p
   }
 });
 
+test("readCompletedAnglesForHead drops findings_present body-reading angles when the pr-body digest changed", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-findings-completed-"));
+  try {
+    const first = await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+    const reviews = await seedCompleteBodyRound(repoRoot, []);
+    for (const angle of ["holistic", "renderer-security", "scope"]) {
+      await writeFile(path.join(reviews, `${angle}.json`), JSON.stringify({ angle, verdict: "findings_present", headSha: BODY_RERUN_SHA, findings: [{ severity: "low", summary: "A finding." }] }), "utf8");
+    }
+    const prior = first.artifact.requiredReads.find((r) => r.kind === "pr-body").sha256;
+    const id = { repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA };
+    const completed = async (prBodySha256) => (await readCompletedAnglesForHead({ ...id, prBodySha256 }, { repoRoot, config: bodyRerunInput("").config })).sort();
+    const changed = await completed("f".repeat(64));
+    // holistic does not read the PR body, so its findings_present artifact stays complete.
+    assert.deepEqual(changed, ["holistic"]);
+    assert.deepEqual(await completed(prior), [...BODY_RERUN_ANGLES].sort());
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("a body-only rebuild retires only the completed body-reading units and keeps the other unit live", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-retire-"));
   try {
@@ -10835,18 +10853,18 @@ test("a body-only rebuild treats an artifact older than its sentinel as in fligh
   }
 });
 
-test("a body-only rebuild also retires a pending non-body unit whose findings_present artifact left a live sentinel", async () => {
+test("a body-only rebuild keeps a finished non-body unit whose artifact is findings_present and its live sentinel", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-findings-"));
   try {
     await buildGateContext(bodyRerunInput("Original"), { repoRoot });
     const reviews = await seedCompleteBodyRound(repoRoot);
     await writeFile(path.join(reviews, "holistic.json"), JSON.stringify({ angle: "holistic", verdict: "findings_present", headSha: BODY_RERUN_SHA, findings: [{ severity: "low", summary: "A finding." }] }), "utf8");
     const second = await buildGateContext(bodyRerunInput("Edited"), { repoRoot });
-    assert.deepEqual(second.artifact.fanout.pendingGroups.map((g) => g.name).sort(), ["holistic", "process", "renderer-security"]);
-    assert.deepEqual(second.bodyOnlyRerun.scopes.sort(), Object.values(bodyRerunUnits).sort());
+    assert.deepEqual(second.artifact.fanout.pendingGroups.map((g) => g.name).sort(), ["process", "renderer-security"]);
+    assert.deepEqual(second.bodyOnlyRerun.scopes.sort(), [bodyRerunUnits.process, bodyRerunUnits.rendererSecurity].sort());
     const live = await readdir(path.join(repoRoot, "tmp"));
-    assert.ok(!live.some((n) => n.startsWith("checkpoint-context-sentinel-") && n.includes(BODY_RERUN_SHA)), live.join(","));
-    assert.ok(!existsSync(path.join(reviews, "holistic.json")), "the findings_present artifact moved with its unit");
+    assert.ok(live.includes(`checkpoint-context-sentinel-${bodyRerunUnits.holistic}-${BODY_RERUN_SHA}.json`), live.join(","));
+    assert.ok(existsSync(path.join(reviews, "holistic.json")), "the findings_present artifact stays with its kept unit");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
