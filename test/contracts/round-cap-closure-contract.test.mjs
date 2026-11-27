@@ -23,10 +23,10 @@ test("GATE-EXEC-FIXER-CYCLE-BOUND names the draft_gate round cap and no closure 
   assert.ok(!/closure/i.test(line));
 });
 
-test("the judge brief names the draft closure round as superseded by ADR 0208 and the pre_approval_gate scoped final round", async () => {
+test("the judge brief names the round after cap round N on draft_gate and pre_approval_gate as the scoped final round", async () => {
   const judge = await read("agents/judge.agent.md");
-  assert.match(judge, /`draft_gate` closure round stays superseded by ADR 0208 \(`GATE-EXEC-ROUND-CAP`\)/);
-  assert.match(judge, /scoped final round \(work order `closureRound: true`, `GATE-EXEC-CAP-BRAKES`\)/);
+  assert.match(judge, /A round after cap round N on `draft_gate` and on `pre_approval_gate` is the scoped final round \(work order `closureRound: true`, `GATE-EXEC-CAP-BRAKES`, ADR 0324\)/);
+  assert.doesNotMatch(judge, /superseded by ADR 0208/);
   assert.doesNotMatch(judge, /In a closure round/);
 });
 

@@ -1786,7 +1786,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
           ? `The PR is still draft at or below the round cap (ADR 0208) and the current head's act list names a human decision (GATE-EXEC-SOFT-CAP): ${actBlockers.map((b) => b?.item).join("; ")}. No further draft_gate round runs for it.`
           : bodyOnlyList
             ? `The PR is still draft at or below the round cap and every open act item of the current head is a PR-body item (ADR 0271, ADR 0332). Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true). No further draft_gate round runs for it.`
-          : "The PR is still draft and the next `draft_gate` round is past the scoped final round of the round cap (`round_cap_reached`, GATE-EXEC-CAP-BRAKES). Report blocked with blockedOn operator_decision; the operator clears it with an operator focus item whose decision names the open act items by fingerprint.",
+          : "The PR is still draft and the next `draft_gate` round is past the scoped final round of the round cap (`round_cap_reached`, GATE-EXEC-CAP-BRAKES). Report blocked with blockedOn operator_decision; " + (input.capBrakes?.notClearable === true
+            ? "this act set already had its one re-open, so a focus file does not clear it and the decision stays with the operator."
+            : "the operator clears it with an operator focus item whose decision names the open act items by fingerprint, passed as --operator-focus-file <path> on loop gate-coordination."),
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,
