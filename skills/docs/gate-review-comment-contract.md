@@ -247,6 +247,13 @@ pending review regardless of head. The submit path detects the own pending revie
 the raw reviews list, because the same-head marker scan (`summarizeExistingComment`) cannot see an
 author-only review.
 
+The same one-pending-review limit applies to a `draft_gate` or `pre_approval_gate` verdict post. When
+its review create fails because the caller has an own PENDING review, the poster reads the reviews list.
+A PENDING review whose body starts with `Reviewer-loop draft verdict:` is a tool draft (the UI review's):
+the poster submits it with event `COMMENT`, which keeps its inline comments, and posts the verdict. Any
+other PENDING review is a human draft, so the post refuses with `reason: own_pending_review_blocks_post`,
+the review id and a `recovery` that names it. A post with no PENDING review makes no extra call.
+
 Human-style review (part of `GATE-REVIEW-SUBMIT-MODES`): `--gate review --submit <comment|approve>
 --human-opener-file <path> --interactive-confirm` submits the own same-head pending draft in place
 (same review id, no create or discard call) with a body of two parts. The visible part is the opener

@@ -1333,6 +1333,18 @@ export async function findOwnPendingReview({ repo, pr, headSha }, { env, ghComma
 }
 
 /**
+ * Find the caller's own PENDING review of any body. GitHub lists a PENDING review only to its
+ * author, so a PENDING entry in the reviews list is the caller's. `isToolDraft` marks a review
+ * that `buildDraftReviewBody` wrote (the UI review's head-pinned draft). Returns `null` when none.
+ */
+export async function findOwnPendingDraft({ repo, pr }, gh) {
+  const match = flattenPaginatedSlurp(await runGhJson(prReviewsApiArgs(repo, pr), gh))
+    .find((r) => r?.state === "PENDING" && Number.isInteger(r?.id));
+  if (!match) return null;
+  return { id: match.id, isToolDraft: typeof match.body === "string" && match.body.startsWith("Reviewer-loop draft verdict:") };
+}
+
+/**
  * Find the caller's OWN same-head SUBMITTED review-gate review — the round's
  * existing surface for a `--gate review` rerun. Sibling of findOwnPendingReview
  * for the submitted (no longer PENDING) case: once submitted a review is no

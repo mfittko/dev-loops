@@ -45,6 +45,7 @@ import {
   createGateReview,
   discardPendingReview,
   fetchPrFiles,
+  findOwnPendingDraft,
   findOwnPendingReview,
   findOwnSubmittedReview,
   fingerprintFinding,
@@ -4351,7 +4352,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       ...compositionResultFields,
     };
   }
-  const createdReview = await createGateReview({
+  const createReview = () => createGateReview({
     repo: options.repo,
     pr: options.pr,
     headSha: canonicalHeadSha,
@@ -4366,6 +4367,26 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     allowedRefs: options.allowedRefs,
     ...(isReviewGate ? { event: resolveReviewSubmitEvent(reviewSubmitMode) } : {}),
   }, gh);
+  let createdReview;
+  try {
+    createdReview = await createReview();
+  } catch (error) {
+    // GitHub allows one pending review per user per PR, so the caller's own pending review 422s this create.
+    // Read the reviews list only then, so a post without one costs no extra call. The review gate resolves its own above.
+    if (isReviewGate || !/one pending review/i.test(error?.message ?? "")) throw error;
+    const ownDraft = await findOwnPendingDraft({ repo: options.repo, pr: options.pr }, gh);
+    if (!ownDraft) throw error;
+    // A tool draft (the UI review's) is submitted as a COMMENT review, which keeps its inline comments; a human draft is not ours to publish.
+    if (!ownDraft.isToolDraft) {
+      const recovery = `submit or discard your pending review ${ownDraft.id} on the pull request, then rerun the post`;
+      throw Object.assign(
+        new Error(`Cannot post the ${options.gate} verdict for ${options.repo}#${options.pr}: your own pending review ${ownDraft.id} blocks it. Recovery: ${recovery}.`),
+        { reason: "own_pending_review_blocks_post", reviewId: ownDraft.id, recovery },
+      );
+    }
+    await submitPendingReview({ repo: options.repo, pr: options.pr, reviewId: ownDraft.id, event: "COMMENT" }, gh);
+    createdReview = await createReview();
+  }
   const created = { commentId: createdReview.reviewId, commentUrl: createdReview.reviewUrl };
   // Post-creation verification: verify the review is retrievable before returning.
   // GitHub API can have brief eventual-consistency windows where a just-posted
