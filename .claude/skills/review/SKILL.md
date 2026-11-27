@@ -190,8 +190,9 @@ this skill dispatches the `review` agents directly.
        kept). It refuses with a named recovery on `--auto`, a missing
        `--interactive-confirm`, a missing or non-comment/approve `--submit`, an empty or
        unreadable opener file, an opener that holds an HTML comment, `<details>` or
-       `<summary>` tag (edit the opener file), no same-head pending draft, or an
-       issue/PR reference in the body. On this gate
+       `<summary>` tag or an unclosed code fence (edit the opener file), no same-head pending draft, or an
+       issue/PR reference in the body. With `approve`, explain that the event satisfies
+       required-approvals branch protection independently of dev-loops gates. On this gate
        only `act` or unjudged findings are inline; `defer` and `reject` findings sit
        in the report body.
      - **Leave pending:** print the review URL and how to finish it

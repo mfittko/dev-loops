@@ -417,7 +417,9 @@ Optional:
                                             the visible opener and the draft body in a
                                             collapsed details block. Requires
                                             --interactive-confirm and --submit
-                                            comment|approve; refused with --auto.
+                                            comment|approve; refused with --auto, an
+                                            opener with an unclosed code fence, or an
+                                            HTML comment, details or summary tag.
   --new-round                              SCOPED TO --gate review ONLY. Bypass
                                             the same-head submitted-review dedup
                                             and force a FRESH review round even
@@ -2926,6 +2928,8 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     // Leading indentation is kept; only trailing whitespace is dropped.
     humanOpener = humanOpener.trimEnd();
     if (/<!--|<\/?details|<\/?summary/i.test(humanOpener)) throw refuse("the opener holds an HTML comment, details or summary tag that would break the wrapper.", editRecovery);
+    // An odd count of fence lines leaves a fence open and swallows the details wrapper.
+    if ((humanOpener.match(/^ {0,3}(```|~~~)/gm) ?? []).length % 2 === 1) throw refuse("the opener holds an unclosed code fence that would swallow the wrapper.", editRecovery);
   }
   if (isReviewGate && reviewSubmitMode !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(reviewSubmitMode)) {
     if (options.auto) {
@@ -3999,7 +4003,9 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
         try {
           guardCommentBodyNoIssuePrIds(wrappedBody, { ref: "human-style review body", allowedRefs: options.allowedRefs });
         } catch (error) {
-          const recovery = "edit the opener file to remove the issue or PR reference, or repeat the original --allowed-refs";
+          const recovery = /OPERATOR-OWNED-LINE/.test(error.message)
+            ? "edit the opener file to remove the operator-owned line"
+            : "edit the opener file to remove the issue or PR reference, or repeat the original --allowed-refs";
           throw Object.assign(new Error(`--human-opener-file refused: ${error.message} Recovery: ${recovery}.`), { recovery });
         }
       }

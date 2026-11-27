@@ -13792,8 +13792,20 @@ const HUMAN_REFUSALS = [
   { name: "an opener with an HTML comment", opener: "Hi <!-- hidden -->", text: /opener/i, recovery: /edit the opener file/ },
   { name: "an opener with a details tag", opener: "Hi </details> there", text: /opener/i, recovery: /edit the opener file/ },
   { name: "an opener with a summary tag", opener: "<summary>x</summary>", text: /opener/i, recovery: /edit the opener file/ },
+  { name: "an opener with an unclosed backtick fence", opener: "Looks good. Nit:\n```js\nfoo()", text: /fence/, recovery: /edit the opener file/ },
+  { name: "an opener with an unclosed tilde fence", opener: "Note:\n~~~\nbar", text: /fence/, recovery: /edit the opener file/ },
+  { name: "an opener with an unclosed indented fence", opener: "  ```\nindented open fence", text: /fence/, recovery: /edit the opener file/ },
+  { name: "an opener line with an operator-owned phrase", opener: "approve merge once CI is green", text: /OPERATOR-OWNED-LINE/, recovery: /edit the opener file to remove the operator-owned line/ },
   { name: "a non-review gate", gate: "draft_gate", text: /--gate review/, recovery: /pass --gate review/ },
 ];
+for (const opener of ["Looks good.", "Looks good.\n```js\nfoo()\n```", "Nit:\n~~~\nbar\n~~~"]) {
+  test(`human-style accepts the balanced-fence opener ${JSON.stringify(opener)}`, async () => {
+    await withTempDir(async (tempDir) => {
+      const { run } = await runHumanStyle(tempDir, { opener });
+      assert.equal((await run()).action, "submitted");
+    }, { prefix: "dev-loops-upsert-human-style-fence-ok-" });
+  });
+}
 for (const { name, text, recovery, ...rest } of HUMAN_REFUSALS) {
   test(`human-style refuses ${name} before any GitHub write, naming its recovery`, async () => {
     await withTempDir(async (tempDir) => {
@@ -13830,7 +13842,7 @@ test("review gate: an unjudged round puts every locatable finding inline", async
 test("review gate: a judged defer or reject finding is never inline; an act finding is", async () => {
   await withTempDir(async (tempDir) => {
     const at = (summary, line, judgeDisposition, severity = "must-fix") => ({ severity, angle: "correctness", summary, files: ["src/db.mjs"], line, judgeDisposition });
-    const findings = [at("act finding text", 2, "act"), at("defer finding text", 3, "defer"), at("reject finding text", 3, "reject"), at("nit defer finding text", 3, "defer", "low")];
+    const findings = [at("act finding text", 2, "act"), at("defer finding text", 3, "defer"), at("reject finding text", 3, "reject"), at("trivial deferred wording", 3, "defer", "low")];
     const ledgerPath = await writeReviewGateLedger(tempDir, findings, { overallVerdict: "findings_present" });
     const entries = [
       ...reviewGateFindingSurfaceEntries({ files: [{ filename: "src/db.mjs", patch: SINGLE_SURFACE_PATCH }] }),
@@ -13846,7 +13858,7 @@ test("review gate: a judged defer or reject finding is never inline; an act find
     assert.equal(posted.comments.length, 1);
     assert.match(posted.comments[0].body, /act finding text/);
     assert.doesNotMatch(posted.comments.map((c) => c.body).join("\n"), /defer finding text|reject finding text/);
-    assert.match(posted.body, /nit defer finding text/);
+    assert.match(posted.body, /trivial deferred wording/);
     assert.match(posted.body, /defer finding text/);
     assert.match(posted.body, /reject finding text/);
   }, { prefix: "dev-loops-upsert-review-act-inline-" });
