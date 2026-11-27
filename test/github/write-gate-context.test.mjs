@@ -11630,7 +11630,7 @@ test("issue 3416: the CLI refusal for a live round at an abbreviated head carrie
   const payload = JSON.parse(err.trim().split("\n").at(-1));
   assert.equal(payload.ok, false);
   // The sentinel has no findings artifact, so its reviewer may still run: wait first, and keep the retire command behind `operator:`.
-  assert.match(payload.recovery, new RegExp(`^wait for the running reviewers .*--pending; if they crashed, operator: run \`dev-loops-run scripts/github/retire-gate-round\\.mjs --gate draft_gate --head-sha ${fullSha} --reason '[^'<>]+' --tmp-root '`));
+  assert.match(payload.recovery, new RegExp(`^wait for the running reviewers .*--pending; for a crashed unit, run emit-fanout-dispatch\\.mjs --pending with --retry-crashed and the unit name; for a rebuilt briefing, operator: run \`dev-loops-run scripts/github/retire-gate-round\\.mjs --gate draft_gate --head-sha ${fullSha} --reason '[^'<>]+' --tmp-root '`));
   assert.doesNotMatch(payload.recovery, /[<>\[\]]/);
 });
 
