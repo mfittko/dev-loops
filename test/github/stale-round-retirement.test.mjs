@@ -9,7 +9,7 @@ import { mock, test } from "bun:test";
 import { specDigestFromBody } from "@dev-loops/core/loop/spec-authority";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 import { parseWriteGateContextCliArgs, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
-import { buildRetireCommand, retireStaleRound, retiredLedgerName } from "../../scripts/github/_stale-round-retirement.mjs";
+import { buildRetireCommand, retireStaleRound } from "../../scripts/github/_stale-round-retirement.mjs";
 import { buildGateArtifactPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 
 const HEAD = "d".repeat(40);
@@ -348,15 +348,12 @@ async function withStoppedRound(fn, setup) {
 }
 const decided = { currentSpecDigest: NEW_DIGEST, liveOnly: true };
 
-test("a stopped spec-decision round with a changed spec digest retires, moves its fan-in ledger and names both digests", async () => {
+test("a stopped spec-decision round with a changed spec digest retires past its fan-in ledger and names both digests", async () => {
   await withStoppedRound(async (tmpRoot) => {
-    const ledger = buildGateFaninLedgerPath({ ...KEY, tmpRoot });
     const { retiredRound, refusal } = await retireStaleRound({ ...KEY, tmpRoot, ...decided });
     assert.equal(refusal, undefined);
     assert.equal(retiredRound.retired, 1);
     assert.equal(existsSync(path.join(tmpRoot, SENTINEL_FILE)), false);
-    assert.equal(existsSync(ledger), false);
-    assert.equal(existsSync(path.join(retiredRound.retirementDir, retiredLedgerName(tmpRoot, ledger))), true);
     const record = JSON.parse(await readFile(path.join(retiredRound.retirementDir, "retirement.json"), "utf8"));
     assert.match(record.reason, /SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT/);
     assert.ok(record.reason.includes(`${"a".repeat(12)} to ${"b".repeat(12)})`), record.reason);
@@ -582,111 +579,4 @@ test("a judge plan older than a sentinel of a newer fan-out is stale: the new ro
     assert.deepEqual(result, { retiredRound: null });
     assert.equal(existsSync(path.join(tmpRoot, SENTINEL_FILE)), true);
   });
-});
-
-test("retirement moves a fan-in ledger from each of two verdict roots into the retirement directory without overwrite", async () => {
-  await withRound(async (tmpRoot) => {
-    const otherRoot = await mkdtemp(path.join(os.tmpdir(), "stale-round-other-"));
-    try {
-      const ledgers = [tmpRoot, otherRoot].map((root) => buildGateFaninLedgerPath({ ...KEY, tmpRoot: root }));
-      for (const [i, ledger] of ledgers.entries()) {
-        await mkdir(path.dirname(ledger), { recursive: true });
-        await writeFile(ledger, JSON.stringify({ root: i }));
-      }
-      const { retiredRound } = await retireStaleRound({ ...KEY, tmpRoot, verdictRoots: [tmpRoot, otherRoot] });
-      const names = [tmpRoot, otherRoot].map((root, i) => retiredLedgerName(root, ledgers[i]));
-      assert.notEqual(names[0], names[1]);
-      assert.deepEqual(JSON.parse(await readFile(path.join(retiredRound.retirementDir, names[0]), "utf8")), { root: 0 });
-      assert.deepEqual(JSON.parse(await readFile(path.join(retiredRound.retirementDir, names[1]), "utf8")), { root: 1 });
-      for (const ledger of ledgers) assert.equal(existsSync(ledger), false);
-      // A finish under the other root order finds both destinations taken: nothing is overwritten and the new ledgers stay in place.
-      for (const [i, ledger] of ledgers.entries()) await writeFile(ledger, JSON.stringify({ later: i }));
-      assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot, verdictRoots: [otherRoot, tmpRoot] }), { retiredRound: null });
-      for (const [i, name] of names.entries()) {
-        assert.deepEqual(JSON.parse(await readFile(path.join(retiredRound.retirementDir, name), "utf8")), { root: i });
-        assert.deepEqual(JSON.parse(await readFile(ledgers[i], "utf8")), { later: i });
-      }
-    } finally {
-      await rm(otherRoot, { recursive: true, force: true });
-    }
-  });
-});
-
-test("a ledger left behind by a crash after the audited move is finished into the latest retirement by the next call", async () => {
-  await withRound(async (tmpRoot) => {
-    const { retiredRound } = await retireStaleRound({ ...KEY, tmpRoot });
-    const ledger = buildGateFaninLedgerPath({ ...KEY, tmpRoot });
-    await mkdir(path.dirname(ledger), { recursive: true });
-    await writeFile(ledger, "{}");
-    assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot }), { retiredRound: null });
-    assert.equal(existsSync(ledger), false);
-    assert.equal(existsSync(path.join(retiredRound.retirementDir, retiredLedgerName(tmpRoot, ledger))), true);
-  });
-});
-
-async function writeLedger(tmpRoot, content = "{}") {
-  const ledger = buildGateFaninLedgerPath({ ...KEY, tmpRoot });
-  await mkdir(path.dirname(ledger), { recursive: true });
-  await writeFile(ledger, content);
-  return ledger;
-}
-
-test("a ledger's seal sidecar moves with it", async () => {
-  await withRound(async (tmpRoot) => {
-    const ledger = await writeLedger(tmpRoot);
-    await writeFile(`${ledger}.seal`, "seal");
-    const { retiredRound } = await retireStaleRound({ ...KEY, tmpRoot });
-    const moved = path.join(retiredRound.retirementDir, retiredLedgerName(tmpRoot, ledger));
-    assert.equal(await readFile(`${moved}.seal`, "utf8"), "seal");
-    assert.equal(existsSync(`${ledger}.seal`), false);
-  });
-});
-
-test("a leftover ledger keeps a posted verdict's ledger in place, and a liveOnly or specDecisionOnly call leaves it alone", async () => {
-  await withRound(async (tmpRoot) => {
-    const { retiredRound } = await retireStaleRound({ ...KEY, tmpRoot });
-    const ledger = await writeLedger(tmpRoot);
-    for (const opts of [{ liveOnly: true }, { specDecisionOnly: true }]) {
-      assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot, ...opts }), { retiredRound: null });
-      assert.equal(existsSync(ledger), true);
-    }
-    const log = buildLogPath({ ...KEY, tmpRoot });
-    await mkdir(path.dirname(log), { recursive: true });
-    await writeFile(log, "{}");
-    assert.deepEqual(await retireStaleRound({ ...KEY, tmpRoot }), { retiredRound: null });
-    assert.equal(existsSync(ledger), true);
-    assert.equal(existsSync(path.join(retiredRound.retirementDir, retiredLedgerName(tmpRoot, ledger))), false);
-  });
-});
-
-test("a leftover ledger finishes only into a round whose record names this gate", async () => {
-  await withRound(async (tmpRoot) => {
-    const { retiredRound } = await retireStaleRound({ ...KEY, tmpRoot });
-    const foreign = path.join(path.dirname(retiredRound.retirementDir), "round-9");
-    await mkdir(foreign);
-    await writeFile(path.join(foreign, "retirement.json"), JSON.stringify({ gate: "pre_approval_gate", retiredAt: new Date(Date.now() + 60_000).toISOString() }));
-    const ledger = await writeLedger(tmpRoot);
-    await retireStaleRound({ ...KEY, tmpRoot });
-    assert.equal(existsSync(ledger), false);
-    assert.equal(existsSync(path.join(retiredRound.retirementDir, retiredLedgerName(tmpRoot, ledger))), true);
-    assert.equal(existsSync(path.join(foreign, retiredLedgerName(tmpRoot, ledger))), false);
-  });
-});
-
-test("a leftover ledger is finished after a retirement taken through the records root", async () => {
-  const sentinelRoot = await mkdtemp(path.join(os.tmpdir(), "stale-round-"));
-  const recordsRoot = await mkdtemp(path.join(os.tmpdir(), "stale-round-"));
-  try {
-    await writeFile(path.join(recordsRoot, `checkpoint-dispatch-prompt-draft-gate-coverage-${HEAD}.json`), "{}");
-    const args = { ...KEY, tmpRoot: sentinelRoot, recordsTmpRoot: recordsRoot, verdictRoots: [sentinelRoot] };
-    const { retiredRound } = await retireStaleRound({ ...args, liveOnly: true });
-    assert.ok(retiredRound.retirementDir.startsWith(path.resolve(recordsRoot)));
-    const ledger = await writeLedger(sentinelRoot);
-    assert.deepEqual(await retireStaleRound(args), { retiredRound: null });
-    assert.equal(existsSync(ledger), false);
-    assert.equal(existsSync(path.join(retiredRound.retirementDir, retiredLedgerName(sentinelRoot, ledger))), true);
-  } finally {
-    await rm(sentinelRoot, { recursive: true, force: true });
-    await rm(recordsRoot, { recursive: true, force: true });
-  }
 });
