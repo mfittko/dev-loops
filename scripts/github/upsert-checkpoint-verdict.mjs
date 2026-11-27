@@ -2927,7 +2927,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     if (humanOpener.trim() === "") throw refuse("the opener file is empty.", "edit the opener file so it holds the opener text");
     // Leading indentation is kept; only trailing whitespace is dropped.
     humanOpener = humanOpener.trimEnd();
-    if (/<!--|<\/?details|<\/?summary/i.test(humanOpener)) throw refuse("the opener holds an HTML comment, details or summary tag that would break the wrapper.", editRecovery);
+    if (/<!|<\?|<\/?(details|summary|pre|script|style|textarea)\b/i.test(humanOpener)) throw refuse("the opener holds an HTML comment, declaration or block tag that would break the wrapper.", editRecovery);
     // A fence left open at the end swallows the details wrapper. CommonMark: a close needs the same character, at least the opening length and no info string.
     let openFence = null;
     for (const line of humanOpener.split("\n")) {

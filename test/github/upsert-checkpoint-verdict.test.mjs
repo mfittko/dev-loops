@@ -13792,6 +13792,13 @@ const HUMAN_REFUSALS = [
   { name: "an opener with an HTML comment", opener: "Hi <!-- hidden -->", text: /opener/i, recovery: /edit the opener file/ },
   { name: "an opener with a details tag", opener: "Hi </details> there", text: /opener/i, recovery: /edit the opener file/ },
   { name: "an opener with a summary tag", opener: "<summary>x</summary>", text: /opener/i, recovery: /edit the opener file/ },
+  { name: "an opener with an unclosed pre block", opener: "<pre>\nfoo", text: /opener/i, recovery: /edit the opener file/ },
+  { name: "an opener with an unclosed script block", opener: "<script>\nx", text: /opener/i, recovery: /edit the opener file/ },
+  { name: "an opener with an unclosed style block", opener: "<style>\nx", text: /opener/i, recovery: /edit the opener file/ },
+  { name: "an opener with an unclosed textarea block", opener: "<textarea>\nx", text: /opener/i, recovery: /edit the opener file/ },
+  { name: "an opener with a processing instruction", opener: "<?php\nx", text: /opener/i, recovery: /edit the opener file/ },
+  { name: "an opener with a declaration", opener: "<!DOCTYPE x\ny", text: /opener/i, recovery: /edit the opener file/ },
+  { name: "an opener with a CDATA section", opener: "<![CDATA[\nx", text: /opener/i, recovery: /edit the opener file/ },
   { name: "an opener with an unclosed backtick fence", opener: "Looks good. Nit:\n```js\nfoo()", text: /fence/, recovery: /edit the opener file/ },
   { name: "an opener with an unclosed tilde fence", opener: "Note:\n~~~\nbar", text: /fence/, recovery: /edit the opener file/ },
   { name: "an opener with an unclosed indented fence", opener: "  ```\nindented open fence", text: /fence/, recovery: /edit the opener file/ },
@@ -13800,7 +13807,7 @@ const HUMAN_REFUSALS = [
   { name: "an opener line with an operator-owned phrase", opener: "approve merge once CI is green", text: /OPERATOR-OWNED-LINE/, recovery: /edit the opener file to remove the operator-owned line/ },
   { name: "a non-review gate", gate: "draft_gate", text: /--gate review/, recovery: /pass --gate review/ },
 ];
-for (const opener of ["Looks good.", "Looks good.\n```js\nfoo()\n```", "Nit:\n~~~\nbar\n~~~", "Run:\n````\na\n```\nb\n````", "```npm test``` passes"]) {
+for (const opener of ["Looks good.", "Looks good.\n```js\nfoo()\n```", "Nit:\n~~~\nbar\n~~~", "Run:\n````\na\n```\nb\n````", "```npm test``` passes", "Use a < b here."]) {
   test(`human-style accepts the balanced-fence opener ${JSON.stringify(opener)}`, async () => {
     await withTempDir(async (tempDir) => {
       const { run } = await runHumanStyle(tempDir, { opener });
