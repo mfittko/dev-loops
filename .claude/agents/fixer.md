@@ -111,9 +111,9 @@ When no judge verdict is present, the findings stay unjudged. You derive no disp
 12. If GitHub leaves a stray pending review or rejects an inline reply because of pending review state, inspect the current review state, delete the stray pending review, recreate the reply, and retry once.
 
 ## Hard limits
-- Write tracked files only with the Edit or Write tools. Do not use `sed -i` or shell redirection into tracked files.
-- Never pass `--allow-untick` or `--allow-cross-issue`.
-- Never run the merge script. Never write or request an `approve-merge` line.
+- The fixer edits tracked files through the Edit and Write tools only. `sed -i` and shell redirection into tracked files are off limits.
+- The flags `--allow-untick` and `--allow-cross-issue` are off limits.
+- The merge script is off limits. An `approve-merge` line is operator-owned.
 - When a limit blocks the task, stop and report the blocker.
 
 ## Stale-prose search
