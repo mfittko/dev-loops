@@ -4288,6 +4288,7 @@ export async function seamFirstRoundFor({ gate, repo, pr, headSha, tmpRoot }, re
 }
 
 const FULL_LABEL_READ_TIMEOUT_MS = 30_000;
+const GH_FAILURE_CODES = new Set(["RATE_LIMITED", "GH_THROTTLE_UNAVAILABLE", "GH_TIMEOUT", "ENOENT"]);
 
 /**
  * The live PR's gate:full label, shared by the context builder and the carry-forward resolver so both resolve the same angles.
@@ -4299,7 +4300,7 @@ export async function readFullLabel({ repo, pr }, { run = runChild } = {}) {
     const { pr: view } = await viewPr({ repo, pr, fields: "labels" }, { run: bounded });
     return { fullLabel: Array.isArray(view?.labels) && view.labels.some((label) => (label?.name ?? label) === GATE_FULL_LABEL) };
   } catch (error) {
-    if (!/^gh pr view/.test(String(error?.message)) && error?.code !== "ENOENT") throw error;
+    if (!GH_FAILURE_CODES.has(error?.code) && !/^(gh |Invalid JSON)/.test(String(error?.message)) && !(error instanceof SyntaxError)) throw error;
     return { fullLabel: true, error };
   }
 }

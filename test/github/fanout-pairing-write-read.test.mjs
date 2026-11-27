@@ -184,6 +184,19 @@ test("a round built from the whole-base-unit plan passes the pairing check and w
   const perAngle = plan.mustRerun.map((m) => ({ angle: m.angle, reviewer: "r1", group: "docs-surface" }));
   await withConfig(devloops, async (dir) => {
     assert.equal(await writeCheck(dir, perAngle), null);
+    // The writer records the packed unit from the context artifact: the whole base unit passes its split check.
+    const packed = await writePacked(dir, "pre_approval_gate", [{ name: "docs-surface", angles }], perAngle);
+    assert.equal(packed.error, null);
+  });
+  // Negative control: the pre-fix shape (fresh contract-surface only, link-check and config-drift carried out of its unit) splits the base unit.
+  await withConfig(devloops, async (dir) => {
+    const prefix = [
+      { angle: "contract-surface", reviewer: "r1", group: "docs-surface" },
+      { angle: "link-check", reviewer: "p-link-check", carriedFromHead: "abc1234" },
+      { angle: "config-drift", reviewer: "p-config-drift", carriedFromHead: "abc1234" },
+    ];
+    const packed = await writePacked(dir, "pre_approval_gate", [{ name: "docs-surface", angles: ["contract-surface"] }], prefix);
+    assert.match(packed.error ?? "", /is not a union of whole base units/);
   });
 });
 

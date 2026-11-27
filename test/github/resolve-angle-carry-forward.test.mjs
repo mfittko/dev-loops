@@ -17,7 +17,7 @@ import {
   runGitCommand,
 } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { buildLogPath, parseProvenanceJson } from "../../scripts/github/write-gate-findings-log.mjs";
-import { buildCarryForwardPlanPath } from "../../scripts/github/write-gate-context.mjs";
+import { buildCarryForwardPlanPath, readFullLabel } from "../../scripts/github/write-gate-context.mjs";
 
 // Scrub inherited global/system git config and any leaked GIT_DIR/GIT_WORK_TREE
 // so host-side commit signing, hooks, templates, or an exported repo pointer
@@ -357,9 +357,19 @@ test("CLI label read: a labelled, an unlabelled and a failing gh read each resol
     assert.equal(result.ok, true);
     // The read goes through the injected runner with a bounded timeout, never a live gh.
     assert.equal(calls.at(-1)[4].timeoutMs > 0, true);
-    if (answer === labelled || answer.code === 1) assert.equal(reasonOfLinkCheck(result), "base_unit_rerun");
+    if (answer !== unlabelled) assert.equal(reasonOfLinkCheck(result), "base_unit_rerun");
   }
   assert.equal(calls.length, 3);
+});
+
+test("readFullLabel reads the label: unlabelled is false, labelled is true, an ENOENT runner fails closed with the error", async () => {
+  const answer = (labels) => async () => ({ code: 0, stdout: JSON.stringify({ labels }), stderr: "" });
+  assert.deepEqual(await readFullLabel({ repo: "o/n", pr: 7 }, { run: answer([]) }), { fullLabel: false });
+  assert.deepEqual(await readFullLabel({ repo: "o/n", pr: 7 }, { run: answer([{ name: "gate:full" }]) }), { fullLabel: true });
+  const missing = Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" });
+  const closed = await readFullLabel({ repo: "o/n", pr: 7 }, { run: async () => { throw missing; } });
+  assert.equal(closed.fullLabel, true);
+  assert.equal(closed.error, missing);
 });
 
 test("CLI label read: a timed-out gh read fails closed to labelled and a non-gh error propagates", async () => {
@@ -373,6 +383,12 @@ test("CLI label read: a timed-out gh read fails closed to labelled and a non-gh 
     const argv = ["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha];
     const timedOut = await runMain(argv, { repoRoot, run: async () => ({ code: null, stdout: "", stderr: "", timedOut: true }) });
     assert.equal(timedOut.mustRerun.find((m) => m.angle === "link-check")?.reason, "base_unit_rerun");
+    for (const [code, message] of [["RATE_LIMITED", "gh command failed: secondary rate limit"], ["GH_THROTTLE_UNAVAILABLE", "gh throttle unavailable: slot timeout"], ["ENOENT", "spawn gh ENOENT"]]) {
+      const closed = await runMain(argv, { repoRoot, run: async () => { throw Object.assign(new Error(message), { code }); } });
+      assert.equal(closed.mustRerun.find((m) => m.angle === "link-check")?.reason, "base_unit_rerun", code);
+    }
+    const badJson = await runMain(argv, { repoRoot, run: async () => ({ code: 0, stdout: "not json", stderr: "" }) });
+    assert.equal(badJson.mustRerun.find((m) => m.angle === "link-check")?.reason, "base_unit_rerun");
     const failed = await runMainRaw(argv, { repoRoot, run: async () => { throw new TypeError("not a gh failure"); } });
     assert.equal(failed.exitCode, 1);
     assert.match(failed.stderr, /not a gh failure/);
