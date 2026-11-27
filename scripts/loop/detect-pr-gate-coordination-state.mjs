@@ -41,8 +41,7 @@ import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { loadDeliveredHandoff, verifyFixerDisposition } from "../github/verify-fixer-disposition.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
-import { collectFingerprints, countUnresolvedGateAuthoredThreadsFromRawNodes, findJudgeDispositionForFingerprint, parseFindingMarker } from "../github/_gate-finding-surface.mjs";
-import { isStrictAncestor } from "../github/close-gate-findings.mjs";
+import { collectFingerprints, countUnresolvedGateAuthoredThreadsFromRawNodes, isStaleJudgeActFingerprint, parseFindingMarker } from "../github/_gate-finding-surface.mjs";
 import { resolveAuthenticatedLogin } from "../github/post-gate-findings.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
@@ -1077,30 +1076,29 @@ async function countUnresolvedGateThreads(threadsPayload, runtime) {
   }
 }
 
-// GATE-EXEC-THREAD-DISPOSITION: true when at least one thread is open and every open thread is a judge-act code thread whose
-// recording round (draft_gate or pre_approval_gate) ran at a strict ancestor of the current head. The caller has already shown every
-// open thread is gate-authored (equal gate and total counts). A question, an ambiguous ledger or a failed read fails closed to false,
-// which keeps the fixer route.
-async function onlyStaleGateRoundThreadsOpen({ threadsPayload, repo, pr, currentHeadSha, runtime }) {
+// GATE-EXEC-THREAD-DISPOSITION: true when at least one gate-authored thread is open and every one is a judge-act code thread whose
+// recording round ran at a strict ancestor of the current head, read from the ledgers of the gate whose round the route runs (the
+// same ledgers that round's fixed-act close reads). A question, an ambiguous ledger, a failed read or a settled round of that gate
+// already at the current head fails closed to false, which keeps the fixer route.
+export async function onlyStaleGateRoundThreadsOpen({ threadsPayload, repo, pr, currentHeadSha, runtime }) {
+  const gate = "pre_approval_gate";
   try {
-    const open = threadsPayload.filter((node) => !node?.isResolved);
+    const login = await resolveAuthenticatedLogin(runtime);
+    const open = threadsPayload.filter((node) => !node?.isResolved && node?.comments?.nodes?.[0]?.author?.login === login);
     if (open.length === 0) return false;
     const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
     const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
+    const head = currentHeadSha.toLowerCase();
+    const rounds = await readClosedPriorRoundLogs({ repo, pr, gate, headSha: currentHeadSha, tmpRoot }, { repoRoot, includeLiveCurrentHead: true, includeRetainedCurrentHead: true });
+    if (rounds.some((log) => String(log.headSha).trim().toLowerCase() === head)) return false;
     for (const node of open) {
-      const first = node?.comments?.nodes?.[0];
-      const body = typeof first?.body === "string" ? first.body : "";
+      const body = typeof node.comments.nodes[0].body === "string" ? node.comments.nodes[0].body : "";
       const marker = parseFindingMarker(body);
       if (!marker || marker.severity === "question") return false;
       const fps = new Set([marker.fp]);
       collectFingerprints(body, fps);
       for (const fp of fps) {
-        let stale = false;
-        for (const gate of ["draft_gate", "pre_approval_gate"]) {
-          const prior = await findJudgeDispositionForFingerprint({ repo, pr, gate, headSha: currentHeadSha, tmpRoot, repoRoot, fp });
-          if (prior && !prior.ambiguous && prior.disposition === "act" && !prior.remedyKind && prior.headSha && isStrictAncestor(prior.headSha, currentHeadSha, repoRoot)) stale = true;
-        }
-        if (!stale) return false;
+        if (!(await isStaleJudgeActFingerprint({ repo, pr, gate, headSha: currentHeadSha, tmpRoot, repoRoot, fp }))) return false;
       }
     }
     return true;

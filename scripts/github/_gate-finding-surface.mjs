@@ -8,6 +8,7 @@
  * finding/review markers, the in-diff position walk, the ledger read, and the
  * round number — so the two can never drift apart on a shape they both parse.
  */
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -1668,6 +1669,25 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
     return { ambiguous: true }; // Tied on the greatest loggedAt, and those tied candidates disagree.
   }
   return { disposition: winners[0].disposition, rationale: winners[0].rationale, reason: winners[0].reason, ...(winners[0].remedyKind ? { remedyKind: winners[0].remedyKind } : {}), ...verdictHeadOf(winners) };
+}
+
+// True when ancestor is a different commit that the repo's history places strictly before head (any git error fails closed).
+export function isStrictAncestor(ancestor, head, repoRoot) {
+  if (ancestor.toLowerCase() === head.toLowerCase()) return false;
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", ancestor, head], { cwd: repoRoot, env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_COMMON_DIR: undefined }, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// GATE-EXEC-THREAD-DISPOSITION: the one prior-act test of the fixed-act close and of the coordinator's route to it. True when the newest
+// ledger of `gate` that carries `fp` is a judge `act` code finding (no remedy kind) recorded at a strict ancestor of `headSha`. Both callers
+// pass the gate whose round runs next, so the route predicts exactly what that round's close reads.
+export async function isStaleJudgeActFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp }) {
+  const prior = await findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp });
+  return Boolean(prior && !prior.ambiguous && prior.disposition === "act" && !prior.remedyKind && prior.headSha && isStrictAncestor(prior.headSha, headSha, repoRoot));
 }
 
 // Tier 3 (last-resort) of the reject-close judge-disposition lookup: parses

@@ -957,7 +957,7 @@ async function emitPlan({
     if (error?.code === "SEQUENCE_LOCK_BUSY") throw new WorkOrderRefusal("sequence_lock_busy", `sequence_lock_busy: ${error.message}; no work order was made current, so re-run the emit once the concurrent close or pull finishes`, true);
     throw error;
   }
-  // The coordinator's gate wait-for-units --artifact path: a full-phase fixer's final-on-write report (ADR 0223), else the hand-back itself.
+  // The coordinator's gate wait-for-units --artifact path: the fixer's join report (published last), else the hand-back itself.
   // fixerModel is returned, not persisted in the plan: the Claude Agent `model` from the config validated above.
   return { ...plan, planPath: livePlanPath, joinRef: reviewId ? fixerReportPath(outputRef) : outputRef, fixerModel: resolveRoleModel(config, { role: "fixer", harness: "claude" }) };
   } finally { await capture.release(); }

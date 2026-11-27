@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { parseAllowedRefsCsv, requireTokenValue } from "../_cli-primitives.mjs";
 import { containsBareCopilotSummon, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -17,6 +16,7 @@ import {
   isDeferredAtRound,
   filterTrustedRoundInputs,
   isFileableDeferral,
+  isStaleJudgeActFingerprint,
   listPrReviews,
   parseFindingMarker,
   parseRenderedJudgeDisposition,
@@ -469,8 +469,7 @@ async function runDispositionPass({ repo, pr, gate, headSha, tmpRoot, repoRoot, 
 // A `question` thread is NEVER selected by selectDispositionTargets above
 // (a question is never deferred, whatever the ledger says) —
 // it is answered, never deferred. Without this pass, a question the judge
-// REJECTED (so it never entered the fixer's act list, and the fixer's own
-// answer-and-resolve path is never invoked for it — GATE-EXEC-ACT-LIST-SCOPE,
+// REJECTED (so it never entered the fixer's act list — GATE-EXEC-ACT-LIST-SCOPE,
 // out of scope to change) had no sanctioned resolution path at all once
 // someone answered it: unresolvedGateThreadCount could never reach 0. This
 // pass closes that case and, per ADR 0144, a medium, low or nit defect thread whose
@@ -708,17 +707,6 @@ async function runEvidenceOnlyClosePass({ repo, pr, gate, headSha, round, thread
   return { evidenceOnlyClosed: closed, dispositionFailures };
 }
 
-// True when ancestor is a different commit that the repo's history places strictly before head (any git error fails closed).
-export function isStrictAncestor(ancestor, head, repoRoot) {
-  if (ancestor.toLowerCase() === head.toLowerCase()) return false;
-  try {
-    execFileSync("git", ["merge-base", "--is-ancestor", ancestor, head], { cwd: repoRoot, env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_COMMON_DIR: undefined }, stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // Fixed act close (GATE-EXEC-THREAD-DISPOSITION): the full-phase fix pass posts no reply and resolves no thread, so a
 // later round that judged the fix closes the thread of a judge-act code finding it does not raise again. Only a settled round
 // (verdict clean or findings_present) that freshly reviewed the thread's angle counts, and only prior-ledger act evidence whose
@@ -737,8 +725,7 @@ async function runFixedActClosePass({ repo, pr, gate, headSha, round, threads, s
       collectFingerprints(thread.body, fps);
       for (const memberFp of fps) {
         if (findings.some((f) => f && findingFingerprintMatches(f, memberFp))) return false;
-        const prior = await findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp: memberFp });
-        if (!prior || prior.ambiguous || prior.disposition !== "act" || prior.remedyKind || !prior.headSha || !isStrictAncestor(prior.headSha, headSha, repoRoot)) return false;
+        if (!(await isStaleJudgeActFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp: memberFp }))) return false;
       }
       return true;
     },

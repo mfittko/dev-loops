@@ -909,7 +909,7 @@ test("#2381: countUnresolvedGateAuthoredThreadsBySeverity splits question from e
 // Copilot review (PR 2402): a nit must split out of "other" into its OWN
 // bucket — a nit is never a fixer target (NON_DEFECT_SEVERITIES,
 // gate-fanin.mjs), unlike high/medium/low, so lumping it into "other" told
-// operators to use a remedy (the fixed-act close) that cannot clear it.
+// operators to use a remedy (a close-gate-findings rerun) that cannot clear it.
 test("#2381: countUnresolvedGateAuthoredThreadsBySeverity splits nit into its own bucket, separate from question and other defect severities", () => {
   const nit = thread({ body: `${buildFindingMarker({ fp: "9".repeat(16), severity: "nit", angle: "style", round: 1 })}\n**nit** (\`style\`): x` });
   const low = thread({ body: `${buildFindingMarker({ fp: "8".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): y` });

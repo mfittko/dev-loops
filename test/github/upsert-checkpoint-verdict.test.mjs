@@ -13143,6 +13143,34 @@ test("buildCoordinationEvaluatorInput threads draftCapRoundFixed so pre_approval
   assert.ok(!evaluate(undefined).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "an unresolved proof (resolver threw) fails closed");
 });
 
+// GATE-EXEC-THREAD-DISPOSITION: the poster's gate-entry check reads the detector's stale-gate-thread flag, so the round the coordinator routes is not refused as unresolved feedback.
+test("buildCoordinationEvaluatorInput threads staleGateRoundThreadsOnly so a ready PR with only stale judge-act gate threads may post a pre_approval_gate verdict", () => {
+  const coordinationContext = {
+    repo: "owner/repo",
+    pr: 2937,
+    currentHeadSha: "29aa40b7deadbeef",
+    prData: { isDraft: false, state: "OPEN" },
+    interpretation: { state: "unresolved_feedback_present", sameHeadCleanConverged: true },
+    disposition: { loopDisposition: "action_required" },
+    snapshot: { ciStatus: "success", copilotReviewRoundCount: 1, unresolvedThreadCount: 1, copilotReviewOnCurrentHead: true, copilotReviewRequestStatus: "none" },
+    gateEvidence: { draftGate: { visible: false }, draftGateMarker: { visible: false }, preApprovalGate: { visible: false }, preApprovalGateMarker: { visible: false } },
+    refinementArtifact: null,
+    copilotBodyConvergence: { ok: true },
+    unresolvedGateThreadCount: 1,
+  };
+  const evaluate = (staleGateRoundThreadsOnly) => evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
+    coordinationContext: { ...coordinationContext, ...(staleGateRoundThreadsOnly === undefined ? {} : { staleGateRoundThreadsOnly }) },
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: "internal_only",
+    draftCapRoundFixed: true,
+  }));
+  assert.ok(evaluate(true).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "only stale judge-act gate threads open: the round is allowed");
+  assert.ok(!evaluate(false).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "other open threads: refused");
+  assert.ok(!evaluate(undefined).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "an absent flag fails closed");
+});
+
 test("tick (#2898): the dry-run artifact keeps a label a reload-only issue carries unticked even when another issue's row is flipped", async () => {
   const extraIssueBodies = { 901: ["## Acceptance criteria", "", "- [ ] criterion number 1", ""].join("\n") };
   const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: UNTICKED_TICK_ISSUE_BODY, closingIssues: [900, 901], extraIssueBodies, failIssueViewAfter: 1, failIssueViewCount: 1 };

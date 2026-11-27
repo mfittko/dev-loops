@@ -2195,6 +2195,8 @@ export function buildCoordinationEvaluatorInput({
     // verified once in loadPrGateCoordinationContext (_copilot-convergence-carry.mjs)
     // — see detect-pr-gate-coordination-state.mjs.
     postConvergenceReviewSuppressed: coordinationContext.postConvergenceReviewSuppressed === true,
+    // The detector's flag (GATE-EXEC-THREAD-DISPOSITION): only stale judge-act gate threads are open, so the routed round may post.
+    staleGateRoundThreadsOnly: coordinationContext.staleGateRoundThreadsOnly === true,
     // Independent gate-ENTRY re-check: fed alongside (not derived from)
     // sameHeadCleanConverged, so an outstanding request on the current head refuses
     // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.

@@ -784,7 +784,7 @@ test("MARKER_UNREADABLE: a record with next step push names the full-phase emiss
     assert.match(result.reason, /the sealed delta record of/);
     assert.match(result.remedy, /emit-fixer-work-order\.mjs --phase full --repo \S+ --pr \d+ --head-sha \S+ [^`]*--harness <claude\|pi\|codex>`/);
     assert.doesNotMatch(result.remedy, /--delta-result/);
-    assert.match(result.remedy, /already emitted, returns it unchanged and rewrites the marker as granted/);
+    assert.match(result.remedy, /emits the full order and writes no marker; the full-phase fixer then pushes its candidate/);
     assert.doesNotMatch(result.remedy, /\brm\b|operator/);
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });

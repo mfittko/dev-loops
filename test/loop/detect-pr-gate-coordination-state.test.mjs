@@ -12,7 +12,8 @@ const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir,
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 
-import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveCapBrakes, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { detectPrGateCoordinationState, onlyStaleGateRoundThreadsOpen, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveCapBrakes, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
@@ -6000,4 +6001,69 @@ test("loop gate-coordination refuses a malformed --operator-focus-file before an
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+// GATE-EXEC-THREAD-DISPOSITION: the stale-thread route reads the same ledgers the next pre_approval_gate round's fixed-act close reads.
+describe("onlyStaleGateRoundThreadsOpen", () => {
+  const REPO = "owner/repo";
+  const PR = 77;
+  const GATE_LOGIN = "dev-loops-gate[bot]";
+  const FINDING = { severity: "medium", angle: "perf", summary: "stale cache not invalidated" };
+
+  const threadNode = ({ severity = "medium", author = GATE_LOGIN } = {}) => ({
+    isResolved: false,
+    comments: { nodes: [{ author: { login: author }, body: `${buildFindingMarker({ fp: fingerprintFinding(FINDING), severity, angle: "perf", round: 1 })}\n**${severity}** (\`perf\`): ${FINDING.summary}` }] },
+  });
+
+  async function staleCase(ledgers, { threads = [threadNode()] } = {}) {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-stale-threads-"));
+    try {
+      initGitFixture(repoRoot);
+      const a = runGitFixture(repoRoot, ["rev-parse", "HEAD"]);
+      runGitFixture(repoRoot, ["commit", "-q", "--allow-empty", "-m", "fix"]);
+      const b = runGitFixture(repoRoot, ["rev-parse", "HEAD"]);
+      const heads = { A: a, B: b };
+      const tmpRoot = path.join(repoRoot, "tmp");
+      for (const { gate, head, findings = [{ ...FINDING, judgeDisposition: "act", judgeRationale: "fix it" }], verdict = "findings_present", loggedAt } of ledgers) {
+        const file = buildLogPath({ repo: REPO, pr: PR, gate, headSha: heads[head], tmpRoot });
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate, headSha: heads[head], verdict, loggedAt, findings }), "utf8");
+      }
+      const runChild = async () => ({ code: 0, stdout: JSON.stringify({ login: GATE_LOGIN }), stderr: "" });
+      return await onlyStaleGateRoundThreadsOpen({ threadsPayload: threads, repo: REPO, pr: PR, currentHeadSha: b, runtime: { repoRoot, env: {}, ghCommand: "gh", runChild } });
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  }
+
+  const ACT_AT_A = { gate: "pre_approval_gate", head: "A", loggedAt: "2026-09-10T00:00:00.000Z" };
+
+  it("is true for a judge-act thread whose pre_approval_gate round ran at an ancestor head", async () => {
+    assert.equal(await staleCase([ACT_AT_A]), true);
+  });
+
+  it("is false for a question thread", async () => {
+    assert.equal(await staleCase([ACT_AT_A], { threads: [threadNode({ severity: "question" })] }), false);
+  });
+
+  it("is false when only the other gate's ledger holds the ancestor act", async () => {
+    assert.equal(await staleCase([{ ...ACT_AT_A, gate: "draft_gate" }]), false);
+  });
+
+  it("is false when a newer pre_approval_gate ledger rejected the finding, whatever the other gate holds", async () => {
+    const reject = [{ ...FINDING, judgeDisposition: "reject", judgeRationale: "no" }];
+    assert.equal(await staleCase([{ ...ACT_AT_A, findings: reject, loggedAt: "2026-09-11T00:00:00.000Z" }, { ...ACT_AT_A, gate: "draft_gate" }]), false);
+  });
+
+  it("is false when a settled pre_approval_gate round already ran at the current head without raising the finding", async () => {
+    assert.equal(await staleCase([ACT_AT_A, { gate: "pre_approval_gate", head: "B", findings: [], verdict: "clean", loggedAt: "2026-09-12T00:00:00.000Z" }]), false);
+  });
+
+  it("is false when the current head raised the finding again", async () => {
+    assert.equal(await staleCase([ACT_AT_A, { gate: "pre_approval_gate", head: "B", loggedAt: "2026-09-12T00:00:00.000Z" }]), false);
+  });
+
+  it("is false when the open thread is not authored by the gate login", async () => {
+    assert.equal(await staleCase([ACT_AT_A], { threads: [threadNode({ author: "someone-else" })] }), false);
+  });
 });

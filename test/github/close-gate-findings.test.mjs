@@ -1021,7 +1021,7 @@ test("answering a previously-unanswered, judge-rejected question lets the pass c
   });
 });
 
-test("an answered question the judge did NOT reject (act) stays open (the fixer's own answer-and-resolve path owns it)", async () => {
+test("an answered question the judge did NOT reject (act) stays open (only a judge rerun at the current head changes its disposition)", async () => {
   const finding = { severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "act", judgeRationale: "Worth fixing." };
   const fp = fingerprintFinding(finding);
   const questionBody = `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why this approach?`;
