@@ -1322,7 +1322,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  // GATE-EXEC-CAP-BRAKES: `capBrakes` is `{ gate, round, cap, actCounts, items, operatorCleared?, notClearable? }` for the gate whose round is posted at this head. The one policy
+  // GATE-EXEC-CAP-BRAKES: `capBrakes` is `{ gate, round, cap, items, operatorCleared?, notClearable? }` for the gate whose round is posted at this head. The one policy
   // (decideCapRound) stops the lane before another fixer pass; only an operator focus decision that names the items clears the stop (`operatorCleared: true` routes past it; `notClearable: true` marks a set that already had its one re-open, which no focus file clears).
   const capStop = input.capBrakes ? decideCapRound({ ...input.capBrakes, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 } }) : null;
   // Issue 3105 AC15 (ADR 0288): the open draft_gate act list at the current head; the fixer route below consumes it.
@@ -1341,12 +1341,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
     && input.draftRoundRefused !== true;
   // ADR 0271: a round of PR-body items only has no fixer route; its exit is the body-only converged post, named in the cap refusal below.
   const bodyOnlyList = headActList && actList.bodyOnly === true;
-  // GATE-EXEC-NO-DEAD-END: the non_convergence brake (which guards the next round) skips a blocker-free all-PR-body list only when the body-only route or the satisfied-gate route answers instead.
-  const bodyOnlyExempt = capStop?.reason === "non_convergence" && actList?.bodyOnly === true && actList.openActCount > 0
-    && (actList.blockers ?? []).length === 0 && (bodyOnlyList || draftReady) && actListHeadBound;
   // AC7: a forecast with a failed growth read stops the lane like a growth stop, so a transient read failure never clears it; only an operator decision does.
   const growthUnread = input.capBrakes?.growthReadError !== undefined && input.capBrakes.forecastWloc > 0 && input.capBrakes.operatorCleared !== true;
-  const capStopApplies = capStop?.action === "operator" && input.capBrakes.operatorCleared !== true && !bodyOnlyExempt;
+  const capStopApplies = capStop?.action === "operator" && input.capBrakes.operatorCleared !== true;
   if (capStopApplies || growthUnread) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
     pushUnique(forbiddenActions, [

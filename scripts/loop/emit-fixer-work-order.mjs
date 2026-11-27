@@ -744,7 +744,7 @@ async function emitPlan({
     } catch { return null; }
   };
   // One read of the operator focus file for the scoped-round decision and the binding below: a shape error refuses here under GATE-EXEC-OPERATOR-FOCUS, never inside the swallowing cap-round catch.
-  const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
+  const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined);
   if ((gate === "pre_approval_gate" || gate === "draft_gate") && guardFile) {
     const runtime = { env, ghCommand, runChild };
     // GATE-COMMENT-BLOCKED-BY: a posted blocked verdict whose causes hold no findings entry has no fix round; its next step is the operator's.

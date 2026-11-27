@@ -1470,7 +1470,7 @@ async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoo
   const last = logs.at(-1), fingerprints = actFingerprintSet(last);
   const base = { repo: context.repo, pr: context.pr, gate };
   if (effective.at(-1) === last) return operatorDecidedLatestRound({ ...base, operatorFocusFile }, { repoRoot, latest: last, last: fingerprints });
-  // A base-merge-forced latest round clears from the issued fixer plan, or from the direct file when it decides the forced set and the effective latest set (refuseNonConvergence and resolveOperatorClearedRound read the same file).
+  // A base-merge-forced latest round clears from the issued fixer plan, or from the direct file when it decides the forced set and the effective latest set (resolveOperatorClearedRound reads the same file).
   if (await operatorDecidedLatestRound(base, { repoRoot, latest: last, last: fingerprints })) return true;
   return operatorDecidedLatestRound({ ...base, operatorFocusFile }, { repoRoot, latest: last, last: [...new Set([...fingerprints, ...actFingerprintSet(effective.at(-1))])] });
 }
@@ -1511,7 +1511,6 @@ export async function resolveCapBrakes(context, { repoRoot, config, operatorFocu
     // A base-merge-forced round never counts (countCapRounds), as in the poster and the emitter.
     round,
     cap,
-    actCounts: effective.map((log) => capRoundActList(log.findings, log.headSha).length),
     forecastWloc,
     ...growth,
     ...(growthReadError === undefined ? {} : { growthReadError }),
@@ -1627,7 +1626,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // A malformed operator focus file refuses here (GATE-EXEC-OPERATOR-FOCUS), before any gh read.
   // Resolved against cwd once, as emit-fixer-work-order.mjs does, so both readers name the same file.
   const operatorFocusFile = options.operatorFocusFile ? path.resolve(process.cwd(), options.operatorFocusFile) : undefined;
-  await readOperatorFocusFile(operatorFocusFile, { allowItems: true });
+  await readOperatorFocusFile(operatorFocusFile);
   // ADR 0117 (issue 3139): an open self-hosting PR is answered by its own head's toolchain; another checkout refuses inside the loader, before any shared gate state is written.
   const fetchedAtMs = Date.now();
   const context = await loadPrGateCoordinationContext(options, { ...runtime, guardToolchain: true });
@@ -1841,7 +1840,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // ADR 0238: all-untrusted open threads are non-blocking but visible, with authors and the remedy.
   if (context.skippedUntrusted?.length > 0) result.skippedUntrusted = context.skippedUntrusted;
   // GATE-EXEC-CAP-BRAKES: an unreadable ledger leaves the brakes unevaluated; the warning keeps that visible (the context writer still refuses the round).
-  if (capBrakesError) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the cap brakes could not be evaluated (${capBrakesError.message}); write-gate-context.mjs still refuses the round-count and non-convergence brakes of the next gate round, but only this detector evaluates the growth limit.`;
+  if (capBrakesError) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the cap brakes could not be evaluated (${capBrakesError.message}); write-gate-context.mjs still refuses the round-count brake of the next gate round, but only this detector evaluates the growth limit.`;
   // GATE-EXEC-CAP-BRAKES: a judged round with no forecast to compare has no growth limit; the warning names the gap and the lane does not stop.
   else if (capBrakes?.growthReadError !== undefined) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the growth limit could not be evaluated (${capBrakes.growthReadError}); with a forecast the lane stops until a rerun reads it or an operator decision clears it, and the other cap brakes still apply.`;
   else if (capBrakes && !(capBrakes.forecastWloc > 0)) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the growth limit is not evaluated because ${context.refinementArtifact?.linkedIssue ? `linked issue #${context.refinementArtifact.linkedIssue} has no \`- forecast: slice=<id> wloc=<n> files=<paths>\` line with wloc above 0 under \`## Size forecast\`` : "the PR has no linked issue"}.`;
