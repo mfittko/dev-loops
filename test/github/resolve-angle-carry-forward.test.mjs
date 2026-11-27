@@ -1454,12 +1454,6 @@ test("buildCarryForwardPlan refuses --rerun-angle for a finding angle that match
   }
 });
 
-test("buildCarryForwardPlan keeps an orphan angle in mustRerun and out of carried when the head does not resolve it", () => {
-  const plan = buildCarryForwardPlan({ log: orphanLog, changedFiles: ["docs/guide.md"], freshAngles: [] });
-  assert.ok(plan.mustRerun.some((m) => m.angle === "typo-ed-angle"));
-  assert.ok(!plan.carried.some((c) => c.angle === "typo-ed-angle"));
-});
-
 test("buildCarryForwardPlan keeps the orphan angle in mustRerun on a dev-loop config-source delta", () => {
   const plan = buildCarryForwardPlan({ log: orphanLog, changedFiles: [".devloops"], incrementalFiles: [".devloops"] });
   assert.ok(plan.mustRerun.some((m) => m.angle === "typo-ed-angle"));

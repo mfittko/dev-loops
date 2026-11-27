@@ -240,10 +240,11 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
   const perAngleRows = Array.isArray(log.provenance?.perAngle) ? log.provenance.perAngle.map((a) => a?.angle) : [];
   const rowBases = new Set(perAngleRows.filter((a) => typeof a === "string").map((a) => baseAngleName(a).toLowerCase()));
   // Only a real orphan (no perAngle row by base name, not the copilot-body skip) is a known rerun angle.
-  const orphanFindingAngles = (Array.isArray(log.findings) ? log.findings : [])
+  // A finding whose angle has no perAngle row cannot be proved clean, so that angle re-runs (never carried).
+  const orphanAngles = new Set((Array.isArray(log.findings) ? log.findings : [])
     .map((f) => (typeof f?.angle === "string" ? f.angle.trim() : ""))
-    .filter((a) => a.length > 0 && !rowBases.has(baseAngleName(a).toLowerCase()) && a !== COPILOT_BODY_ANGLE);
-  const knownAngles = [...perAngleRows, ...orphanFindingAngles];
+    .filter((a) => a.length > 0 && !rowBases.has(baseAngleName(a).toLowerCase()) && a !== COPILOT_BODY_ANGLE));
+  const knownAngles = [...perAngleRows, ...orphanAngles];
   const unknownRerun = rerunAngles.filter((a) => !knownAngles.includes(a));
   if (unknownRerun.length > 0) {
     throw Object.assign(new Error(`--rerun-angle names no angle in the prior findings-log: ${unknownRerun.join(", ")}`), { code: "unknown_rerun_angle" });
@@ -346,20 +347,15 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
   // single-row match is eligible for carry-with-findings below.
   const ambiguousAngles = new Set();
   const priorFindingsByAngle = new Map();
-  // A finding whose angle has no perAngle row cannot be proved clean, so that angle re-runs (never carried).
-  const orphanAngles = new Set();
   for (const finding of Array.isArray(log.findings) ? log.findings : []) {
     const rawAngle = finding && typeof finding.angle === "string" ? finding.angle.trim() : "";
     if (rawAngle.length === 0) {
       throw new Error("prior gate findings-log has a finding with no angle — cannot attribute it to a carried angle (fail-closed)");
     }
-    // The synthetic Copilot body finding has no perAngle row by design; any other unmatched angle is an orphan and re-runs.
+    // The synthetic Copilot body finding has no perAngle row by design; an unmatched angle is an orphan (orphanAngles above).
     if (rawAngle === COPILOT_BODY_ANGLE && !prevAnglesByLowerBase.has(COPILOT_BODY_ANGLE)) continue;
     const matches = prevAnglesByLowerBase.get(baseAngleName(rawAngle).toLowerCase());
-    if (!matches || matches.length === 0) {
-      orphanAngles.add(rawAngle);
-      continue;
-    }
+    if (!matches || matches.length === 0) continue;
     if (matches.length > 1) {
       for (const angle of matches) ambiguousAngles.add(angle);
       continue;
