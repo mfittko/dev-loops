@@ -13879,7 +13879,7 @@ test("review gate: a judged defer or reject finding is never inline; an act find
 
 // An own PENDING review makes the gate verdict create 422, so draft_gate and pre_approval_gate resolve it first.
 const DRAFT_GATE_HEAD = "abc1234000000000000000000000000000000000";
-const runDraftGateVerdict = async (gate, reviews) => {
+const runDraftGateVerdict = async (gate, reviews, { force422 = false } = {}) => {
   const preApproval = gate === "pre_approval_gate";
   const entries = [
     ...buildGateCoordinationEntries({
@@ -13889,7 +13889,7 @@ const runDraftGateVerdict = async (gate, reviews) => {
     }),
     ...(preApproval ? [{ assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n' }] : []),
     // GitHub 422s the first create while the caller has a pending review.
-    ...(reviews.some((review) => review.state === "PENDING")
+    ...(force422 || reviews.some((review) => review.state === "PENDING")
       ? [{ assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], exitCode: 1, stderr: "gh: Unprocessable Entity: User can only have one pending review per pull request (HTTP 422)\n" }]
       : []),
     // The round's own reviews read comes first; the pending-review lookup after the 422 is the second read.
@@ -13939,6 +13939,14 @@ for (const gate of ["draft_gate", "pre_approval_gate"]) {
     assert.match(printed.error, /8101/);
     assert.ok(printed.recovery);
     // No events call and no second create.
+    assert.equal(calls.filter(isWriteCall).length, 1);
+    assert.equal(calls.some((call) => call.args.some((arg) => String(arg).endsWith("/events"))), false);
+  });
+
+  test(`${gate} verdict rethrows the original 422 when no own PENDING review exists`, async () => {
+    const { result, error, calls } = await runDraftGateVerdict(gate, [{ id: 8101, state: "COMMENTED", commit_id: DRAFT_GATE_HEAD, body: "Reviewer-loop draft verdict: COMMENT\n\nfindings" }], { force422: true });
+    assert.equal(result, undefined);
+    assert.match(error.message, /one pending review/);
     assert.equal(calls.filter(isWriteCall).length, 1);
     assert.equal(calls.some((call) => call.args.some((arg) => String(arg).endsWith("/events"))), false);
   });
