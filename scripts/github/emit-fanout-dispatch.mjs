@@ -465,7 +465,11 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     process.stderr.write(`${formatCliError(parseError("--retry-crashed requires a unit name."))}\n`);
     return 2;
   }
-  const operatorFocusArg = resolveFlagValue(argv, "--operator-focus-file");
+  if (retryCrashed.size > 0 && !pendingOnly) {
+    process.stderr.write(`${formatCliError(parseError("--retry-crashed applies only to a --pending emission; re-run with --pending --retry-crashed <unit name> for each unit whose agent ended without result artifacts."))}\n`);
+    return 2;
+  }
+  const operatorFocusArg =resolveFlagValue(argv, "--operator-focus-file");
   if (operatorFocusArg === "") {
     process.stderr.write(`${formatCliError(parseError("--operator-focus-file must not be an empty value; pass a path or omit the flag"))}\n`);
     return 2;
@@ -675,14 +679,6 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   } else {
     units = fanout.groups;
   }
-  if (retryCrashed.size > 0 && !pendingOnly) {
-    return finish({ ok: false, error: "GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: --retry-crashed applies only to a --pending emission", recovery: "Re-run with --pending --retry-crashed <unit name> for each unit whose agent ended without result artifacts." }, false);
-  }
-  const pendingNames = Array.isArray(units) ? units.map((unit) => unit?.name) : [];
-  const notPending = [...retryCrashed].filter((name) => !pendingNames.includes(name));
-  if (notPending.length > 0) {
-    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: --retry-crashed names ${notPending.map((n) => JSON.stringify(n)).join(", ")}, which is not a pending unit`, recovery: `The pending units are ${pendingNames.map((n) => JSON.stringify(n)).join(", ") || "(none)"}; name only a pending unit whose agent ended without result artifacts.` }, false);
-  }
   // A zero-unit pending plan is valid only when every original angle was
   // carried. Completed-only resumes and malformed empty plans still refuse;
   // fan-in independently verifies the carry proof before accepting findings.
@@ -775,6 +771,23 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // well-formed by construction.
   const unitBound = resolveReviewerUnitBound(fanout.unitBound);
   const dispatchUnits = expandDispatchUnits(units, configuredGroupNames, unitBound);
+  // --retry-crashed matches a raw pending unit name or an emitted dispatch unit name. Expansion is per unit and in order,
+  // so each pending unit owns the next expandDispatchUnits([unit]).length emitted units.
+  const pendingNames = Array.isArray(units) ? units.map((unit) => unit?.name) : [];
+  const emittedNames = dispatchUnits.map((unit) => unit.name);
+  const retryEmitted = new Set();
+  let emittedAt = 0;
+  for (const unit of Array.isArray(units) ? units : []) {
+    const count = expandDispatchUnits([unit], configuredGroupNames, unitBound).length;
+    for (const emitted of dispatchUnits.slice(emittedAt, emittedAt + count)) {
+      if (retryCrashed.has(unit?.name) || retryCrashed.has(emitted.name)) retryEmitted.add(emitted);
+    }
+    emittedAt += count;
+  }
+  const notPending = [...retryCrashed].filter((name) => !pendingNames.includes(name) && !emittedNames.includes(name));
+  if (notPending.length > 0) {
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: --retry-crashed names ${notPending.map((n) => JSON.stringify(n)).join(", ")}, which is not a pending unit`, recovery: `The pending units are ${pendingNames.map((n) => JSON.stringify(n)).join(", ") || "(none)"} and the emitted units are ${emittedNames.map((n) => JSON.stringify(n)).join(", ") || "(none)"}; name only a pending unit whose agent ended without result artifacts.` }, false);
+  }
 
   // GATE-EXEC-FANOUT-CAPACITY (emitter half): the emitted unit count is the wave
   // width the coordinator uses, so a PRESENT plan record whose EMITTED units
@@ -900,7 +913,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
-      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound, resolutionDeltaPaths, resolutionDeltaMerges, resolutionDeltaFullPaths, retryCrashed.has(unit.name)), "utf8");
+      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound, resolutionDeltaPaths, resolutionDeltaMerges, resolutionDeltaFullPaths, retryEmitted.has(unit)), "utf8");
     } catch (err) {
       return failAfterRetirement(err);
     }

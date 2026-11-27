@@ -689,8 +689,7 @@ spec source, a missing or unreadable judge file or an unchanged digest leaves an
 or scoped-variant file under any sentinel at that head, finished or not, still refuses until the round is retired explicitly.
 The automatic retirement refuses while a reviewer may still be writing into the round: a sentinel
 with no valid findings artifact newer than it is live, and both scripts refuse with a `recovery`
-(wait for the reviewers, re-run `write-gate-context.mjs` at the same head so `pendingGroups` drops the completed units, then run `emit-fanout-dispatch.mjs --pending`, or run the explicit command when the
-reviewers crashed). A full re-emission while reviewers run is forbidden for the same reason; the coordinator
+(wait for the reviewers, re-run `write-gate-context.mjs` at the same head so `pendingGroups` drops the completed units, then run `emit-fanout-dispatch.mjs --pending`, with `--retry-crashed <unit>` for a unit whose reviewer crashed, or retire the round when its briefing was rebuilt). A full re-emission while reviewers run is forbidden for the same reason; the coordinator
 resumes with `--pending`. Only an undispatched round (dispatch records, no sentinel) or a finished round
 (every sentinel has a valid newer artifact) retires automatically (ADR 0314). A round already stranded by old
 tooling or an out-of-band prefix change also uses retirement: `--same-head-retry`
