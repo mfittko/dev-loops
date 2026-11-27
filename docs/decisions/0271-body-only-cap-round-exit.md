@@ -26,4 +26,8 @@ A cap round whose open act items are all PR-body items has no exit. The fix is a
 
 ## Consequences
 
-A PR-body cap round clears with no commit and no replacement PR. The rule `GATE-EXEC-NO-DEAD-END` is registered in `skills/docs/gate-review-sub-loop-contract.md` and `skills/docs/required-rules.json`. A low-value body edit can pass the poster, and `pre_approval_gate` is the backstop.
+A PR-body cap round clears with no commit and no replacement PR. The rule `GATE-EXEC-NO-DEAD-END` is registered in `skills/docs/gate-review-sub-loop-contract.md` and `skills/docs/required-rules.json`.
+
+## Amendment (issue 3604, 2026-11-27)
+
+Decision 4 and the body-only converged post stay as written. A second exit now covers a posted round of PR-body act items, on `draft_gate` and `pre_approval_gate`, below and past the cap, with no operator ask. When the open act items of the posted findings log are all PR-body items and the live PR body digest differs from the `prBodySha256` that log recorded, the same-head rebuild retires the round automatically. The live findings log moves to a retained round, the units that read the PR body rerun (`GATE-EXEC-BODY-ONLY-RERUN`) and the other units keep their artifacts. The rerun is no cap round and trips neither `round_cap_reached` nor `cap_fix_over_budget`. `pre_approval_gate` still reviews the body edit through its body-reading angles, so the backstop of this ADR holds. The operator chose this over extending the converged post to `pre_approval_gate`. A low-value body edit can pass the poster, and `pre_approval_gate` is the backstop.

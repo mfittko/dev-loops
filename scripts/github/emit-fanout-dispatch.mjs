@@ -865,7 +865,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     try {
       // Sentinels always live under <cwd>/tmp (verify-fresh-review-context); the round's findings and dispatch records follow --tmp-root;
       // a verdict marker may sit under --tmp-root, the ledger root or the main worktree's tmp.
-      stale = await retireStaleRound({ repo, pr, gate, headSha, tmpRoot: tmpRootDefault, findingsTmpRoot: tmpRoot, recordsTmpRoot: tmpRoot, verdictRoots: [...new Set([tmpRoot, ledgerTmpRoot, ledgerTmpRootDefault])] });
+      // The context's pr-body digest is the body this emission reviews: a posted round of PR-body act items that read an older body retires (issue 3604).
+      const currentPrBodySha256 = artifact.requiredReads?.find((read) => read?.kind === "pr-body")?.sha256 ?? null;
+      stale = await retireStaleRound({ repo, pr, gate, headSha, tmpRoot: tmpRootDefault, findingsTmpRoot: tmpRoot, recordsTmpRoot: tmpRoot, verdictRoots: [...new Set([tmpRoot, ledgerTmpRoot, ledgerTmpRootDefault])], currentPrBodySha256 });
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;

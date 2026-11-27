@@ -8,7 +8,8 @@
  * once all writers have shipped.
  */
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { copyFile, mkdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
 
 export const OUT_OF_BAND_WRITE = "gate_artifact_out_of_band_write";
 const sealPath = (file) => `${file}.seal`;
@@ -58,4 +59,19 @@ export async function readSealed(file) {
     throw Object.assign(new Error(`${OUT_OF_BAND_WRITE}: ${file} was modified outside its sanctioned writer (seal mismatch)`), { code: OUT_OF_BAND_WRITE, file });
   }
   return text;
+}
+
+// Moves the live ledger and its seal to `retained` without ever replacing an existing file: COPYFILE_EXCL fails with EEXIST on a taken name.
+// The copies are separate inodes, so a later rewrite of the live path never writes through to the retained round.
+// The seal is copied first (a crash leaves a waiting seal that matches the bytes a retry copies there; EEXIST on the seal is that waiting seal).
+export async function claimRetainedRound(fullPath, retained) {
+  let copiedSeal = true;
+  await copyFile(`${fullPath}.seal`, `${retained}.seal`, fsConstants.COPYFILE_EXCL).catch((err) => { copiedSeal = false; if (err?.code !== "ENOENT" && err?.code !== "EEXIST") throw err; });
+  // A refused claim drops only the seal this call copied; a pre-existing seal of the taken round stays.
+  try { await copyFile(fullPath, retained, fsConstants.COPYFILE_EXCL); } catch (err) {
+    if (copiedSeal) await unlink(`${retained}.seal`).catch(() => {});
+    throw err;
+  }
+  await unlink(fullPath);
+  await unlink(`${fullPath}.seal`).catch((err) => { if (err?.code !== "ENOENT") throw err; });
 }

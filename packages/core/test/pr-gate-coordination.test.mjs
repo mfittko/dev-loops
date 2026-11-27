@@ -5167,6 +5167,22 @@ test("cap brakes: a round past the pre_approval_gate scoped final round stops wi
   assert.equal(scoped.nextAction, "run_pre_approval_gate", scoped.reason);
 });
 
+// Issue 3604: a posted round whose open act items are all PR-body items, with the PR body edited since, returns the gate round on a draft and a ready PR, below and past the cap.
+test("body-only retirement (issue 3604): the gate round runs on a draft and on a ready PR, past the cap, instead of a cap stop or the body-only converged post", () => {
+  const head = "ab".repeat(20);
+  const posted = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
+  const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
+  const draft = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: posted, draftGateMarker: posted, draftOpenActList: { headSha: head, openActCount: 1, blockers: [], bodyOnly: true } };
+  const ready = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", maxCopilotRounds: 0, draftGate: clean, draftGateMarker: clean, preApprovalGate: posted, preApprovalGateMarker: posted };
+  assert.equal(evaluatePrGateCoordination({ ...draft }).nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  for (const [cap, round] of [[4, 2], [2, 4]]) {
+    const draftResult = evaluatePrGateCoordination({ ...draft, bodyOnlyRetire: true, draftRoundRefused: round > cap, capBrakes: { gate: "draft_gate", round, cap, items: [] } });
+    assert.equal(draftResult.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, draftResult.reason);
+    const readyResult = evaluatePrGateCoordination({ ...ready, bodyOnlyRetire: true, capBrakes: { gate: "pre_approval_gate", round, cap, items: [] } });
+    assert.equal(readyResult.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE, readyResult.reason);
+  }
+});
+
 // Issue 3464 AC2, AC5, AC7: the draft cap and the growth brake, both gates, through the one policy.
 test("cap brakes: a draft_gate round past the scoped final round stops with round_cap_reached, while the scoped round itself runs (cap 2)", () => {
   const head = "ab".repeat(20);

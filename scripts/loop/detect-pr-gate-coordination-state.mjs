@@ -34,7 +34,8 @@ import {
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { convergedCarryAccepts } from "../github/_carried-verdict.mjs";
-import { actSetAlreadyHeld, actSetHeld, capRoundActList, countCapRounds, effectiveRounds, operatorClearsCapStop, readClosedPriorRoundLogs, refusesPastScopedRound, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { actSetAlreadyHeld, actSetHeld, capRoundActList, countCapRounds, effectiveRounds, operatorClearsCapStop, prBodySha256, readClosedPriorRoundLogs, refusesPastScopedRound, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { bodyOnlySupersededDigest } from "../github/_stale-round-retirement.mjs";
 import { readOperatorFocusFile } from "./_operator-focus.mjs";
 import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
@@ -1468,6 +1469,20 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, operator
 }
 
 /**
+ * Issue 3604: whether the gate whose round is posted at the current head (draft_gate while the PR is draft, else pre_approval_gate) holds a round of only PR-body act items
+ * that read an older PR body than the live one. That round retires automatically and its body-reading units rerun, so the gate round is the next action
+ * (GATE-EXEC-ROUND-RETIREMENT, GATE-EXEC-BODY-ONLY-RERUN). Any read failure is false: the earlier routing stays.
+ */
+export async function resolveBodyOnlyRetire(context, { repoRoot }) {
+  const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{40,64}$/.test(head) || typeof context.prData?.body !== "string") return false;
+  const gate = context.prData.isDraft === true ? "draft_gate" : "pre_approval_gate";
+  const logs = await readClosedPriorRoundLogs({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, includeLiveCurrentHead: true }).catch(() => []);
+  const last = logs.at(-1);
+  return Boolean(last) && String(last.headSha).trim().toLowerCase() === head && bodyOnlySupersededDigest(last, prBodySha256(context.prData.body)) !== null;
+}
+
+/**
  * GATE-EXEC-CAP-BRAKES: the facts of the gate whose judged round is posted at the current head (draft_gate while the PR is draft, else pre_approval_gate),
  * or null when that head holds no judged round with an open act item. The evaluator applies the one policy (decideCapRound) to them.
  * It also carries the growth numbers: `forecastWloc` of the linked issue now (null with no linked issue or forecast line) and `wholeLogicLoc` of the head.
@@ -1538,6 +1553,7 @@ export function buildGateCoordinationEvaluatorInput({
   draftCapRoundFailure = null,
   draftCapRoundDetail = null,
   draftOpenActList = null,
+  bodyOnlyRetire = false,
   capBrakes = null,
 }) {
   return {
@@ -1607,6 +1623,7 @@ export function buildGateCoordinationEvaluatorInput({
     draftCapRoundFailure,
     ...(draftCapRoundDetail ? { draftCapRoundDetail } : {}),
     draftOpenActList,
+    ...(bodyOnlyRetire ? { bodyOnlyRetire } : {}),
     ...(capBrakes ? { capBrakes } : {}),
     ...(earlySurface ?? {}),
   };
@@ -1708,6 +1725,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const draftOpenActList = context.prData?.isDraft === true
     ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0, operatorCleared: capBrakes?.operatorCleared === true }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
     : null;
+  const bodyOnlyRetire = await resolveBodyOnlyRetire(context, { repoRoot });
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,
@@ -1729,6 +1747,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     draftCapRoundFailure,
     draftCapRoundDetail,
     draftOpenActList,
+    bodyOnlyRetire,
     ...(capBrakes ? { capBrakes } : {}),
   }));
   // Copilot review request guard: when Copilot has reviewed the PR but no
