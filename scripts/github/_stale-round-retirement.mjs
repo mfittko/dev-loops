@@ -1,4 +1,5 @@
 import { access, readdir, readFile, rename, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { validateAngleResult } from "@dev-loops/core/loop/gate-fanin";
 import { retireGateRound } from "./retire-gate-round.mjs";
@@ -100,8 +101,8 @@ async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdic
   const hasRecords = names.some((n) => n.endsWith(suffix) && n.startsWith(sentinelPrefix))
     || recordNames.some((n) => n.endsWith(suffix) && n.startsWith(recordPrefix));
   if (!hasRecords && (liveOnly || !hasFindings)) {
-    // A crash after the audited move but before the ledger move leaves the ledger behind: finish it into the latest retirement of this head.
-    if (!liveOnly && !specDecisionOnly) await finishLeftoverFaninLedgers({ repo, pr, gate, head, tmpRoot, verdictRoots });
+    // A crash after the audited move but before the ledger move leaves the ledger behind: the next full emit-fanout-dispatch.mjs emission finishes it into the latest retirement of this gate at this head.
+    if (!liveOnly && !specDecisionOnly) await finishLeftoverFaninLedgers({ repo, pr, gate, head, roots: [tmpRoot, recordsTmpRoot, findingsTmpRoot], verdictRoots });
     return { retiredRound: null };
   }
   const roundFiles = [
@@ -158,25 +159,43 @@ async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdic
   return { retiredRound: { retirementDir: path.resolve(base.retirementDir), retired: result.retired, sentinels: result.sentinels, dispatchPromptRecords: [...result.dispatchPromptRecords, ...(recordsResult?.dispatchPromptRecords ?? [])], findingsDirRetired: result.findingsDirRetired } };
 }
 
+/** The name a root's retired fan-in ledger takes: a hash of the resolved root, so it never depends on the caller's root order. */
+export const retiredLedgerName = (root, ledger) => `${createHash("sha256").update(path.resolve(root)).digest("hex").slice(0, 8)}-${path.basename(ledger)}`;
+
 // The fan-in ledger is no verdict marker, so it retires with the round: the next round must not read a stale ledger.
-// Each verdict root gets its own destination name (the first keeps the bare name), so two roots never overwrite each other.
+// A findings log that appeared since the guard owns its ledger, so nothing moves. A destination that exists is never overwritten.
+// The ledger's `.seal` sidecar (ADR 0204) moves with it.
 async function moveFaninLedgers({ repo, pr, gate, head, verdictRoots }, retirementDir) {
-  for (const [index, root] of [...new Set(verdictRoots)].entries()) {
+  for (const root of verdictRoots) {
+    if (await exists(buildLogPath({ repo, pr, gate, headSha: head, tmpRoot: root }))) return;
+  }
+  for (const root of new Set(verdictRoots)) {
     const ledger = buildGateFaninLedgerPath({ repo, pr, gate, headSha: head, tmpRoot: root });
-    if (await exists(ledger)) await rename(ledger, path.join(retirementDir, index === 0 ? path.basename(ledger) : `root-${index}-${path.basename(ledger)}`));
+    const destination = path.join(retirementDir, retiredLedgerName(root, ledger));
+    if (!await exists(ledger) || await exists(destination)) continue;
+    await rename(ledger, destination);
+    if (await exists(`${ledger}.seal`)) await rename(`${ledger}.seal`, `${destination}.seal`);
   }
 }
 
-async function finishLeftoverFaninLedgers({ repo, pr, gate, head, tmpRoot, verdictRoots }) {
-  for (const root of verdictRoots) {
-    if (await exists(buildLogPath({ repo, pr, gate, headSha: head, tmpRoot: root }))) return; // a posted verdict owns its ledger
+// The latest retirement of this gate at this head under any root retireGateRound may have used.
+async function finishLeftoverFaninLedgers({ repo, pr, gate, head, roots, verdictRoots }) {
+  let latest = null;
+  for (const root of new Set(roots)) {
+    const retiredRoot = path.join(root, "retired-gate-rounds", head);
+    const names = await readdir(retiredRoot).catch((err) => {
+      if (err?.code === "ENOENT") return [];
+      throw err;
+    });
+    for (const name of names.filter((n) => /^round-\d+$/.test(n))) {
+      const dir = path.join(retiredRoot, name);
+      try {
+        const record = JSON.parse(await readFile(path.join(dir, "retirement.json"), "utf8"));
+        if (record.gate === gate && (latest === null || String(record.retiredAt) > latest.retiredAt)) latest = { dir, retiredAt: String(record.retiredAt) };
+      } catch { /* a round without a readable record does not name this gate */ }
+    }
   }
-  const retiredRoot = path.join(tmpRoot, "retired-gate-rounds", head);
-  const rounds = (await readdir(retiredRoot).catch((err) => {
-    if (err?.code === "ENOENT") return [];
-    throw err;
-  })).map((n) => /^round-(\d+)$/.exec(n)).filter(Boolean).map((m) => Number(m[1]));
-  if (rounds.length > 0) await moveFaninLedgers({ repo, pr, gate, head, verdictRoots }, path.join(retiredRoot, `round-${Math.max(...rounds)}`));
+  if (latest) await moveFaninLedgers({ repo, pr, gate, head, verdictRoots }, latest.dir);
 }
 
 /**

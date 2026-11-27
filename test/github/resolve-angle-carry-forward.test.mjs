@@ -6,11 +6,14 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
+import { resolveFanoutGroups } from "@dev-loops/core/config";
+import { orderAnglesByCatalog } from "@dev-loops/core/loop/gate-fanin";
 
 import {
   buildCarryForwardPlan,
   main,
   parseResolveAngleCarryForwardCliArgs,
+  planOverWriterUnits,
   runGitCommand,
 } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { buildLogPath, parseProvenanceJson } from "../../scripts/github/write-gate-findings-log.mjs";
@@ -75,12 +78,15 @@ test("async Git runner surfaces the close signal and keeps a null exit code as 1
 
 // Run the CLI main() against a repoRoot and return the parsed JSON result it
 // writes to stdout (default emitResult mode).
-async function runMain(argv, { repoRoot }) {
+// No CLI test spawns gh: the label read fails like an offline host (fail closed to labelled) unless a test injects `run`.
+const OFFLINE = { run: async () => ({ code: 1, stdout: "", stderr: "offline" }), evaluateSize: async () => null };
+
+async function runMain(argv, { repoRoot, ...deps }) {
   const chunks = [];
   const orig = process.stdout.write;
   process.stdout.write = (chunk) => { chunks.push(String(chunk)); return true; };
   try {
-    await main(argv, { repoRoot });
+    await main(argv, { repoRoot, ...OFFLINE, ...deps });
   } finally {
     process.stdout.write = orig;
   }
@@ -89,7 +95,7 @@ async function runMain(argv, { repoRoot }) {
 
 // Run main() capturing stdout+stderr and the exit code, WITHOUT parsing — for the
 // fail-closed paths where main writes an error and sets process.exitCode = 1.
-async function runMainRaw(argv, { repoRoot }) {
+async function runMainRaw(argv, { repoRoot, ...deps }) {
   const out = [];
   const err = [];
   const origOut = process.stdout.write;
@@ -99,7 +105,7 @@ async function runMainRaw(argv, { repoRoot }) {
   process.stderr.write = (chunk) => { err.push(String(chunk)); return true; };
   process.exitCode = 0;
   try {
-    await main(argv, { repoRoot });
+    await main(argv, { repoRoot, ...OFFLINE, ...deps });
     return { stdout: out.join(""), stderr: err.join(""), exitCode: process.exitCode };
   } finally {
     process.stdout.write = origOut;
@@ -108,7 +114,7 @@ async function runMainRaw(argv, { repoRoot }) {
   }
 }
 
-async function makeCarryForwardRepo({ mandatoryAngles = [], optionalAngles = [], perAngle, mutate, verdict = "clean", findings = [] }) {
+async function makeCarryForwardRepo({ mandatoryAngles = [], optionalAngles = [], perAngle, mutate, verdict = "clean", findings = [], maxAnglesPerGroup = 1, noGroups = false }) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-cli-"));
   git(repoRoot, ["init", "-q"]);
   git(repoRoot, ["config", "user.email", "test@example.com"]);
@@ -121,7 +127,7 @@ async function makeCarryForwardRepo({ mandatoryAngles = [], optionalAngles = [],
   await writeFile(
     path.join(repoRoot, ".devloops.yaml"),
     // maxAnglesPerGroup 1 keeps each ungrouped angle its own base unit, so a fresh mandatory angle never shares a unit with a carried one.
-    `version: 1\ngates:\n  fanout:\n    maxAnglesPerGroup: 1\n  draft:\n    angles:\n${angleLines}\n`,
+    `version: 1\ngates:\n  fanout:\n    maxAnglesPerGroup: ${maxAnglesPerGroup}\n${noGroups ? "    groups: []\n" : ""}  draft:\n    angles:\n${angleLines}\n`,
     "utf8",
   );
   const base = {
@@ -304,6 +310,89 @@ test("CLI derives base units over the angles the head resolves, so a group membe
     ], { repoRoot });
     assert.equal(result.ok, true);
     assert.equal(result.mustRerun.find((m) => m.angle === "link-check")?.reason, "base_unit_rerun");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("planOverWriterUnits derives the units over the writer's angle set: a touched prior angle the head no longer resolves does not shift the auto-chunk boundary", () => {
+  // Default maxAnglesPerGroup (5), no configured groups: ungrouped angles chunk by position.
+  const pool = ["link-check", "correctness", "coverage", "determinism", "state-concurrency", "input-validation"];
+  const config = { gates: { fanout: { groups: [] } } };
+  const deriveUnits = (angles) => resolveFanoutGroups(config, "draft", orderAnglesByCatalog([...new Set(angles)], pool)).map((g) => g.angles);
+  const log = { headSha: "aaaaaaa", verdict: "clean", provenance: { distinctReviewers: 6, perAngle: pool.map((angle) => ({ angle, reviewer: `r-${angle}` })) } };
+  // The delta touches link-check's docs surface; the head resolves the first four code angles, not link-check.
+  const fixedAngles = pool.slice(1, 5);
+  const plan = planOverWriterUnits({
+    priorAngles: pool, fixedAngles, deriveUnits,
+    buildPlan: (baseUnits) => buildCarryForwardPlan({ log, changedFiles: ["docs/guide.md"], deltaComplete: true, baseUnits, freshAngles: fixedAngles }),
+  });
+  assert.deepEqual(plan.mustRerun.map((m) => m.angle), ["link-check"]);
+  const carried = new Set(plan.carried.map((c) => c.angle));
+  assert.deepEqual([...carried].sort(), pool.slice(1).sort());
+  // The writer sees the resolved angles plus the carried ones; every unit over that set is wholly carried, so no dispatch unit splits one.
+  for (const unit of deriveUnits([...fixedAngles, ...carried])) assert.ok(unit.every((a) => carried.has(a)), `unit ${unit} is split`);
+});
+
+test("CLI label read: a labelled, an unlabelled and a failing gh read each resolve through the injected runner", async () => {
+  const labelled = { code: 0, stdout: JSON.stringify({ labels: [{ name: "gate:full" }] }), stderr: "" };
+  const unlabelled = { code: 0, stdout: JSON.stringify({ labels: [] }), stderr: "" };
+  const calls = [];
+  const resolved = async (run) => {
+    const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+      optionalAngles: ["link-check", "contract-surface", "correctness"],
+      perAngle: [{ angle: "link-check", reviewer: "review-a" }, { angle: "correctness", reviewer: "review-b" }],
+      mutate: async (root) => { await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8"); },
+    });
+    try {
+      git(repoRoot, ["update-ref", "refs/remotes/origin/main", prevHead]);
+      return await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot, run });
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  };
+  const reasonOfLinkCheck = (result) => result.mustRerun.find((m) => m.angle === "link-check")?.reason;
+  for (const answer of [labelled, unlabelled, { code: 1, stdout: "", stderr: "boom" }]) {
+    const result = await resolved(async (...args) => { calls.push(args); return answer; });
+    assert.equal(result.ok, true);
+    // The read goes through the injected runner with a bounded timeout, never a live gh.
+    assert.equal(calls.at(-1)[4].timeoutMs > 0, true);
+    if (answer === labelled || answer.code === 1) assert.equal(reasonOfLinkCheck(result), "base_unit_rerun");
+  }
+  assert.equal(calls.length, 3);
+});
+
+test("CLI label read: a timed-out gh read fails closed to labelled and a non-gh error propagates", async () => {
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    optionalAngles: ["link-check", "contract-surface", "correctness"],
+    perAngle: [{ angle: "link-check", reviewer: "review-a" }, { angle: "correctness", reviewer: "review-b" }],
+    mutate: async (root) => { await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8"); },
+  });
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", prevHead]);
+    const argv = ["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha];
+    const timedOut = await runMain(argv, { repoRoot, run: async () => ({ code: null, stdout: "", stderr: "", timedOut: true }) });
+    assert.equal(timedOut.mustRerun.find((m) => m.angle === "link-check")?.reason, "base_unit_rerun");
+    const failed = await runMainRaw(argv, { repoRoot, run: async () => { throw new TypeError("not a gh failure"); } });
+    assert.equal(failed.exitCode, 1);
+    assert.match(failed.stderr, /not a gh failure/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI size-budget read fails closed to null, so the floors treat the evidence as ambiguous", async () => {
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    optionalAngles: ["link-check", "contract-surface", "correctness"],
+    perAngle: [{ angle: "link-check", reviewer: "review-a" }, { angle: "correctness", reviewer: "review-b" }],
+    mutate: async (root) => { await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8"); },
+  });
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", prevHead]);
+    let asked = 0;
+    const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot, evaluateSize: async () => { asked++; throw new Error("size read failed"); } });
+    assert.equal(asked, 1);
+    assert.equal(result.ok, true);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

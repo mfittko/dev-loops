@@ -4287,6 +4287,39 @@ export async function seamFirstRoundFor({ gate, repo, pr, headSha, tmpRoot }, re
   }
 }
 
+const FULL_LABEL_READ_TIMEOUT_MS = 30_000;
+
+/**
+ * The live PR's gate:full label, shared by the context builder and the carry-forward resolver so both resolve the same angles.
+ * A gh failure or a timeout of the bounded read fails closed to labelled (`error` carries the cause); any other error propagates.
+ */
+export async function readFullLabel({ repo, pr }, { run = runChild } = {}) {
+  const bounded = (command, args, env, stdin) => run(command, args, env, stdin, { timeoutMs: FULL_LABEL_READ_TIMEOUT_MS });
+  try {
+    const { pr: view } = await viewPr({ repo, pr, fields: "labels" }, { run: bounded });
+    return { fullLabel: Array.isArray(view?.labels) && view.labels.some((label) => (label?.name ?? label) === GATE_FULL_LABEL) };
+  } catch (error) {
+    if (!/^gh pr view/.test(String(error?.message)) && error?.code !== "ENOENT") throw error;
+    return { fullLabel: true, error };
+  }
+}
+
+/** The size-budget outcome of the base diff; it fails closed to null, which checkFloors treats as ambiguous. */
+export async function readSizeOutcome({ base, repoRoot }, { evaluateSize = evaluatePrSizeBudget } = {}) {
+  try {
+    return await evaluateSize({ base, head: "HEAD", repoRoot });
+  } catch {
+    return null;
+  }
+}
+
+/** The dynamic angle resolution of one head: the one call the context builder and the carry-forward resolver both make. */
+export async function resolveHeadAngles(config, gate, { diff, fullLabel, sizeOutcome, checkFloors, explicitAngles, seamInput }, repoRoot) {
+  return resolveGateAnglesDynamic(config, mapGateToConfigKey(gate), {
+    diff, hasFullLabel: fullLabel === true, checkFloors, sizeOutcome, explicitAngles, seamFirstRound: await seamFirstRoundFor(seamInput, repoRoot),
+  });
+}
+
 export async function buildGateContext(input, { repoRoot = process.cwd() } = {}) {
   const isReviewGate = input.gate === "review";
   // review has no config key of its own (resolveGateAnglesDynamic only
@@ -4906,14 +4939,7 @@ export async function main(
     // full_fanout dispatch but leaves the angle set at the matched tier or
     // dynamic best-effort selection. A --prefix-file/no-base thin briefing has
     // no diff to evaluate a size outcome against, so checkFloors stays off.
-    let sizeOutcome = null;
-    if (options.base) {
-      try {
-        sizeOutcome = await evaluatePrSizeBudget({ base: options.base, head: "HEAD", repoRoot });
-      } catch {
-        sizeOutcome = null; // fails CLOSED — checkFloors treats null as ambiguous
-      }
-    }
+    const sizeOutcome = options.base ? await readSizeOutcome({ base: options.base, repoRoot }) : null;
 
     // Angle resolution: when --angles is omitted, resolve dynamically from the
     // loaded config (.devloops) + the captured --base diff — the SAME path the
@@ -4950,15 +4976,9 @@ export async function main(
         });
       } else {
         if (options.fullLabel !== true && !options.prefixFile) {
-          try {
-            const { pr } = await viewPr(
-              { repo: options.repo, pr: options.pr, fields: "labels" },
-              { run },
-            );
-            options.fullLabel = Array.isArray(pr?.labels)
-              && pr.labels.some((label) => (label?.name ?? label) === GATE_FULL_LABEL);
-          } catch (error) {
-            options.fullLabel = true;
+          const { fullLabel, error } = await readFullLabel({ repo: options.repo, pr: options.pr }, { run });
+          options.fullLabel = fullLabel;
+          if (error) {
             process.stderr.write(
               `[write-gate-context] warning: could not read PR labels to check for ${GATE_FULL_LABEL} (${error?.message ?? error}); failing closed to the untriered angle set.\n`,
             );
@@ -4969,15 +4989,10 @@ export async function main(
             `[write-gate-context] note: --prefix-file mode cannot read PR labels; resolving the untriered angle set (pass --angles to override).\n`,
           );
         }
-        const configKey = mapGateToConfigKey(options.gate);
-        resolverResult = await resolveGateAnglesDynamic(config, configKey, {
-          diff,
-          hasFullLabel: options.fullLabel === true,
-          checkFloors: Boolean(options.base),
-          sizeOutcome,
-          explicitAngles: Array.isArray(options.angles) ? options.angles : undefined,
-          seamFirstRound: await seamFirstRoundFor(options, repoRoot),
-        });
+        resolverResult = await resolveHeadAngles(config, options.gate, {
+          diff, fullLabel: options.fullLabel, sizeOutcome, checkFloors: Boolean(options.base),
+          explicitAngles: Array.isArray(options.angles) ? options.angles : undefined, seamInput: options,
+        }, repoRoot);
       }
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
       // The zero-review-coverage refusal is enforced by writeGateContext (the
