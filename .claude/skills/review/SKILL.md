@@ -188,8 +188,10 @@ this skill dispatches the `review` agents directly.
        The poster submits the same-head pending draft in place with the opener visible
        and the whole mechanical report inside a collapsed `<details>` block (markers
        kept). It refuses with a named recovery on `--auto`, a missing
-       `--interactive-confirm`, a non-comment/approve mode, an empty opener file, no
-       same-head pending draft, or an issue/PR reference in the body. On this gate
+       `--interactive-confirm`, a missing or non-comment/approve `--submit`, an empty or
+       unreadable opener file, an opener that holds an HTML comment, `<details>` or
+       `<summary>` tag (edit the opener file), no same-head pending draft, or an
+       issue/PR reference in the body. On this gate
        only `act` or unjudged findings are inline; `defer` and `reject` findings sit
        in the report body.
      - **Leave pending:** print the review URL and how to finish it

@@ -404,7 +404,8 @@ Optional:
   --interactive-confirm                    The explicit interactive-confirmation
                                             token for --submit
                                             approve|request-changes|discard
-                                            (#1888/#1912).
+                                            (#1888/#1912). It is also required
+                                            with --human-opener-file.
                                             Pass it ONLY from the review skill's
                                             interactive multiple-choice submit
                                             step after a human made the choice;
@@ -741,6 +742,17 @@ export function summarizeCheckpointVerdictText(value, limit = MAX_GATE_COMMENT_T
   const verboseSummary = buildVerboseValidationSummary(lines);
   return enforcePostedCommentLimit(verboseSummary ?? flat, limit, "findings summary");
 }
+// One home for the --human-opener-file flag refusals; the parse path and postCheckpointVerdict both call it.
+function assertHumanOpenerFlags(options, submit, makeError) {
+  const interactiveRecovery = "run the interactive submit choice (--interactive-confirm with --submit comment or approve, never --auto)";
+  const refuse = (reason, recovery) => Object.assign(makeError(`--human-opener-file refused: ${reason} Recovery: ${recovery}.`), { recovery });
+  if (options.gate !== "review") throw refuse("it is scoped to --gate review.", "pass --gate review");
+  if (options.auto) throw refuse("it is refused with --auto.", interactiveRecovery);
+  if (options.interactiveConfirm !== true) throw refuse("it requires --interactive-confirm.", interactiveRecovery);
+  if (submit == null) throw refuse("it requires --submit comment or --submit approve.", interactiveRecovery);
+  if (submit !== "comment" && submit !== "approve") throw refuse(`--submit ${submit} is not supported (only comment or approve).`, interactiveRecovery);
+}
+
 export function parseUpsertCheckpointVerdictCliArgs(argv) {
   const { tokens } = parseArgs({
     args: [...argv],
@@ -1095,14 +1107,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   // so automation must never reach them — they are reachable only via the
   // review skill's interactive multiple-choice.
   // Human-style refusals come first so they carry the human-style wording and a `recovery`.
-  if (options.humanOpenerFile !== undefined) {
-    const interactiveRecovery = "run the interactive submit choice (--interactive-confirm with --submit comment or approve, never --auto)";
-    const refuseHuman = (reason, recovery) => Object.assign(parseError(`--human-opener-file refused: ${reason} Recovery: ${recovery}.`), { recovery });
-    if (options.gate !== "review") throw refuseHuman("it is scoped to --gate review.", "pass --gate review");
-    if (options.auto) throw refuseHuman("it is refused with --auto.", interactiveRecovery);
-    if (!options.interactiveConfirm) throw refuseHuman("it requires --interactive-confirm.", interactiveRecovery);
-    if (options.submit !== undefined && options.submit !== "comment" && options.submit !== "approve") throw refuseHuman(`--submit ${options.submit} is not supported (only comment or approve).`, interactiveRecovery);
-  }
+  if (options.humanOpenerFile !== undefined) assertHumanOpenerFlags(options, options.submit, (message) => parseError(message));
   if (options.gate === "review" && options.auto && options.submit !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(options.submit)) {
     throw parseError(
       `--submit ${options.submit} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes/discard are reachable only via the interactive submit choice.`,
@@ -2401,7 +2406,8 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
   // a non-locatable finding that fails isVisibleFinding folds into the verdict body's
   // Details block (see renderVerdictDetailsBlock). Inline threads keep today's rules: on a
   // create, a locatable finding at or above the inline floor, or visible (e.g. an act
-  // below the floor), takes the inline track whatever its judge disposition.
+  // below the floor), takes the inline track whatever its judge disposition, except on
+  // --gate review, where only an act or unjudged finding goes inline (see inlineAllowed).
   const visibility = { floor: inlineSeverityFloor, blockingSeverities };
   const visible = (f) => isVisibleFinding(f, visibility);
   const inlineEligible = (f) => visible(f) || !isBelowInlineFloor(f.severity, inlineSeverityFloor);
@@ -2908,12 +2914,8 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   // Human-style review: fail closed before any GitHub call, each refusal naming its recovery.
   let humanOpener;
   if (options.humanOpenerFile !== undefined) {
-    const interactiveRecovery = "run the interactive submit choice (--interactive-confirm with --submit comment or approve, never --auto)";
     const refuse = (reason, recovery) => Object.assign(new Error(`--human-opener-file refused: ${reason} Recovery: ${recovery}.`), { recovery });
-    if (!isReviewGate) throw refuse("it is scoped to --gate review.", "pass --gate review");
-    if (options.auto) throw refuse("it is refused with --auto.", interactiveRecovery);
-    if (options.interactiveConfirm !== true) throw refuse("it requires --interactive-confirm.", interactiveRecovery);
-    if (reviewSubmitMode !== "comment" && reviewSubmitMode !== "approve") throw refuse(`--submit ${reviewSubmitMode} is not supported (only comment or approve).`, interactiveRecovery);
+    assertHumanOpenerFlags(options, options.submit, (message) => new Error(message));
     const editRecovery = "edit the opener file";
     try {
       humanOpener = await readFile(options.humanOpenerFile, "utf8");

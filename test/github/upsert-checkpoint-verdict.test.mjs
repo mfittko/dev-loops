@@ -13767,7 +13767,7 @@ test("human-style keeps the opener's leading indentation and drops only trailing
 
 test("parseUpsertCheckpointVerdictCliArgs refuses --human-opener-file combinations with a recovery before the generic guards", () => {
   const base = ["--repo", "owner/repo", "--pr", "7", "--head-sha", "a".repeat(40), "--gate", "review", "--verdict", "clean", "--findings-summary", "none", "--inline-reason", "test", "--human-opener-file", "f"];
-  for (const extra of [["--auto", "--submit", "approve"], ["--submit", "approve"], ["--interactive-confirm", "--submit", "discard"], ["--interactive-confirm", "--submit", "pending"]]) {
+  for (const extra of [["--auto", "--submit", "approve"], ["--interactive-confirm"], ["--submit", "approve"], ["--interactive-confirm", "--submit", "discard"], ["--interactive-confirm", "--submit", "pending"]]) {
     let error;
     try { parseUpsertCheckpointVerdictCliArgs([...base, ...extra]); } catch (e) { error = e; }
     assert.ok(error, extra.join(" "));
@@ -13779,6 +13779,7 @@ test("parseUpsertCheckpointVerdictCliArgs refuses --human-opener-file combinatio
 const HUMAN_REFUSALS = [
   { name: "no --interactive-confirm", extra: { interactiveConfirm: false }, text: /interactive/i, recovery: /interactive submit choice/ },
   { name: "--auto", extra: { auto: true }, text: /--auto/, recovery: /interactive submit choice/ },
+  { name: "no --submit", submit: null, text: /--submit/, recovery: /interactive submit choice/ },
   { name: "--submit pending", submit: "pending", text: /--submit/, recovery: /interactive submit choice/ },
   { name: "--submit request-changes", submit: "request-changes", text: /--submit/, recovery: /interactive submit choice/ },
   { name: "--submit discard", submit: "discard", text: /--submit/, recovery: /interactive submit choice/ },
