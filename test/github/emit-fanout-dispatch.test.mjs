@@ -1094,8 +1094,9 @@ test("--retry-crashed accepts an emitted sub-unit name and refuses its raw paren
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir, { fanout });
     const emitted = ["big-part1", "big-part2"];
-    const ok = runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", emitted[0]], { cwd: tmpDir });
+    const ok =runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", emitted[0]], { cwd: tmpDir });
     assert.equal(ok.status, 0, ok.stderr);
+    assert.deepEqual(JSON.parse(ok.stdout).units.map((unit) => unit.name), emitted);
     const flags = await retryFlags(ok);
     assert.deepEqual(Object.values(flags), [true, false]);
     const refused = runEmitCli([...RETRY_ARGS, "--pending", "--retry-crashed", "big"], { cwd: tmpDir });
@@ -1254,7 +1255,7 @@ test("a successful run persists the keyed emit-plan artifact with the full resul
     assert.equal(persisted.maxConcurrent, stdoutPayload.maxConcurrent);
     assert.deepEqual(persisted.units, stdoutPayload.units);
     for (const unit of persisted.units) {
-      assert.deepEqual(Object.keys(unit).sort(), ["angles", "budget", "budgetBasis", "dispatchPrompt", "executionIdentity", "group", "materializationHash", "promptBytes", "promptPath", "scope", "sectionBytes", "workOrder", "workOrderDigest", "workOrderRef"].sort());
+      assert.deepEqual(Object.keys(unit).sort(), ["angles", "budget", "budgetBasis", "dispatchPrompt", "executionIdentity", "group", "materializationHash", "name", "promptBytes", "promptPath", "scope", "sectionBytes", "workOrder", "workOrderDigest", "workOrderRef"].sort());
       // The seeded bundle records no diff read, so every unit gets the floor.
       assert.deepEqual(unit.budgetBasis, { scope: "none", files: 0, changedLines: 0 });
       assert.deepEqual(unit.budget, { ...REVIEWER_UNIT_BUDGET });

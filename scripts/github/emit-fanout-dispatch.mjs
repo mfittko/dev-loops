@@ -93,9 +93,8 @@ Optional:
                                exceed the stdout count. Only the stdout "units"
                                are dispatched, and --expected-dispatch-units
                                takes the stdout count.
-  --retry-crashed <unit>       Repeatable, only with --pending. <unit> is the emitted unit name: the angle
-                               name for a singleton, <group>-part<n> for a split sub-unit, or the
-                               packed name for a packed bin. The unit's
+  --retry-crashed <unit>       Repeatable, only with --pending. <unit> is the "name" field of an emitted
+                               stdout unit. The unit's
                                agent ended without result artifacts: its work order also passes
                                --same-head-retry to the sentinel check, so its stale sentinel is replaced.
                                A plain --pending keeps a running unit's sentinel refusal. A name that
@@ -124,7 +123,7 @@ Optional:
                                must match the write-gate-context.mjs call).
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "repo": "...", "pr": "...",
-    "pending": <true|false>, "roundId": "...", "count": <n>, "maxConcurrent": <n>, "unitBound": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>,
+    "pending": <true|false>, "roundId": "...", "count": <n>, "maxConcurrent": <n>, "unitBound": <n>, "units": [ { "name": "...", "scope": "...", "angles": ["..."], "group": <name|null>,
       "budget": { "maxToolCalls": <n>, "maxModelTurns": <n>, "maxAngles": <n> }, "budgetBasis": { "scope": "none|docs-only|full", "files": <n>, "changedLines": <n> }, "promptPath": "...",
       "workOrderRef", "workOrderDigest", "materializationHash", "executionIdentity", "dispatchPrompt",
       "promptBytes": <n>, "sectionBytes": { "prefix": <n>, "volatile": <n>, "suffix": <n> },
@@ -973,7 +972,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const record = JSON.parse(await readFile(recordPath, "utf8"));
     await writeFile(recordPath, `${JSON.stringify({ ...record, compactReference: identity }, null, 2)}\n`, "utf8");
     emitted.push({
-      scope, angles, group: unit.group, budget, budgetBasis, promptPath: result.promptPath, promptBytes, sectionBytes: result.sectionBytes,
+      name: unit.name, scope, angles, group: unit.group, budget, budgetBasis, promptPath: result.promptPath, promptBytes, sectionBytes: result.sectionBytes,
       ...identity, materializationHash: materializationHash(promptText), dispatchPrompt, workOrder,
     });
   }
