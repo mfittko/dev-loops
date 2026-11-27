@@ -93,6 +93,10 @@ Optional:
                                exceed the stdout count. Only the stdout "units"
                                are dispatched, and --expected-dispatch-units
                                takes the stdout count.
+                               A unit whose angles all have a terminal artifact newer
+                               than the gate-context file is dropped and stays in the
+                               plan as resumed. When every pending unit is dropped the
+                               run refuses and its recovery names consolidate-fanin.mjs.
   --retry-crashed <unit>       Repeatable, only with --pending. <unit> is the "name" field of an emitted
                                stdout unit. The unit's
                                agent ended without result artifacts: its work order also passes
@@ -680,7 +684,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout.pendingGroups is present but not an array (malformed plan); re-run write-gate-context.mjs` }, false);
     }
     units = fanout.pendingGroups;
-    // A unit whose angles all have a terminal artifact written after this context finished since it was built: drop it.
+    // Drop a unit whose angles all have a terminal artifact written after the gate-context file was built.
     // Artifacts older than the context (a body-only rerun rebuilt it) are not trusted as finished.
     liveCompleted = new Set(await readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot, newerThanMs: (await stat(contextPath)).mtimeMs }, { repoRoot: process.cwd(), config }));
     units = units.filter((unit) => !(normalizeUnitAngles(unit).length > 0 && normalizeUnitAngles(unit).every((angle) => liveCompleted.has(angle))));
@@ -705,7 +709,11 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       && normalizeUnitAngles(unit).every((angle) => carried.has(angle.trim().toLowerCase())));
   if (liveCompleted.size > 0 && Array.isArray(units) && units.length === 0 && !allCarried && priorText !== null) {
     // The start-of-flow rm deleted the keyed plan: restore it so fan-in still finds the round's units.
-    await writeFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), priorText, "utf8");
+    try {
+      await persistPlan(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), priorText, "utf8");
+    } catch (error) {
+      return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — every pending unit already finished at this head and restoring the keyed emit plan failed: ${error.message}`, recovery: `Restore the keyed emit plan from its .prior sidecar, then run fan-in (consolidate-fanin.mjs).` }, false);
+    }
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — every pending unit already finished at this head — nothing to dispatch`, recovery: "All pending units already finished at this head; run fan-in (consolidate-fanin.mjs) instead of another dispatch." }, false);
   }
   if (!Array.isArray(units) || (units.length === 0 && !allCarried)) {

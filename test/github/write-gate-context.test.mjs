@@ -5285,7 +5285,7 @@ test("issue 3416: a rebuild at a full head retires the partial round and reports
     // A reviewer that has not written its findings may still be running: the rebuild refuses and keeps the round.
     await assert.rejects(
       writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--issue-body", "Corrected body."]), { repoRoot }),
-      (err) => /may still be running/.test(err.message) && /--pending/.test(err.recovery) && /write-gate-context\.mjs/.test(err.recovery) && /retire-gate-round\.mjs/.test(err.recovery),
+      (err) => /may still be running/.test(err.message) && /emit-fanout-dispatch\.mjs --pending/.test(err.recovery) && /retire-gate-round\.mjs/.test(err.recovery),
     );
     assert.equal((await readFile(sentinel, "utf8")).trim(), "{}");
     // Once it finished (a valid artifact newer than the sentinel) the round retires.
@@ -8005,7 +8005,7 @@ test("writeGateContext REFUSES a same-head rebuild that would rewrite the prior 
     await assert.rejects(
       writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot }),
       (err) => /Refusing to rewrite required read\(s\) .*prior-dispositions\.json with DIFFERENT bytes while a fan-out for head abc1234567890 may be in flight \(draft_gate\).*retire-gate-round\.mjs/.test(err.message)
-        && /^wait for the running reviewers/.test(err.recovery) && /--pending/.test(err.recovery) && /write-gate-context\.mjs/.test(err.recovery) && /operator: run `dev-loops-run scripts\/github\/retire-gate-round\.mjs/.test(err.recovery),
+        && /^wait for the running reviewers/.test(err.recovery) && /--pending/.test(err.recovery) && /emit-fanout-dispatch\.mjs --pending/.test(err.recovery) && /operator: run `dev-loops-run scripts\/github\/retire-gate-round\.mjs/.test(err.recovery),
     );
     assert.match(await readFile(path.resolve(repoRoot, read.path), "utf8"), /first-disposition/, "the in-flight reviewers keep the bytes their work order hashes");
     await stat(markerPath); // the completion marker survives the refusal
@@ -11694,7 +11694,7 @@ test("issue 3416: the CLI refusal for a live round at an abbreviated head carrie
   const payload = JSON.parse(err.trim().split("\n").at(-1));
   assert.equal(payload.ok, false);
   // The sentinel has no findings artifact, so its reviewer may still run: wait first, and keep the retire command behind `operator:`.
-  assert.match(payload.recovery, new RegExp(`^wait for the running reviewers .*--pending; for a crashed unit, run emit-fanout-dispatch\\.mjs --pending with --retry-crashed and the unit name; for a rebuilt briefing, operator: run \`dev-loops-run scripts/github/retire-gate-round\\.mjs --gate draft_gate --head-sha ${fullSha} --reason '[^'<>]+' --tmp-root '`));
+  assert.match(payload.recovery, new RegExp(`^wait for the running reviewers .*--pending[^;]*; for a crashed unit, run emit-fanout-dispatch\\.mjs --pending with --retry-crashed and the unit name; for a rebuilt briefing, operator: run \`dev-loops-run scripts/github/retire-gate-round\\.mjs --gate draft_gate --head-sha ${fullSha} --reason '[^'<>]+' --tmp-root '`));
   assert.doesNotMatch(payload.recovery, /[<>\[\]]/);
 });
 
