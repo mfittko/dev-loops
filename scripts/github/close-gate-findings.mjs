@@ -44,7 +44,8 @@ current-ledger duplicate-fingerprint entries that disagree or prior ledgers
 that disagree, also skips) is never
 selected, at any severity and round (ADR 0089): it gets no
 stamp, no reply, no resolve, and no deferral entry, and stays open until the fixer
-replies with the fixing commit or a decline reason and resolves it. Three exceptions: (1) a thread whose markers are all judge \`act\`
+declines it with a decline reason or an act close resolves it. Four exceptions: (0) a thread
+the fixed-act close resolves (fixedActClosed); (1) a thread whose markers are all judge \`act\`
 with remedyKind evidence_only is closed with an evidence-only reply (evidenceOnlyClosed); (2) a thread whose markers are all judge \`act\` with remedyKind pr_body is closed with a reply citing the PR-body change by its two digest prefixes (no commit) once the live PR body digest differs from the digest the disposing ledger recorded (else the gate context's digest at each marker's verdict head) (prBodyActClosed; an unchanged digest leaves it open; for a ledger with no recorded digest, a missing, unreadable or ambiguous context digest, a context rebuilt at the same head, a digest found only in a non-reviewed checkout or an unknown verdict head records body_read_unrecorded; a failed live body read records body_read_failed, both in dispositionFailures); (3) a nit member
 of a judge-deferred mixed cluster closes with the cluster rationale ("Closed at gate close"),
 with no stamp and no filing. Otherwise only a thread whose every marker the judge
@@ -250,8 +251,8 @@ export function buildMeritRationale({ body, judgeReason, judgeRationale }) {
 //
 // A thread whose finding the judge disposed `act` is never selected, whatever
 // its severity and round (ADR 0089): the judge `act` overrides the medium fix
-// window, so the thread stays open until the fixer replies with the fixing
-// commit or a decline reason and resolves it, or a judge rerun at the current head changes the
+// window, so the thread stays open until the fixed-act, evidence-only or PR-body act
+// close resolves it, the fixer declines it with a decline reason, or a judge rerun at the current head changes the
 // disposition. It gets no stamp, reply, or resolve. The disposition comes
 // from the current ledger first. On no current-ledger match, the prior local
 // ledgers and then the thread's rendered ` — judge: <disposition>` suffix
