@@ -7,7 +7,7 @@ import { parseGateReviewCommentMarkerBody } from "@dev-loops/core/github/copilot
 import { wrapOperatorOwnedPhrases } from "@dev-loops/core/github/operator-owned-lines";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { BLOCKED_BY_OPERATOR_STEPS, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, isPastRoundCap, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, pastCapBlockers, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
-import { composeBodyOnlyConvergedDraftGate, composeConvergedDraftGate, convergedActItemKey, isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
+import { composeBodyOnlyConvergedDraftGate, convergedActItemKey } from "@dev-loops/core/loop/fixer-disposition";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
 import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -268,24 +268,20 @@ Required:
                                             without --findings-ledger still requires the flag, ignores its
                                             value and derives "mark ready for review".)
 Optional:
-  --converged-json <path>                   draft_gate low/nit convergence
-                                            (GATE-EXEC-LOW-NIT-CONVERGENCE):
-                                            { fixerCommit, actList, deltaResult }.
+  --converged-json <path>                   draft_gate body-only post
+                                            { fixerCommit, actList, bodyOnly: true }.
                                             A round whose open act items are
                                             all PR-body items (no file named, or
                                             remedyKind pr_body)
-                                            clears with no commit through
-                                            { fixerCommit, actList, bodyOnly: true }
-                                            and no deltaResult (ADR 0271); it
+                                            clears with no commit (ADR 0271); it
                                             refuses body_item_locatable,
                                             body_unchanged, own_commit_in_range,
                                             body_read_unrecorded (no round
-                                            pr-body read: fix with a commit, then
-                                            at the cap run check-pre-push-delta.mjs
-                                            --reviewer-only, below it the next
-                                            draft_gate round),
-                                            or blocked_item. A bodyOnly input
-                                            with a deltaResult is refused. Requires --gate draft_gate and
+                                            pr-body read: fix with a commit and
+                                            push it, the next draft_gate round
+                                            runs at the new head),
+                                            or blocked_item. A file without
+                                            bodyOnly: true is refused. Requires --gate draft_gate and
                                             --findings-ledger, with
                                             --head-sha the reviewed head A and
                                             the PR head equal to fixerCommit, or a
@@ -293,11 +289,7 @@ Optional:
                                             base-merge carry classifier accepts
                                             (ADR 0294).
                                             Updates A's comment to clean and
-                                            records the fixer commit + delta
-                                            digest. Refused unless every act
-                                            item is low/nit and the delta result
-                                            is fresh and locally_clear with no
-                                            new findings. Also needs --verdict
+                                            records the fixer commit. Also needs --verdict
                                             clean (or omitted when
                                             --findings-ledger carries an
                                             overallVerdict), and refuses when
@@ -1793,7 +1785,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     ...(judgeSpecSource ? [judgeSpecSource === "unavailable" ? JUDGE_UNAVAILABLE_LINES[judgeUnavailableReason] : JUDGE_SPEC_LINES[judgeSpecSource]] : []),
     ...(judgeSkippedNoFindings && !judgeSpecSource ? ["**Judge:** skipped, the round has no findings to dispose"] : []),
     ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),
-    // GATE-EXEC-LOW-NIT-CONVERGENCE: rendered only for a validated converged draft_gate post.
+    // Rendered only for a validated body-only converged draft_gate post.
     ...(gate === "draft_gate" && verdict === "clean" && converged ? [`**Converged:** fixer \`${converged.fixerCommit}\` delta \`${converged.deltaDigest}\``] : []),
   );
   // Renderer-only lines: only the renderer reads them, so they sit in an HTML comment, one
@@ -2246,7 +2238,7 @@ async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inline
   // (buildFanoutEnforcement only reads .visible/.executionMode/.inlineReason/
   // .headSha off it). The other gate is marked invisible so only the gate
   // actually being posted is evaluated this call.
-  // A converged post (GATE-EXEC-LOW-NIT-CONVERGENCE) is shaped like the posted marker: headSha is the fixer commit B,
+  // A converged post (the body-only exit) is shaped like the posted marker: headSha is the fixer commit B,
   // convergedFromHeadSha the reviewed head A whose ledger backs it, so scope and risk are judged at B.
   const markerHeadSha = convergedFixerCommit ?? headSha;
   const candidateMarker = {
@@ -2977,7 +2969,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   // refusal below reuses its already-computed per-gate ledgerExists/ledgerPath.
   let postTimeFanoutEnforcement = null;
   let preloadedFindingsLedger;
-  // GATE-EXEC-LOW-NIT-CONVERGENCE: { fixerCommit, actList, deltaResult } from --converged-json; null otherwise.
+  // The body-only post { fixerCommit, actList, bodyOnly: true } from --converged-json; null otherwise.
   let convergedInput = null;
   if (options.convergedJson) {
     try {
@@ -2985,12 +2977,11 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     } catch (err) {
       throw new Error(`Cannot read --converged-json "${options.convergedJson}": ${err instanceof Error ? err.message : String(err)}`);
     }
-    if (convergedInput === null || typeof convergedInput !== "object" || Array.isArray(convergedInput)) {
-      throw new Error(`--converged-json "${options.convergedJson}" must be a JSON object { fixerCommit, actList, deltaResult }`);
+    if (convergedInput === null || typeof convergedInput !== "object" || Array.isArray(convergedInput) || convergedInput.bodyOnly !== true) {
+      throw new Error(`--converged-json "${options.convergedJson}" must be a JSON object { fixerCommit, actList, bodyOnly: true }: the body-only post is the only converged shape; an act list with a file goes to a fix commit and the next draft_gate round`);
     }
   }
-  // The ONLY two paths that let a clean verdict stand over open act items: a validated low/nit convergence and the GATE-EXEC-NO-DEAD-END body-only post
-  // (composeConvergedDraftGate throws on anything else; the body-only post is checked in composeBodyOnlyConvergedDraftGate). Items compare by severity and trimmed summary as a multiset: the ledger and
+  // The only path that lets a clean verdict stand over open act items is the GATE-EXEC-NO-DEAD-END body-only post, checked in composeBodyOnlyConvergedDraftGate. Items compare by severity and trimmed summary as a multiset: the ledger and
   // --findings-json can carry the same finding.
   let convergedMarker = null;
   const guardedActItems = async (findings) => {
@@ -3011,40 +3002,21 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     // GATE-EXEC-ROUND-CAP: the same cap-round count as every other draft consumer, so a base-merge-forced round never counts toward the cap.
     const round = await countCapRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot, prBase: coordinationContext?.prData?.baseRefName });
     const capacity = { gate: options.gate, headSha: canonicalHeadSha, round, cap: draftGateConfig?.maxReviewRounds ?? 0, roundActItems, converged: convergedInput };
-    if (convergedInput.bodyOnly !== undefined && typeof convergedInput.bodyOnly !== "boolean") throw new Error(`--converged-json bodyOnly must be a boolean, got ${JSON.stringify(convergedInput.bodyOnly)}`);
-    if (convergedInput.bodyOnly === true) {
-      // ADR 0271: the narrow facts the body-only exit checks; the pr-body digest is the one the round's context recorded at A.
-      const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "body,baseRefName"], { env, ghCommand, runChild });
-      // The same count check-pre-push-delta.mjs uses (fetches origin/<base>, base-only-merge test, resolution merges).
-      const composeInput = {
-        ...capacity,
-        // The ledger plus the passed findings, as for the act items: the blocking set reads the whole round.
-        roundFindings: [...(preloadedFindingsLedger.findings ?? []), ...findings.filter((f) => !(preloadedFindingsLedger.findings ?? []).includes(f))],
-        reviewedBodySha: await readReviewedBodySha256(options, canonicalHeadSha, repoRoot),
-        liveBodySha: prBodySha256(live.body),
-      };
-      // The pure checks run first so a typed refusal wins over a git failure in the count below.
-      composeBodyOnlyConvergedDraftGate({ ...composeInput, ownCommits: 0 });
-      const ownCommits = convergedInput.fixerCommit === canonicalHeadSha ? 0
-        : await countPrOwnCommits(repoRoot, canonicalHeadSha, convergedInput.fixerCommit, live.baseRefName)
-          .catch((err) => { if (err instanceof Error && err.message.startsWith("own_commit_in_range:")) throw err; throw new Error(`--converged-json bodyOnly: cannot count PR-own commits in ${canonicalHeadSha}..${convergedInput.fixerCommit}: ${err instanceof Error ? err.message : String(err)}`); });
-      convergedMarker = composeBodyOnlyConvergedDraftGate({ ...composeInput, ownCommits });
-    } else {
-      // One property, two lists: the posted round items and converged.actList must agree on which items are PR-body items (convergedActItemKey ignores the file field).
-      if (Array.isArray(convergedInput.actList)) {
-        const bodyCounts = (list) => list.reduce((m, f) => (isDeltaBodyItem(f) ? m.set(convergedActItemKey(f), (m.get(convergedActItemKey(f)) ?? 0) + 1) : m), new Map());
-        const roundBody = bodyCounts(roundActItems);
-        const listBody = bodyCounts(convergedInput.actList);
-        const differs = [...new Set([...roundBody.keys(), ...listBody.keys()])].filter((k) => (roundBody.get(k) ?? 0) !== (listBody.get(k) ?? 0));
-        if (differs.length > 0) throw new Error(`--converged-json actList and the round's act items (ledger at ${canonicalHeadSha} plus --findings-json) disagree on which items are PR-body items (no file, or remedyKind pr_body): ${differs.join("; ")}. Give each item the same file and remedyKind in both lists.`);
-      }
-      // A mixed list holds PR-body items the delta reviewer never sees: pass the digests of the body-only route's body-change check.
-      const bodyDigests = roundActItems.some(isDeltaBodyItem) ? {
-        reviewedBodySha: await readReviewedBodySha256(options, canonicalHeadSha, repoRoot),
-        liveBodySha: prBodySha256((await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "body"], { env, ghCommand, runChild })).body),
-      } : {};
-      convergedMarker = composeConvergedDraftGate({ ...capacity, ...bodyDigests });
-    }
+    // ADR 0271: the narrow facts the body-only exit checks; the pr-body digest is the one the round's context recorded at A.
+    const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "body,baseRefName"], { env, ghCommand, runChild });
+    const composeInput = {
+      ...capacity,
+      // The ledger plus the passed findings, as for the act items: the blocking set reads the whole round.
+      roundFindings: [...(preloadedFindingsLedger.findings ?? []), ...findings.filter((f) => !(preloadedFindingsLedger.findings ?? []).includes(f))],
+      reviewedBodySha: await readReviewedBodySha256(options, canonicalHeadSha, repoRoot),
+      liveBodySha: prBodySha256(live.body),
+    };
+    // The pure checks run first so a typed refusal wins over a git failure in the count below.
+    composeBodyOnlyConvergedDraftGate({ ...composeInput, ownCommits: 0 });
+    const ownCommits = convergedInput.fixerCommit === canonicalHeadSha ? 0
+      : await countPrOwnCommits(repoRoot, canonicalHeadSha, convergedInput.fixerCommit, live.baseRefName)
+        .catch((err) => { if (err instanceof Error && err.message.startsWith("own_commit_in_range:")) throw err; throw new Error(`--converged-json bodyOnly: cannot count PR-own commits in ${canonicalHeadSha}..${convergedInput.fixerCommit}: ${err instanceof Error ? err.message : String(err)}`); });
+    convergedMarker = composeBodyOnlyConvergedDraftGate({ ...composeInput, ownCommits });
     return [];
   };
   // GATE-EXEC-BASE-REFRESH: a clean pre_approval_gate never records at a head that lacks origin/<base>; a draft_gate verdict records at a stale head.
@@ -3629,7 +3601,7 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-ledger "${options.findingsLedger}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
   }
   if (convergedInput && (convergedMarker === null || options.verdict !== "clean")) {
-    throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs a clean composed verdict over a validated low/nit act list (got verdict ${JSON.stringify(options.verdict)}); post a full round instead.`);
+    throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs a clean composed verdict over a validated body-only act list (got verdict ${JSON.stringify(options.verdict)}); post a full round instead.`);
   }
   if (capRoundHead && options.verdict !== "clean") {
     throw new Error(`GATE-EXEC-ROUND-CAP-CATCH-UP-POST: a post at the earlier cap-round head ${canonicalHeadSha} must compose a clean verdict (got ${JSON.stringify(options.verdict)}); post a non-clean round at the current PR head.`);

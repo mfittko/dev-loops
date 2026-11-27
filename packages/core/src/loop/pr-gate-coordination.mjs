@@ -1749,7 +1749,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK,
         ...remedyOrOperator(input, (r, n) => ({
-          command: `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo ${r} --pr ${n} --head-sha ${currentHeadSha} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>${actList.operatorCleared === true ? " --operator-focus-file <operator focus file>" : ""}`,
+          command: `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo ${r} --pr ${n} --head-sha ${currentHeadSha} --phase full --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>${actList.operatorCleared === true ? " --operator-focus-file <operator focus file>" : ""}`,
           summary: "Emit the fixer work order for the open act list (the judge-pass --out file of this head's round) and dispatch it.",
         })),
         reason: `The PR is still draft and the current head carries a posted \`draft_gate\` \`findings_present\` verdict with ${actList.openActCount} open act item(s) and no round-cap blocker, so the fixer runs before any further round or base integration.`,

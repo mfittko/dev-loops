@@ -13,7 +13,6 @@ import {
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { isBlockedActItem, isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
 import { buildSnapshotFromPrFacts, DISPOSITION, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateEarlySurface } from "./early-surface-checks.mjs";
@@ -30,6 +29,8 @@ import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
   FIXER_COMMIT_CLAIM_KINDS,
+  isBlockedActItem,
+  isDeltaBodyItem,
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";

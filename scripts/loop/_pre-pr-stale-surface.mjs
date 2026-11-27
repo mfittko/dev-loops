@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { diffPrBodyAgainstIssue } from "@dev-loops/core/loop/issue-refinement-artifact";
-import { staleSurfaceTruncatedHit, unaddressedStaleSurfaceHits } from "@dev-loops/core/loop/pre-push-delta-review";
+import { staleSurfaceTruncatedHit, unaddressedStaleSurfaceHits } from "@dev-loops/core/loop/stale-surface-hits";
 import { fetchIssueBody } from "./detect-issue-refinement-artifact.mjs";
 import { gitStaleSurfaceHits } from "./check-pre-push-delta.mjs";
 import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";

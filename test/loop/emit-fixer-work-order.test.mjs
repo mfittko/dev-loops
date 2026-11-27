@@ -11,8 +11,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, test } from "bun:test";
 import { setCommentTrustConfig } from "@dev-loops/core/github/comment-trust";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
-import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
-import { startDeltaSequence, toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
+import { normalizeFixerDispositionHandoff, siteCoverageGaps, toDeltaActItems } from "@dev-loops/core/loop/fixer-disposition";
+import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { renderOperatorFocusSection } from "../../scripts/loop/_operator-focus.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../../scripts/github/_fixer-emission-evidence.mjs";
@@ -24,7 +24,7 @@ import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { readSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
-import { assertDeltaClearsFullPhase, assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, missingCapLedgerRefusal, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
+import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, missingCapLedgerRefusal, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { resolveCapRound } from "../../scripts/github/write-gate-context.mjs";
 import { extendCapRoundChain } from "../../scripts/loop/extend-cap-round-chain.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
@@ -123,81 +123,6 @@ test("pristine emitter history initializes simultaneously with independent workt
   assert.equal(existsSync(path.join(initialHistory.root, "tmp")), false);
 });
 
-for (const route of ["ACT", "THREAD"]) test(`detector carries only a complete authenticated ${route} ancestor checkpoint`, async () => {
-  const { resolveFixerDispositionInput } = await import("../../scripts/loop/detect-pr-gate-coordination-state.mjs");
-  await withFixture(async ({ root, wt, head, emit, files, writeRecord, prepareFull }) => {
-    let unit, candidate, fixing, siteCoverage;
-    if (route === "ACT") {
-      const prepared = await prepareFull({ bounded: true });
-      candidate = prepared.candidate;
-      fixing = prepared.fixing;
-      siteCoverage = prepared.siteCoverage;
-      unit = await prepared.full();
-    } else {
-      git(wt, "commit", "-q", "--allow-empty", "-m", "fix");
-      candidate = git(wt, "rev-parse", "HEAD");
-      fixing = head;
-      await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
-      await writeRecord({ candidateHead: candidate, items: [{ ref: "PRRT_T1", status: "resolved" }] });
-      unit = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
-    }
-    assert.equal(pull(unit, root).status, 0);
-    const threadId = "PRRT_T1";
-    const handoff = { headSha: candidate, dispositions: [{ threadId, disposition: "tackled", fixingCommitSha: fixing }], ...(siteCoverage ? { siteCoverage } : {}) };
-    await mkdir(path.dirname(unit.workOrder.outputRefs[0]), { recursive: true });
-    await writeMarked(unit.workOrder.outputRefs[0], JSON.stringify(handoff));
-    git(wt, "commit", "-q", "--allow-empty", "-m", "developer follow-up");
-    const live = git(wt, "rev-parse", "HEAD");
-    const directory = path.join(root, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
-    const checkpoint = path.join(directory, `fixer-disposition-${candidate}.json`);
-    await mkdir(directory, { recursive: true });
-    for (const defect of ["none", "behind", "diverged", "identical", "incomplete", "unstamped", "unresolved", "uncontained", "current-checkpoint-live-verification-refused"]) {
-      await writeFile(checkpoint, JSON.stringify({ ...handoff, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity, ...(defect === "unstamped" ? {} : { complete: defect !== "incomplete" }) }));
-      const current = path.join(directory, `fixer-disposition-${live}.json`);
-      if (defect === "current-checkpoint-live-verification-refused") await writeFile(current, "{");
-      const compare = (sha, target = live) => ["api", `repos/${REPO}/compare/${sha}...${target}`];
-      const relation = ["behind", "diverged", "identical"].includes(defect) ? defect : "ahead";
-      const expected = [{ args: compare(unit.workOrder.headSha), status: route === "ACT" ? relation : "ahead" }];
-      const authenticatesAncestor = !["incomplete", "unstamped", "current-checkpoint-live-verification-refused"].includes(defect)
-        && (route === "THREAD" || !["behind", "diverged"].includes(defect));
-      if (authenticatesAncestor) {
-        expected.push({ args: compare(head, candidate), status: "ahead" });
-        if (route === "ACT") expected.push({ args: compare(fixing, candidate), status: "ahead" });
-        expected.push({ args: compare(candidate), status: relation });
-        if (["none", "unresolved", "uncontained"].includes(defect)) expected.push({ args: compare(fixing), status: defect === "uncontained" ? "behind" : "ahead" });
-      }
-      if (defect === "current-checkpoint-live-verification-refused") {
-        // A current checkpoint uses live verification, which authenticates the candidate before observing the PR.
-        expected.push({ args: compare(head, candidate), status: "ahead" });
-        if (route === "ACT") {
-          expected.push({ args: compare(fixing, candidate), status: "ahead" });
-          expected.push({ args: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,statusCheckRollup,baseRefName"], payload: { headRefOid: null } });
-        }
-      }
-      const calls = [];
-      const runtime = { repoRoot: wt, env: gitFreeEnv(), runChild: async (command, args) => {
-        const entry = expected[calls.length];
-        calls.push({ command, args });
-        assert.equal(command, "gh");
-        assert.deepEqual(args, entry?.args, `${defect}: unexpected verification call`);
-        return { code: 0, stdout: JSON.stringify(entry.payload ?? { status: entry.status }), stderr: "" };
-      } };
-      const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: live, parsedThreads: {
-        threads: [{ id: threadId, isResolved: defect !== "unresolved" }], comments: [{ threadId, body: `Fixed in ${fixing}` }],
-      } }, runtime);
-      assert.deepEqual(calls, expected.map(({ args }) => ({ command: "gh", args })), `${defect}: exact expected calls consumed`);
-      assert.equal(result?.complete === true, defect === "none", `${defect}: ${JSON.stringify(result)}`);
-      if (defect === "none") assert.equal(result.carriedFromHead, candidate);
-      if (defect === "current-checkpoint-live-verification-refused") assert.match(result.incomplete[0].failedStep, route === "ACT"
-        ? /unverified_active_fixer: --head-sha .* is not the live PR head/
-        : /unverified_active_fixer: THREAD report differs from the clearing candidate dispositions/);
-      assert.equal(result?.gateVerdict, undefined);
-      if (defect === "current-checkpoint-live-verification-refused") await rm(current);
-    }
-    assert.notEqual(head, live);
-  });
-});
-
 // A main checkout on `main` (commit C0) with the PR branch issue-1 at head C1 in a
 // linked worktree, plus typed source files under the main checkout's tmp/.
 const initialHistory = {};
@@ -263,38 +188,18 @@ async function withFixture(fn) {
     };
     const emitRaw = (over = {}) => (sealIfPresent(over.tmpRoot ?? resolveGateArtifactTmpRoot(over.cwd ?? wt), "deltaResult" in over ? over.deltaResult : files.delta), emitFixerWorkOrder)({
       repo: REPO, pr: PR, headSha: head, phase: "commit_only", actListFile: files.actList, gate: "draft_gate", cwd: wt,
-      ...(over.actListFile === undefined && "actListFile" in over ? {} : { deltaResult: files.delta }),
+      ...(over.actListFile === undefined && "actListFile" in over || over.phase === "full" ? {} : { deltaResult: files.delta }),
       fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }), fetchVerdictMarkers: verdictPostedAt(head), executionIdentity: nextExecution(), ...over,
     });
     const emit = async (over = {}) => {
       const restore = await syncRecordItems(over);
       try { return await emitRaw(over); } finally { await restore(); }
     };
-    const prepareFull = async ({ bounded = false, cannotVerify = false, siteCoverage, nodes = [], allowedPaths = [], login = "bot", emitter = emit, baseline = head } = {}) => {
-      const act = JSON.parse(await readFile(files.actList));
-      const prior = await emitter({ phase: "commit_only", deltaResult: undefined, allowedPaths });
-      assert.equal(pull(prior, root).status, 0);
-      git(wt, "commit", "-q", "--allow-empty", "-m", "fixing F");
-      const fixing = git(wt, "rev-parse", "HEAD");
-      siteCoverage ??= act.map(({ fingerprint }) => ({ fingerprint, returnedSites: [], sites: [], noSitesReason: "  query returned no sites  " }));
-      await mkdir(path.dirname(prior.workOrder.outputRefs[0]), { recursive: true });
-      await writeFile(prior.workOrder.outputRefs[0], JSON.stringify({ headSha: fixing, siteCoverage }));
-      const log = path.join(path.dirname(files.actList), "findings.json");
-      await writeFile(log, JSON.stringify({ headSha: baseline, provenance: { perAngle: [{ angle: "correctness" }] } }));
-      const args = ["--act-list", files.actList, "--baseline", baseline, "--worktree", wt, "--fixer-plan", prior.planPath, "--site-coverage", prior.workOrder.outputRefs[0]];
-      const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", log, "--result-path", path.join(path.dirname(log), "delta-result.json")], { stdout: { write() {} } });
-      const result = { ...input.input.resultShape, actionableItems: input.input.actItems.map(({ ref }) => ({ ref, status: cannotVerify ? "cannot_verify" : "resolved", evidence: ["focused check"] })), newFindings: [], widenedReads: [], outcome: "locally_clear" };
-      if (bounded) { git(wt, "commit", "-q", "--allow-empty", "-m", "candidate B"); result.outcome = cannotVerify ? "locally_clear" : "bounded_out"; }
-      await writeFile(files.delta, JSON.stringify(result));
-      sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
-      assert.equal((await runCli([...args, "--result", files.delta, "--invocation", bounded ? "3" : "1"], { stdout: { write() {} } })).nextStep, bounded ? "push_to_gate" : "push");
-      const candidate = git(wt, "rev-parse", "HEAD");
-      const runtime = () => makeGhMock([
-        { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) },
-        { assertArgs: ["api", "user"], stdout: JSON.stringify({ login }) },
-      ]);
-      return { prior, fixing, candidate, siteCoverage, result, runtime, full: (over = {}) => emitter({ phase: "full", keepRecord: true, allowedPaths, runChild: runtime().runChild, ...over }) };
-    };
+    // The full phase has no delta review: one full emission at the PR head (issue 2937 D1).
+    const prepareFull = async ({ allowedPaths = [], emitter = emit } = {}) => ({
+      candidate: head,
+      full: (over = {}) => emitter({ phase: "full", deltaResult: undefined, allowedPaths, ...over }),
+    });
     await fn({ root, wt, head, files, emit, recordPath, writeRecord, prepareFull });
   }, { prefix: "dev-loops-fixer-" });
 }
@@ -412,48 +317,21 @@ test("a commit_only emit under a held head lock refuses sequence_lock_busy and l
   });
 });
 
-test("a zero-thread threads commit_only emit refuses without an operator focus round and writes no marker; with one it emits and a focus-bound record clears full", async () => {
+test("a zero-thread threads emit refuses without an operator focus round and writes no marker; with one it emits in the full phase with no marker", async () => {
   const { sequenceMarkerPath } = await import("@dev-loops/core/loop/fix-push-authority");
-  await withFixture(async ({ root, head, files, emit, writeRecord }) => {
+  await withFixture(async ({ root, head, files, emit }) => {
     await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [] }));
-    const base = { phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined };
-    await assert.rejects(emit(base), /no unresolved thread needs an --operator-focus-file with a round/);
-    assert.equal(existsSync(sequenceMarkerPath(path.join(root, "tmp"), head)), false);
+    const base = { actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined };
+    for (const phase of ["commit_only", "full"]) {
+      await assert.rejects(emit({ ...base, phase }), (error) => /no unresolved thread needs an --operator-focus-file with a round/.test(error.message) && /Pass --operator-focus-file/.test(error.recovery));
+      assert.equal(existsSync(sequenceMarkerPath(path.join(root, "tmp"), head)), false);
+    }
     const focusFile = path.join(root, "tmp", "focus.json");
     await writeFile(focusFile, JSON.stringify({ round: "tighten the cap-round summary wording" }));
-    const commitOnly = await emit({ ...base, operatorFocusFile: focusFile });
-    assert.equal(commitOnly.workOrder.phase, "commit_only");
-    const focusItems = [{ ref: "operator-focus", status: "resolved" }];
-    // A record that clears a weaker round never grants the push: while the canonical plan is still the commit_only order, only the focus digest can refuse it.
-    const { startDeltaSequence: startOther } = await import("@dev-loops/core/loop/pre-push-delta-review");
-    const otherFocus = path.join(root, "tmp", "other-focus.json");
-    await writeFile(otherFocus, JSON.stringify({ round: "fix a typo" }));
-    const otherId = startOther({ reviewBaselineHead: head, actList: [{ ref: "operator-focus", angle: "operator-focus", summary: "fix a typo", judgeDisposition: "act" }] }).actSetId;
-    await writeRecord({ items: focusItems, actSetId: otherId });
-    await assert.rejects(emit({ ...base, phase: "full", operatorFocusFile: otherFocus }), /not the one in the canonical commit_only work order/);
-    // A plan whose operatorFocusDigest was altered without its workOrderDigest grants nothing, even for the issued focus round.
-    const plan = JSON.parse(readFileSync(commitOnly.planPath, "utf8"));
-    const goodBytes = readFileSync(commitOnly.planPath, "utf8");
-    const { actSetId: focusActSetId } = startOther({ reviewBaselineHead: head, actList: [{ ref: "operator-focus", angle: "operator-focus", summary: "tighten the cap-round summary wording", judgeDisposition: "act" }] });
-    await writeRecord({ items: focusItems, actSetId: focusActSetId });
-    const checkFull = () => assertDeltaClearsFullPhase({ tmpRoot: path.join(root, "tmp"), headSha: head, repo: REPO, pr: PR, threads: [], operatorFocus: commitOnly.workOrder.operatorFocus, candidateHead: head });
-    checkFull();
-    await writeFile(commitOnly.planPath, JSON.stringify({ ...plan, workOrder: { ...plan.workOrder, operatorFocusDigest: "0".repeat(64) } }));
-    assert.throws(checkFull, /missing, altered or not a threads order/);
-    await writeFile(commitOnly.planPath, goodBytes);
-    await writeRecord({ items: focusItems });
-    // A record reviewed against another round's act set (the default ACT set here) never clears.
-    await writeRecord({ items: focusItems });
-    await assert.rejects(emit({ ...base, phase: "full", operatorFocusFile: focusFile }), /not reviewed against this operator focus round/);
-    const { startDeltaSequence: start } = await import("@dev-loops/core/loop/pre-push-delta-review");
-    const actSetId = start({ reviewBaselineHead: head, actList: [{ ref: "operator-focus", angle: "operator-focus", summary: "tighten the cap-round summary wording", judgeDisposition: "act" }] }).actSetId;
-    await writeRecord({ items: focusItems, actSetId });
-    assert.equal((await emit({ ...base, phase: "full", operatorFocusFile: focusFile })).workOrder.phase, "full");
-    await assert.rejects(emit({ ...base, phase: "full" }), /not reviewed against this operator focus round/);
-    // The first full emission renamed its plan over the canonical one; a re-emission with the same focus still succeeds and another focus still refuses.
-    assert.equal((await emit({ ...base, phase: "full", operatorFocusFile: focusFile })).workOrder.phase, "full");
-    await writeRecord({ items: focusItems, actSetId: otherId });
-    await assert.rejects(emit({ ...base, phase: "full", operatorFocusFile: otherFocus }), /not the one in the canonical commit_only work order/);
+    const full = await emit({ ...base, phase: "full", operatorFocusFile: focusFile });
+    assert.equal(full.workOrder.phase, "full");
+    assert.equal(full.workOrder.operatorFocus.round, "tighten the cap-round summary wording");
+    assert.equal(existsSync(sequenceMarkerPath(path.join(root, "tmp"), head)), false);
   });
 });
 
@@ -507,32 +385,14 @@ test("an unreadable closure record fails closed as stale_dispatch", async () => 
   });
 });
 
-test("a closure record at the review baseline head retires a full emission whose ref head is the candidate", async () => {
-  await withFixture(async ({ root, head, prepareFull }) => {
-    const f = await prepareFull();
-    const unit = await f.full();
-    assert.notEqual(f.candidate, head);
+test("a closure record at the head retires a full emission", async () => {
+  await withFixture(async ({ root, head, files, emit }) => {
+    const unit = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     const { sequenceClosurePath } = await import("@dev-loops/core/loop/fix-push-authority");
     const file = sequenceClosurePath(path.join(root, "tmp"), head, unit.executionIdentity);
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, "{}");
     assert.equal(refusal(pull(unit, root)), "stale_dispatch");
-  });
-});
-
-test("after a BOUNDED_OUT close at the baseline, the --phase full emission and its pull stay admissible", async () => {
-  const { closeGateSequence } = await import("../../scripts/loop/close-gate-sequence.mjs");
-  await withFixture(async ({ root, head, prepareFull }) => {
-    const f = await prepareFull({ bounded: true });
-    const tmpRoot = path.join(root, "tmp");
-    const { branch } = readSequenceMarker(tmpRoot, head);
-    const closed = await closeGateSequence({ tmpRoot, head, repo: REPO, pr: PR, fetchPr: async () => ({ pr: { headRefOid: head, headRefName: branch } }) });
-    assert.equal(closed.ok, true, closed.reason ?? closed.remedy);
-    assert.equal(closed.condition, "BOUNDED_OUT");
-    assert.equal(closed.nextStep, "push_to_gate");
-    const unit = await f.full();
-    assert.equal(pull(unit, root).status, 0);
-    assert.equal(readSequenceMarker(tmpRoot, head)?.fullGranted, true);
   });
 });
 
@@ -588,23 +448,9 @@ test("the no_commit close under a held head lock throws SEQUENCE_LOCK_BUSY and l
   });
 });
 
-test("THREAD full emission binds the delta to the committed candidate rather than the baseline", async () => {
-  await withFixture(async ({ wt, files, emit, writeRecord }) => {
-    git(wt, "commit", "-q", "--allow-empty", "-m", "candidate");
-    const candidate = git(wt, "rev-parse", "HEAD");
-    const options = { phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined };
-    for (const candidateHead of [undefined, "d".repeat(40)]) {
-      await writeRecord({ candidateHead });
-      await assert.rejects(emit(options), /candidateHead.*committed candidate/);
-    }
-    await writeRecord({ candidateHead: candidate });
-    assert.equal((await emit(options)).workOrder.phase, "full");
-  });
-});
-
 for (const phase of ["commit_only", "full"]) test(`capture preserves genuine ${phase} delivery before replacement without granting archive authority`, async () => {
-  await withFixture(async ({ root, wt, emit, prepareFull }) => {
-    const old = phase === "full" ? await (await prepareFull()).full() : await emit({ phase });
+  await withFixture(async ({ root, wt, emit }) => {
+    const old = await emit({ phase });
     assert.equal(pull(old, root).status, 0);
     const tmp = path.join(root, "tmp");
     await mkdir(path.dirname(old.workOrder.outputRefs[0]), { recursive: true });
@@ -667,125 +513,6 @@ test("unpulled capture and equal archive reentry preserve bytes without inventin
     await emit({ phase: "commit_only" });
     assert.deepEqual(await readFile(archive), bytes);
     assert.equal(existsSync(pullReceiptPath(path.join(root, "tmp"), old.workOrderRef)), false);
-  });
-});
-
-test("ordinary full emission carries genuine pulled coverage from reviewed A through fixing F to candidate B", async () => {
-  await withFixture(async ({ root, wt, head, files, emit }) => {
-    const prior = await emit({ phase: "commit_only", deltaResult: undefined });
-    assert.equal(pull(prior, root).status, 0);
-    git(wt, "commit", "-q", "--allow-empty", "-m", "fixing F");
-    const fixing = git(wt, "rev-parse", "HEAD");
-    const siteCoverage = [{ fingerprint: ACT_REF, returnedSites: [], sites: [], noSitesReason: "  actual query returned nothing  " }];
-    await mkdir(path.dirname(prior.workOrder.outputRefs[0]), { recursive: true });
-    await writeFile(prior.workOrder.outputRefs[0], JSON.stringify({ headSha: fixing, siteCoverage }));
-    const log = path.join(path.dirname(files.actList), "findings.json");
-    await writeFile(log, JSON.stringify({ headSha: head, provenance: { perAngle: [{ angle: "correctness" }] } }));
-    const args = ["--act-list", files.actList, "--baseline", head, "--worktree", wt, "--fixer-plan", prior.planPath, "--site-coverage", prior.workOrder.outputRefs[0]];
-    const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", log, "--result-path", path.join(path.dirname(log), "delta-result.json")], { stdout: { write() {} } });
-    await writeFile(files.delta, JSON.stringify({ ...input.input.resultShape, actionableItems: [{ ref: ACT_REF, status: "resolved", evidence: ["query returned no sites"] }], newFindings: [], widenedReads: [], outcome: "locally_clear" }));
-    sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
-    const decision = await runCli([...args, "--result", files.delta, "--invocation", "1"], { stdout: { write() {} } });
-    assert.equal(decision.nextStep, "push");
-    const mock = makeGhMock([
-      { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) },
-      { assertArgs: ["api", "user"], stdout: '{"login":"bot"}' },
-    ]);
-    const unit = await emit({ phase: "full", keepRecord: true, runChild: mock.runChild });
-    assert.equal(unit.workOrder.headSha, fixing);
-    assert.equal(unit.workOrder.authority.reviewBaselineHead, head);
-    const completionRead = unit.workOrder.requiredReads.find((read) => read.kind === "completion-input");
-    assert.ok(completionRead, "ordinary producer supplies authenticated completion input");
-    assert.deepEqual(JSON.parse(await readFile(completionRead.path)), { headSha: fixing, fixingCommitSha: fixing, siteCoverage, threadBindings: [], origin: input.input.resultShape.origin });
-    assert.equal(pull(unit, root).status, 0);
-    assert.equal(JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef))).subject.headSha, fixing);
-  });
-});
-
-for (const defect of ["resultBinding", "decisionBinding", "resultLegacy", "decisionLegacy", "resultOrigin", "decisionOrigin", "reportBytes", "missingReport", "emptyReport", "malformedReport", "missingReceipt", "prePullReport", "resultCandidate", "decisionCandidate", "decisionOutcome", "invocation", "branch", "dirty", "lostFix", "lateHead", "lateReport", "earlyRetirement", "mainRetirement", "lateRetirement", "query", "login"]) test(`populated full refuses ${defect} without replacing active plan or marker`, async () => {
-  await withFixture(async ({ root, wt, head, files, recordPath, prepareFull }) => {
-    const f = await prepareFull({ bounded: true });
-    const active = await readFile(f.prior.planPath), markerPath = path.join(root, "tmp/gate-delta", `${head}.sequence`), marker = await readFile(markerPath);
-    if (["resultBinding", "resultLegacy", "resultOrigin", "resultCandidate"].includes(defect)) {
-      const value = JSON.parse(await readFile(files.delta));
-      if (defect === "resultBinding") delete value.handbackBytesDigest;
-      if (defect === "resultLegacy") for (const key of ["coverageProtocol", "handbackBytesDigest", "origin"]) delete value[key];
-      if (defect === "resultOrigin") value.origin.workOrderDigest = `sha256:${"0".repeat(64)}`;
-      if (defect === "resultCandidate") value.candidateHead = head;
-      await writeFile(files.delta, JSON.stringify(value));
-    }
-    if (["decisionBinding", "decisionLegacy", "decisionOrigin", "decisionCandidate", "decisionOutcome", "invocation"].includes(defect)) {
-      const value = JSON.parse(await readFile(recordPath));
-      if (defect === "decisionBinding") delete value.handbackBytesDigest;
-      if (defect === "decisionLegacy") for (const key of ["coverageProtocol", "handbackBytesDigest", "origin"]) delete value[key];
-      if (defect === "decisionOrigin") value.origin.executionIdentity = nextExecution();
-      if (defect === "decisionCandidate") value.candidateHead = head;
-      if (defect === "decisionOutcome") value.outcome = "locally_clear";
-      if (defect === "invocation") value.invocation = 2;
-      await writeFile(recordPath, JSON.stringify(value));
-    }
-    const report = f.prior.workOrder.outputRefs[0];
-    if (defect === "reportBytes") await writeFile(report, `${await readFile(report)} `);
-    if (defect === "missingReport") await rm(report);
-    if (defect === "emptyReport" || defect === "malformedReport") await writeFile(report, defect === "emptyReport" ? "" : "{");
-    if (defect === "missingReceipt") await rm(pullReceiptPath(path.join(root, "tmp"), f.prior.workOrderRef));
-    if (defect === "prePullReport") { const { utimes } = await import("node:fs/promises"); await utimes(report, 1, 1); }
-    if (defect === "branch") git(wt, "checkout", "-qb", "wrong-authority");
-    if (defect === "dirty") await writeFile(path.join(wt, "dirty"), "uncommitted");
-    if (defect === "lostFix") git(wt, "reset", "--hard", head);
-    const retire = async () => {
-      const file = path.join(defect === "mainRetirement" ? root : wt, "tmp/retired-gate-rounds", head, "r1/retirement.json");
-      await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, JSON.stringify({ gate: "draft_gate", retiredAt: new Date(Number(f.prior.executionIdentity.slice(1).split("-")[0]) + 1).toISOString() }));
-    };
-    if (defect === "earlyRetirement" || defect === "mainRetirement") await retire();
-    const mock = f.runtime();
-    await assert.rejects(f.full({ runChild: async (...args) => {
-      if (args[1].includes("graphql")) {
-        if (defect === "lateRetirement") await retire();
-        if (defect === "lateHead") git(wt, "commit", "-q", "--allow-empty", "-m", "moved after capture");
-        if (defect === "lateReport") await writeFile(report, `${await readFile(report)} `);
-        if (defect === "query") return { code: 1, stdout: "", stderr: "query refused" };
-      }
-      if (args[1].includes("user") && defect === "login") return { code: 1, stdout: "", stderr: "login refused" };
-      return mock.runChild(...args);
-    } }));
-    assert.deepEqual(await readFile(f.prior.planPath), active);
-    assert.deepEqual(await readFile(markerPath), marker);
-  });
-});
-
-test("populated producer binds the public 09a root and every synthetic merged/shared ACT member", async () => {
-  await withFixture(async ({ files, prepareFull }) => {
-    // Public finding and complete original root body; all membership variations below are synthetic.
-    const finding = withFp({ severity: "medium", angle: "correctness", files: ["scripts/github/_validation-evidence.mjs"], line: 78, judgeDisposition: "act",
-      summary: "Existing prefix-file contexts with configured validation now fail reviewer admission. The previous write-gate-context producer records scope.validationResultsPath under --prefix-file but omits the validation requiredRead; the previous sentinel accepts that shape. The new sentinel calls this reader, which requires exactly one hash-bound read before checking the record's status, so a valid current-head complete/failed/incomplete legacy artifact is refused as missing binding and blocks semantic participation. Adding the read to the new producer does not preserve compatibility with existing producer-shaped contexts.",
-      siteQuery: "readValidationEvidence|requireBinding|validationResultsPath|prefix-file",
-    });
-    assert.equal(finding.fingerprint, "09a9db735031d233");
-    const body = "<!-- dev-loops:finding 09a9db735031d233 severity=medium angle=correctness round=2 -->\n**medium** · correctness · judge: act\n`scripts/github/_validation-evidence.mjs:78`\n**Problem:** Existing prefix-file contexts with configured validation now fail reviewer admission. The previous write-gate-context producer records scope.validationResultsPath under --prefix-file but omits the validation requiredRead; the previous sentinel accepts that shape.\n**Fix:** Preserve admission of the legacy configured prefix-file shape while keeping the full binding mandatory for not_configured; add a fixture using the old producer-shaped context rather than only the new writer's output.\n<details><summary>Details</summary>\n\n**Problem (continued):** The new sentinel calls this reader, which requires exactly one hash-bound read before checking the record's status, so a valid current-head complete/failed/incomplete legacy artifact is refused as missing binding and blocks semantic participation. Adding the read to the new producer does not preserve compatibility with existing producer-shaped contexts.\n\n**Failing case:** Use a context produced by the old write-gate-context --prefix-file --validation-results path with valid current-head configured evidence, then run the new verify-fresh-review-context: reads.length is zero and admission refuses.\n\n</details>";
-    const root = { id: "PRRC_kwDOScHU787-fIpP", databaseId: "4269574735", body, authorAssociation: "OWNER", author: { login: "mfittko", __typename: "User" } };
-    const other = withFp({ ...ACT[0], summary: "synthetic second member" });
-    const marker = (fp) => `<!-- dev-loops:finding ${fp} severity=medium angle=correctness round=1 -->`;
-    const thread = (id, comment, isResolved = false) => ({ id, isResolved, comments: { nodes: [comment] } });
-    const nodes = [thread("PRRT_kwDOScHU786sRK_N", root),
-      thread("MERGED", { ...root, id: "merged", body: `${body}\n${marker(other.fingerprint)}\n${marker(finding.fingerprint)}` }, true),
-      thread("SHARED", { ...root, id: "shared" }),
-      thread("FOREIGN", { ...root, author: { login: "foreign" } }),
-      thread("REPLY_ONLY", { ...root, id: "early", databaseId: 1, body: "unmarked original root" })];
-    nodes[4].comments.nodes.push({ ...root, id: "late", databaseId: 2 });
-    await writeFile(files.actList, JSON.stringify([finding, finding, other]));
-    const siteCoverage = [finding, other].map(({ fingerprint }) => ({ fingerprint, returnedSites: [], sites: [{ site: "synthetic.mjs", kind: "site", status: "fixed", reason: "", test: "  focused check  " }], noSitesReason: "  synthetic query returned nothing  " }));
-    const f = await prepareFull({ nodes, login: "mfittko", siteCoverage });
-    const unit = await f.full(), read = unit.workOrder.requiredReads.find((entry) => entry.kind === "completion-input");
-    assert.deepEqual(JSON.parse(await readFile(read.path)).threadBindings, [
-      { threadId: "MERGED", fingerprints: [finding.fingerprint, other.fingerprint] },
-      { threadId: "PRRT_kwDOScHU786sRK_N", fingerprints: [finding.fingerprint] },
-      { threadId: "SHARED", fingerprints: [finding.fingerprint] },
-    ]);
-    assert.deepEqual(JSON.parse(await readFile(read.path)).siteCoverage, siteCoverage);
-    assert.equal(unit.workOrder.requiredReads.filter((entry) => entry.kind === "completion-input").length, 1);
-    assert.equal(read.bytes, (await readFile(read.path)).length);
   });
 });
 
@@ -1176,25 +903,35 @@ test("C15: an overwrite of the caller's act list adds no act-list warning to the
   });
 });
 
-test("delta gate: an act-list --phase full without --delta-result refuses and names commit_only; commit_only emits", async () => {
-  await withFixture(async ({ emit }) => {
-    await assert.rejects(emit({ phase: "full", deltaResult: undefined }), /needs --delta-result[^]*--phase commit_only/);
-    assert.equal((await emit({ deltaResult: undefined, phase: "commit_only" })).workOrder.phase, "commit_only");
+test("an act-list source and a threads source emit a full-phase order with no delta record, no marker and no delta step in the rendered order", async () => {
+  await withFixture(async ({ head, root, files, emit }) => {
+    const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
+    await rm(path.join(root, "tmp", "gate-delta"), { recursive: true, force: true });
+    const act = await emit({ phase: "full", deltaResult: undefined });
+    const threads = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    for (const [source, unit] of [["act-list", act], ["threads", threads]]) {
+      assert.equal(unit.workOrder.phase, "full");
+      assert.deepEqual(unit.workOrder.requiredReads.map((read) => read.kind), [source]);
+      assert.equal(unit.workOrder.authority.deltaResultDigest, undefined);
+      assert.equal(unit.workOrder.siteCoverage, undefined);
+      assert.equal(unit.workOrder.handbackCheck, undefined);
+      assert.equal(unit.joinRef, unit.workOrder.outputRefs[0]);
+      const text = await readFile(unit.promptPath, "utf8");
+      assert.doesNotMatch(text, /pre-push-delta|delta review|delta record|--construct/);
+      assert.match(text, /write the handoff `\{ "headSha": "<full pushed SHA>" \}`/);
+      assert.match(text, /the next gate round judges the fix at the pushed head/);
+    }
+    assert.equal(existsSync(marker), false, "a full emission writes no sequence marker");
+    const state = existsSync(path.dirname(marker)) ? (await readdir(path.dirname(marker))).filter((name) => /\.(sequence|json|seal)$/.test(name)) : [];
+    assert.deepEqual(state, [], "and no delta record, seal or marker (the head lock is not delta state)");
   });
 });
 
-test("push authority: commit_only writes the sequence marker ungranted and the full work order grants the fixer", async () => {
-  await withFixture(async ({ head, root, wt, emit, prepareFull }) => {
-    const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
-    await emit({ deltaResult: undefined, phase: "commit_only" });
-    assert.deepEqual(stripExecution(JSON.parse(await readFile(marker, "utf8"))), { baselineHead: head, fullGranted: false, branch: "issue-1" });
-    await assert.rejects(emit({ phase: "full", deltaResult: undefined }), /needs --delta-result/);
-    assert.equal(JSON.parse(await readFile(marker, "utf8")).fullGranted, false, "a full emit without a delta result does not grant");
-    await (await prepareFull()).full();
-    assert.deepEqual(stripExecution(JSON.parse(await readFile(marker, "utf8"))), { baselineHead: head, fullGranted: true, branch: "issue-1" });
-    git(wt, "commit", "-q", "--allow-empty", "-m", "next");
-    await emit({ deltaResult: undefined, phase: "commit_only" });
-    assert.equal(JSON.parse(await readFile(marker, "utf8")).fullGranted, false, "a new commit_only round revokes the grant");
+test("a full emission takes no --delta-result and a commit_only one still takes it; an all-body act list refuses in the full phase", async () => {
+  await withFixture(async ({ files, emit }) => {
+    await assert.rejects(emit({ phase: "full", deltaResult: files.delta }), (error) => /applies only to --phase commit_only/.test(error.message) && /Re-run without --delta-result/.test(error.recovery));
+    await writeFile(files.actList, JSON.stringify([withFp({ severity: "high", angle: "correctness", summary: "PR body claims an unshipped route", judgeDisposition: "act" })]));
+    await assert.rejects(emit({ phase: "full", deltaResult: undefined }), (error) => error.refusal === "delta_body_only_act_set" && /edit-pr\.mjs/.test(error.message) && !/delta review/.test(error.message));
   });
 });
 
@@ -1264,14 +1001,6 @@ test("custom emission root refuses a non-system directory alias", async () => {
   });
 });
 
-test("delta gate: an act-list --phase full with a push-clearing delta result at the PR head emits the delta-result read", async () => {
-  await withFixture(async ({ prepareFull }) => {
-    const unit = await (await prepareFull()).full();
-    assert.equal(unit.workOrder.phase, "full");
-    assert.deepEqual(unit.workOrder.requiredReads.map((read) => read.kind), ["act-list", "delta-result", "completion-input"]);
-  });
-});
-
 test("an empty or truncated --delta-result refuses with the typed evidence_malformed reason and a producer-rerun remedy", async () => {
   await withFixture(async ({ files, emit }) => {
     for (const bad of ["", '{"outcome": "clea']) {
@@ -1281,180 +1010,15 @@ test("an empty or truncated --delta-result refuses with the typed evidence_malfo
   });
 });
 
-test("delta gate: an act-list --phase full refuses without a delta record for the result's act set, whatever the result file states", async () => {
-  await withFixture(async ({ head, files, emit, recordPath }) => {
-    await rm(recordPath);
-    for (const bad of [
-      deltaResultFor(head, { outcome: "needs_fix" }),
-      deltaResultFor(head, { actionableItems: [{ ref: ACT_REF, status: "resolved", evidence: ["e"] }] }),
-      clearingDeltaFor("b".repeat(40)),
-    ]) {
-      await writeFile(files.delta, JSON.stringify(bad));
-      await assert.rejects(emit({ phase: "full", deltaResult: files.delta }), /does not belong to this act list|no delta record[^]*commit_only/, JSON.stringify(bad.outcome));
-    }
-  });
-});
-
-test("delta gate: invocation-three decision clears the actual candidate with a stale authenticated result", async () => {
-  await withFixture(async ({ head, recordPath, prepareFull }) => {
-    const f = await prepareFull({ bounded: true });
-    assert.notEqual(f.candidate, f.fixing);
-    const decision = JSON.parse(await readFile(recordPath));
-    await writeFile(recordPath, JSON.stringify({ ...decision, actSetId: "other" }));
-    await assert.rejects(f.full(), /act set/);
-    await writeFile(recordPath, JSON.stringify(decision));
-    const unit = await f.full();
-    assert.equal(unit.workOrder.headSha, f.candidate);
-    assert.equal(unit.workOrder.authority.reviewBaselineHead, head);
-    await rm(recordPath);
-    await assert.rejects(f.full(), (err) => err.message.includes(recordPath) && /commit_only/.test(err.message));
-  });
-});
-
-test("delta gate: a sealed locally_clear result with a cannot_verify item, downgraded to bounded_out at invocation 3, still emits the full phase and grants the marker", async () => {
-  await withFixture(async ({ head, root, recordPath, prepareFull }) => {
-    const f = await prepareFull({ bounded: true, cannotVerify: true });
-    assert.equal(f.result.outcome, "locally_clear");
-    const record = JSON.parse(await readFile(recordPath));
-    assert.deepEqual([record.outcome, record.nextStep, record.invocation], ["bounded_out", "push_to_gate", 3]);
-    const unit = await f.full();
-    assert.equal(unit.workOrder.phase, "full");
-    assert.equal(readSequenceMarker(resolveGateArtifactTmpRoot(root), head)?.fullGranted, true);
-  });
-});
-
-test("push authority: a corrupt marker after a full emission is re-granted only by the same-head, same-delta-result --phase full re-emission", async () => {
-  await withFixture(async ({ root, head, files, prepareFull }) => {
-    const f = await prepareFull();
-    const unit = await f.full();
-    const markerRoot = resolveGateArtifactTmpRoot(root);
-    const corrupt = () => writeFile(path.join(markerRoot, "gate-delta", `${head}.sequence`), "{not json");
-    await corrupt();
-    assert.equal(readSequenceMarker(markerRoot, head)?.fullGranted, false, "a corrupt marker fails closed for push authority");
-    // A different head refuses and leaves the marker ungranted.
-    await assert.rejects(f.full({ headSha: f.fixing, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: f.fixing }), fetchVerdictMarkers: verdictPostedAt(f.fixing) }));
-    assert.equal(readSequenceMarker(markerRoot, head)?.fullGranted, false);
-    // The same head and byte-identical sealed delta result return the emitted full order unchanged and rewrite the marker as granted.
-    const again = await f.full();
-    assert.equal(again.workOrderRef, unit.workOrderRef);
-    assert.equal(again.workOrderDigest, unit.workOrderDigest);
-    const marker = readSequenceMarker(markerRoot, head);
-    assert.equal(marker?.fullGranted, true);
-    assert.equal(marker?.execution?.executionIdentity, unit.executionIdentity);
-    assert.equal(pull(again, root).status, 0);
-    // A different sealed delta result of the same act set refuses and leaves a corrupt marker ungranted (a fresh producer run, last because it supersedes the first run's seal).
-    await corrupt();
-    const other = path.join(path.dirname(files.delta), "delta-result-other.json");
-    await writeFile(other, JSON.stringify({ ...f.result, runId: undefined, widenedReads: [{ path: "x", reason: "other review" }] }));
-    await assert.rejects(f.full({ deltaResult: other }), /original commit_only source or mutation authority differs/);
-    assert.equal(readSequenceMarker(markerRoot, head)?.fullGranted, false);
-  });
-});
-
-test("push authority: the idempotent --phase full re-emission refuses once local HEAD moved past the original full order's candidate", async () => {
-  const saved = process.env.CLAUDECODE;
-  try {
-  for (const [claudecode, pushDelta] of [[undefined, "dev-loops loop pre-push-delta"], ["1", "dev-loops-run --repo-root <checkout> cli/index.mjs loop pre-push-delta"]]) {
-  if (claudecode === undefined) delete process.env.CLAUDECODE; else process.env.CLAUDECODE = claudecode;
-  await withFixture(async ({ wt, root, head, prepareFull }) => {
-    const f = await prepareFull();
-    const unit = await f.full();
-    const markerRoot = resolveGateArtifactTmpRoot(root);
-    const corrupt = () => writeFile(path.join(markerRoot, "gate-delta", `${head}.sequence`), "{not json");
-    // HEAD at the original candidate: the re-emission returns the same order.
-    await corrupt();
-    assert.equal((await f.full()).workOrderDigest, unit.workOrderDigest);
-    // HEAD past the reviewed candidate: the re-emission refuses and leaves the marker ungranted.
-    await corrupt();
-    git(wt, "commit", "-q", "--allow-empty", "-m", "past the reviewed candidate");
-    await assert.rejects(f.full(), new RegExp(`full_order_head_moved: [^]*re-run the commit_only emission [^]*at the new HEAD, then run the delta review \\(${pushDelta.replaceAll(".", "\\.")}\\)`));
-    assert.equal(readSequenceMarker(markerRoot, head)?.fullGranted, false);
-  });
-  }
-  } finally {
-    if (saved === undefined) delete process.env.CLAUDECODE; else process.env.CLAUDECODE = saved;
-  }
-});
-
-test("delta gate: a --phase full refusal for a HEAD past the record candidate names the head_moved closure", async () => {
-  await withFixture(async ({ wt, prepareFull }) => {
-    const f = await prepareFull({ bounded: true });
-    git(wt, "commit", "-q", "--allow-empty", "-m", "past the candidate");
-    await assert.rejects(f.full(), /head_moved[^]*push_to_gate/);
-  });
-});
-
-test("delta gate: an act-list --phase full binds the --delta-result to the record's item statuses", async () => {
-  await withFixture(async ({ prepareFull, recordPath }) => {
-    const f = await prepareFull();
-    const decision = JSON.parse(await readFile(recordPath));
-    for (const status of ["not_resolved", "cannot_verify"]) {
-      await writeFile(recordPath, JSON.stringify({ ...decision, items: [{ ref: ACT_REF, status }] }));
-      await assert.rejects(f.full(), /item statuses differ from the delta record/);
-    }
-    await writeFile(recordPath, JSON.stringify(decision));
-    assert.equal((await f.full()).workOrder.phase, "full");
-  });
-});
-
-test("delta gate: a clearing --delta-result does not override a later non-clearing record for the head", async () => {
-  await withFixture(async ({ files, emit, writeRecord, recordPath }) => {
-    await writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix" });
-    await assert.rejects(emit({ phase: "full", deltaResult: files.delta }), (err) => err.message.includes(recordPath) && /fix_and_rereview/.test(err.message));
-  });
-});
-
-test("delta gate: a threads --phase full refuses a non-clearing record and names the record path", async () => {
-  await withFixture(async ({ files, emit, writeRecord, recordPath }) => {
-    for (const nextStep of ["fix_and_rereview", "rereview_current_head"]) {
-      await writeRecord({ nextStep, outcome: "needs_fix", items: [{ ref: "T1", status: "not_resolved" }] });
-      await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), (err) => err.message.includes(recordPath) && err.message.includes(nextStep));
-    }
-  });
-});
-
-test("delta gate: a threads --phase full refuses a record whose refs are not all threads in the threads file", async () => {
-  await withFixture(async ({ files, emit, writeRecord }) => {
-    await writeRecord({ items: [{ ref: "T1", status: "resolved" }, { ref: ACT_REF, status: "resolved" }] });
-    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), new RegExp(`not threads in the threads file[^]*"${ACT_REF}"`));
-  });
-});
-
-test("delta gate: a threads --phase full refuses a threads file holding a thread the record never reviewed", async () => {
-  await withFixture(async ({ files, emit, writeRecord }) => {
-    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [...THREADS.threads, { ...THREADS.threads[0], threadId: "T2", commentId: 2 }] }));
-    await writeRecord({ items: [{ ref: "T1", status: "resolved" }] });
-    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), /never reviewed[^]*"T2"/);
-  });
-});
-
-test("delta gate: a threads --phase full with a thread-bound clearing record emits", async () => {
-  await withFixture(async ({ files, emit, writeRecord }) => {
-    for (const nextStep of ["push", "push_to_gate"]) {
-      await writeRecord({ nextStep });
-      assert.equal((await emit({ ...threadsOnly, threadsFile: files.threads })).workOrder.source, "threads");
-    }
-  });
-});
-
-test("delta gate: a threads --phase full with no record refuses and names commit_only; commit_only emits", async () => {
+test("a three-thread Copilot fix emits in the full phase with no delta record", async () => {
   await withFixture(async ({ root, files, emit }) => {
-    await rm(path.join(root, "tmp", "gate-delta"), { recursive: true });
-    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), /needs a delta record[^]*--phase commit_only/);
-    assert.equal((await emit({ ...threadsOnly, threadsFile: files.threads, phase: "commit_only" })).workOrder.phase, "commit_only");
-  });
-});
-
-test("delta gate: a three-thread Copilot fix cannot reach --phase full without a clearing thread-route review", async () => {
-  await withFixture(async ({ root, files, emit, writeRecord }) => {
     await writeFile(files.threads, JSON.stringify(THREE));
-    const items = (status) => ["T1", "T2", "T3"].map((ref) => ({ ref, status }));
-    await writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", items: items("not_resolved") });
-    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), /fix_and_rereview/);
-    await rm(path.join(root, "tmp", "gate-delta"), { recursive: true });
-    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), /--phase commit_only/);
-    await writeRecord({ items: items("resolved") });
-    assert.equal((await emit({ ...threadsOnly, threadsFile: files.threads })).workOrder.source, "threads");
+    await rm(path.join(root, "tmp", "gate-delta"), { recursive: true, force: true });
+    const unit = await emit({ ...threadsOnly, threadsFile: files.threads });
+    assert.deepEqual(unit.workOrder.requiredReads.map((read) => read.kind), ["threads"]);
+    const dir = path.join(root, "tmp", "gate-delta");
+    const state = existsSync(dir) ? (await readdir(dir)).filter((name) => /\.(sequence|json|seal)$/.test(name)) : [];
+    assert.deepEqual(state, []);
   });
 });
 
@@ -2278,8 +1842,8 @@ test("complete order without its completesExecution root is refused at pull", as
 });
 
 for (const source of ["act-list", "threads"]) test(`complete ${source} pulls delivery-only prose and an empty source grant`, async () => {
-  await withFixture(async ({ root, wt, emit, files, prepareFull }) => {
-    const unit = source === "act-list" ? await (await prepareFull()).full()
+  await withFixture(async ({ root, wt, emit, files }) => {
+    const unit = source === "act-list" ? await emit({ phase: "full", deltaResult: undefined })
       : await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     unit.workOrder.operation = "complete";
     unit.workOrder.completesExecution = { executionIdentity: unit.executionIdentity, heads: [unit.workOrder.headSha] };
@@ -2293,10 +1857,11 @@ for (const source of ["act-list", "threads"]) test(`complete ${source} pulls del
     assert.match(active, /shasum -a 256/);
     assert.match(active, /explicit cwd/);
     assert.match(active, /immutable.*evidence/i);
-    assert.doesNotMatch(active, /Run staging|Validation:|Regenerate:|Apply and commit|Push only/);
+    assert.doesNotMatch(active, /Run staging|Validation:|Regenerate:|Apply and commit|Push only|--construct|--check|verify-fixer-disposition/);
     assert.equal(active.includes(unit.workOrder.executionRules.mutation), false);
-    assert.match(active, /--check/);
-    assertFullPhaseSteps(active, { push: /1\. Do not push/ });
+    assert.match(active, /1\. Push the committed local HEAD to branch "issue-1"/);
+    assert.match(active, /2\. Confirm the remote head equals the pushed commit/);
+    assert.match(active, /4\. Only when CI is green, write the handoff `\{ "headSha": "<full pushed SHA>" \}`/);
     assert.ok(result.stdout.endsWith(`${JSON.stringify(unit.workOrder, null, 2)}\n\x60\x60\x60\n`));
     assert.equal(hook(wt, unit.workOrder.outputRefs[0]), "allow");
     assert.equal(hook(wt, path.join(wt, "src/a.mjs")), "deny");
@@ -2304,40 +1869,21 @@ for (const source of ["act-list", "threads"]) test(`complete ${source} pulls del
   });
 });
 
-for (const defect of ["phase", "paths", "ordinaryEmpty", "source", "duplicate", "opposite", "optional", "missingCompletion", "partialCompletion", "semantic", "raw", "json", "sourceDigest", "deltaDigest", "threadMix"]) {
+for (const defect of ["phase", "paths", "ordinaryEmpty", "source", "duplicate", "opposite", "sourceDigest"]) {
   test(`complete pull refuses ${defect} before granting source authority`, async () => {
-    await withFixture(async ({ root, wt, files, emit, prepareFull }) => {
-      const unit = defect === "threadMix"
-        ? await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined })
-        : await (await prepareFull()).full();
+    await withFixture(async ({ root, wt, emit }) => {
+      const unit = await emit({ phase: "full", deltaResult: undefined });
       const order = unit.workOrder;
       order.operation = "complete";
       order.completesExecution = { executionIdentity: "f1-aaaaaaaa", heads: [order.headSha] };
       order.mutationAuthority.allowedPaths = [];
-      const completion = order.requiredReads.find((read) => read.kind === "completion-input");
       if (defect === "phase") order.phase = "commit_only";
       if (defect === "paths") order.mutationAuthority.allowedPaths = ["src"];
       if (defect === "ordinaryEmpty") order.operation = "fix";
       if (defect === "source") order.source = "threads";
       if (defect === "duplicate") order.requiredReads.push({ ...order.requiredReads[0] });
       if (defect === "opposite") order.requiredReads.push({ ...order.requiredReads[0], kind: "threads" });
-      if (defect === "optional") completion.required = false;
-      if (defect === "missingCompletion") {
-        order.requiredReads = order.requiredReads.filter((read) => read !== completion);
-        delete order.authority.completionInputDigest;
-        delete order.authority.completionInputBytesDigest;
-      }
-      if (defect === "partialCompletion") delete order.authority.completionInputBytesDigest;
-      if (defect === "semantic") order.authority.completionInputDigest = "0".repeat(64);
-      if (defect === "raw") order.authority.completionInputBytesDigest = "0".repeat(64);
-      if (defect === "json") {
-        await writeFile(completion.path, "{");
-        Object.assign(completion, { sha256: sha256Hex(Buffer.from("{")).slice(7), bytes: 1 });
-        order.authority.completionInputBytesDigest = completion.sha256;
-      }
       if (defect === "sourceDigest") order.authority.sourceDigest = "0".repeat(64);
-      if (defect === "deltaDigest") delete order.authority.deltaResultDigest;
-      if (defect === "threadMix") order.authority.completionInputDigest = "0".repeat(64);
       await sealBaselineUnit(unit, root);
       assert.equal(pull(unit, wt).status, 1, defect);
       assert.equal(hook(wt, path.join(wt, "src/a.mjs")), "deny");
@@ -2345,125 +1891,45 @@ for (const defect of ["phase", "paths", "ordinaryEmpty", "source", "duplicate", 
   });
 }
 
-for (const form of ["exact", "missing", "extra", "foreign", "mixed"]) test(`complete THREAD delivery is source-bound (${form})`, async () => {
-  await withFixture(async ({ root, wt, head, emit, files, writeRecord }) => {
-    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
-    await writeRecord({ items: [{ ref: "PRRT_T1", status: "resolved" }] });
-    const unit = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
-    unit.workOrder.operation = "complete";
-    unit.workOrder.completesExecution = { executionIdentity: unit.executionIdentity, heads: [unit.workOrder.headSha] };
-    unit.workOrder.mutationAuthority.allowedPaths = [];
-    await sealBaselineUnit(unit, root);
-    assert.equal(pull(unit, wt).status, 0);
-    if (form === "mixed") {
-      // Negative verifier-only resealing; positive delivery uses the genuine pull unchanged.
-      unit.workOrder.authority.completionInputDigest = "0".repeat(64);
-      unit.workOrderDigest = workOrderDigest(unit.workOrder);
-      await writeFile(unit.planPath, JSON.stringify(unit));
-      const receiptPath = pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef);
-      const receipt = JSON.parse(await readFile(receiptPath));
-      await writeFile(receiptPath, JSON.stringify({ ...receipt, workOrderDigest: unit.workOrderDigest }));
-    }
-    const ids = form === "missing" ? [] : form === "foreign" ? ["PRRT_FOREIGN"] : form === "extra" ? ["PRRT_T1", "PRRT_EXTRA"] : ["PRRT_T1"];
-    await mkdir(path.dirname(unit.workOrder.outputRefs[0]), { recursive: true });
-    await writeMarked(unit.workOrder.outputRefs[0], JSON.stringify({ headSha: head, dispositions: ids.map((threadId) => ({ threadId, fixingCommitSha: head, disposition: "tackled" })) }));
-    const nodes = ["PRRT_T1", "PRRT_UNRELATED"].map((id, index) => ({ id, isResolved: id === "PRRT_T1", comments: { nodes: [{ id: `c${index}`, databaseId: index + 1, body: id === "PRRT_T1" ? `Fixed in commit ${head}.` : "unrelated", authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }));
-    const mock = () => makeGhMock([
-      { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: head }) },
-      { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) },
-      ...ciEntries(head),
-      { assertArgs: ["api", `repos/${REPO}/compare/${head}...${head}`], stdout: '{"status":"identical"}' },
-    ]);
-    const options = { repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath };
-    if (form === "exact") {
-      for (const check of [false, true]) assert.equal((await verifyFixerDisposition({ ...options, check }, { repoRoot: wt, env: gitFreeEnv(), runChild: mock().runChild })).complete, true);
-    } else {
-      const runtime = mock();
-      await assert.rejects(verifyFixerDisposition(options, { repoRoot: wt, env: gitFreeEnv(), runChild: runtime.runChild }), form === "extra" ? /non-source thread/ : form === "mixed" ? /THREAD refuses/ : /no disposition entry/);
-      assert.deepEqual(runtime.calls, [], "reject before live queries, checkpoints or mutations");
-      assert.equal(existsSync(path.join(root, "tmp/gate-findings/o-r", `pr-${PR}`, `fixer-disposition-${head}.json`)), false);
-    }
-  });
-});
-
-test("complete THREAD runs the emitted --construct, normal and --check against a record keyed by an earlier baseline", async () => {
-  await withFixture(async ({ root, wt, head, emit, files, writeRecord }) => {
-    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
-    // The delta review ran at baseline `head`; the reviewed candidate is a later commit, which is the complete order's head.
-    git(wt, "commit", "-q", "--allow-empty", "-m", "candidate");
-    const candidate = git(wt, "rev-parse", "HEAD");
-    await writeRecord({ candidateHead: candidate, items: [{ ref: "PRRT_T1", status: "resolved" }] });
-    const unit = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
-    unit.workOrder.operation = "complete";
-    unit.workOrder.completesExecution = { executionIdentity: unit.executionIdentity, heads: [unit.workOrder.headSha] };
-    unit.workOrder.headSha = candidate;
-    unit.workOrder.mutationAuthority.allowedPaths = [];
-    await sealBaselineUnit(unit, root);
-    assert.equal(pull(unit, wt).status, 0);
-    const options = { repo: REPO, pr: PR, headSha: candidate, fixerPlan: unit.planPath };
-    const liveHead = { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: candidate }) };
-    const threadsEntry = (nodes) => ({ assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) });
-    const run = (entries, over) => verifyFixerDisposition({ ...options, ...over }, { repoRoot: wt, env: gitFreeEnv(), runChild: makeGhMock(entries).runChild });
-    assert.equal((await run([liveHead, threadsEntry([])], { construct: true })).constructed, true);
-    assert.deepEqual(JSON.parse(await readFile(unit.workOrder.outputRefs[0], "utf8")).dispositions, [{ threadId: "PRRT_T1", fixingCommitSha: candidate, disposition: "tackled" }]);
-    const resolved = threadsEntry([{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${candidate}.`, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }]);
-    for (const check of [false, true]) {
-      assert.equal((await run([liveHead, resolved, ...ciEntries(candidate), { assertArgs: ["api", `repos/${REPO}/compare/${candidate}...${candidate}`], stdout: '{"status":"identical"}' }], { check })).complete, true);
-    }
-  });
-});
-
-test("commit_only rendering matches the approved base renderer byte for byte and full differs only in the task region", async () => {
+test("commit_only rendering matches the approved base renderer byte for byte", async () => {
   const checkout = fileURLToPath(new URL("../../", import.meta.url));
   const source = execFileSync("git", ["-C", checkout, "show", "c1ce5892ecda03e0516d87b88c7d1d83bc379eae:scripts/loop/emit-fixer-work-order.mjs"], { encoding: "utf8", env: gitFreeEnv() }).replaceAll("ruleCitations?, noSitesReason? }", "ruleCitations?, noSitesReason?, sitelessSkipReason? }"); // issue 3364 widens the record shape on purpose
   const start = source.indexOf("export function renderWorkOrder(");
   const end = source.indexOf("\n// The commit_only phase", start);
   const { runInNewContext } = await import("node:vm");
   const baseline = runInNewContext(`(${source.slice(start, end).replace("export function", "function")})`, { path, PLAN_FILE: "fixer-emit-plan.json", renderRequiredReadLine: (await import("../../scripts/github/write-gate-context.mjs")).renderRequiredReadLine });
-  await withFixture(async ({ emit, prepareFull }) => {
-    const [commitOnly, full] = [await emit(), await (await prepareFull()).full()];
-    for (const unit of [commitOnly, full]) {
-      delete unit.workOrder.operation;
-      assert.equal(renderWorkOrder(unit.workOrder) === baseline(unit.workOrder), unit === commitOnly);
-    }
-    // The full-phase task is the only region that differs: the numbered steps and the edit rule (issue 2787 C1, C4).
-    const split = (text) => [text.slice(0, text.indexOf("\n") + 1), text.slice(text.indexOf("\nWhen a `delta-result` read")), text.slice(text.indexOf("\n") + 1, text.indexOf("\nWhen a `delta-result` read"))];
-    const [head, tail, task] = split(renderWorkOrder(full.workOrder)), [baseHead, baseTail] = split(baseline(full.workOrder));
-    assert.deepEqual([head, tail], [baseHead, baseTail]);
-    assertFullPhaseSteps(task, { push: /1\. Push only the reviewed committed candidate/ });
+  await withFixture(async ({ emit }) => {
+    const commitOnly = await emit();
+    delete commitOnly.workOrder.operation;
+    assert.equal(renderWorkOrder(commitOnly.workOrder), baseline(commitOnly.workOrder));
   });
 });
 
 test("review baseline authenticates the actual producer's complete JSON content identity", async () => {
-  await withFixture(async ({ wt, files, prepareFull }) => {
+  await withFixture(async ({ wt, files, emit }) => {
     const act = JSON.parse(JSON.stringify(ACT));
     act[0].extra = JSON.parse('{"sha256":"/absolute/value","bytes":4,"outputRefs":["/tmp/x","relative"],"__proto__":{"promptPath":"/local"}}');
     await writeFile(files.actList, JSON.stringify(act));
-    const unit = await (await prepareFull()).full();
+    const unit = await emit({ phase: "full", deltaResult: undefined });
     assert.equal(unit.workOrder.authority.sourceDigest, sha256Hex(act).slice(7));
     assert.equal(pull(unit, wt).status, 0);
     assert.equal(hook(wt, path.join(wt, "src/a.mjs")), "allow");
   });
 });
 
-for (const scenario of ["mainA", "mainB", "linkedA", "linkedB", "lostB"]) test(`review baseline pull and receipt grant protect ${scenario}`, async () => {
+for (const scenario of ["main", "linked"]) test(`review baseline pull and receipt grant protect ${scenario}`, async () => {
   await withFixture(async ({ root, wt, head, prepareFull }) => {
-    const f = await prepareFull({ allowedPaths: ["src"] });
-    const unit = await f.full(), candidate = f.candidate;
+    const unit = await (await prepareFull({ allowedPaths: ["src"] })).full();
     assert.equal(pull(unit, wt).status, 0);
     const target = path.join(wt, "src/a.mjs");
     assert.equal(hook(wt, target), "allow");
-    if (scenario === "lostB") git(wt, "reset", "--hard", head);
-    else {
-      const retiredHead = scenario.endsWith("B") ? candidate : head;
-      const retirement = path.join(scenario.startsWith("linked") ? wt : root, "tmp/retired-gate-rounds", retiredHead, "r1/retirement.json");
-      await mkdir(path.dirname(retirement), { recursive: true });
-      await writeFile(retirement, JSON.stringify({ gate: "draft_gate", retiredAt: new Date(clock).toISOString() }));
-    }
+    const retirement = path.join(scenario === "linked" ? wt : root, "tmp/retired-gate-rounds", head, "r1/retirement.json");
+    await mkdir(path.dirname(retirement), { recursive: true });
+    await writeFile(retirement, JSON.stringify({ gate: "draft_gate", retiredAt: new Date(clock).toISOString() }));
     assert.equal(hook(wt, target), "deny", "existing receipt loses its current mutation grant");
     const result = pull(unit, wt);
     assert.equal(result.status, 1, result.stdout + result.stderr);
-    assert.match(result.stdout, scenario === "lostB" ? /no longer contains/ : /retired/);
+    assert.match(result.stdout, /retired/);
   });
 });
 
@@ -2661,10 +2127,9 @@ test("F5: a plan edited in place grants nothing", async () => {
 // F7 — end to end with only the #2416 transport registered
 // ---------------------------------------------------------------------------
 
-test("F7: ordinary emission, pull, construct and verify preserve delivery and refuse missing materialization", async () => {
-  await withFixture(async ({ root, wt, head, emit, prepareFull }) => {
-    const f = await prepareFull(), candidate = f.candidate;
-    const unit = await f.full();
+test("F7: an ordinary full emission pulls, keeps delivery and refuses missing materialization", async () => {
+  await withFixture(async ({ root, wt, emit, prepareFull }) => {
+    const unit = await (await prepareFull()).full();
     const planBefore = await readFile(unit.planPath, "utf8");
     const pulled = pull(unit, wt);
     assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
@@ -2672,26 +2137,8 @@ test("F7: ordinary emission, pull, construct and verify preserve delivery and re
     const receipt = JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef), "utf8"));
     assert.equal(receipt.subject.planPath, unit.planPath);
     assert.equal(receipt.workOrderDigest, workOrderDigest(unit.workOrder));
-    const target = path.join(wt, "src", "fix.mjs");
-    assert.equal(hook(wt, target), "allow");
-    const [outputRef] = unit.workOrder.outputRefs;
-    assert.equal(hook(wt, outputRef), "allow");
-    const comparison = (sha) => ({ assertArgs: ["api", `repos/${REPO}/compare/${sha}...${candidate}`], stdout: '{"status":"ahead"}' });
-    const runtime = () => ({ env: runIdFreeEnv(), repoRoot: wt, runChild: makeGhMock([comparison(head), comparison(f.fixing),
-      { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: candidate }) },
-      { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) },
-      { assertArgs: ["api", "user"], stdout: '{"login":"bot"}' }, ...ciEntries(candidate)]).runChild });
-    const options = { repo: REPO, pr: PR, headSha: candidate, fixerPlan: unit.planPath };
-    await verifyFixerDisposition({ ...options, construct: true }, runtime());
-    const result = await verifyFixerDisposition(options, runtime());
-    assert.equal(result.complete, true);
-    assert.ok(result.checkpointPath.startsWith(path.join(root, "tmp")));
-    const checkpointBefore = [await readFile(result.checkpointPath, "utf8"), (await stat(result.checkpointPath)).mtimeMs];
-    const checked = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: candidate, parsedThreads: { threads: [], comments: [] } }, runtime());
-    assert.equal(checked.complete, true);
-    assert.deepEqual([await readFile(result.checkpointPath, "utf8"), (await stat(result.checkpointPath)).mtimeMs], checkpointBefore);
-    assert.equal(await readFile(unit.planPath, "utf8"), planBefore);
-
+    assert.equal(hook(wt, path.join(wt, "src", "fix.mjs")), "allow");
+    assert.equal(hook(wt, unit.workOrder.outputRefs[0]), "allow");
     const originalPrompt = await readFile(unit.promptPath);
     await rm(unit.promptPath);
     assert.equal(refusal(pull(unit, wt)), "local_materialization_integrity_failure");
@@ -2702,11 +2149,6 @@ test("F7: ordinary emission, pull, construct and verify preserve delivery and re
     assert.notEqual(reemitted.workOrderRef, unit.workOrderRef);
     assert.equal(refusal(pull(unit, wt)), "stale_dispatch");
     assert.equal(pull(reemitted, wt).status, 0);
-
-    const source = await readFile(EMITTER, "utf8");
-    const imports = [...source.matchAll(/^import[^;]*?from\s+"([^"]+)"/gm)].map((match) => match[1]);
-    assert.ok(imports.length > 0);
-    assert.deepEqual(imports.filter((spec) => /reconcil|recover|regenerat/i.test(spec)), []);
   });
 });
 
@@ -2930,82 +2372,6 @@ for (const route of ["THREAD", "ACT", "HISTORICAL_CONSTRUCT", "LEGACY", "AUTHORI
   });
 });
 
-for (const route of ["Historical main", "OLD authority", "complete"]) test(`${route} executes populated commands from the absolute new emitting root`, async () => {
-  await withFixture(async ({ root, wt, head, files, prepareFull }) => {
-    const oldAuthority = route === "OLD authority";
-    const checkout = fileURLToPath(new URL("../../", import.meta.url));
-    const emitting = oldAuthority ? path.join(path.dirname(root), "new emitting 'root") : wt;
-    if (oldAuthority) await mkdir(emitting);
-    const historical = "44f57175a215711923fb128d74e9357b33ff95e9";
-    const archive = execFileSync("git", ["-C", checkout, "archive", historical, "scripts", "packages", "lib", "cli", "package.json", "skills", "agents"], { env: gitFreeEnv(), maxBuffer: 32 * 1024 * 1024 });
-    const oldRoot = oldAuthority ? wt : root;
-    assert.equal(spawnSync("tar", ["-xf", "-", "-C", oldRoot], { input: archive }).status, 0);
-    for (const relative of ["scripts", "packages", "lib", "cli", "package.json", "skills", "agents"]) await cp(path.join(checkout, relative), path.join(emitting, relative), { recursive: true });
-    // The copied package.json would opt this fixture into the docs validators (issue 2447); the fixture holds no docs to validate.
-    const copiedPackage = path.join(emitting, "package.json");
-    await writeFile(copiedPackage, (await readFile(copiedPackage, "utf8")).replace("scripts/docs/docs-validators.mjs", "true"));
-    if (oldAuthority) {
-      git(emitting, "init", "-q", "-b", "emitting");
-      git(emitting, "config", "user.name", "T");
-      git(emitting, "config", "user.email", "t@example.com");
-    }
-    for (const target of [oldRoot, emitting]) {
-      await writeFile(path.join(target, ".gitignore"), "tmp/\nnode_modules/\n");
-      await mkdir(path.join(target, "node_modules/@dev-loops"), { recursive: true });
-      await symlink(path.join(target, "packages/core"), path.join(target, "node_modules/@dev-loops/core"), "dir");
-      for (const dep of ["yaml", "zod"]) await symlink(path.join(checkout, "node_modules", dep), path.join(target, "node_modules", dep), "dir");
-      git(target, "add", ".");
-      git(target, "commit", "-qm", "committed fixture toolchain");
-      assert.equal(git(target, "status", "--porcelain"), "");
-    }
-    const emitterPath = path.join(emitting, "scripts/loop/emit-fixer-work-order.mjs");
-    assert.equal(await readFile(emitterPath, "utf8"), await readFile(EMITTER, "utf8"));
-    assert.equal(await readFile(path.join(oldRoot, "scripts/loop/emit-fixer-work-order.mjs"), "utf8"), execFileSync("git", ["-C", checkout, "show", `${historical}:scripts/loop/emit-fixer-work-order.mjs`], { encoding: "utf8", env: gitFreeEnv() }));
-    const producer = await import(pathToFileURL(emitterPath).href);
-    const emitter = (over = {}) => producer.emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, actListFile: files.actList, gate: "draft_gate", cwd: wt,
-      fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }), fetchVerdictMarkers: verdictPostedAt(head), executionIdentity: nextExecution(), deltaResult: files.delta, ...over });
-    const f = await prepareFull({ emitter }), unit = await f.full();
-    if (route === "complete") {
-      unit.workOrder.operation = "complete";
-      unit.workOrder.completesExecution = { executionIdentity: unit.executionIdentity, heads: [unit.workOrder.headSha] };
-      unit.workOrder.mutationAuthority.allowedPaths = [];
-      await sealBaselineUnit(unit, root);
-    }
-    const coverage = path.join(root, "tmp/loaded-new-emitter");
-    const env = { ...gitFreeEnv(), NODE_V8_COVERAGE: coverage };
-    const pullScript = path.join(oldAuthority ? emitting : root, "scripts/github/pull-work-order.mjs");
-    const pulled = spawnSync("node", [pullScript, unit.executionIdentity], { cwd: wt, encoding: "utf8", env });
-    assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
-    assert.equal(pulled.stdout, await readFile(unit.promptPath, "utf8"));
-    // The fixture runs real gh-stub calls through the throttle; pacing them would exceed the 10s test timeout.
-    await writeFile(path.join(root, ".devloops.json"), JSON.stringify({ version: 1, queue: { ghMinIntervalMs: 0 } }));
-    const bin = path.join(root, "tmp/bin");
-    await mkdir(bin);
-    await writeFile(path.join(bin, "gh"), `#!/bin/sh\ncase "$1 $2" in\n'pr view') printf '%s\\n' '${JSON.stringify({ headRefOid: f.candidate })}';;\n'api graphql') printf '%s\\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}';;\n'api user') printf '%s\\n' '{"login":"bot"}';;\n"api --paginate") case "$4" in *check-runs*) printf '%s\\n' '{"check_runs":[{"name":"build","status":"completed","conclusion":"success"}]}';; *) printf '%s\\n' '{"statuses":[]}';; esac;;\napi*) printf '%s\\n' '{"status":"ahead"}';;\n*) exit 1;;\nesac\n`);
-    chmodSync(path.join(bin, "gh"), 0o755);
-    const commands = [...pulled.stdout.split("## Required reads")[0].matchAll(/`(node [^`]+)`/g)].map((match) => match[1]).filter((command) => command.includes("scripts/github/verify-fixer-disposition.mjs"));
-    assert.equal(commands.length, 3);
-    for (const command of commands) {
-      assert.ok(command.startsWith("node '"));
-      const out = spawnSync("sh", ["-c", command], { cwd: wt, encoding: "utf8", env: { ...env, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
-      assert.equal(out.status, 0, out.stdout + out.stderr);
-    }
-    const output = await readFile(unit.workOrder.outputRefs[0]);
-    const checked = spawnSync("sh", ["-c", `${commands[1]} --check`], { cwd: wt, encoding: "utf8", env: { ...env, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
-    assert.equal(checked.status, 0, checked.stdout + checked.stderr);
-    assert.deepEqual(await readFile(unit.workOrder.outputRefs[0]), output);
-    const loaded = (await Promise.all((await readdir(coverage)).map(async (name) => JSON.parse(await readFile(path.join(coverage, name))).result.map((entry) => entry.url)))).flat();
-    assert.ok(loaded.includes(pathToFileURL(pullScript).href));
-    for (const relative of ["scripts/github/pull-work-order.mjs", "scripts/loop/emit-fixer-work-order.mjs", "scripts/github/verify-fixer-disposition.mjs", "scripts/github/_fixer-act-thread-bindings.mjs", "packages/core/src/loop/work-order-digest.mjs"]) assert.ok(loaded.includes(pathToFileURL(path.join(emitting, relative)).href), `loaded emitting bytes: ${relative}`);
-    const receipt = JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef)));
-    assert.equal(receipt.subject.headSha, f.candidate);
-    assert.equal(receipt.subject.planPath, unit.planPath);
-    assert.equal(receipt.workOrderDigest, unit.workOrderDigest);
-    assert.equal(git(wt, "rev-parse", "HEAD"), f.candidate);
-    assert.equal(git(wt, "status", "--porcelain"), "");
-  });
-});
-
 test("F8: the work order routes validation through the canonical policy and carries no full-run command", () => withoutClaudeCode(async () => {
   await withFixture(async ({ emit, prepareFull }) => {
     for (const phase of ["commit_only", "full"]) {
@@ -3040,24 +2406,6 @@ test("the work order text follows --harness, not the emitting process CLAUDECODE
   } finally {
     if (saved === undefined) delete process.env.CLAUDECODE; else process.env.CLAUDECODE = saved;
   }
-});
-
-test("issue 2787: a THREAD full order has the numbered steps, runs --construct and asks for no hand-written handoff", async () => {
-  await withFixture(async ({ emit, files, writeRecord }) => {
-    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
-    await writeRecord({ items: [{ ref: "PRRT_T1", status: "resolved" }] });
-    const plan = await emit({ ...threadsOnly, threadsFile: files.threads });
-    const { promptPath } = plan;
-    const text = await readFile(promptPath, "utf8");
-    assert.equal(plan.joinRef, `${plan.workOrder.outputRefs[0]}.report`, "a full-phase order joins on the final-on-write report");
-    assert.ok(text.includes(`--check --report-path '${plan.joinRef}'`));
-    assertFullPhaseSteps(text, { push: /1\. Push exactly the delta-reviewed candidate/ });
-    assert.doesNotMatch(text, /Apply and commit/);
-    assert.match(text, /Make no further commit/);
-    assert.match(text, /never write the disposition handoff yourself/);
-    assert.match(text, /--head-sha <pushed-head-sha>/);
-    assert.match(text, /Replace `<pushed-head-sha>` in steps 4 to 6 with the confirmed SHA\./);
-  });
 });
 
 test("issue 2787: the ordinary commit_only render carries neither the numbered steps nor the edit rule", async () => {
@@ -3165,15 +2513,6 @@ test("commit_only work order carries a siteCoverage skeleton built from the act 
   });
 });
 
-test("a --phase full act-list order carries populated immutable completion instead of a skeleton", async () => {
-  await withFixture(async ({ prepareFull }) => {
-    const full = await (await prepareFull()).full();
-    assert.equal(full.workOrder.siteCoverage, undefined);
-    assert.equal(full.workOrder.handbackCheck, undefined);
-    assert.match(await readFile(full.promptPath, "utf8"), /Push only the reviewed committed candidate/);
-  });
-});
-
 test("handbackCheck is machine-local: two commit_only emissions with different executions share a digest", async () => {
   await withFixture(async ({ files, emit }) => {
     await writeFile(files.actList, JSON.stringify(SKELETON_ACT));
@@ -3230,19 +2569,6 @@ test("a threads --phase full prompt names no siteCoverage skeleton, an act-list 
     git(wt, "commit", "-q", "--allow-empty", "-m", "next");
     const act = await emit({ deltaResult: files.delta });
     assert.match(await readFile(act.promptPath, "utf8"), /skeleton in the work order JSON/);
-  });
-});
-
-test("delta gate: a threads order lists the delta record as a delta-result read in both phases, carrying a not_resolved item on push_to_gate", async () => {
-  await withFixture(async ({ files, emit, writeRecord, recordPath }) => {
-    await writeRecord({ nextStep: "push_to_gate", outcome: "bounded_out", items: [{ ref: "T1", status: "not_resolved" }] });
-    for (const phase of ["commit_only", "full"]) {
-      const plan = await emit({ ...threadsOnly, phase, threadsFile: files.threads });
-      const read = plan.workOrder.requiredReads.find((entry) => entry.kind === "delta-result");
-      assert.equal(read?.path, recordPath);
-      assert.ok(plan.workOrder.authority.deltaResultDigest);
-    }
-    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads, deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);
   });
 });
 
@@ -3745,7 +3071,7 @@ test("issue 2787 C11: --ci-file emits a ci-failure order that names the failing 
     assert.match(text, /\{ "headSha": "<full pushed SHA>" \}/);
     assert.match(text, /Edit and Write tools/);
     assert.doesNotMatch(text, /--construct/);
-    assert.equal(JSON.parse(await readFile(path.join(fx.root, "tmp", "gate-delta", `${fx.head}.sequence`), "utf8")).fullGranted, true);
+    assert.equal(existsSync(path.join(fx.root, "tmp", "gate-delta", `${fx.head}.sequence`)), false, "a full emission writes no push marker");
     assert.equal(unit.joinRef, workOrder.outputRefs[0]);
     assert.equal(pull(unit, fx.root).status, 0);
   });
@@ -3983,17 +3309,6 @@ test("issue 2787 C11: --ci-file accepts no other primary source and accepts --ga
   });
 });
 
-test("issue 2787 C11: --ci-file refuses while an ungranted commit_only sequence is active at the head and leaves the marker unchanged", async () => {
-  await withFixture(async (fx) => {
-    await fx.emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, threadsFile: fx.files.threads, phase: "commit_only" });
-    const marker = path.join(fx.root, "tmp", "gate-delta", `${fx.head}.sequence`);
-    const before = await readFile(marker);
-    await assert.rejects(emitCi(fx), /commit_only sequence is active.*close-gate-sequence/);
-    assert.deepEqual(await readFile(marker), before);
-    assert.equal(JSON.parse(before).fullGranted, false);
-  });
-});
-
 // Delta findings on the thread route (issue 2787 C12, ADR 0235).
 const FINDING = { severity: "high", summary: "new null deref in src/b.mjs", evidence: "src/b.mjs:9 reads x.y before the guard", site: "src/b.mjs:9" };
 const threadsCommitOnly = (fx, over = {}) => fx.emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, threadsFile: fx.files.threads, phase: "commit_only", ...over });
@@ -4010,9 +3325,7 @@ test("issue 2787 C12: a thread-route fix_and_rereview record with findings re-em
     assert.equal(text, renderWorkOrder(unit.workOrder));
     assert.match(text, /Delta review findings to fix as act items:\n1\. high: "new null deref in src\/b\.mjs" \(evidence: "src\/b\.mjs:9 reads x\.y before the guard"\)/);
     assert.notEqual(unit.workOrderDigest, none.workOrderDigest);
-    // The full phase still refuses the non-clearing record, and a clearing record replaces it.
-    await assert.rejects(fx.emit({ ...threadsOnlyFull(fx) }), /fix_and_rereview/);
-    await fx.writeRecord({});
+    // The full phase reads no delta record, so a non-clearing record does not refuse it.
     assert.equal((await fx.emit({ ...threadsOnlyFull(fx) })).workOrder.phase, "full");
   });
 });
@@ -4058,16 +3371,6 @@ test("issue 2787 C11: a wide red result carries the first 50 names cut at 200 ch
   });
 });
 
-test("issue 2787 C11: a --review-id full emission refuses while an ungranted commit_only sequence is active and leaves the marker unchanged", async () => {
-  await withFixture(async (fx) => {
-    await fx.emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, threadsFile: fx.files.threads, phase: "commit_only" });
-    const marker = path.join(fx.root, "tmp", "gate-delta", `${fx.head}.sequence`);
-    const before = await readFile(marker);
-    await assert.rejects(emitReview(fx.emit, [reviewFor(fx.head)]), /commit_only sequence is active.*--review-id full emission/);
-    assert.deepEqual(await readFile(marker), before);
-  });
-});
-
 test("issue 2787 C12: a sealed record whose candidate is not the worktree HEAD contributes no deltaFindings", async () => {
   await withFixture(async (fx) => {
     await fx.writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", candidateHead: "c".repeat(40), items: [{ ref: "T1", status: "resolved" }], findings: [FINDING] }, { seal: true });
@@ -4080,9 +3383,10 @@ const pulledFull = async (fx, route) => {
   const unit = route === "ACT" ? await (await fx.prepareFull()).full()
     : await fx.emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: fx.files.threads, deltaResult: undefined });
   assert.equal(pull(unit, fx.wt).status, 0);
+  git(fx.wt, "commit", "-q", "--allow-empty", "-m", "fixing F");
   return unit;
 };
-// The fixer pushed its candidate, so the live PR head is the worktree HEAD.
+// The fixer pushed its fix commit, so the live PR head is the worktree HEAD.
 const reenter = (fx, route, over = {}) => {
   const live = git(fx.wt, "rev-parse", "HEAD");
   return fx.emit({ phase: "full", completionOnly: true, keepRecord: true, deltaResult: undefined, headSha: live, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: live }),
@@ -4092,34 +3396,6 @@ const markerOf = (fx) => path.join(fx.root, "tmp", "gate-delta", `${fx.head}.seq
 const noWrite = async (unit) => {
   assert.equal(existsSync(path.join(path.dirname(unit.planPath), unit.executionIdentity, "original-fixer-emit-plan.json")), false);
 };
-
-for (const route of ["ACT", "THREAD"]) {
-  test(`issue 2787 C13: commit_only refuses while an incomplete ${route} full plan is active at its candidate (PR 2810)`, async () => {
-    await withFixture(async (fx) => {
-      const unit = await pulledFull(fx, route);
-      const plan = await readFile(unit.planPath);
-      const marker = await readFile(markerOf(fx));
-      const texts = (await readdir(path.join(path.dirname(unit.planPath), "work-orders"))).length;
-      const commitOnly =() => (route === "ACT" ? fx.emit({ phase: "commit_only", deltaResult: undefined }) : fx.emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: fx.files.threads, deltaResult: undefined }));
-      const atHead = (headSha) => fx.emit({ phase: "commit_only", deltaResult: undefined, keepRecord: true, headSha, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: headSha }),
-        ...(route === "THREAD" ? { actListFile: undefined, gate: undefined, threadsFile: fx.files.threads } : {}) });
-      // The PR head is the candidate: the exit is --completion-only, and the refusal writes nothing.
-      await assert.rejects(atHead(git(fx.wt, "rev-parse", "HEAD")), (error) => error.message.includes(unit.workOrderRef) && /--completion-only/.test(error.message));
-      // The PR head is not the candidate (unpushed): the exit names the existing full order.
-      await assert.rejects(atHead("b".repeat(40)), (error) => error.message.includes(unit.workOrderRef) && /pull .* and push the candidate/.test(error.message) && !/--completion-only/.test(error.message));
-      if (route === "THREAD") await assert.rejects(commitOnly(), /--completion-only/);
-      await noWrite(unit);
-      assert.equal((await readdir(path.join(path.dirname(unit.planPath), "work-orders"))).length, texts, "no new work order text");
-      assert.deepEqual(await readFile(unit.planPath), plan, "the active plan stays current");
-      assert.deepEqual(await readFile(markerOf(fx)), marker);
-      const candidate = unit.workOrder.headSha;
-      // A verified disposition at the candidate, or a new commit, allows the emission.
-      git(fx.wt, "commit", "-q", "--allow-empty", "-m", "new commit");
-      assert.equal((await commitOnly()).workOrder.phase, "commit_only");
-      assert.equal(candidate === git(fx.wt, "rev-parse", "HEAD"), false);
-    });
-  });
-}
 
 test("issue 2787 C13: an unpulled full plan does not block commit_only at the same HEAD", async () => {
   await withFixture(async (fx) => {
@@ -4135,34 +3411,6 @@ test("issue 2787 C13: a THREAD plan whose pinned threads read drifted does not b
     await assert.rejects(reenter(fx, "THREAD"), /required read threads differs/);
     const unit = await fx.emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: fx.files.threads, deltaResult: undefined });
     assert.equal(unit.workOrder.phase, "commit_only");
-  });
-});
-
-test("issue 2787 C13/C14: an unpulled completion order refuses commit_only and a --completion-only re-run, names pulling it and writes nothing", async () => {
-  await withFixture(async (fx) => {
-    await pulledFull(fx, "ACT");
-    const completion = await reenter(fx, "ACT");
-    const plan = await readFile(completion.planPath);
-    const live = git(fx.wt, "rev-parse", "HEAD");
-    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, keepRecord: true, headSha: live, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: live }) }),
-      (error) => error.message.includes(completion.workOrderRef) && /unpulled/.test(error.message) && /Pull/.test(error.message));
-    await assert.rejects(reenter(fx, "ACT"), (error) => error.message.includes(completion.workOrderRef) && /never pulled; pull/.test(error.message));
-    assert.deepEqual(await readFile(completion.planPath), plan, "the completion plan stays current");
-  });
-});
-
-test("issue 2787 C13/C14: commit_only at a descendant head refuses over the completion order emitted there, unpulled or pulled", async () => {
-  await withFixture(async (fx) => {
-    await pulledFull(fx, "ACT");
-    git(fx.wt, "commit", "-q", "--allow-empty", "-m", "ci fix");
-    const completion = await reenter(fx, "ACT");
-    const live = git(fx.wt, "rev-parse", "HEAD");
-    const commitOnly = () => fx.emit({ phase: "commit_only", deltaResult: undefined, keepRecord: true, headSha: live, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: live }) });
-    const plan = await readFile(completion.planPath);
-    await assert.rejects(commitOnly(), (error) => error.message.includes(completion.workOrderRef) && /unpulled/.test(error.message));
-    assert.equal(pull(completion, fx.wt).status, 0);
-    await assert.rejects(commitOnly(), (error) => error.message.includes(completion.workOrderRef) && /Pull .* and run its steps/.test(error.message));
-    assert.deepEqual(await readFile(completion.planPath), plan, "the completion plan stays current");
   });
 });
 
@@ -4224,17 +3472,16 @@ for (const route of ["ACT", "THREAD"]) {
     await withFixture(async (fx) => {
       const old = await pulledFull(fx, route);
       const oldPlan = await readFile(old.planPath);
-      const marker = await readFile(markerOf(fx));
       const unit = await reenter(fx, route);
       assert.equal(unit.workOrder.operation, "complete");
       assert.deepEqual(unit.workOrder.mutationAuthority.allowedPaths, []);
       assert.equal(unit.workOrder.requiredReads.filter((read) => read.kind === (route === "ACT" ? "threads" : "act-list")).length, 0);
       assert.equal(unit.workOrder.requiredReads.filter((read) => read.kind === (route === "ACT" ? "act-list" : "threads")).length, 1);
-      assert.deepEqual(await readFile(markerOf(fx)), marker, "no push marker is written or changed");
+      assert.equal(existsSync(markerOf(fx)), false, "no push marker is written");
       assert.equal(JSON.parse(await readFile(unit.planPath)).workOrderRef, unit.workOrderRef);
       assert.deepEqual(await readFile(path.join(path.dirname(unit.planPath), old.executionIdentity, "original-fixer-emit-plan.json")), oldPlan);
       assert.equal(await readFile(unit.promptPath, "utf8"), renderWorkOrder(unit.workOrder));
-      assert.equal(unit.joinRef, `${unit.workOrder.outputRefs[0]}.report`);
+      assert.equal(unit.joinRef, unit.workOrder.outputRefs[0]);
       assert.equal(pull(unit, fx.wt).status, 0, "the unchanged consumer admission accepts the order");
       assert.equal(refusal(pull(old, fx.wt)), "stale_dispatch");
       // Cross-harness row (issue 1086): the completion-only plan builds a valid dispatch payload for every harness.
@@ -4300,21 +3547,8 @@ test("issue 2787 C14: a descendant live head re-enters; a diverged head refuses 
     git(fx.wt, "commit", "-q", "--allow-empty", "-m", "diverged");
     const diverged = git(fx.wt, "rev-parse", "HEAD");
     const plan = await readFile(unit.planPath);
-    await assert.rejects(reenter(fx, "ACT", { headSha: diverged, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: diverged }) }), /not an ancestor of the live head/);
+    await assert.rejects(reenter(fx, "ACT", { headSha: diverged, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: diverged }) }), /not a descendant of the plan head/);
     assert.deepEqual(await readFile(unit.planPath), plan);
-  });
-});
-
-test("issue 2787 C14: a THREAD plan refuses --completion-only at a descendant head, names a full gate round and writes nothing", async () => {
-  await withFixture(async (fx) => {
-    const old = await pulledFull(fx, "THREAD");
-    git(fx.wt, "commit", "-q", "--allow-empty", "-m", "ci fix");
-    const live = git(fx.wt, "rev-parse", "HEAD");
-    const plan = await readFile(old.planPath);
-    await assert.rejects(reenter(fx, "THREAD", { headSha: live, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: live }) }), /only at its candidate[^]*full gate round/);
-    assert.deepEqual(await readFile(old.planPath), plan);
-    await noWrite(old);
-    assert.equal((await readdir(path.join(path.dirname(old.planPath), "work-orders"))).length, 1, "no new work order text");
   });
 });
 
@@ -4415,37 +3649,6 @@ test("issue 2787 C14: --completion-only takes phase full, one source and no othe
     await assert.rejects(reenter(fx, "ACT", { threadsFile: fx.files.threads }), /exactly one of/);
     await assert.rejects(reenter(fx, "ACT"), /no fixer plan exists/);
     assert.match((await import("node:fs")).readFileSync(EMITTER, "utf8"), /\[--completion-only\]/);
-  });
-});
-
-test("issue 2787 C13: a pull that lands after the first guard and before the plan rename refuses commit_only under the plan's head locks and leaves the plan current", async () => {
-  await withFixture(async (fx) => {
-    const unit = await (await fx.prepareFull()).full();
-    const plan = await readFile(unit.planPath);
-    // Pull for real, then take the receipt away: the emit sees an unpulled plan, and the pull "lands" while the emit waits on the plan's head locks.
-    assert.equal(pull(unit, fx.wt).status, 0);
-    const markerRoot = resolveGateArtifactTmpRoot(fx.wt), receipt = pullReceiptPath(markerRoot, unit.workOrderRef), receiptBytes = await readFile(receipt);
-    await rm(receipt);
-    const { withSequenceLock } = await import("@dev-loops/core/loop/fix-push-authority");
-    let emitting;
-    await withSequenceLock(markerRoot, [unit.workOrder.headSha], async () => {
-      emitting = fx.emit({ phase: "commit_only", deltaResult: undefined }).then(() => null, (error) => error);
-      await new Promise((resolve) => setTimeout(resolve, 1500)); // the emit passed both early guards and now waits on the lock
-      await writeFile(receipt, receiptBytes);
-    });
-    const error = await emitting;
-    assert.ok(error && error.message.includes(unit.workOrderRef) && /would supersede it/.test(error.message), `expected the supersede refusal, got ${error?.message}`);
-    assert.deepEqual(await readFile(unit.planPath), plan, "the pulled plan stays current");
-  });
-});
-
-test("issue 2787 C13: a truncated fixer-disposition checkpoint is not a verified disposition and commit_only still refuses with the typed message", async () => {
-  await withFixture(async (fx) => {
-    const unit = await pulledFull(fx, "ACT");
-    const checkpoint = path.resolve(fx.wt, buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: git(fx.wt, "rev-parse", "HEAD"), tmpRoot: resolveGateArtifactTmpRoot(fx.wt) }));
-    await mkdir(path.dirname(checkpoint), { recursive: true });
-    await writeFile(checkpoint, '{"complete": tr');
-    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined }), (error) => error.message.includes(unit.workOrderRef) && /--phase commit_only refused/.test(error.message));
   });
 });
 
@@ -4850,15 +4053,14 @@ test("Claude fixer dispatch payload carries the resolved model only when non-nul
 });
 
 test("full-phase step 3 hands back ci_pending or ci_unknown, never ci_failed, when the wait exits 1 with RATE_LIMITED", async () => {
-  await withFixture(async ({ emit, files, writeRecord }) => {
+  await withFixture(async ({ emit, files }) => {
     await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
-    await writeRecord({ items: [{ ref: "PRRT_T1", status: "resolved" }] });
     const plan = await emit({ ...threadsOnly, threadsFile: files.threads });
     const step3 = /3\. Run `[^`]*wait-pr-checks[^\n]*/.exec(await readFile(plan.promptPath, "utf8"))[0];
-    // Only a red `failure` result reaches ci_failed; an exit 1 error (RATE_LIMITED) resolves no thread and hands back ci_pending (ci_unknown when unreadable).
+    // Only a red `failure` result reaches ci_failed; an exit 1 error (RATE_LIMITED) hands back ci_pending (ci_unknown when unreadable).
     assert.equal(step3.match(/ci_failed/g).length, 1);
     assert.match(step3, /If CI is red \(`failure`\), [^.]*`ci_failed`/);
-    assert.match(step3, /exits 1 with an error, resolve no thread, run no verifier step, and hand back `ci_pending` \(`ci_unknown` when the checks cannot be read\)/);
+    assert.match(step3, /exits 1 with an error, hand back `ci_pending` \(`ci_unknown` when the checks cannot be read\)/);
   });
 });
 

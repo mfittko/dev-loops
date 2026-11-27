@@ -4792,7 +4792,7 @@ test("3105 AC15: a posted findings_present draft_gate verdict with an open act l
   const head = "ab".repeat(20);
   const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
   const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict };
-  const fixer = `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo o/r --pr 9 --head-sha ${head} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`;
+  const fixer = `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo o/r --pr 9 --head-sha ${head} --phase full --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`;
   // PR 3221 (round 2, 5 act items) and PR 3239 (cap round, no high, no fixer pass); the PR 3234 stale-base shape is the detector case.
   // A round up to the cap (PR 3221) routes to the fixer; a round past the scoped final round never does (GATE-EXEC-CAP-BRAKES, ADR 0324).
   const result = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 5, blockers: [] } });
@@ -4813,6 +4813,19 @@ test("3105 AC15: a posted findings_present draft_gate verdict with an open act l
   const blocked = evaluatePrGateCoordination({ ...blockedInput, draftOpenActList: open });
   assert.equal(blocked.nextAction, evaluatePrGateCoordination(blockedInput).nextAction, blocked.reason);
   assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, blocked.reason);
+});
+
+test("an act-list fix pass pushed in the full phase goes to the next gate round with no delta record", () => {
+  const reviewed = "ab".repeat(20);
+  const pushed = "cd".repeat(20);
+  const verdict = { visible: true, headSha: reviewed, verdict: "findings_present", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict };
+  const atReviewedHead = evaluatePrGateCoordination({ ...base, currentHeadSha: reviewed, draftOpenActList: { headSha: reviewed, openActCount: 2, blockers: [] } });
+  assert.equal(atReviewedHead.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, atReviewedHead.reason);
+  assert.match(atReviewedHead.agentRemedy.command, /--phase full /);
+  // The fixer pushed a new head: no verdict stands at it, so the next step is the gate round, with no delta record read.
+  const atPushedHead = evaluatePrGateCoordination({ ...base, currentHeadSha: pushed });
+  assert.equal(atPushedHead.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, atPushedHead.reason);
 });
 
 test("3309: a cap-round body-only act list routes to the converged post, never the fixer; a clean converged verdict ends the block", async () => {

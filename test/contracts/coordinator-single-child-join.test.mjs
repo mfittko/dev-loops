@@ -115,9 +115,3 @@ test("the delta reviewer is told to write its result to the absolute --result pa
   }
 });
 
-test("the Copilot follow-up THREAD-route delta reviewer dispatch sentence names the --artifact join", () => {
-  const text = read("skills/copilot-pr-followup/SKILL.md");
-  const at = text.indexOf("Otherwise run the delta reviewer");
-  assert.ok(at >= 0);
-  assert.ok(text.slice(at, at + 400).includes("gate wait-for-units --artifact <the delta reviewer's --result path> --after <the input run's input.patchPath>"));
-});

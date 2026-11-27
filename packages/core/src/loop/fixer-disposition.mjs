@@ -7,6 +7,8 @@
 
 import { guardCommentBodyNoIssuePrIds } from "../github/comment-id-guard.mjs";
 import { sanitizeCopilotSummonTokens } from "../github/copilot-helpers.mjs";
+import { baseAngleName, normalizeSeverity, pastCapBlockers, resolveFindingFile } from "./gate-fanin.mjs";
+import { sha256Hex } from "./review-dispatch-plan.mjs";
 
 /** Disposition values a handoff entry may carry. "tackled" and "partially_fixed"
  * entries are auto-disposed by evaluateFixerDisposition, as is a "deferred" or
@@ -453,4 +455,127 @@ export function evaluateFixerDisposition({ handoff, liveThreads = [], containmen
     nextAction: ok ? null : COMPLETE_FIXER_DISPOSITION_ACTION,
     reason: ok ? null : formatIncompleteReason(incomplete),
   };
+}
+
+const OPERATOR_FOCUS_REF = "operator-focus";
+const FULL_SHA_RE = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
+
+/** The judge's authorized remediation and its site query ride each act item, so the fixer edits against the remedy text. */
+export const REMEDIATION_TEXT_FIELDS = Object.freeze(["authorizedRemediation", "defectClass", "siteQuery", "defectKind"]);
+export const REMEDIATION_LIST_FIELDS = Object.freeze(["acceptedForms", "rejectedForms", "statedSurfaces"]);
+
+/**
+ * Maps a `capture-review-threads --unresolved --bodies` payload onto the `list-review-threads --unresolved-only`
+ * shape the thread route validates; any other payload passes through unchanged.
+ * A capture holds trusted unresolved threads only, so those markers are implied.
+ * A capture not bound to the target (an input or stdin source, another repo or PR) maps to a refused payload.
+ * @param {unknown} payload
+ * @param {{ repo: string, pr: number|string }} target
+ */
+export function normalizeThreadsPayload(payload, { repo, pr } = {}) {
+  const p = /** @type {any} */ (payload);
+  if (!p || typeof p.source !== "object" || p.source === null || p.repo !== undefined || !Array.isArray(p.threads) || !p.threads.every((thread) => Array.isArray(thread?.bodies) && thread.bodies.length > 0 && thread.bodies.every((b) => typeof b === "string"))) return payload;
+  const bound = p.ok === true && p.source.type === "github" && p.source.repo === repo && Number(p.source.pr) === Number(pr);
+  return { ...p, ok: bound, repo, pr, threads: p.threads.map((thread) => ({ ...thread, isResolved: false, trusted: true, body: thread.bodies.join("\n\n") })) };
+}
+
+/** The act items an operator focus contributes when the thread source holds no thread: its `round` text. */
+export function operatorFocusActItems(operatorFocus) {
+  const summary = typeof operatorFocus?.round === "string" ? operatorFocus.round.trim() : "";
+  return summary ? [{ ref: OPERATOR_FOCUS_REF, angle: OPERATOR_FOCUS_REF, summary, judgeDisposition: "act" }] : [];
+}
+
+/**
+ * Reduce a judge act list (the `judge-pass --out` array) to the neutral act
+ * items the reviewer may see. Only allow-listed fields pass, so reviewer
+ * verdicts, "clean" claims and diff bytes never reach the act item.
+ * @param {unknown} actList
+ */
+export function toDeltaActItems(actList) {
+  if (!Array.isArray(actList) || actList.length === 0) {
+    throw new Error("delta review requires a non-empty judge act list");
+  }
+  const items = actList.map((entry, index) => {
+    if (!entry || typeof entry !== "object") throw new Error(`act list entry ${index} is not an object`);
+    if (entry.judgeDisposition !== "act") {
+      throw new Error(`act list entry ${index} has judgeDisposition ${JSON.stringify(entry.judgeDisposition)}, expected "act"`);
+    }
+    // Real judge act entries carry the ledger `fingerprint`; `ref` wins when set.
+    const ledgerRef = [entry.ref, entry.fingerprint].find(isNonEmptyString);
+    const item = {
+      ref: ledgerRef ? ledgerRef.trim() : `act-${index + 1}`,
+      angle: isNonEmptyString(entry.angle) ? entry.angle.trim() : null,
+      severity: normalizeSeverity(entry.severity) ?? null,
+      summary: isNonEmptyString(entry.summary) ? entry.summary.trim() : "",
+      judgeDisposition: "act",
+    };
+    if (isNonEmptyString(entry.judgeRationale)) item.judgeRationale = entry.judgeRationale.trim();
+    // The site coverage record keys on the ledger fingerprint, which a repeated-fingerprint ref suffix would hide.
+    if (isNonEmptyString(entry.fingerprint)) item.fingerprint = entry.fingerprint.trim();
+    for (const key of REMEDIATION_TEXT_FIELDS) if (isNonEmptyString(entry[key])) item[key] = entry[key].trim();
+    for (const key of REMEDIATION_LIST_FIELDS) if (Array.isArray(entry[key]) && entry[key].length > 0) item[key] = key === "statedSurfaces" ? entry[key].filter(isNonEmptyString).map((v) => v.trim()) : entry[key].filter((v) => typeof v === "string"); // a form is an input (verbatim), a surface is a location (trimmed)
+    if (Array.isArray(entry.siblingRemediations) && entry.siblingRemediations.length > 0) item.siblingRemediations = entry.siblingRemediations;
+    if (isNonEmptyString(entry.file)) item.file = entry.file.trim();
+    if (Number.isInteger(entry.line)) item.line = entry.line;
+    return item;
+  });
+  // A fingerprint hashes only file and summary, so entries from different clusters
+  // can share one; suffix the repeats deterministically. Explicit refs stay unique.
+  const refs = new Set();
+  const fingerprintCounts = new Map();
+  items.forEach((item, index) => {
+    const entry = actList[index];
+    if (!isNonEmptyString(entry.ref) && isNonEmptyString(entry.fingerprint)) {
+      const count = (fingerprintCounts.get(item.ref) ?? 0) + 1;
+      fingerprintCounts.set(item.ref, count);
+      if (count > 1) item.ref = `${item.ref}#${count}`;
+    }
+    if (refs.has(item.ref)) throw new Error(`act list has duplicate ref ${JSON.stringify(item.ref)}`);
+    refs.add(item.ref);
+  });
+  return items;
+}
+
+/** A PR-body item names no file or carries `remedyKind: "pr_body"` (never a review-thread or operator-focus item); a thread item is exempt (its ref is the thread id). */
+export const isDeltaBodyItem = (entry) => entry?.angle !== "review-thread" && entry?.angle !== OPERATOR_FOCUS_REF && (entry?.remedyKind === "pr_body" || !resolveFindingFile(entry));
+
+export const convergedActItemKey = (item) => `${normalizeSeverity(item?.severity)}|${String(item?.summary).trim()}`;
+
+// An allowlist: a missing, blank or unknown severity blocks.
+export const isBlockedActItem = (item) => !["medium", "low", "nit"].includes(String(normalizeSeverity(item?.severity)).toLowerCase()) || item?.failOpen === true || isSecurityAngle(item?.angle);
+// A security angle is `security`, a prefixed one (`renderer-security`) and any of them with a `-delta-at-<sha>` suffix.
+// shortcut: no shared security classification exists in core; a pr-gate-coordination one would replace this.
+function isSecurityAngle(angle) { return /(^|-)security(-|$)/.test(baseAngleName(String(angle ?? ""))); }
+
+/**
+ * Body-only round (ADR 0271 as amended by ADR 0332, GATE-EXEC-NO-DEAD-END): a draft_gate round at any round, below the cap or at it, whose open act items are all PR-body items clears with no commit.
+ * Hard checks cover narrow facts only: every item is a PR-body item (no file, or remedyKind pr_body), the live PR body digest differs from the
+ * reviewed `pr-body` read, the reviewed head..fixerCommit range holds no PR-own commit, and no item blocks (high, question, fail-open, security, missing or unknown severity).
+ * Whether the edit resolves an item stays with pre_approval_gate. `fixerCommit` may equal the reviewed head.
+ * Throws a typed refusal (`body_item_locatable`, `body_unchanged`, `own_commit_in_range`, `body_read_unrecorded`, `blocked_item`); returns the converged marker.
+ * @param {{ gate?: string, headSha?: string, round?: number, cap?: number, roundActItems?: any[], converged?: { fixerCommit?: string, actList?: any[] }, reviewedBodySha?: string|null, liveBodySha?: string, ownCommits?: number }} input
+ * @returns {{ fixerCommit: string, deltaDigest: string }}
+ */
+export function composeBodyOnlyConvergedDraftGate({ gate, headSha, round, cap, roundActItems, roundFindings, converged, reviewedBodySha, liveBodySha, ownCommits } = {}) {
+  if (gate !== "draft_gate") throw new Error(`body-only converged verdict applies to draft_gate only, got ${JSON.stringify(gate)}`);
+  if (!FULL_SHA_RE.test(headSha ?? "") || !FULL_SHA_RE.test(converged?.fixerCommit ?? "")) throw new Error("body-only converged verdict requires the full reviewed head sha and fixerCommit");
+  const items = roundActItems ?? [];
+  const keys = (list) => JSON.stringify(list.map(convergedActItemKey).sort());
+  if (items.length === 0 || !Array.isArray(converged?.actList) || keys(converged.actList) !== keys(items)) throw new Error("converged.actList must be the round's non-empty act list (same items as the posted act items)");
+  if (converged?.deltaResult !== undefined) throw new Error("body-only converged verdict takes no converged.deltaResult; a body-only post carries the act list only");
+  // The cap-round blocking set (deferred high, fail-open, missing disposition, severity disagreement) holds for the whole round, not only its act items.
+  const capBlockers = pastCapBlockers(roundFindings ?? items, { round, cap });
+  if (capBlockers.length > 0) throw new Error(`blocked_item: the round holds ${capBlockers.length} blocker(s) (${capBlockers.map((b) => b.item).join("; ")}); they need a fix commit or an operator decision, not a body-only exit`);
+  const blocked = items.find(isBlockedActItem);
+  if (blocked) throw new Error(`blocked_item: act item ${JSON.stringify(blocked.summary)} is not medium, low or nit, is fail-open or is from a security angle; it needs a fix commit or an operator decision, not a body-only exit (GATE-EXEC-NO-DEAD-END)`);
+  const locatable = items.find((item) => !isDeltaBodyItem(item));
+  if (locatable) throw new Error(locatable.angle === "review-thread"
+    ? `body_item_locatable: act item ${JSON.stringify(locatable.summary)} is a review-thread item; a thread is never a PR-body item, so it needs a fix commit and the next draft_gate round, not a body-only exit`
+    : `body_item_locatable: act item ${JSON.stringify(locatable.summary)} names a file and is not remedyKind pr_body; it needs a fix commit and the next draft_gate round, not a body-only exit`);
+  if (!reviewedBodySha) {
+    throw new Error(`body_read_unrecorded: no round context records a pr-body read at ${headSha}, so a body edit cannot be shown, and write-gate-context.mjs refuses a rerun at that head; fix the items with a commit and push it; the next draft_gate round runs at the new head`);
+  }
+  if (reviewedBodySha === liveBodySha) throw new Error("body_unchanged: the live PR body digest equals the reviewed pr-body read; edit the PR body first");
+  if (ownCommits !== 0) throw new Error(`own_commit_in_range: ${headSha}..${converged.fixerCommit} holds ${ownCommits} PR-own commit(s); a fix commit needs the next draft_gate round at the pushed head, not a body-only exit`);
+  return { fixerCommit: converged.fixerCommit, deltaDigest: sha256Hex({ bodyOnly: true, reviewedBodySha, liveBodySha, actList: converged.actList }) };
 }

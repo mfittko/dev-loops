@@ -402,7 +402,7 @@ function normalizeGateSizeWaiver(value) {
   return null;
 }
 
-// `**Converged:** fixer <sha> delta sha256:<digest>` (GATE-EXEC-LOW-NIT-CONVERGENCE): a present but
+// `**Converged:** fixer <sha> delta sha256:<digest>` (the body-only converged post): a present but
 // unparseable line is `{ malformed: true }`, never silently absent.
 function normalizeGateConverged(value) {
   const m = /^fixer\s+`?([0-9a-f]{40}|[0-9a-f]{64})`?\s+delta\s+`?(sha256:[0-9a-f]{64})`?$/iu.exec(value.trim());
@@ -680,7 +680,7 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
       continue;
     }
 
-    // GATE-EXEC-LOW-NIT-CONVERGENCE: a clean, contract-complete draft_gate comment at head A whose valid
+    // Body-only converged post: a clean, contract-complete draft_gate comment at head A whose valid
     // converged marker names the requested head as its fixer commit is the draft_gate marker for that head.
     const convergedFor = normalizedHeadSha !== null && parsed.gate === "draft_gate" && parsed.verdict === "clean"
       && parsed.contractComplete && parsed.converged?.fixerCommit === normalizedHeadSha;

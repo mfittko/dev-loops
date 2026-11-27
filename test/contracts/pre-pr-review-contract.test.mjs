@@ -229,7 +229,6 @@ test("every PR-creating route loads Copilot Loop Operations or the local SKILL",
 // Delta mode: one fresh reviewer between the gate act-list fix commit and its
 // push. The contract owns the rules; the SKILL and fixer only cross-reference.
 const DELTA_RULES = [
-  ["PRE-PUSH-DELTA-TRIGGER", /MUST NOT/, ["act list", "before that fix is pushed", "no act-list fix", "thread route", "unresolved review threads", "passed to the `commit_only` emission"]],
   ["PRE-PUSH-DELTA-PINNED-BASELINE", /MUST/, ["reviewBaselineHead..candidateHead", "A..C", "B..C", "new gate round"]],
   ["PRE-PUSH-DELTA-INPUT", /MUST NOT/, ["judge dispositions", "spec identity", "surface hints", "checklist", "diff bytes", "sibling reviewer verdicts", "widenedReads[]", "MUST review every hunk", "provenance.perAngle", "staleSurfaceHits[]", "an act-list input run without `--findings-log`"]],
   ["PRE-PUSH-DELTA-RESULT", /MUST/, ["resolved", "not_resolved", "cannot_verify", "widenedReads[]", "{ path, reason }", "missing or unknown status", "the reported defect is gone", "introduces no new finding of severity medium or higher", "staleSurfaceHits[]", "stale-surface-hits-truncated"]],
@@ -253,19 +252,13 @@ test("delta-mode rules are registered, owned by the contract, and state their in
   assert.ok(doc.includes("`pre-push-reviewer` role and its two bounded modes"), "contract must name the one role with two modes");
 });
 
-test("the gate fix pass and the fixer cross-reference delta mode between the fix commit and the push", () => {
-  const skill = readRepo("skills/dev-loop/SKILL.md");
-  const actListIdx = skill.indexOf("The fix pass consumes ONLY `--out`'s act list");
-  const deltaIdx = skill.indexOf("`PRE-PUSH-DELTA-TRIGGER`");
-  assert.ok(actListIdx !== -1 && deltaIdx > actListIdx, "dev-loop SKILL must wire delta mode after the act-list fix pass");
-  assert.ok(skill.slice(deltaIdx - 400, deltaIdx + 400).includes("pre-pr-review-contract.md#delta-mode"));
-
+test("the contract and the fixer state that a gate fix pass pushes in the full phase with no delta review (ADR 0336)", () => {
+  const contract = readRepo(CONTRACT).replace(/\s+/g, " ");
+  assert.ok(contract.includes("pushes in the full phase, and no delta review runs"), "contract must state the full-phase fix pass");
+  assert.doesNotMatch(contract, /PRE-PUSH-DELTA-TRIGGER/);
   const fixer = readRepo("agents/fixer.agent.md");
-  const commitIdx = fixer.indexOf("7. Create a focused commit");
-  const fixerDeltaIdx = fixer.indexOf("PRE-PUSH-DELTA-TRIGGER");
-  const pushIdx = fixer.indexOf("8. Push the commit");
-  assert.ok(commitIdx < fixerDeltaIdx && fixerDeltaIdx < pushIdx, "fixer must run delta mode after the commit and before the push");
-  assert.match(fixer.slice(commitIdx, pushIdx), /hand back the commit SHA unpushed/);
+  assert.match(fixer, /A gate fix work order \(source `act-list` or `threads`, full phase, ADR 0336\)/);
+  assert.match(fixer, /A gate fix pass pushes in the full phase \(ADR 0336\)/);
 });
 
 test("delta mode states the decision record, the full-phase refusal and the fixed-reply refusal", () => {
@@ -276,13 +269,11 @@ test("delta mode states the decision record, the full-phase refusal and the fixe
   assert.doesNotMatch(readRepo("scripts/loop/check-pre-push-delta.mjs"), /Read-only:/, "the --result run is no longer read-only");
 });
 
-test("the Copilot follow-up skill emits commit_only, runs the thread-route delta review, then emits full", () => {
+test("the Copilot follow-up skill emits the thread fix pass in the full phase with no delta review", () => {
   const skill = readRepo("skills/copilot-pr-followup/SKILL.md");
-  const line = skill.split("\n").find((l) => l.includes("--phase commit_only --threads-file")) ?? "";
-  for (const text of ["check-pre-push-delta.mjs --threads-file", "--baseline <headRefOid> --pr-head <PR head just read from GitHub> --spec-identity <id>", "--baseline <headRefOid> --pr-head <PR head just read from GitHub> --result <path> --invocation <1-3>", "`--result` run", "`PRE-PUSH-DELTA-TRIGGER`", "`--phase full`"]) {
-    assert.ok(line.includes(text), `follow-up skill must state: ${text}`);
-  }
-  assert.doesNotMatch(skill, /--phase full --threads-file/);
+  assert.match(skill, /--phase full --threads-file/);
+  assert.doesNotMatch(skill, /--phase commit_only --threads-file/);
+  assert.doesNotMatch(skill, /PRE-PUSH-DELTA-TRIGGER/);
   assert.match(skill, /`fixerDispositionWarning` on any status except `suppressed_draft` and `blocked_by_copilot_comment` \(they return before the disposition read\): the fixer disposition is incomplete/);
 });
 

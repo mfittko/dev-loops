@@ -146,3 +146,33 @@ export function collectStaleSurface({ diffText, grep }) {
 
 /** The hits only; use `collectStaleSurface` to learn whether a cap dropped some. */
 export const collectStaleSurfaceHits = (input) => collectStaleSurface(input).hits;
+
+const nonEmpty = (value) => typeof value === "string" && value.trim().length > 0;
+
+/**
+ * The synthetic hit that result mode adds when the stale-surface list was truncated. A
+ * `newFindings[]` entry or a skipped `siteCoverage[]` site (with a reason) naming this token addresses it.
+ */
+export const STALE_SURFACE_TRUNCATED_SITE = "stale-surface-hits-truncated";
+export const staleSurfaceTruncatedHit = () => ({ kind: "truncated", needle: STALE_SURFACE_TRUNCATED_SITE, file: STALE_SURFACE_TRUNCATED_SITE, line: 0, site: STALE_SURFACE_TRUNCATED_SITE });
+
+// The path must stand alone as a token: `.claude/skills/x.md` or `docs/README.md` do not name `skills/x.md` or `README.md`.
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+const namesPath = (text, file) => new RegExp(`(?<![^\\s\`"'(\\[{<])${escapeRegExp(file)}(?![^\\s\`"')\\]}>:,;.!?])`, "u").test(text);
+
+/**
+ * Stale-surface hits that neither a `newFindings[]` entry (its summary, site or evidence names the
+ * hit file) nor a skipped site in `siteCoverage[]` (with a reason) addresses. A skipped site that
+ * names a bare file addresses every hit in that file. A skipped site with a `:line` or `:start-end`
+ * suffix addresses only a hit on that line or inside that range.
+ */
+export function unaddressedStaleSurfaceHits(hits, { newFindings = [], siteCoverage = [] } = {}) {
+  const findingText = newFindings.map((f) => [f?.summary, f?.site, ...(Array.isArray(f?.evidence) ? f.evidence : [])].join("\n"));
+  const skipped = siteCoverage.flatMap((record) => (record?.sites ?? []).filter((s) => s?.status === "skipped" && nonEmpty(s.reason)).map((s) => String(s.site).trim()));
+  const skipAddresses = (site, hit) => {
+    if (site === hit.file) return true;
+    const m = /^(.*):(\d+)(?:-(\d+))?$/u.exec(site);
+    return m !== null && m[1] === hit.file && hit.line >= Number(m[2]) && hit.line <= Number(m[3] ?? m[2]);
+  };
+  return (hits ?? []).filter((hit) => !findingText.some((t) => namesPath(t, hit.file)) && !skipped.some((site) => skipAddresses(site, hit)));
+}

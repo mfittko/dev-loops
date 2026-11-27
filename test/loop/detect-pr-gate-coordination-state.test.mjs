@@ -4659,7 +4659,7 @@ test("3105 AC15: the detector derives the open act list from the current-head le
     const result = await fixture.detect();
     assert.equal(result.ok, true);
     assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
-    assert.equal(result.agentRemedy.command, `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo owner/repo --pr 10 --head-sha ${fixture.headSha} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`);
+    assert.equal(result.agentRemedy.command, `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo owner/repo --pr 10 --head-sha ${fixture.headSha} --phase full --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`);
   } finally {
     await rm(fixture.tempDir, { recursive: true, force: true });
   }

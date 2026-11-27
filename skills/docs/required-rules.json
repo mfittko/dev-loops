@@ -490,11 +490,6 @@
       "enforcement": "runtime"
     },
     {
-      "id": "GATE-EXEC-LOW-NIT-CONVERGENCE",
-      "enforcement": "runtime",
-      "enforcementNote": "Enforced by composeConvergedDraftGate (packages/core/src/loop/pre-push-delta-review.mjs) and upsert-checkpoint-verdict.mjs --converged-json; the rule body in gate-review-sub-loop-contract.md owns the clauses"
-    },
-    {
       "id": "GATE-EXEC-LOW-FIX-UNTIL-CAP",
       "enforcement": "runtime",
       "enforcementNote": "applyJudgeDispositions coerces the disposition (lowFixCapped and round from resolveDraftRoundCap) and emit-fixer-work-order.mjs refuses a low/nit-only act list at pre_approval_gate, or a nit-only list outside draft round 1, with code low_fix_until_cap"
@@ -944,10 +939,6 @@
     },
     {
       "id": "PRE-PUSH-DELTA-RESULT",
-      "enforcement": "doc"
-    },
-    {
-      "id": "PRE-PUSH-DELTA-TRIGGER",
       "enforcement": "doc"
     },
     {

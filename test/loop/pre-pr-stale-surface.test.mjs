@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, test } from "bun:test";
 
-import { unaddressedStaleSurfaceHits } from "../../packages/core/src/loop/pre-push-delta-review.mjs";
+import { unaddressedStaleSurfaceHits } from "../../packages/core/src/loop/stale-surface-hits.mjs";
 import { validatePrePrReview } from "../../scripts/loop/_pre-pr-review-record.mjs";
 import { runCli } from "../../scripts/loop/record-pre-pr-review.mjs";
 import { requiredSelfCheckIds } from "../../scripts/loop/_self-check-items.mjs";
