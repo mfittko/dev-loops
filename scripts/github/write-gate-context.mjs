@@ -304,7 +304,7 @@ Optional:
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-RESOLUTION) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing evidence file, bound by sha256 as an optional read (read field by field with jq; the sentinel still verifies its hash) (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the label read is skipped (only the PR base branch read for the base freshness check remains), so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
-  --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, and a carried angle in a mixed group is stripped from it (recorded membership stays whole), so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). A carried body-reading angle is dropped (it re-runs) when the PR body digest differs from the head's sticky baseline (\`prBodyBaselineSha256\`, kept in \`<gate>-<headSha>.pr-body-baseline\` beside the context so a failed write keeps it). Omit for today's full-count behavior (nothing excluded).
+  --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a terminal (clean or findings_present) per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, and a carried angle in a mixed group is stripped from it (recorded membership stays whole), so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). A carried body-reading angle is dropped (it re-runs) when the PR body digest differs from the head's sticky baseline (\`prBodyBaselineSha256\`, kept in \`<gate>-<headSha>.pr-body-baseline\` beside the context so a failed write keeps it). Omit for today's full-count behavior (nothing excluded).
   --known-findings <path>        Default \`capture-review-threads.mjs --repo --pr\` output (every open or resolved thread, full bodies). Rendered to the digest-keyed round-bound <gate>-<headSha>.known-findings-<digest12>.json and hash-bound as a required \`known-findings\` read (volatile tail and every work order; never the prefix) when at least one thread exists. Fails closed (exit 1) if unreadable or not that shape.
   --operator-focus-file <path>   GATE-EXEC-OPERATOR-FOCUS JSON with a fingerprint item carrying a decision for each act fingerprint of the latest effective closed round (draft_gate and pre_approval_gate only). Clears a round_cap_reached stop of the pre_approval_gate scoped final round for a set opened the first time.
   --tmp-root <path>              Root tmp directory. Omitted, the worktree-local gate-context
@@ -682,8 +682,8 @@ export function readsPrBody(angle, config) {
 
 /**
  * AC3 — same-head skip-completed resume. Scan the per-angle findings
- * directory for this head and return the angle names that already have a CLEAN
- * artifact stamped for this head. The preflight excludes groups whose angles are
+ * directory for this head and return the angle names that already have a terminal
+ * artifact (verdict clean or findings_present; a blocked one is not terminal) stamped for this head. The preflight excludes groups whose angles are
  * all in this set, so a later session re-running the fan-out at the same head
  * dispatches only the shortfall (the groups not yet complete) instead of
  * restarting. A missing/empty directory (first round, or no prior partial run)
@@ -706,7 +706,7 @@ export function readsPrBody(angle, config) {
  * correctness are not complete: they read the PR body, so they re-run (see
  * readsPrBody).
  *
- * @returns {Promise<string[]>} angle names with a clean artifact at this head
+ * @returns {Promise<string[]>} angle names with a terminal (clean or findings_present) artifact at this head
  */
 export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot = "tmp", prBodySha256 = null }, { repoRoot = process.cwd(), config } = {}) {
   const priorBodySha256 = typeof prBodySha256 === "string" ? await readPriorPrBodySha256({ repo, pr, gate, headSha, tmpRoot }, { repoRoot }) : null;
@@ -729,7 +729,7 @@ export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpR
     } catch {
       continue;
     }
-    if (parsed && parsed.verdict === "clean" && String(parsed.headSha ?? "").trim().toLowerCase() === want) {
+    if (parsed && (parsed.verdict === "clean" || parsed.verdict === "findings_present") && String(parsed.headSha ?? "").trim().toLowerCase() === want) {
       if (typeof parsed.angle !== "string" || parsed.angle.length === 0) continue;
       if (bodyChanged && readsPrBody(parsed.angle, config)) continue;
       completed.push(parsed.angle);
@@ -754,7 +754,7 @@ export async function dropBodyReadingCarriedAngles(carriedAngles, { repo, pr, ga
 }
 
 /**
- * The body-aware angle state both context builders read (`buildGateContext` and `main`): the angles with a clean artifact at this head and the carried
+ * The body-aware angle state both context builders read (`buildGateContext` and `main`): the angles with a terminal (clean or findings_present) artifact at this head and the carried
  * angles, each already adjusted for a changed PR body. A `--prefix-file` build carries no PR body, so it passes no digest.
  */
 async function readBodyAwareAngleState({ repo, pr, gate, headSha, tmpRoot, prefixFile, prBody, carriedAngles, config }, { repoRoot }) {
@@ -3040,7 +3040,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // before spawning any reviewer; on `false` it records the shortfall (this
   // artifact is the resumable record) and stops without dispatching. `null`
   // budget (harness does not expose one) → proceed, no shortfall proven.
-  // `completedAngles` (angles with a clean artifact already stamped at this
+  // `completedAngles` (angles with a terminal (clean or findings_present) artifact already stamped at this
   // head) drives the same-head skip-completed resume; `carriedAngles`
   // (angles the fail-closed Phase 1.2 carry-forward seam has proven carried
   // from a prior clean head — resolve-angle-carry-forward.mjs's own result,
@@ -4123,7 +4123,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
       const refuseInFlight = (scope) => {
         throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}) while unit ${scope} is in flight; wait for it to write its findings, or retire the round: ${retireCommand}`);
       };
-      // A unit whose clean artifact is stamped for this head is absent from pendingGroups, yet a re-dispatch may be in flight
+      // A unit whose terminal (clean or findings_present) artifact is stamped for this head is absent from pendingGroups, yet a re-dispatch may be in flight
       // (live sentinel newer than the artifact). Refuse on it too.
       const pendingScopes = new Set(options.fanoutDispatch.pendingGroups.map((unit) => dispatchUnitScope(options.gate, unit)));
       // Iterate the cap-split dispatch units: an oversized group runs as <name>-partN sub-units with their own sentinels.
@@ -4144,7 +4144,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
         const scope = dispatchUnitScope(options.gate, unit);
         const sentinel = sentinelOf(scope);
         const pending = pendingScopes.has(scope) || unit.angles.some((angle) => pendingKeys.has(keyOf(angle)));
-        // A pending unit that holds no body-reading angle but finished with a live sentinel (a findings_present
+        // A pending unit that holds no body-reading angle but finished with a live sentinel (a blocked
         // artifact) is re-emitted too, so its sentinel must retire or the reviewer's fresh-context guard refuses it.
         if (sentinel) {
           // Any unfinished unit refuses: a non-body unit left live would be re-dispatched by the next --pending emission under a new execution.
@@ -4462,7 +4462,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // Resolve the fan-out dispatch plan (groups + wave plan +
   // knobs) so the artifact carries it for the conductor to dispatch
   // wave-by-wave. Computed from the same config + resolved angles.
-  // AC3: same-head skip-completed resume — angles with a clean artifact
+  // AC3: same-head skip-completed resume — angles with a terminal (clean or findings_present) artifact
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
   const planFanout = async (explicitCompletedAngles) => {
@@ -5103,7 +5103,7 @@ export async function main(
       // so the artifact carries the wave plan the conductor dispatches
       // wave-by-wave. Independent of --angles vs dynamic resolution and of
       // --prefix-file (config is a local file read).
-      // AC3: same-head skip-completed resume (angles with a clean artifact
+      // AC3: same-head skip-completed resume (angles with a terminal (clean or findings_present) artifact
       // at this head are excluded from the required count + pending plan).
       const planFanout = async () => {
         const angleState = await readBodyAwareAngleState({ ...options, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
