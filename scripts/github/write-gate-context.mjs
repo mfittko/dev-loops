@@ -2295,6 +2295,20 @@ export function actSetHeld({ logs, effective, cap }) {
   return last.length > 0 && effective.slice(cap).some((log) => log !== latest && actFingerprintSet(log).join() === last.join());
 }
 
+/**
+ * The act fingerprints a cap stop names (the latest closed round's set unioned with the effective latest, as operatorClearsCapStop decides them) and whether
+ * no focus file can clear it (the set is held, see {@link actSetHeld}).
+ */
+export async function capStopFacts(options, { repoRoot, prBase, cap }) {
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot });
+  if (closed.length === 0) return { fingerprints: [], notClearable: false };
+  const effective = await effectiveRounds(closed, { prBase, repoRoot });
+  return {
+    fingerprints: [...new Set([...actFingerprintSet(closed.at(-1)), ...actFingerprintSet(effective.at(-1))])],
+    notClearable: actSetHeld({ logs: closed, effective, cap }),
+  };
+}
+
 /** {@link actSetHeld} over the closed round logs of `options`. */
 export async function actSetAlreadyHeld(options, { repoRoot, cap, prBase, includeLiveCurrentHead = false }) {
   const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead });
@@ -2371,10 +2385,8 @@ export async function resolveScopedFinalRound(options, { repoRoot, prBase, confi
   }
   if (decision.action === "operator") {
     // The refusal names the open act items of the latest closed round; an over-budget fix also keeps its smaller-fix and raised-budget exits.
-    const closed = await readClosedPriorRoundLogs(options, { repoRoot });
     // A base-merge-forced latest round needs the union of its own and the effective latest set decided (operatorClearsCapStop), so the refusal names the union.
-    const effectiveLatest = closed.length > 0 ? (await effectiveRounds(closed, { prBase, repoRoot })).at(-1) : undefined;
-    const fingerprints = closed.length > 0 ? [...new Set([...actFingerprintSet(closed.at(-1)), ...actFingerprintSet(effectiveLatest)])] : [];
+    const { fingerprints } = await capStopFacts(options, { repoRoot, prBase, cap });
     const clear = "the operator clears it with an operator focus item whose decision names the act items by fingerprint";
     const shrink = `shrink the fix to at most ${fixBudget.maxLines} PR-own logic LOC with no added file, or the operator raises gates.capFixMaxLines`;
     const clearedBy = decision.reason !== "cap_fix_over_budget" ? clear : fingerprints.length > 0 ? `${clear}; or ${shrink}` : shrink;
