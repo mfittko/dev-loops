@@ -2287,12 +2287,29 @@ export async function operatorDecidedLatestRound(options, { repoRoot, latest, la
 }
 
 /**
- * Whether the latest closed round's act set was already held by an earlier round from the round after the effective cap round on: no focus file re-opens it (GATE-EXEC-CAP-BRAKES).
+ * The one once-per-set predicate (GATE-EXEC-CAP-BRAKES): whether the latest of the closed `logs` holds an act set that an earlier effective round (`effective`, see {@link effectiveRounds})
+ * already held from the round after the cap round on, so no focus file re-opens it. The detector's notClearable fact and its refusal reason both read it.
  */
+export function actSetHeld({ logs, effective, cap }) {
+  const latest = logs.at(-1), last = latest ? actFingerprintSet(latest) : [];
+  return last.length > 0 && effective.slice(cap).some((log) => log !== latest && actFingerprintSet(log).join() === last.join());
+}
+
+/** {@link actSetHeld} over the closed round logs of `options`. */
 export async function actSetAlreadyHeld(options, { repoRoot, cap, prBase, includeLiveCurrentHead = false }) {
   const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead });
-  const latest = closed.at(-1), last = latest ? actFingerprintSet(latest) : [];
-  return last.length > 0 && (await effectiveRounds(closed, { prBase, repoRoot })).slice(cap).some((log) => log !== latest && actFingerprintSet(log).join() === last.join());
+  return actSetHeld({ logs: closed, effective: await effectiveRounds(closed, { prBase, repoRoot }), cap });
+}
+
+/**
+ * GATE-EXEC-CAP-BRAKES: the one operator-clear predicate of the cap stops. Whether an operator decision (`options.operatorFocusFile` or the issued fixer plan) covers every act fingerprint of the
+ * latest closed round; a base-merge-forced latest round clears from the issued plan, or from the direct file when it decides the forced set and the effective latest set.
+ */
+export async function operatorClearsCapStop(options, { repoRoot, logs, effective }) {
+  const last = logs.at(-1), fingerprints = actFingerprintSet(last);
+  if (effective.at(-1) === last) return operatorDecidedLatestRound(options, { repoRoot, latest: last, last: fingerprints });
+  if (await operatorDecidedLatestRound({ ...options, operatorFocusFile: undefined }, { repoRoot, latest: last, last: fingerprints })) return true;
+  return operatorDecidedLatestRound(options, { repoRoot, latest: last, last: [...new Set([...fingerprints, ...actFingerprintSet(effective.at(-1))])] });
 }
 
 /**
@@ -2301,16 +2318,15 @@ export async function actSetAlreadyHeld(options, { repoRoot, cap, prBase, includ
  * earlier round from the round after the effective cap round on was re-opened once: it stays with the operator.
  * Returns the scoped round input `{ fromHead, priorActItems }`, or null.
  */
-async function resolveOperatorClearedRound(options, { repoRoot, cap, prBase, includeLiveCurrentHead = false }) {
+async function resolveOperatorClearedRound(options, { repoRoot, cap, prBase, includeLiveCurrentHead = false, requireActItems = false }) {
   const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead });
   if (closed.length === 0) return null;
-  const latest = closed.at(-1);
-  const last = actFingerprintSet(latest);
-  // A latest round with no act items has nothing to decide: the next round is the scoped round over the PR-own delta (the exit after a clean round).
-  if (last.length > 0) {
-    if (await actSetAlreadyHeld(options, { repoRoot, cap, prBase, includeLiveCurrentHead })) return null;
-    if (!(await operatorDecidedLatestRound(options, { repoRoot, latest, last }))) return null;
-  }
+  // A latest round with no act items has nothing to decide: the next round is the scoped round over the PR-own delta (the exit after a clean round); an over-budget fix has no such exit.
+  if (actFingerprintSet(closed.at(-1)).length > 0) {
+    const effective = await effectiveRounds(closed, { prBase, repoRoot });
+    if (actSetHeld({ logs: closed, effective, cap })) return null;
+    if (!(await operatorClearsCapStop(options, { repoRoot, logs: closed, effective }))) return null;
+  } else if (requireActItems) return null;
   return { fromHead: closureFromHeadOf(closed), priorActItems: await listPriorActItems(options, { repoRoot }) };
 }
 
@@ -2335,9 +2351,12 @@ export async function resolveScopedFinalRound(options, { repoRoot, prBase, confi
   const facts = closure ? await capFixBudgetFacts({ fromHead: closure.fromHead, headSha: options.headSha, prBase, repoRoot }) : { logicLoc: 0, addedFiles: 0 };
   const fixBudget = { ...facts, maxLines: resolveCapFixMaxLines(config) };
   let decision = decideCapRound({ round, cap, fixBudget });
-  if (decision.action === "operator" && decision.reason === "round_cap_reached") {
+  if (decision.action === "operator" && ["round_cap_reached", "cap_fix_over_budget"].includes(decision.reason)) {
     // GATE-EXEC-CAP-BRAKES: an operator clear of the latest round's act items opens one more scoped round, once per distinct act-item set.
-    const cleared = await resolveOperatorClearedRound(options, { repoRoot, cap, prBase });
+    // An over-budget fix needs act items to decide: with none, only a smaller fix or a larger budget exits.
+    const overBudget = decision.reason === "cap_fix_over_budget";
+    const cleared = await resolveOperatorClearedRound(options, { repoRoot, cap, prBase, requireActItems: overBudget });
+    if (cleared && overBudget) return cleared;
     if (cleared) {
       const clearedFacts = await capFixBudgetFacts({ fromHead: cleared.fromHead, headSha: options.headSha, prBase, repoRoot });
       decision = decideCapRound({ round: cap + 1, cap, fixBudget: { ...clearedFacts, maxLines: fixBudget.maxLines } });
@@ -2345,11 +2364,14 @@ export async function resolveScopedFinalRound(options, { repoRoot, prBase, confi
     }
   }
   if (decision.action === "operator") {
-    // An operator focus decision clears only round_cap_reached; an over-budget fix needs a smaller fix or a larger budget.
-    const clearedBy = decision.reason === "cap_fix_over_budget"
-      ? `an operator focus decision does not clear it; shrink the fix to at most ${fixBudget.maxLines} PR-own logic LOC with no added file, or the operator raises gates.capFixMaxLines`
-      : "the operator clears it with an operator focus item whose decision names the act items by fingerprint";
-    throw Object.assign(new Error(`${describeCapStop(decision)}. Report blocked with blockedOn operator_decision.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); ${clearedBy} (GATE-EXEC-CAP-BRAKES)` });
+    // The refusal names the open act items of the latest closed round; an over-budget fix also keeps its smaller-fix and raised-budget exits.
+    const closed = await readClosedPriorRoundLogs(options, { repoRoot });
+    const fingerprints = closed.length > 0 ? actFingerprintSet(closed.at(-1)) : [];
+    const clear = "the operator clears it with an operator focus item whose decision names the act items by fingerprint";
+    const shrink = `shrink the fix to at most ${fixBudget.maxLines} PR-own logic LOC with no added file, or the operator raises gates.capFixMaxLines`;
+    const clearedBy = decision.reason !== "cap_fix_over_budget" ? clear : fingerprints.length > 0 ? `${clear}; or ${shrink}` : shrink;
+    const named = fingerprints.length > 0 ? ` Open act items: ${fingerprints.join(", ")}.` : "";
+    throw Object.assign(new Error(`${describeCapStop(decision, { clearable: decision.reason !== "cap_fix_over_budget" || fingerprints.length > 0 })}.${named} Report blocked with blockedOn operator_decision.`), { recovery: `stop: report_blocked with blockedOn operator_decision (${decision.reason}); ${clearedBy} (GATE-EXEC-CAP-BRAKES)` });
   }
   return decision.action === "scoped_final_round" ? closure : null;
 }

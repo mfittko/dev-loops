@@ -38,4 +38,4 @@ const CAP_STOP_TEXT = {
 };
 
 /** One sentence naming the numbers of an `operator` decision, for the refusal and the `report_blocked` reason. */
-export const describeCapStop = ({ reason, numbers }, { clearable = true } = {}) => `${reason}: ${CAP_STOP_TEXT[reason](numbers)}${clearable && reason !== "cap_fix_over_budget" ? "; the operator clears it with an operator focus item whose decision names the act items by fingerprint (GATE-EXEC-CAP-BRAKES)" : " (GATE-EXEC-CAP-BRAKES)"}`;
+export const describeCapStop = ({ reason, numbers }, { clearable = true } = {}) => `${reason}: ${CAP_STOP_TEXT[reason](numbers)}${clearable ?"; the operator clears it with an operator focus item whose decision names the act items by fingerprint (GATE-EXEC-CAP-BRAKES)" : " (GATE-EXEC-CAP-BRAKES)"}`;

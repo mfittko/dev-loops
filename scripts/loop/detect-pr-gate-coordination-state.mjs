@@ -34,7 +34,7 @@ import {
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { convergedCarryAccepts } from "../github/_carried-verdict.mjs";
-import { actFingerprintSet, actSetAlreadyHeld, capRoundActList, countCapRounds, effectiveRounds, operatorDecidedLatestRound, readClosedPriorRoundLogs, refusesPastScopedRound, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { actSetAlreadyHeld, actSetHeld, capRoundActList, countCapRounds, effectiveRounds, operatorClearsCapStop, readClosedPriorRoundLogs, refusesPastScopedRound, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
 import { readOperatorFocusFile } from "./_operator-focus.mjs";
 import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
@@ -1457,24 +1457,6 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, operator
   return { headSha: head, openActCount: open.length, blockers: isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [] };
 }
 
-// The once-per-set rule: with the cap on and the round past the scoped final round, the latest act set already had its one re-open.
-function setAlreadyHeld({ logs, effective, round, cap }) {
-  const last = logs.at(-1), fingerprints = actFingerprintSet(last).join();
-  return cap > 0 && round > cap + 1 && effective.slice(cap).some((log) => log !== last && actFingerprintSet(log).join() === fingerprints);
-}
-
-/**
- * GATE-EXEC-CAP-BRAKES: whether an operator decision (`--operator-focus-file` or the issued fixer plan) covers every act fingerprint of the latest judged round.
- */
-async function operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, effective }) {
-  const last = logs.at(-1), fingerprints = actFingerprintSet(last);
-  const base = { repo: context.repo, pr: context.pr, gate };
-  if (effective.at(-1) === last) return operatorDecidedLatestRound({ ...base, operatorFocusFile }, { repoRoot, latest: last, last: fingerprints });
-  // A base-merge-forced latest round clears from the issued fixer plan, or from the direct file when it decides the forced set and the effective latest set (resolveOperatorClearedRound reads the same file).
-  if (await operatorDecidedLatestRound(base, { repoRoot, latest: last, last: fingerprints })) return true;
-  return operatorDecidedLatestRound({ ...base, operatorFocusFile }, { repoRoot, latest: last, last: [...new Set([...fingerprints, ...actFingerprintSet(effective.at(-1))])] });
-}
-
 /**
  * GATE-EXEC-CAP-BRAKES: the facts of the gate whose judged round is posted at the current head (draft_gate while the PR is draft, else pre_approval_gate),
  * or null when that head holds no judged round with an open act item. The evaluator applies the one policy (decideCapRound) to them.
@@ -1520,9 +1502,9 @@ export async function resolveCapBrakes(context, { repoRoot, config, operatorFocu
     items: [...new Map([...capRoundActList(last.findings, last.headSha), ...(effectiveLatest && effectiveLatest !== last ? capRoundActList(effectiveLatest.findings, effectiveLatest.headSha) : [])].map((a) => [a.fingerprint, a])).values()].map((a) => `${a.fingerprint} [${normalizeSeverity(a.severity)}] ${String(a.summary ?? "").trim()}`),
   };
   // A set that already had its one re-open is not clearable by any focus file: the reason names the operator-only step (GATE-EXEC-NO-DEAD-END).
-  if (setAlreadyHeld({ logs, effective, round, cap })) return { ...facts, notClearable: true };
+  if (cap > 0 && round > cap + 1 && actSetHeld({ logs, effective, cap })) return { ...facts, notClearable: true };
   // Fail closed: a focus file that fails to read here clears nothing, and the cap stop stays.
-  return await operatorClearsCapStop({ context, gate, operatorFocusFile, repoRoot, logs, effective }).catch(() => false) ? { ...facts, operatorCleared: true } : facts;
+  return await operatorClearsCapStop({ repo: context.repo, pr: context.pr, gate, operatorFocusFile }, { repoRoot, logs, effective }).catch(() => false) ?{ ...facts, operatorCleared: true } : facts;
 }
 
 // Builds the exact input object passed to evaluatePrGateCoordination.

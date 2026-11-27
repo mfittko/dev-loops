@@ -35,7 +35,7 @@ test("the draft cap exit rule is deleted and GATE-EXEC-CAP-BRAKES names the draf
   const contract = await read("skills/docs/gate-review-sub-loop-contract.md");
   assert.ok(!contract.includes(["GATE-EXEC-ROUND-CAP", "EXIT"].join("-")), "the cap exit rule and every reference are gone");
   const brakes = contract.split("<!-- rule: GATE-EXEC-CAP-BRAKES -->")[1].split("\n")[1];
-  for (const text of ["(default 2, `0` disables the cap)", "(3) Growth:"]) assert.ok(brakes.includes(text), text);
+  for (const text of ["(default 2, `0` disables the cap)", "(2) Growth:"]) assert.ok(brakes.includes(text), text);
   // AC4: the rule carries no ADR 0324 sentence; GATE-EXEC-ROUND-CAP states the draft exit and the enforcementNote carries the growth-read detail.
   assert.ok(!brakes.includes("ADR 0324"), "GATE-EXEC-CAP-BRAKES carries no ADR 0324 sentence");
   assert.ok(contract.includes("A draft PR goes ready only on clean current-head `draft_gate` evidence (ADR 0324)."), "GATE-EXEC-ROUND-CAP states the draft exit");
