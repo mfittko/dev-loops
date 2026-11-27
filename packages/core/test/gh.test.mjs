@@ -578,6 +578,40 @@ describe("secondary rate limit backoff", () => {
     });
   });
 
+  describe("default runChild and runCommand (a gh stub that fails once with a dial timeout, then succeeds)", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "issue-3619-transport-"));
+    const countFile = path.join(dir, "count");
+    writeFileSync(path.join(dir, "gh"), `#!/bin/sh\necho run >> "${countFile}"\nif [ "$(wc -l < "${countFile}")" -le 1 ]; then echo "dial tcp 1.2.3.4:443: i/o timeout" >&2; exit 1; fi\necho ok\n`, { mode: 0o755 });
+    const env = { PATH: `${dir}:/bin:/usr/bin`, DEV_LOOPS_GH_STUB: "1" };
+    const runs = () => readFileSync(countFile, "utf8").trim().split("\n").length;
+    beforeEach(() => writeFileSync(countFile, ""));
+    afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+    test("runChild retries the transport failure once and succeeds", async () => {
+      const sleeps = [];
+      const result = await runChild("gh", ["x"], env, undefined, { sleep: async (ms) => { sleeps.push(ms); } });
+      assert.equal(result.code, 0);
+      assert.equal(runs(), 2);
+      assert.equal(sleeps.length, 1);
+    });
+
+    test("runCommand retries the message-only transport rejection once and succeeds", async () => {
+      const sleeps = [];
+      await runCommand("gh", ["x"], { env, sleep: async (ms) => { sleeps.push(ms); } });
+      assert.equal(runs(), 2);
+      assert.equal(sleeps.length, 1);
+    });
+  });
+
+  test("isTransportFailed accepts message-only timeouts and rejects other failures", async () => {
+    const run = async (error) => { let runs = 0; try { await withSecondaryLimitBackoff(async () => { runs += 1; throw error; }, { sleep: async () => {} }); } catch { /* the outcome is the run count */ } return runs; };
+    assert.equal(await run(new Error("dial tcp 1.2.3.4:443: i/o timeout")), 2);
+    assert.equal(await run(new Error("net/http: TLS handshake timeout")), 2);
+    assert.equal(await run(new Error("read: connection reset by peer")), 1);
+    assert.equal(await run(new Error("HTTP 502: Bad Gateway")), 1);
+    assert.equal(await run(new Error("")), 1);
+  });
+
   test("ghCommandFailed keeps code, resetAt and cause", () => {
     const original = Object.assign(new Error("slow down"), { code: "RATE_LIMITED", resetAt: null });
     const wrapped = ghCommandFailed(original);

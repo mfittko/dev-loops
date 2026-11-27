@@ -76,7 +76,7 @@ function isSecondaryLimited(outcome) {
 }
 
 function isTransportFailed(outcome) {
-  if (outcome instanceof Error) return isGhTransportError(outcome.stderr);
+  if (outcome instanceof Error) return isGhTransportError(outcome.stderr === undefined ? outcome.message : outcome.stderr);
   return outcome?.code !== 0 && isGhTransportError(outcome?.stderr);
 }
 
@@ -255,7 +255,7 @@ export function isSecondaryRateLimitError(error) {
   return /secondary rate limit/i.test(message);
 }
 
-// A failure before the request reaches GitHub (dial or TLS handshake timeout), so the request never reached GitHub.
+// A dial or TLS handshake timeout fails before the request is sent, so a retry is safe for mutations.
 export function isGhTransportError(stderr) {
   return /dial tcp [^\n]*i\/o timeout|TLS handshake timeout/i.test(String(stderr ?? ""));
 }
