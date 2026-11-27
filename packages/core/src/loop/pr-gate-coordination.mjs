@@ -1342,7 +1342,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // ADR 0271: a round of PR-body items only has no fixer route; its exit is the body-only converged post, named in the cap refusal below.
   const bodyOnlyList = headActList && actList.bodyOnly === true;
   // AC7: a forecast with a failed growth read stops the lane like a growth stop, so a transient read failure never clears it; only an operator decision does.
-  const growthUnread = input.capBrakes?.growthReadError !== undefined && input.capBrakes.forecastWloc > 0 && input.capBrakes.operatorCleared !== true;
+  const growthUnread = input.capBrakes?.growthReadError !== undefined && input.capBrakes.operatorCleared !== true;
   const capStopApplies = capStop?.action === "operator" && input.capBrakes.operatorCleared !== true;
   if (capStopApplies || growthUnread) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
@@ -1370,7 +1370,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       blockedOn: BLOCKED_ON.OPERATOR_DECISION,
       reason: capStopApplies
         ? `${describeCapStop(capStop, { clearable: input.capBrakes.notClearable !== true })} (${input.capBrakes.gate}).${named}${input.capBrakes.notClearable === true ? " This act set already had its one re-open, so a focus file does not clear it and the decision stays with the operator." : " Clear it with --operator-focus-file <path> on loop gate-coordination."}`
-        : `growth_unread: the growth limit against forecast wloc ${input.capBrakes.forecastWloc} could not be read (${input.capBrakes.growthReadError}) (${input.capBrakes.gate}).${named} A rerun of loop gate-coordination after a successful read re-evaluates growth. Or clear the stop with --operator-focus-file <path> on loop gate-coordination.`,
+        : `growth_unread: the growth limit${input.capBrakes.forecastWloc > 0 ? ` against forecast wloc ${input.capBrakes.forecastWloc}` : ""} could not be read (${input.capBrakes.growthReadError}) (${input.capBrakes.gate}).${named} A rerun of loop gate-coordination after a successful read re-evaluates growth. Or clear the stop with --operator-focus-file <path> on loop gate-coordination.`,
       mergeStateStatus,
       conflictFiles,
       refinementArtifact,

@@ -4544,7 +4544,7 @@ async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, f
     { stdout: "[]\n" },
     { assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: "\n" },
     // The detector reads the review-request status before the linked issue body.
-    ...(linkedIssueBody === undefined ? [] : [{ assertArgs: ["issue", "view", "900", "--repo", "owner/repo", "--json", "body"], stdout: JSON.stringify({ body: linkedIssueBody }) + "\n" }]),
+    ...(linkedIssueBody === undefined ? [] : [{ assertArgs: ["issue", "view", "900", "--repo", "owner/repo", "--json", "body"], ...(linkedIssueBody === null ? { stdout: "", exitCode: 1, stderr: "HTTP 502" } : { stdout: JSON.stringify({ body: linkedIssueBody }) + "\n" }) }]),
   ]);
 }
 
@@ -5670,6 +5670,32 @@ test("a growth size read that throws with a forecast stops the lane instead of r
   assert.equal(failed.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
   assert.match(failed.reason, /growth_unread: .*\(git diff failed\)/);
 });
+
+// Issue 3464 AC5/AC6/AC9: a failed linked-issue body fetch (null body) leaves the forecast unread, so the lane stops with growth_unread instead of warning "no forecast line".
+{
+  const isDraft = false;
+  test(`a failed linked-issue body fetch on a ready PR stops the lane with growth_unread and names the failed read`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-cap-brakes-forecast-unread-"));
+    try {
+      initGitFixture(tempDir, { branch: "main" });
+      await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1 }));
+      const headSha = "abc1234567".repeat(4);
+      const gate = isDraft ? "draft_gate" : "pre_approval_gate";
+      const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+      await mkdir(findings, { recursive: true });
+      await writeSealed(path.join(findings, `${gate}-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate, headSha, verdict: "findings_present", loggedAt: "2026-11-16T00:00:00.000Z", findings: [{ severity: "medium", summary: "x", file: "src/x.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix x" }] }));
+      const body = renderGateReviewCommentBody({ gate, headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
+      const env = await capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody: body, linkedIssueBody: null });
+      const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, evaluateSize: async () => { throw new Error("no size read without a forecast"); } }));
+      assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+      assert.match(result.reason, /growth_unread: .*could not be read \(.*linked issue #900 could not be fetched\)/);
+      assert.match(result.capBrakesWarning, /linked issue #900 could not be fetched/);
+      assert.doesNotMatch(result.capBrakesWarning, /has no `- forecast:/);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
 
 test("detectPrGateCoordinationState forwards --operator-focus-file into the cap brakes: a full file clears the round_cap_reached stop", async () => {
   const stopped = await detectWithPriorLedger("x", { pastCap: true });

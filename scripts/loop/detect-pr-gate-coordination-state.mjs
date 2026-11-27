@@ -628,7 +628,10 @@ async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand
   const firstPresent = evaluated.find((e) => e.artifact && e.artifact.hasACs === true);
   const firstFetched = evaluated.find((e) => e.artifact !== null);
   const allFailed = evaluated.every((e) => e.artifact === null);
-  return { evaluated, refinedIssues, firstPresent, firstFetched, allFailed };
+  // A failed body fetch leaves the forecast unread: with no forecast from another issue, that is a read error and never a missing forecast line.
+  const failedIssues = evaluated.filter((e) => e.artifact === null).map((e) => `#${e.issue}`);
+  const forecastReadFor = (forecastWloc) => (forecastWloc > 0 || failedIssues.length === 0 ? {} : { forecastReadError: `the body of linked issue ${failedIssues.join(", ")} could not be fetched` });
+  return { evaluated, refinedIssues, firstPresent, firstFetched, allFailed, forecastReadFor };
 }
 
 export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerged, expectedIssue = null }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
@@ -662,7 +665,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     // pre_approval_gate refuses a `clean` verdict while unticked AC items
     // remain, reading exactly this field. `_onlyEnforcedWhenDraft: false`
     // keeps the draft-gate missing-enforcement off for ready PRs.
-    const { evaluated, refinedIssues, firstPresent, firstFetched, allFailed } =
+    const { evaluated, refinedIssues, firstPresent, firstFetched, allFailed, forecastReadFor } =
       await evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand, runChild });
     const base = {
       status: "unknown",
@@ -694,6 +697,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       return {
         ...base,
         ...prBodyUncheckedFields,
+        ...forecastReadFor(null),
         reason: `Linked issue(s) ${scopeLabel} detected (${linkedIssues.length}); refinement enforcement is a draft-gate boundary and the PR is not draft. Failed to fetch issue bodies, so the spec-of-record AC data is unavailable.`,
       };
     }
@@ -721,6 +725,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       linkedIssue: (firstPresent ?? firstFetched).issue,
       // The forecast comes from the issue `linkedIssue` names, so the capBrakesWarning names the right gap.
       forecastWloc: (firstPresent ?? firstFetched).forecastWloc ?? null,
+      ...forecastReadFor((firstPresent ?? firstFetched).forecastWloc),
       source: a.source,
       acItems: unionAc.length > 0 ? unionAc : a.acItems,
       uncheckedAcItems: unionUnchecked,
@@ -734,7 +739,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       finding: null,
     };
   }
-  const { evaluated, refinedIssues, firstPresent, firstFetched, allFailed } =
+  const { evaluated, refinedIssues, firstPresent, firstFetched, allFailed, forecastReadFor } =
     await evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand, runChild });
 
   if (firstPresent) {
@@ -743,6 +748,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       status: "present",
       linkedIssue: firstPresent.issue,
       forecastWloc: firstPresent.forecastWloc,
+      ...forecastReadFor(firstPresent.forecastWloc),
       linkedIssues,
       specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE,
       refinedIssues,
@@ -774,6 +780,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
         linkedIssues,
         specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE,
         refinedIssues,
+        ...forecastReadFor(null),
         reason: `Failed to fetch body for linked issue(s) ${scopeLabel}; draft gate cannot verify a refinement artifact, treating as missing.`,
         finding: "missing_refinement_artifact",
       };
@@ -783,6 +790,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       linkedIssue: linkedIssues.length === 1 ? linkedIssues[0] : firstEvaluated.issue,
       linkedIssues,
       refinedIssues,
+      ...forecastReadFor(null),
       reason: `Failed to fetch body for linked issue(s) ${scopeLabel}; refinement status is unknown.`,
     };
   }
@@ -795,6 +803,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     status: "missing",
     linkedIssue: firstFetched.issue,
     forecastWloc: firstFetched.forecastWloc ?? null,
+    ...forecastReadFor(firstFetched.forecastWloc),
     linkedIssues,
     specSource: REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE,
     refinedIssues,
@@ -1475,7 +1484,8 @@ export async function resolveCapBrakes(context, { repoRoot, config, operatorFocu
   if (open.length === 0) return null;
   const forecastWloc = context.refinementArtifact?.forecastWloc ?? null;
   // A failed growth read leaves the growth limit unevaluated (the caller warns); the other brakes still stand.
-  let growth = {}, growthReadError;
+  // A failed linked-issue body fetch left the forecast unread: it is the same stop as a failed size read, never a missing forecast line.
+  let growth = {}, growthReadError = forecastWloc > 0 ? undefined : context.refinementArtifact?.forecastReadError;
   if (forecastWloc > 0) {
     try {
       // The growth diff is `origin/<base>...head`: a stale local ref counts every base commit a merge brought as PR logic, so the ref is fetched first (a stale head is fine, a failed fetch is not).
@@ -1824,7 +1834,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // GATE-EXEC-CAP-BRAKES: an unreadable ledger leaves the brakes unevaluated; the warning keeps that visible (the context writer still refuses the round).
   if (capBrakesError) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the cap brakes could not be evaluated (${capBrakesError.message}); write-gate-context.mjs still refuses the round-count brake of the next gate round, but only this detector evaluates the growth limit.`;
   // GATE-EXEC-CAP-BRAKES: a judged round with no forecast to compare has no growth limit; the warning names the gap and the lane does not stop.
-  else if (capBrakes?.growthReadError !== undefined) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the growth limit could not be evaluated (${capBrakes.growthReadError}); with a forecast the lane stops until a rerun reads it or an operator decision clears it, and the other cap brakes still apply.`;
+  else if (capBrakes?.growthReadError !== undefined) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the growth limit could not be evaluated (${capBrakes.growthReadError}); the lane stops until a rerun reads it or an operator decision clears it, and the other cap brakes still apply.`;
   else if (capBrakes && !(capBrakes.forecastWloc > 0)) result.capBrakesWarning = `GATE-EXEC-CAP-BRAKES (advisory): the growth limit is not evaluated because ${context.refinementArtifact?.linkedIssue ? `linked issue #${context.refinementArtifact.linkedIssue} has no \`- forecast: slice=<id> wloc=<n> files=<paths>\` line with wloc above 0 under \`## Size forecast\`` : "the PR has no linked issue"}.`;
   // ADR 0155: an incomplete fixer disposition is a visible warning, never a block.
   if (context.fixerDisposition?.warning) {

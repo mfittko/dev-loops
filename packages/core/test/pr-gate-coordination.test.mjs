@@ -4882,7 +4882,10 @@ test("a failed growth read with a forecast routes report_blocked until an operat
   assert.equal(stopped.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
   assert.match(stopped.reason, /growth_unread: .*\(git fetch failed\).*rerun.*--operator-focus-file/);
   assert.equal(evaluatePrGateCoordination({ ...base, capBrakes: { ...capBrakes, operatorCleared: true } }).nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
-  assert.equal(evaluatePrGateCoordination({ ...base, capBrakes: { ...capBrakes, forecastWloc: null } }).nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+  // A failed forecast read carries no forecastWloc and stops the same way, naming the read error.
+  const unreadForecast = evaluatePrGateCoordination({ ...base, capBrakes: { ...capBrakes, forecastWloc: null, growthReadError: "the body of linked issue #9 could not be fetched" } });
+  assert.equal(unreadForecast.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, unreadForecast.reason);
+  assert.match(unreadForecast.reason, /growth_unread: the growth limit could not be read \(the body of linked issue #9 could not be fetched\)/);
 });
 
 test("3105 AC15: an eligible open act list wins over a BEHIND-only refresh, and a real conflict still resolves first", () => {
