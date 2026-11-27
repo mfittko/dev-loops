@@ -237,7 +237,10 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
   }
   // Refusal precedence (GATE-EXEC-RERUN-ANGLE): an unknown --rerun-angle name is refused before the
   // eligibility refusal below, so no fallback plan is written for a typo.
-  const knownAngles = Array.isArray(log.provenance?.perAngle) ? log.provenance.perAngle.map((a) => a?.angle) : [];
+  const knownAngles = [
+    ...(Array.isArray(log.provenance?.perAngle) ? log.provenance.perAngle.map((a) => a?.angle) : []),
+    ...(Array.isArray(log.findings) ? log.findings.map((f) => (typeof f?.angle === "string" ? f.angle.trim() : null)) : []),
+  ];
   const unknownRerun = rerunAngles.filter((a) => !knownAngles.includes(a));
   if (unknownRerun.length > 0) {
     throw Object.assign(new Error(`--rerun-angle names no angle in the prior findings-log: ${unknownRerun.join(", ")}`), { code: "unknown_rerun_angle" });
@@ -339,6 +342,8 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
   // single-row match is eligible for carry-with-findings below.
   const ambiguousAngles = new Set();
   const priorFindingsByAngle = new Map();
+  // A finding whose angle has no perAngle row cannot be proved clean, so that angle re-runs (never carried).
+  const orphanAngles = new Set();
   for (const finding of Array.isArray(log.findings) ? log.findings : []) {
     const rawAngle = finding && typeof finding.angle === "string" ? finding.angle.trim() : "";
     if (rawAngle.length === 0) {
@@ -348,7 +353,8 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
     if (rawAngle === COPILOT_BODY_ANGLE && !prevAnglesByLowerBase.has(COPILOT_BODY_ANGLE)) continue;
     const matches = prevAnglesByLowerBase.get(baseAngleName(rawAngle).toLowerCase());
     if (!matches || matches.length === 0) {
-      throw new Error(`prior gate findings-log has a finding for angle ${JSON.stringify(rawAngle)}, which matches no provenance.perAngle entry — cannot prove that angle is clean (fail-closed)`);
+      orphanAngles.add(rawAngle);
+      continue;
     }
     if (matches.length > 1) {
       for (const angle of matches) ambiguousAngles.add(angle);
@@ -359,16 +365,24 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
     priorFindingsByAngle.get(angle).push(finding);
   }
 
+  const orphanRerun = [...orphanAngles].map((angle) => ({
+    angle,
+    reason: rerunAngles.includes(angle) ? "operator_rerun" : "angle returned a finding at the prior head but has no provenance.perAngle entry, so it cannot be proved clean and re-runs (fail-closed)",
+  }));
+
   if (incrementalFiles.some(isDevLoopConfigSourcePath)) {
     return {
       prevHead: headSha,
       carried: [],
-      mustRerun: prevAngles.map((angle) => ({ angle, reason: rerunAngles.includes(angle) ? "operator_rerun" : "incremental delta changed a dev-loop config source; every angle must re-run" })),
+      mustRerun: [
+        ...prevAngles.map((angle) => ({ angle, reason: rerunAngles.includes(angle) ? "operator_rerun" : "incremental delta changed a dev-loop config source; every angle must re-run" })),
+        ...orphanRerun,
+      ],
     };
   }
 
   const carried = [];
-  const mustRerun = [];
+  const mustRerun = [...orphanRerun];
   const AMBIGUOUS_FINDING_REASON = "angle returned a finding at the prior head that matches more than one provenance.perAngle entry — attribution is ambiguous, so it never carries forward regardless of the delta (fail-closed)";
   for (const angle of prevAngles) {
     if (rerunAngles.includes(angle)) {
