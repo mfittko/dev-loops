@@ -4815,7 +4815,7 @@ test("3105 AC15: a posted findings_present draft_gate verdict with an open act l
   assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, blocked.reason);
 });
 
-test("an act-list fix pass pushed in the full phase goes to the next gate round with no delta record", () => {
+test("an act-list fix pass pushed in the full phase routes the pushed head to the next gate round from an input that carries no delta-record field", () => {
   const reviewed = "ab".repeat(20);
   const pushed = "cd".repeat(20);
   const verdict = { visible: true, headSha: reviewed, verdict: "findings_present", contractComplete: true };
@@ -4823,8 +4823,10 @@ test("an act-list fix pass pushed in the full phase goes to the next gate round 
   const atReviewedHead = evaluatePrGateCoordination({ ...base, currentHeadSha: reviewed, draftOpenActList: { headSha: reviewed, openActCount: 2, blockers: [] } });
   assert.equal(atReviewedHead.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, atReviewedHead.reason);
   assert.match(atReviewedHead.agentRemedy.command, /--phase full /);
-  // The fixer pushed a new head: no verdict stands at it, so the next step is the gate round, with no delta record read.
-  const atPushedHead = evaluatePrGateCoordination({ ...base, currentHeadSha: pushed });
+  // The fixer pushed a new head: no verdict stands at it, so the next step is the gate round. The evaluator is pure, so the input itself must carry no delta-record field.
+  const pushedInput = { ...base, currentHeadSha: pushed };
+  assert.deepEqual(Object.keys(pushedInput).filter((key) => /delta/i.test(key)), []);
+  const atPushedHead = evaluatePrGateCoordination(pushedInput);
   assert.equal(atPushedHead.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, atPushedHead.reason);
 });
 

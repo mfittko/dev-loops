@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { parseAllowedRefsCsv, requireTokenValue } from "../_cli-primitives.mjs";
 import { containsBareCopilotSummon, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -660,77 +661,88 @@ const resolveThreadRejection = (args) => resolveThreadDisposition("reject", args
 
 const NO_EVIDENCE_ONLY_RATIONALE_TEXT = "the judge recorded no rationale text for this evidence-only remedy";
 
+// One close loop for the act passes below: select(thread, marker) returns the evidence to close with (falsy leaves the thread open),
+// message(marker, summary, evidence) builds the reply, and label names the pass in a commentId failure.
+async function runActClosePass({ label, repo, pr, threads, snapshot, login, allowedRefs = [] }, { env, ghCommand, runChild }, select, message) {
+  let closed = 0;
+  const dispositionFailures = [];
+  for (const thread of threads) {
+    if (thread.isResolved || thread.author !== login) continue;
+    const marker = parseFindingMarker(thread.body);
+    if (!marker) continue;
+    const failure = (error) => dispositionFailures.push({ commentId: thread.commentId, threadId: thread.threadId, severity: marker.severity, angle: marker.angle, error: error instanceof Error ? error.message : String(error) });
+    try {
+      const evidence = await select(thread, marker);
+      if (!evidence) continue;
+      if (!Number.isInteger(thread.commentId) || thread.commentId <= 0) {
+        failure(`${label} thread ${thread.threadId} has no valid root commentId (${String(thread.commentId)}); left open`);
+        continue;
+      }
+      const summary = escapeProse(extractFindingSummary(thread.body)).replace(/"/g, "'");
+      await replyAndMaybeResolve(
+        { repo, pr, commentId: thread.commentId, threadId: thread.threadId, body: message(marker, summary, evidence), resolve: true, validatedSnapshot: snapshot, allowedRefs },
+        { env, ghCommand, runChild },
+      );
+      closed += 1;
+    } catch (err) {
+      failure(err);
+    }
+  }
+  return { closed, dispositionFailures };
+}
+
 // Evidence-only act close (GATE-EXEC-THREAD-DISPOSITION): a gate-authored thread whose every
 // marker the judge disposed `act` with remedyKind evidence_only never reaches the fixer (isOpenActItem),
 // so this pass replies and resolves it with no stamp and no filing.
-async function runEvidenceOnlyClosePass({ repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, allowedRefs = [] }, { env, ghCommand, runChild }) {
-  let evidenceOnlyClosed = 0;
-  const dispositionFailures = [];
-  for (const thread of threads) {
-    if (thread.isResolved || thread.author !== login) continue;
-    const marker = parseFindingMarker(thread.body);
-    if (!marker) continue;
-    const failure = (error) => dispositionFailures.push({ commentId: thread.commentId, threadId: thread.threadId, severity: marker.severity, angle: marker.angle, error: error instanceof Error ? error.message : String(error) });
-    try {
-      const judgement = await resolveThreadDisposition("act", { fp: marker.fp, threadBody: thread.body, findings, repo, pr, gate, headSha, tmpRoot, repoRoot });
-      if (!judgement) continue;
-      if (!Number.isInteger(thread.commentId) || thread.commentId <= 0) {
-        failure(`evidence-only act thread ${thread.threadId} has no valid root commentId (${String(thread.commentId)}); left open`);
-        continue;
-      }
-      const summary = escapeProse(extractFindingSummary(thread.body)).replace(/"/g, "'");
+async function runEvidenceOnlyClosePass({ repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, allowedRefs = [] }, gh) {
+  const { closed, dispositionFailures } = await runActClosePass(
+    { label: "evidence-only act", repo, pr, threads, snapshot, login, allowedRefs },
+    gh,
+    (thread, marker) => resolveThreadDisposition("act", { fp: marker.fp, threadBody: thread.body, findings, repo, pr, gate, headSha, tmpRoot, repoRoot }),
+    (marker, summary, judgement) => {
       const rationale = escapeProse(neutralizeBareIssuePrIds(judgement.rationale ?? NO_EVIDENCE_ONLY_RATIONALE_TEXT)).replace(/[.\s]+$/u, "");
-      const message = `${GATE_REJECT_CLOSE_REPLY_PREFIX}round ${round}, fingerprint ${marker.fp}, severity ${marker.severity}, angle ${marker.angle}): Examined on merits: "${summary}" was accepted by the judge with an evidence-only remedy, so no file change applies — ${rationale}.`;
-      await replyAndMaybeResolve(
-        { repo, pr, commentId: thread.commentId, threadId: thread.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
-        { env, ghCommand, runChild },
-      );
-      evidenceOnlyClosed += 1;
-    } catch (err) {
-      failure(err);
-    }
+      return `${GATE_REJECT_CLOSE_REPLY_PREFIX}round ${round}, fingerprint ${marker.fp}, severity ${marker.severity}, angle ${marker.angle}): Examined on merits: "${summary}" was accepted by the judge with an evidence-only remedy, so no file change applies — ${rationale}.`;
+    },
+  );
+  return { evidenceOnlyClosed: closed, dispositionFailures };
+}
+
+// True when ancestor is a different commit that the repo's history places strictly before head (any git error fails closed).
+function isStrictAncestor(ancestor, head, repoRoot) {
+  if (ancestor.toLowerCase() === head.toLowerCase()) return false;
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", ancestor, head], { cwd: repoRoot, env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_COMMON_DIR: undefined }, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
   }
-  return { evidenceOnlyClosed, dispositionFailures };
 }
 
 // Fixed act close (GATE-EXEC-THREAD-DISPOSITION): the full-phase fix pass posts no reply and resolves no thread, so a
-// later round closes the thread of a judge-act code finding it does not raise again. Only prior-ledger act evidence counts
-// (a marker the current ledger still carries stays with the fixer), and the two remedy kinds above keep their own passes.
-async function runFixedActClosePass({ repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, allowedRefs = [] }, { env, ghCommand, runChild }) {
-  let fixedActClosed = 0;
-  const dispositionFailures = [];
-  for (const thread of threads) {
-    if (thread.isResolved || thread.author !== login) continue;
-    const marker = parseFindingMarker(thread.body);
-    if (!marker) continue;
-    const failure = (error) => dispositionFailures.push({ commentId: thread.commentId, threadId: thread.threadId, severity: marker.severity, angle: marker.angle, error: error instanceof Error ? error.message : String(error) });
-    try {
+// later round that judged the fix closes the thread of a judge-act code finding it does not raise again. Only a settled round
+// (verdict clean or findings_present) that freshly reviewed the thread's angle counts, and only prior-ledger act evidence whose
+// head is a strict ancestor of the current head (a fix commit landed after the act round). A marker the current ledger still
+// carries stays with the fixer, and the two remedy kinds above keep their own passes.
+async function runFixedActClosePass({ repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, verdict, provenance, allowedRefs = [] }, gh) {
+  if (verdict !== "clean" && verdict !== "findings_present") return { fixedActClosed: 0, dispositionFailures: [] };
+  const freshAngles = new Set((Array.isArray(provenance?.perAngle) ? provenance.perAngle : []).filter((e) => e && typeof e.angle === "string" && !e.carriedFromHead).map((e) => e.angle));
+  const { closed, dispositionFailures } = await runActClosePass(
+    { label: "fixed act", repo, pr, threads, snapshot, login, allowedRefs },
+    gh,
+    async (thread, marker) => {
+      if (!freshAngles.has(marker.angle)) return false;
       const fps = new Set([marker.fp]);
       collectFingerprints(thread.body, fps);
-      let primary = null;
       for (const memberFp of fps) {
-        if (findings.some((f) => f && findingFingerprintMatches(f, memberFp))) { primary = null; break; }
+        if (findings.some((f) => f && findingFingerprintMatches(f, memberFp))) return false;
         const prior = await findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp: memberFp });
-        if (!prior || prior.ambiguous || prior.disposition !== "act" || prior.remedyKind) { primary = null; break; }
-        primary ??= prior;
+        if (!prior || prior.ambiguous || prior.disposition !== "act" || prior.remedyKind || !prior.headSha || !isStrictAncestor(prior.headSha, headSha, repoRoot)) return false;
       }
-      if (!primary) continue;
-      if (!Number.isInteger(thread.commentId) || thread.commentId <= 0) {
-        failure(`fixed act thread ${thread.threadId} has no valid root commentId (${String(thread.commentId)}); left open`);
-        continue;
-      }
-      const summary = escapeProse(extractFindingSummary(thread.body)).replace(/"/g, "'");
-      const message = `${GATE_REJECT_CLOSE_REPLY_PREFIX}round ${round}, fingerprint ${marker.fp}, severity ${marker.severity}, angle ${marker.angle}): Examined on merits: "${summary}" was accepted by the judge in an earlier round, a fix pass pushed, and the round at head ${headSha} did not raise it again.`;
-      await replyAndMaybeResolve(
-        { repo, pr, commentId: thread.commentId, threadId: thread.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
-        { env, ghCommand, runChild },
-      );
-      fixedActClosed += 1;
-    } catch (err) {
-      failure(err);
-    }
-  }
-  return { fixedActClosed, dispositionFailures };
+      return true;
+    },
+    (marker, summary) => `${GATE_REJECT_CLOSE_REPLY_PREFIX}round ${round}, fingerprint ${marker.fp}, severity ${marker.severity}, angle ${marker.angle}): Examined on merits: "${summary}" was accepted by the judge in an earlier round, a fix pass pushed, and the round at head ${headSha} did not raise it again.`,
+  );
+  return { fixedActClosed: closed, dispositionFailures };
 }
 
 // The gate context sits in the reviewed worktree while the ledger sits in the main checkout. repoRoot is the reviewed worktree, so
@@ -955,7 +967,7 @@ export function parseCloseGateFindingsCliArgs(argv) {
 // ---------------------------------------------------------------------------
 
 export async function closeGateFindings(options, { env = process.env, ghCommand = "gh", runChild, repoRoot = process.cwd() } = {}) {
-  const { repo, pr, gate, headSha, findings, prBodySha256: ledgerBodySha256 } = await readGateFindingsLedger(options.ledgerPath, { errorFactory: parseError });
+  const { repo, pr, gate, headSha, findings, verdict, provenance, prBodySha256: ledgerBodySha256 } = await readGateFindingsLedger(options.ledgerPath, { errorFactory: parseError });
   // The findings-log ledger (resolveGateRound's local-count cross-check) is
   // anchored at the MAIN worktree; default there so a close running
   // inside a linked worktree still counts the centralized prior-round ledgers.
@@ -1037,7 +1049,7 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
     gh,
   );
   const { fixedActClosed, dispositionFailures: fixedActFailures } = await runFixedActClosePass(
-    { repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, allowedRefs: options.allowedRefs ?? [] },
+    { repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, verdict, provenance, allowedRefs: options.allowedRefs ?? [] },
     gh,
   );
   const unresolvedGateThreadCount = countUnresolvedGateAuthoredThreads(threads, login) - deferredResolved - rejectClosed - evidenceOnlyClosed - prBodyActClosed - fixedActClosed;

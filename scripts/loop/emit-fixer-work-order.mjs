@@ -62,7 +62,7 @@ the PR's own head branch (gh pr view headRefName) and the --allowed-path selecto
 (default "." = the whole repository). A PR head other than --head-sha refuses.
 An --act-list-file source without --ci-file also refuses with verdict_not_posted until the --gate verdict review for --head-sha is posted on the PR (GATE-EXEC-POST-BEFORE-FIX; post it with dev-loops gate upsert-verdict --findings-ledger).
 An --act-list-file of only PR-body items refuses with delta_body_only_act_set (no fixer commit applies; edit the PR body and post the body-only converged verdict) and writes no marker.
-A commit_only emission writes its sequence marker under the head's sequence lock (the keyed no-commit re-emission below and every full emission write none); while a concurrent close or pull holds that lock it refuses with sequence_lock_busy (retryable: no work order was made current, re-run the same emit once the close or pull finishes).
+Every emission renames its plan under the head's sequence lock, and only a commit_only emission writes a sequence marker (the keyed no-commit re-emission below and every full emission write none); while a concurrent close or pull holds that lock an emission refuses with sequence_lock_busy (retryable: no work order was made current, re-run the same emit once the close or pull finishes).
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
 (default: the main checkout's tmp/; an explicit --tmp-root inside a linked worktree is refused) and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef }.
@@ -225,13 +225,13 @@ const CI_RED_HANDBACK = "hand back `ci_failed` with the failing check names";
 const CI_UNSETTLED_HANDBACK = "hand back `ci_pending` (`ci_unknown` when the checks cannot be read)";
 
 // The push, remote-head, CI-wait and one-line-handoff steps that end a ci-failure order, a gate fix order and a delivery-only order.
-function pushWaitHandoffSteps(workOrder, dispositionPath, push) {
+function pushWaitHandoffSteps(workOrder, dispositionPath, push, replyStep = null) {
   const { branch, wait } = branchAndWait(workOrder);
   return `Do these steps in this order; none may be skipped or reordered:
 1. ${push}
 2. Confirm the remote head equals the pushed commit: run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}; it must print the pushed commit SHA. If it does not, stop and report.
 3. Run \`${wait}\`. ${WAIT_STEP_RULES} If CI is red (\`failure\`), ${CI_RED_HANDBACK}. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, ${CI_UNSETTLED_HANDBACK}.
-4. Only when CI is green, write the handoff \`{ "headSha": "<full pushed SHA>" }\` to \`${dispositionPath}\` with the Write tool. This is the last step.
+${replyStep ? `4. Only when CI is green, ${replyStep}\n5.` : "4."} Only when CI is green, write the handoff \`{ "headSha": "<full pushed SHA>" }\` to \`${dispositionPath}\` with the Write tool. This is the last step.
 Edit rule: write file content only with the Edit and Write tools. Never write file content through Bash (heredoc, redirect, \`sed -i\`, or cp/mv onto a tracked file).`;
 }
 
@@ -243,11 +243,14 @@ function ciFailureFullTask(workOrder, dispositionPath) {
 ${pushWaitHandoffSteps(workOrder, dispositionPath, `Commit the fixes and push them to branch ${JSON.stringify(workOrder.mutationAuthority.branch)}.`)}`;
 }
 
+// A Copilot or human thread has no gate marker, so the fixer that knows each outcome posts the replies (the verifier posts none on this route).
+const THREADS_REPLY_STEP = "reply to each thread you fixed and resolve it, citing the full pushed head SHA, with `reply-resolve-review-threads.mjs --disposition fixed --resolve`; on each thread you declined (and on every thread after a full decline, which has no commit to cite) post a `rejected` or `deferred` reply with `--disposition rejected|deferred` and no `--resolve`.";
+
 // A gate fix pass (an act list or the unresolved threads) pushes in the full phase and ends like a ci-failure order: the next gate round judges the fix at the pushed head.
 function gateFixFullTask(workOrder, dispositionPath) {
   const read = workOrder.requiredReads.find((entry) => entry.kind === workOrder.source);
-  return `Fix every item the \`${workOrder.source}\` read (${JSON.stringify(read.path)}) names, per agents/fixer.agent.md.${workOrder.source === "threads" ? threadsReadSentence(workOrder) : ""} Post no thread reply and resolve no thread: the next gate round judges the fix at the pushed head. When you decline every item and make no commit, run no step below except step 4, with the unchanged head SHA.
-${pushWaitHandoffSteps(workOrder, dispositionPath, `Commit the fixes and push them to branch ${JSON.stringify(workOrder.mutationAuthority.branch)}.`)}`;
+  return `Fix every item the \`${workOrder.source}\` read (${JSON.stringify(read.path)}) names, per agents/fixer.agent.md.${workOrder.source === "threads" ? threadsReadSentence(workOrder) : ""} ${workOrder.source === "threads" ? "Reply to each thread only at step 4 below" : "Post no thread reply and resolve no thread"}: the next gate round judges the fix at the pushed head. When you decline every item and make no commit, run no CI wait and no push: ${workOrder.source === "threads" ? "post the step 4 \`rejected\` or \`deferred\` replies, then " : ""}write the \`{ "headSha": "<unchanged head SHA>" }\` handoff.
+${pushWaitHandoffSteps(workOrder, dispositionPath, `Commit the fixes and push them to branch ${JSON.stringify(workOrder.mutationAuthority.branch)}.`, workOrder.source === "threads" ? THREADS_REPLY_STEP : null)}`;
 }
 
 // The numbered full-phase steps (issue 2787 C1): push, confirm the remote head, wait for CI, --construct, verify, --check.
@@ -387,6 +390,7 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
   if (String(prState.headRefOid ?? "").toLowerCase() !== headSha) refuse(`PR head is ${prState.headRefOid}, not --head-sha ${headSha}`);
   // The candidate is the committed local HEAD: pushed (the PR head) or not yet pushed (the PR head is still the plan head).
   const candidate = gitIn(cwd, "rev-parse", "HEAD");
+  assertBranchHeadClean(cwd, prState.headRefName, candidate); // First, so a wrong cwd refuses with the worktree refusal and never names another checkout's HEAD.
   if (![prior.headSha, candidate].includes(headSha)) refuse(`PR head ${headSha} is neither the plan head ${prior.headSha} nor the local HEAD ${candidate}; run a full gate round`);
   const receiptTmpRoot = resolveGateArtifactTmpRoot(cwd);
   const read = async (file) => { const bytes = await capture.read(file); if (!bytes) throw Object.assign(new Error(`missing ${file}`), { code: "ENOENT" }); return bytes; };

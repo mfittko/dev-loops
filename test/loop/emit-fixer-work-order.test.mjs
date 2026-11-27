@@ -920,6 +920,18 @@ test("an act-list source and a threads source emit a full-phase order with no de
       assert.doesNotMatch(text, /pre-push-delta|delta review|delta record|--construct/);
       assert.match(text, /write the handoff `\{ "headSha": "<full pushed SHA>" \}`/);
       assert.match(text, /the next gate round judges the fix at the pushed head/);
+      assert.match(text, /decline every item and make no commit, run no CI wait and no push:/);
+      assert.match(text, /write the `\{ "headSha": "<unchanged head SHA>" \}` handoff/);
+      assert.doesNotMatch(text, /run no step below except step 4/);
+      if (source === "threads") {
+        // The fixer knows each thread's outcome, so it posts the replies after green CI and before the handoff.
+        assert.match(text, /4\. Only when CI is green, reply to each thread you fixed and resolve it, citing the full pushed head SHA, with `reply-resolve-review-threads\.mjs --disposition fixed --resolve`/);
+        assert.match(text, /post a `rejected` or `deferred` reply with `--disposition rejected\|deferred` and no `--resolve`/);
+        assert.match(text, /5\. Only when CI is green, write the handoff/);
+      } else {
+        assert.match(text, /Post no thread reply and resolve no thread/);
+        assert.doesNotMatch(text, /reply-resolve-review-threads/);
+      }
     }
     assert.equal(existsSync(marker), false, "a full emission writes no sequence marker");
     const state = existsSync(path.dirname(marker)) ? (await readdir(path.dirname(marker))).filter((name) => /\.(sequence|json|seal)$/.test(name)) : [];
@@ -3578,6 +3590,14 @@ test("C1: --completion-only refuses a PR head that is neither the plan head nor 
     await assert.rejects(reenter(fx, "ACT", { headSha: third, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: third }) }), /is neither the plan head .* nor the local HEAD/);
     assert.deepEqual(await readFile(old.planPath), plan);
     assert.equal((await readdir(path.join(path.dirname(old.planPath), "work-orders"))).some((name) => name.includes(third)), false);
+  });
+});
+
+test("AC1b: --completion-only from a checkout on another branch refuses with the worktree refusal, not the local HEAD refusal", async () => {
+  await withFixture(async (fx) => {
+    await pulledFull(fx, "ACT");
+    const live = git(fx.wt, "rev-parse", "HEAD");
+    await assert.rejects(reenter(fx, "ACT", { cwd: fx.root, headSha: live, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: live }) }), /candidate branch, HEAD or clean committed authority changed/);
   });
 });
 

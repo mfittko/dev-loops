@@ -7863,7 +7863,7 @@ test("renderBriefingVolatile: the known-findings line keeps the open-or-resolved
   const render = (gate) => renderBriefingVolatile({ gate, headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z", knownFindingsRead: read, worktreeRoot: "/wt" });
   for (const gate of ["draft_gate", "pre_approval_gate"]) {
     const text = render(gate);
-    assert.match(text, /Known findings \(do not duplicate an open thread\): 2 threads/);
+    assert.match(text, /Known findings \(re-check each listed thread, open or resolved, at this head\): 2 threads/);
     assert.doesNotMatch(text, /or resolved thread already covers/);
     assert.doesNotMatch(text, /see below/);
   }
@@ -7871,11 +7871,12 @@ test("renderBriefingVolatile: the known-findings line keeps the open-or-resolved
   assert.match(render("pre_approval_gate"), /assess it in this full round/);
 });
 
-test("renderBriefingVolatile: both gates tell the reviewer to re-check each resolved thread at this head and never say a resolved thread needs no reassessment (issue 2937)", () => {
+test("renderBriefingVolatile: both gates tell the reviewer to re-check each listed thread, open or resolved, at this head and never say a resolved thread needs no reassessment (issue 2937)", () => {
   const read = { kind: "known-findings", path: "tmp/x.known-findings.json", sha256: "b".repeat(64), bytes: 10, entries: 2, required: true };
   for (const gate of ["draft_gate", "pre_approval_gate"]) {
     const text = renderBriefingVolatile({ gate, headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z", knownFindingsRead: read, worktreeRoot: "/wt" });
-    assert.match(text, /Re-check each resolved thread at this head and raise it again if its fix is missing\./, gate);
+    assert.match(text, /Raise a listed thread again with the same summary when its fix is missing at this head\./, gate);
+    assert.doesNotMatch(text, /do not duplicate an open thread/, gate);
     assert.doesNotMatch(text, /needs no reassessment/, gate);
   }
 });

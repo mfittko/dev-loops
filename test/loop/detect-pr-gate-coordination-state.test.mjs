@@ -4568,15 +4568,15 @@ for (const { name, isDraft, seal, expected } of [
   });
 }
 
-// Issue 2787 C11: a ci-failure fixer plan has no thread to verify, so the ADR 0155 advisory check skips it.
-for (const [source, advisory] of [["ci-failure", false], ["threads", true]]) test(`an active full ${source} plan ${advisory ? "raises" : "raises no"} unverified_active_fixer advisory`, async () => {
+// Issue 2787 C11, issue 2937: a ci-failure, act-list or threads fixer plan hands back only { headSha }, so the ADR 0155 advisory check skips it; a review-body plan keeps the check.
+for (const [source, advisory, requiredReads] of [["ci-failure", false, []], ["act-list", false, []], ["threads", false, []], ["review-body", true, []], ["threads", true, [{ kind: "delta-result" }]], ["act-list", true, [{ kind: "completion-input" }]]]) test(`an active full ${source} plan with reads [${requiredReads.map((read) => read.kind)}] ${advisory ? "raises" : "raises no"} unverified_active_fixer advisory`, async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-ci-failure-"));
   try {
     initGitFixture(tempDir);
     const head = "a".repeat(40);
     const fixerDir = path.join(tempDir, "tmp", "gate-fixer", "owner-repo", "pr-9");
     await mkdir(path.join(fixerDir, "f1-0000abcd"), { recursive: true });
-    const workOrder = { role: "fixer", phase: "full", source, target: { repo: "owner/repo", pr: 9 }, headSha: head, outputRefs: [path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json")], requiredReads: [] };
+    const workOrder = { role: "fixer", phase: "full", source, target: { repo: "owner/repo", pr: 9 }, headSha: head, outputRefs: [path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json")], requiredReads };
     await writeFile(path.join(fixerDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder), executionIdentity: "f1-0000abcd" }));
     const result = await resolveFixerDispositionInput({ repo: "owner/repo", pr: 9, currentHeadSha: head, parsedThreads: { threads: [], comments: [] } }, { repoRoot: tempDir });
     if (advisory) assert.match(result.incomplete[0].failedStep, /^unverified_active_fixer/);
