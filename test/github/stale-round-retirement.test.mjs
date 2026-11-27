@@ -577,47 +577,93 @@ const NEW_BODY = "b".repeat(64);
 const bodyItem = { angle: "scope", severity: "medium", summary: "body", judgeDisposition: "act", remedyKind: "pr_body" };
 const codeItem = { angle: "correctness", severity: "medium", summary: "code", file: "src/a.mjs", judgeDisposition: "act" };
 
-async function withPostedRound(gate, findings, fn, prBodySha256 = OLD_BODY) {
+// Two units: `coverage` reads no PR body and keeps its artifacts, `scope` reads it and reruns.
+const unitsOf = (gate) => {
   const prefix = gate === "draft_gate" ? "draft-gate" : "pre-approval-gate";
+  return { prefix, bodyReadingUnits: [{ scope: `${prefix}-scope`, angles: ["scope"] }] };
+};
+
+async function withPostedRound(gate, findings, fn, prBodySha256 = OLD_BODY) {
+  const { prefix, bodyReadingUnits } = unitsOf(gate);
   const key = { ...KEY, gate };
   const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "stale-round-"));
   try {
-    await writeFile(path.join(tmpRoot, `checkpoint-context-sentinel-${prefix}-coverage-${HEAD}.json`), "{}");
-    await writeFile(path.join(tmpRoot, `checkpoint-dispatch-prompt-${prefix}-coverage-${HEAD}.json`), "{}");
     const dir = buildGateReviewsDir({ ...key, tmpRoot });
     await mkdir(dir, { recursive: true });
-    await writeFile(path.join(dir, "coverage.json"), JSON.stringify({ angle: "coverage", verdict: "clean", headSha: HEAD, findings: [] }));
+    for (const angle of ["coverage", "scope"]) {
+      await writeFile(path.join(tmpRoot, `checkpoint-context-sentinel-${prefix}-${angle}-${HEAD}.json`), "{}");
+      await writeFile(path.join(tmpRoot, `checkpoint-dispatch-prompt-${prefix}-${angle}-${HEAD}.json`), "{}");
+      await writeFile(path.join(dir, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: HEAD, findings: [] }));
+    }
     const log = buildLogPath({ ...key, tmpRoot });
     await mkdir(path.dirname(log), { recursive: true });
     await writeFile(log, JSON.stringify({ repo: key.repo, pr: key.pr, gate, headSha: HEAD, verdict: "findings_present", prBodySha256, findings }));
-    return await fn({ key, tmpRoot, log });
+    return await fn({ key, tmpRoot, log, prefix, dir, bodyReadingUnits });
   } finally {
     await rm(tmpRoot, { recursive: true, force: true });
   }
 }
 
 for (const gate of ["pre_approval_gate", "draft_gate"]) {
-  test(`${gate}: a posted round with only PR-body act items retires when the body digest changed, keeping the ledger as a retained round`, async () => {
-    await withPostedRound(gate, [bodyItem], async ({ key, tmpRoot, log }) => {
-      const result = await retireStaleRound({ ...key, tmpRoot, currentPrBodySha256: NEW_BODY });
+  test(`${gate}: a posted round with only PR-body act items retires only its body-reading units when the body digest changed, keeping the ledger as a retained round`, async () => {
+    await withPostedRound(gate, [bodyItem], async ({ key, tmpRoot, log, prefix, dir, bodyReadingUnits }) => {
+      const result = await retireStaleRound({ ...key, tmpRoot, currentPrBodySha256: NEW_BODY, bodyReadingUnits });
       assert.equal(result.refusal, undefined);
       assert.equal(result.retiredRound.retired, 1);
+      assert.deepEqual(result.bodyOnlyScopes, [`${prefix}-scope`]);
       assert.match(JSON.parse(await readFile(path.join(result.retiredRound.retirementDir, "retirement.json"), "utf8")).reason, /GATE-EXEC-BODY-ONLY-RERUN.*aaaaaaaaaaaa.*bbbbbbbbbbbb/);
       assert.equal(existsSync(log), false);
       assert.equal(existsSync(log.replace(/\.json$/, ".round-1.json")), true);
+      // The body-reading unit's sentinel, dispatch record and artifact moved; the other unit keeps all three.
+      assert.equal(existsSync(path.join(tmpRoot, `checkpoint-context-sentinel-${prefix}-scope-${HEAD}.json`)), false);
+      assert.equal(existsSync(path.join(tmpRoot, `checkpoint-dispatch-prompt-${prefix}-scope-${HEAD}.json`)), false);
+      assert.equal(existsSync(path.join(dir, "scope.json")), false);
+      assert.equal(existsSync(path.join(tmpRoot, `checkpoint-context-sentinel-${prefix}-coverage-${HEAD}.json`)), true);
+      assert.equal(existsSync(path.join(tmpRoot, `checkpoint-dispatch-prompt-${prefix}-coverage-${HEAD}.json`)), true);
+      assert.equal(existsSync(path.join(dir, "coverage.json")), true);
     });
   });
 }
 
-test("a posted round with a non-PR-body open act item, an unchanged body digest or no digest still refuses with the operator recovery", async () => {
+test("a body-only retirement without the caller's body-reading units keeps the refusal", async () => {
+  await withPostedRound("pre_approval_gate", [bodyItem], async ({ key, tmpRoot, log }) => {
+    const result = await retireStaleRound({ ...key, tmpRoot, currentPrBodySha256: NEW_BODY });
+    assert.match(result.refusal.recovery, /^operator: /);
+    assert.equal(existsSync(log), true);
+  });
+});
+
+test("with two verdict roots that each hold a superseded ledger, both ledgers become retained rounds", async () => {
+  await withPostedRound("pre_approval_gate", [bodyItem], async ({ key, tmpRoot, log, bodyReadingUnits }) => {
+    const otherRoot = await mkdtemp(path.join(os.tmpdir(), "stale-round-other-"));
+    try {
+      const otherLog = buildLogPath({ ...key, tmpRoot: otherRoot });
+      await mkdir(path.dirname(otherLog), { recursive: true });
+      await writeFile(otherLog, JSON.stringify({ repo: key.repo, pr: key.pr, gate: key.gate, headSha: HEAD, verdict: "findings_present", prBodySha256: OLD_BODY, findings: [bodyItem] }));
+      const result = await retireStaleRound({ ...key, tmpRoot, verdictRoots: [tmpRoot, otherRoot], currentPrBodySha256: NEW_BODY, bodyReadingUnits });
+      assert.equal(result.refusal, undefined);
+      for (const ledger of [log, otherLog]) {
+        assert.equal(existsSync(ledger), false);
+        assert.equal(existsSync(ledger.replace(/\.json$/, ".round-1.json")), true);
+      }
+    } finally {
+      await rm(otherRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+test("a posted round with a non-PR-body open act item, no open act item, an unchanged, malformed or missing body digest still refuses with the operator recovery", async () => {
   const cases = [
     { findings: [bodyItem, codeItem], digest: NEW_BODY },
     { findings: [bodyItem], digest: OLD_BODY },
     { findings: [bodyItem], digest: undefined },
+    // Every open item closed: the only PR-body item is not act-disposed, so nothing is open.
+    { findings: [{ ...bodyItem, judgeDisposition: "reject" }], digest: NEW_BODY },
+    { findings: [bodyItem], digest: "not-a-hex-digest" },
   ];
   for (const { findings, digest } of cases) {
-    await withPostedRound("pre_approval_gate", findings, async ({ key, tmpRoot, log }) => {
-      const result = await retireStaleRound({ ...key, tmpRoot, currentPrBodySha256: digest });
+    await withPostedRound("pre_approval_gate", findings, async ({ key, tmpRoot, log, bodyReadingUnits }) => {
+      const result = await retireStaleRound({ ...key, tmpRoot, currentPrBodySha256: digest, bodyReadingUnits });
       assert.match(result.refusal.recovery, /^operator: /);
       assert.equal(existsSync(log), true);
     });
@@ -625,16 +671,19 @@ test("a posted round with a non-PR-body open act item, an unchanged body digest 
 });
 
 test("after the automatic retirement a second rebuild resumes without refusing", async () => {
-  await withPostedRound("pre_approval_gate", [bodyItem], async ({ key, tmpRoot, log }) => {
-    assert.equal((await retireStaleRound({ ...key, tmpRoot, currentPrBodySha256: NEW_BODY })).retiredRound.retired, 1);
-    assert.deepEqual(await retireStaleRound({ ...key, tmpRoot, currentPrBodySha256: NEW_BODY }), { retiredRound: null });
-  });
-  // A crash after the ledger moved but before the sentinels did leaves a round with no live ledger; the next rebuild retires it without refusing.
-  await withPostedRound("pre_approval_gate", [bodyItem], async ({ key, tmpRoot, log }) => {
-    await rename(log, log.replace(/\.json$/, ".round-1.json"));
-    const again = await retireStaleRound({ ...key, tmpRoot, currentPrBodySha256: NEW_BODY });
+  await withPostedRound("pre_approval_gate", [bodyItem], async ({ key, tmpRoot, bodyReadingUnits }) => {
+    assert.equal((await retireStaleRound({ ...key, tmpRoot, currentPrBodySha256: NEW_BODY, bodyReadingUnits })).retiredRound.retired, 1);
+    // The ledger is retained, so the second rebuild refuses nothing and retires the units the scoped retirement kept as an ordinary stale round.
+    const again = await retireStaleRound({ ...key, tmpRoot, currentPrBodySha256: NEW_BODY, bodyReadingUnits });
     assert.equal(again.refusal, undefined);
     assert.equal(again.retiredRound.retired, 1);
+  });
+  // A crash after the ledger moved but before the sentinels did leaves a round with no live ledger; the next rebuild retires it without refusing.
+  await withPostedRound("pre_approval_gate", [bodyItem], async ({ key, tmpRoot, log, bodyReadingUnits }) => {
+    await rename(log, log.replace(/\.json$/, ".round-1.json"));
+    const again = await retireStaleRound({ ...key, tmpRoot, currentPrBodySha256: NEW_BODY, bodyReadingUnits });
+    assert.equal(again.refusal, undefined);
+    assert.equal(again.retiredRound.retired, 2);
   });
 });
 

@@ -2360,18 +2360,19 @@ async function resolveOperatorClearedRound(options, { repoRoot, cap, prBase, inc
  * Whether `round` of a gate with cap `cap` is past the scoped final round and not cleared by the operator (GATE-EXEC-CAP-BRAKES): the shared refusal
  * of the draft_gate poster and detector, so the round cap+1 is never refused. `round` is a {@link countCapRounds} count.
  */
-export async function refusesPastScopedRound(options, { repoRoot, prBase, cap, round, includeLiveCurrentHead = false }) {
-  const decision = decideCapRound({ round, cap, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 } });
+export async function refusesPastScopedRound(options, { repoRoot, prBase, cap, round, includeLiveCurrentHead = false, bodySha256 = null }) {
+  // A poster passes the digest the rerun read: the retained round it superseded makes the post a body-only rerun, which is no cap round (GATE-EXEC-BODY-ONLY-RERUN).
+  const bodyOnlyRerun = await isBodyOnlyRerun(options, { repoRoot, bodySha256, includeLiveCurrentHead });  const decision = decideCapRound({ round, cap, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 }, bodyOnlyRerun });
   return decision.reason === "round_cap_reached" && !(await resolveOperatorClearedRound(options, { repoRoot, cap, prBase, includeLiveCurrentHead }));
 }
 
-/** Whether the head's latest ledger (live, or retained once the automatic retirement moved it) is a round of PR-body act items that read an older PR body than `options.prBody` (GATE-EXEC-BODY-ONLY-RERUN). */
-async function isBodyOnlyRerun(options, { repoRoot }) {
-  if (typeof options.prBody !== "string") return false;
+/** Whether the head's latest ledger (live, or retained once the automatic retirement moved it) is a round of PR-body act items that read a PR body other than `bodySha256` (default: `options.prBody`'s digest; GATE-EXEC-BODY-ONLY-RERUN). */
+async function isBodyOnlyRerun(options, { repoRoot, bodySha256 = typeof options.prBody === "string" ? prBodySha256(options.prBody) : null, includeLiveCurrentHead = true }) {
+  if (typeof bodySha256 !== "string") return false;
   const head = String(options.headSha).trim().toLowerCase();
-  const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead: true });
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead });
   const latest = closed.filter((log) => String(log.headSha).trim().toLowerCase().startsWith(head)).at(-1);
-  return Boolean(latest) && bodyOnlySupersededDigest(latest, prBodySha256(options.prBody)) !== null;
+  return Boolean(latest) && bodyOnlySupersededDigest(latest, bodySha256) !== null;
 }
 
 /**
@@ -2383,7 +2384,7 @@ export async function resolveScopedFinalRound(options, { repoRoot, prBase, confi
   if (!(cap > 0)) return null;
   const round = await countCapRounds(options, { repoRoot, prBase, includeLiveCurrentHead: true });
   // Issue 3604: the same-head rerun after a PR-body edit of a round of PR-body act items is no cap round and has no fix to budget.
-  if (await isBodyOnlyRerun(options, { repoRoot }) && decideCapRound({ round, cap, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 }, bodyOnlyRerun: true }).action === "full_round") return null;
+  if (await isBodyOnlyRerun(options, { repoRoot })) return null;
   const closure = round === cap + 1 ? await resolveClosureRound(options, { repoRoot, cap, round }) : null;
   const facts = closure ? await capFixBudgetFacts({ fromHead: closure.fromHead, headSha: options.headSha, prBase, repoRoot }) : { logicLoc: 0, addedFiles: 0 };
   const fixBudget = { ...facts, maxLines: resolveCapFixMaxLines(config) };
@@ -3870,7 +3871,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
     } else {
       // Issue 3416: retire the undispatched or partial round at this head automatically, so the fresh round starts clean.
       // A live round has sentinels or dispatch records; a round with a posted verdict is never retired: the refusal stands, with its recovery.
-      const stale = await retireStaleRound({ ...staleRoundArgs, ...loadedSpecDigests(options), currentPrBodySha256: typeof options.prBody === "string" ? prBodySha256(options.prBody) : null });
+      const stale = await retireStaleRound({ ...staleRoundArgs, ...loadedSpecDigests(options) });
       if (stale.refusal) throw Object.assign(new Error(`${stale.refusal.error} recovery: ${stale.refusal.recovery}`), { recovery: stale.refusal.recovery });
       retiredRound = stale.retiredRound;
       state.retiredRound = retiredRound;

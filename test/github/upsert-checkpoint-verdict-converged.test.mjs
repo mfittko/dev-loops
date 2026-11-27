@@ -264,6 +264,35 @@ test("after the scoped final round a converged post is accepted and a non-conver
   }, { prefix: "dev-loops-converged-capon-n1-" });
 });
 
+// Issue 3604: past the cap the poster publishes the verdict of the body-only rerun: the retained same-head round holds only PR-body act items that read an older body than the context's pr-body read.
+test("past the cap the poster accepts the rerun of a retained body-only round and still refuses the same post when the body did not change", async () => {
+  await withTempDir(async (tempDir) => {
+    const dir = path.join(capOnRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
+    const ctx = path.join(capOnRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    await mkdir(path.dirname(ctx), { recursive: true });
+    for (const c of ["1", "2", "3", "4"]) {
+      const head = c.repeat(40);
+      await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${c}T00:00:00.000Z`, findings: c === "4" ? [{ severity: "medium", summary: "open act", judgeDisposition: "act", judgeFix: "fix it", file: "a.mjs", line: 1 }] : [] }), "utf8");
+    }
+    // Round 5 posted at A with one PR-body act item; the automatic retirement moved its ledger to a retained round.
+    await writeFile(path.join(dir, `draft_gate-${A}.round-1.json`), JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z", prBodySha256: prBodySha256(DEFAULT_TEST_PR_BODY), findings: [{ ...bodyFinding("medium", 1), remedyKind: "pr_body", judgeFix: "edit the PR body", file: "README.md", line: 1 }] }), "utf8");
+    try {
+      const findings = [finding("low", 1), finding("nit", 2)];
+      for (const [body, refused] of [[DEFAULT_TEST_PR_BODY, true], [EDITED_BODY, false]]) {
+        await writeFile(ctx, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(body) }] }), "utf8");
+        const out = await post(tempDir, { findings, verdict: "clean", runChildOptions: { currentHead: A }, root: capOnRoot });
+        if (refused) assert.match(out.error ?? "", /^round_cap_reached: this would be draft_gate round 6 and the cap is 4/);
+        else assert.doesNotMatch(out.error ?? "", /^round_cap_reached/, out.error);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      await rm(ctx, { force: true });
+    }
+  }, { prefix: "dev-loops-converged-capon-bodyonly-rerun-" });
+});
+
 test("3105: a judged log with a medium act item derives findings_present with no --verdict", async () => {
   await withTempDir(async (tempDir) => {
     const judgeVerdict = path.join(tempDir, "judge-verdict.json");

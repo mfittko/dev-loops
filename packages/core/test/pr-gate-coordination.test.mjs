@@ -5168,7 +5168,7 @@ test("cap brakes: a round past the pre_approval_gate scoped final round stops wi
 });
 
 // Issue 3604: a posted round whose open act items are all PR-body items, with the PR body edited since, returns the gate round on a draft and a ready PR, below and past the cap.
-test("body-only retirement (issue 3604): the gate round runs on a draft and on a ready PR, past the cap, instead of a cap stop or the body-only converged post", () => {
+test("body-only retirement (issue 3604): the gate round runs on a ready PR and on a draft PR past the cap, while a draft PR below the cap keeps the converged post", () => {
   const head = "ab".repeat(20);
   const posted = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
   const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
@@ -5177,7 +5177,8 @@ test("body-only retirement (issue 3604): the gate round runs on a draft and on a
   assert.equal(evaluatePrGateCoordination({ ...draft }).nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
   for (const [cap, round] of [[4, 2], [2, 4]]) {
     const draftResult = evaluatePrGateCoordination({ ...draft, bodyOnlyRetire: true, draftRoundRefused: round > cap, capBrakes: { gate: "draft_gate", round, cap, items: [] } });
-    assert.equal(draftResult.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, draftResult.reason);
+    // Below the cap the ADR 0332 body-only converged post stays the route; only a cap-refused draft round reruns.
+    assert.equal(draftResult.nextAction, round > cap ? PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE : PR_CHECKPOINT_ACTION.REPORT_BLOCKED, draftResult.reason);
     const readyResult = evaluatePrGateCoordination({ ...ready, bodyOnlyRetire: true, capBrakes: { gate: "pre_approval_gate", round, cap, items: [] } });
     assert.equal(readyResult.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE, readyResult.reason);
   }

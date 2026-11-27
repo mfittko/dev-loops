@@ -1477,7 +1477,8 @@ export async function resolveBodyOnlyRetire(context, { repoRoot }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{40,64}$/.test(head) || typeof context.prData?.body !== "string") return false;
   const gate = context.prData.isDraft === true ? "draft_gate" : "pre_approval_gate";
-  const logs = await readClosedPriorRoundLogs({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, includeLiveCurrentHead: true }).catch(() => []);
+  const logs = await readClosedPriorRoundLogs({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, includeLiveCurrentHead: true, includeRetainedCurrentHead: true }).catch(() => []);
+  // The latest round at the head: the live ledger, or the retained round once the automatic retirement moved it (the crash-resume state, AC5).
   const last = logs.at(-1);
   return Boolean(last) && String(last.headSha).trim().toLowerCase() === head && bodyOnlySupersededDigest(last, prBodySha256(context.prData.body)) !== null;
 }

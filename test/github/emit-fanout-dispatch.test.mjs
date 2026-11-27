@@ -9,6 +9,7 @@ import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, bui
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, readCompletedAnglesForHead, renderPrBodyRead, renderRequiredReadLine, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
+import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { countFreshDispatchUnits, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
@@ -2946,6 +2947,36 @@ test("issue 3416: an exit-2 failure after the retirement still reports retiredRo
     const second = runEmitCli(args, { cwd: tmpDir });
     assert.equal(second.status, 2, second.stderr || second.stdout);
     assert.equal(JSON.parse(second.stderr.trim().split("\n").at(-1)).retiredRound.dispatchPromptRecords.length, 3);
+  });
+});
+
+test("issue 3604: a posted round of PR-body act items retires only its body-reading unit, keeps the other units and the ledger as a retained round, and emits only the retired unit", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const oldBody = "a".repeat(64);
+    const newBody = "b".repeat(64);
+    const units = [{ name: "contradiction-lens", angles: ["contradiction-lens"] }, { name: "dry", angles: ["dry"] }];
+    await seedBundle(tmpDir, { fanout: { groups: units, pendingGroups: units }, artifactExtra: { requiredReads: [{ kind: "pr-body", path: "tmp/pr-body.md", sha256: newBody }] } });
+    const args = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+    assert.equal(runEmitCli(args, { cwd: tmpDir }).status, 0);
+    // Both units finished: a sentinel and a valid newer artifact each. The `contradiction-lens` unit reads the PR body, the `dry` unit does not.
+    const reviews = path.join(tmpDir, buildGateReviewsDir({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: "tmp" }));
+    await mkdir(reviews, { recursive: true });
+    const sentinels = ["contradiction-lens", "dry"].map((scope) => path.join(tmpDir, "tmp", `${CHECKPOINT_SENTINEL_PREFIX}pre-approval-gate-${scope}-${HEAD_SHA}.json`));
+    for (const sentinel of sentinels) await writeFile(sentinel, "{}", "utf8");
+    for (const angle of ["contradiction-lens", "dry"]) await writeFile(path.join(reviews, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+    const log = path.join(tmpDir, buildLogPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(log), { recursive: true });
+    await writeFile(log, JSON.stringify({ repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA, verdict: "findings_present", prBodySha256: oldBody, findings: [{ angle: "scope", severity: "medium", summary: "body", judgeDisposition: "act", remedyKind: "pr_body" }] }), "utf8");
+    const second = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(second.status, 0, second.stderr || second.stdout);
+    const payload = JSON.parse(second.stdout);
+    assert.deepEqual(payload.units.map((unit) => unit.name), ["contradiction-lens"]);
+    assert.equal(existsSync(sentinels[0]), false);
+    assert.equal(existsSync(path.join(reviews, "contradiction-lens.json")), false);
+    assert.equal(existsSync(sentinels[1]), true);
+    assert.equal(existsSync(path.join(reviews, "dry.json")), true);
+    assert.equal(existsSync(log), false);
+    assert.equal(existsSync(log.replace(/\.json$/, ".round-1.json")), true);
   });
 });
 

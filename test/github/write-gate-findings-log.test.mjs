@@ -8,13 +8,12 @@ import { execFileSync } from "node:child_process";
 import {
   buildLogPath,
   checkProvenanceAngleCoverage,
-  claimRetainedRound,
   parseProvenanceJson,
   parseWriteGateFindingsLogCliArgs,
   verifyEmitPlanProvenance,
   writeGateFindingsLog,
 } from "../../scripts/github/write-gate-findings-log.mjs";
-import { readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
+import { claimRetainedRound, readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { countCompletedRounds } from "../../scripts/github/write-gate-context.mjs";
 import { resolveDraftOpenActList } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { buildGateArtifactPath } from "../../scripts/github/_gate-artifact-paths.mjs";

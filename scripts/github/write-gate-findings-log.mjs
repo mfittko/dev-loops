@@ -1373,7 +1373,6 @@ async function retainSameHeadLedger(fullPath, logPath, roundIdentity) {
   await claimRetainedRound(fullPath, path.join(dir, `${stem}.round-${next}.json`));
   return logPath.replace(/\.json$/, `.round-${next}.json`);
 }
-export { claimRetainedRound };
 async function main() {
   let options;
   try {

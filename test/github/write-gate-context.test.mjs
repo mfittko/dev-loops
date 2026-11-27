@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, link, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { existsSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12076,6 +12076,17 @@ test("resolveScopedFinalRound runs a body-only rerun as a full round past the ca
     const options = { repo: "owner/repo", pr: 68, gate: "draft_gate", headSha };
     assert.equal(await resolveScopedFinalRound({ ...options, prBody: "Edited body" }, { repoRoot, prBase: "main", config: {} }), null);
     await assert.rejects(resolveScopedFinalRound({ ...options, prBody: oldBody }, { repoRoot, prBase: "main", config: {} }), /./);
+    // The draft_gate poster passes the digest the rerun read: past the cap the cap refusal holds for an unchanged body and lifts for the edited one.
+    const cap = 4;
+    const round = await countCapRounds(options, { repoRoot, prBase: "main", includeLiveCurrentHead: true });
+    const past = { repoRoot, prBase: "main", cap, round, includeLiveCurrentHead: true };
+    assert.equal(await refusesPastScopedRound(options, { ...past, bodySha256: prBodySha256(oldBody) }), true);
+    assert.equal(await refusesPastScopedRound(options, past), true);
+    assert.equal(await refusesPastScopedRound(options, { ...past, bodySha256: prBodySha256("Edited body") }), false);
+    // Crash-resume: the emitter moved the live ledger to a retained round; the rerun is still no cap round.
+    await rename(path.join(dir, `draft_gate-${headSha}.json`), path.join(dir, `draft_gate-${headSha}.round-1.json`));
+    assert.equal(await resolveScopedFinalRound({ ...options, prBody: "Edited body" }, { repoRoot, prBase: "main", config: {} }), null);
+    assert.equal(await refusesPastScopedRound(options, { ...past, bodySha256: prBodySha256("Edited body") }), false);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
