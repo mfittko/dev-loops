@@ -8,6 +8,7 @@ import { test } from "bun:test";
 import { renderBriefingPointerLine, sha256Hex, DISPATCH_PROMPT_LEADING_CAP_BYTES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { evaluateDispatchPromptLayout, verifyDispatchPromptLayoutForHead } from "../../scripts/github/verify-dispatch-prompt-layout.mjs";
 import { validateBriefingPrefixPath, dispatchPromptLayoutRecordPath, recordDispatchPromptLayout } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
+import { canonicalizeScope } from "../../scripts/github/_gate-names.mjs";
 import { bindCompactReference } from "../_helpers.mjs";
 
 const COMPACT_REFERENCE = { workOrderRef: `review:o/r#1:draft_gate:abc:draft-gate-coverage`, workOrderDigest: "sha256:d", executionIdentity: "r1-ab-u0" };
@@ -323,6 +324,17 @@ test("recordDispatchPromptLayout binds a >cap prompt by FULL content (not the tr
     await writeEmittedPrompt(tmpDir, "draft-gate-coverage", `${PREFIX_BYTES}## Angle: coverage\n${"x".repeat(DISPATCH_PROMPT_LEADING_CAP_BYTES)}DIFFERENT-TAIL\n`);
     const driftResult = await verifyDispatchPromptLayoutForHead(path.join(tmpDir, "tmp"), HEAD_SHA);
     assert.equal(driftResult.verified, false);
+  });
+});
+
+test("recordDispatchPromptLayout stores a record under the canonicalized scope", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const relPath = await writeGateContextPrefix(tmpDir);
+    const scope = canonicalizeScope("draft_gate-group-docs-surface");
+    const payload = await recordPrompt(tmpDir, scope, relPath, `${PREFIX_BYTES}## Angle: docs\n`);
+    assert.equal(payload.recorded, true);
+    const record = JSON.parse(await readFile(dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-group-docs-surface", HEAD_SHA), "utf8"));
+    assert.equal(record.scope, "draft-gate-group-docs-surface");
   });
 });
 
