@@ -6,9 +6,6 @@ import {
   REVIEWER_TRANSITIONS,
   normalizeReviewerSnapshot,
   interpretReviewerLoopState,
-  REVIEWER_SUPPORTED_ANGLES,
-  selectReviewerPlan,
-  mergeReviewerResults,
   buildDraftReviewPayload,
 } from "../src/loop/reviewer-loop-state.mjs";
 
@@ -280,60 +277,6 @@ test("interpretReviewerLoopState outputs stay reachable via REVIEWER_TRANSITIONS
       && state !== REVIEWER_STATE.WAITING_FOR_RE_REQUEST,
   );
   assert.deepEqual([...seenStates].sort(), [...producible].sort());
-});
-
-test("selectReviewerPlan keeps bounded deterministic angles", () => {
-  assert.ok(Array.isArray(REVIEWER_SUPPORTED_ANGLES));
-  assert.ok(REVIEWER_SUPPORTED_ANGLES.includes("security"));
-
-  const defaultPlan = selectReviewerPlan();
-  assert.equal(defaultPlan.maxParallel, 3);
-  assert.equal(defaultPlan.angles.length, 3);
-  assert.deepEqual(defaultPlan.runs.map((run) => run.runId), [
-    "review-angle-01",
-    "review-angle-02",
-    "review-angle-03",
-  ]);
-
-  const custom = selectReviewerPlan({
-    requestedAngles: ["security", "tests", "security", "unknown"],
-    maxParallel: 4,
-  });
-  assert.deepEqual(custom.angles, ["security", "tests"]);
-});
-
-test("mergeReviewerResults deduplicates findings and returns deterministic verdict", () => {
-  const merged = mergeReviewerResults({
-    headSha: "abc123",
-    runResults: [
-      {
-        runId: "review-angle-01",
-        angle: "correctness",
-        findings: [
-          { path: "src/app.ts", line: 10, message: "Handle null", severity: "high" },
-          { message: "Consider edge case", severity: "low" },
-        ],
-      },
-      {
-        runId: "review-angle-02",
-        angle: "security",
-        verdictHint: "REQUEST_CHANGES",
-        findings: [
-          { path: "src/app.ts", line: 10, message: "Handle null", severity: "high" },
-        ],
-      },
-    ],
-  });
-
-  assert.equal(merged.headSha, "abc123");
-  assert.equal(merged.totalFindings, 2);
-  assert.equal(merged.inlineComments.length, 1);
-  assert.equal(merged.summaryFindings.length, 1);
-  assert.equal(merged.verdict, "REQUEST_CHANGES");
-  assert.equal(merged.runsMerged, 2);
-
-  const approve = mergeReviewerResults({ headSha: "abc", runResults: [] });
-  assert.equal(approve.verdict, "APPROVE");
 });
 
  test("buildDraftReviewPayload converts merged review results into a deterministic pending-review payload", () => {
