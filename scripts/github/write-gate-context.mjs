@@ -2370,7 +2370,10 @@ export async function refusesPastScopedRound(options, { repoRoot, prBase, cap, r
   return decision.reason === "round_cap_reached" && !(await resolveOperatorClearedRound(options, { repoRoot, cap, prBase, includeLiveCurrentHead }));
 }
 
-/** Whether the head's latest ledger (live, or retained once the automatic retirement moved it) is a round of PR-body act items that read a PR body other than `bodySha256` (default: `options.prBody`'s digest; GATE-EXEC-BODY-ONLY-RERUN). */
+/**
+ * Whether the head's latest ledger (live, or retained once the automatic retirement moved it) is a round of PR-body act items that read a PR body other than `bodySha256` (default: `options.prBody`'s digest; GATE-EXEC-BODY-ONLY-RERUN).
+ * With a `config` (issue 3667) it also requires a body-reading angle in the head's gate context `resolvedAngles`, read from the writer's checkout tmp or the ledger tmp root; a missing or unreadable context, or a non-array `resolvedAngles`, gives false.
+ */
 export async function isBodyOnlyRerun(options, { repoRoot, bodySha256 = prBodySha256(options.prBody), includeLiveCurrentHead = true, config = null }) {
   if (typeof bodySha256 !== "string") return false;
   const head = String(options.headSha).trim().toLowerCase();
@@ -2380,13 +2383,18 @@ export async function isBodyOnlyRerun(options, { repoRoot, bodySha256 = prBodySh
   if (config === null) return true;
   // The emitter retires only when a unit holds a body-reading angle (issue 3667); a missing or unreadable context keeps the earlier routing.
   // shortcut: reads the context's resolvedAngles, not the pending units after carry; upgrade if carried-only rounds matter.
-  try {
-    const contextPath = buildGateContextPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) });
-    const { resolvedAngles } = JSON.parse(await readFile(path.resolve(repoRoot, contextPath), "utf8"));
-    return Array.isArray(resolvedAngles) && resolvedAngles.some((angle) => readsPrBody(angle, config));
-  } catch {
-    return false;
+  // The worktree-local live context wins: the writer keeps it under the tmp of the checkout it ran in, while the ledger is main-anchored, so probe every checkout's tmp and then the ledger tmp root.
+  const contextPaths = [
+    ...resolveLedgerCheckouts(repoRoot).map((root) => path.resolve(root, buildGateContextPath({ ...options, tmpRoot: options.tmpRoot || "tmp" }))),
+    path.resolve(repoRoot, buildGateContextPath({ ...options, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) })),
+  ];
+  for (const contextPath of new Set(contextPaths)) {
+    try {
+      const { resolvedAngles } = JSON.parse(await readFile(contextPath, "utf8"));
+      return Array.isArray(resolvedAngles) && resolvedAngles.some((angle) => readsPrBody(angle, config));
+    } catch { /* absent or unreadable at this root: try the next */ }
   }
+  return false;
 }
 
 /**

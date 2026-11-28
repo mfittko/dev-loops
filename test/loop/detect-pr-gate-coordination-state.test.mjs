@@ -5541,6 +5541,37 @@ test("resolveBodyOnlyRetire reads the gate of the PR state, the live and the ret
     assert.equal(await resolveBodyOnlyRetire(ctx(head, true, "Edited body"), { repoRoot: tempDir, config }), true);
     await writeContext([]);
     assert.equal(await resolveBodyOnlyRetire(ctx(head, true, "Edited body"), { repoRoot: tempDir, config }), false, "zero body-reading angles");
+    // A configured angle without a PR-body prompt does not read the body.
+    const nonBodyConfig = { version: 1, gates: { draft: { angles: [{ name: "link-check", prompt: "Check links." }] } } };
+    await writeContext(["link-check"]);
+    assert.equal(await resolveBodyOnlyRetire(ctx(head, true, "Edited body"), { repoRoot: tempDir, config: nonBodyConfig }), false, "only non-body-reading angles");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// Issue 3667: the writer keeps the context under the tmp of the linked worktree it ran in, while the ledger is main-anchored.
+test("resolveBodyOnlyRetire reads the context from a linked worktree tmp while the ledger lives in the main tmp", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "body-only-retire-wt-"));
+  try {
+    const main = path.join(tempDir, "main");
+    const linked = path.join(tempDir, "linked");
+    await mkdir(main, { recursive: true });
+    const git = (...args) => execFileSync("git", args, { cwd: main, stdio: "ignore", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+    git("init", "-q");
+    git("commit", "-q", "--allow-empty", "-m", "init");
+    git("worktree", "add", "-q", linked, "-b", "linked");
+    const head = "1".repeat(40);
+    const ledger = path.join(main, "tmp", "gate-findings", "owner-repo", "pr-10", `draft_gate-${head}.json`);
+    await mkdir(path.dirname(ledger), { recursive: true });
+    await writeFile(ledger, JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-11-01T00:00:00.000Z", prBodySha256: prBodySha256("Original body"), findings: [{ severity: "medium", angle: "scope", summary: "body", judgeDisposition: "act", remedyKind: "pr_body" }] }), "utf8");
+    const context = path.join(linked, buildGateContextPath({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(context), { recursive: true });
+    await writeFile(context, JSON.stringify({ resolvedAngles: ["pr-description"] }), "utf8");
+    const ctx = { repo: "owner/repo", pr: 10, currentHeadSha: head, prData: { isDraft: true, body: "Edited body" } };
+    for (const repoRoot of [main, linked]) {
+      assert.equal(await resolveBodyOnlyRetire(ctx, { repoRoot, config: { version: 1 } }), true, repoRoot);
+    }
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
