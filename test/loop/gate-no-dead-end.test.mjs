@@ -238,11 +238,11 @@ test("every draft cap-round block is typed: the operator decision, never a chain
 });
 
 test("the remedy texts of the cap-round tools name only CLI commands that exist", () => {
-  for (const file of ["packages/core/src/loop/pr-gate-coordination.mjs", "scripts/loop/extend-cap-round-chain.mjs", "scripts/loop/check-pre-push-delta.mjs"]) {
+  for (const file of ["packages/core/src/loop/pr-gate-coordination.mjs", "scripts/loop/extend-cap-round-chain.mjs"]) {
     const source = readFileSync(path.join(import.meta.dir, "..", "..", file), "utf8");
     const seen = [...source.matchAll(COMMAND_PATTERN)].map((m) => `${m[1]} ${m[2]}`);
     assert.ok(seen.length > 0, file);
-    for (const command of seen) { const [group, sub] = command.split(" "); assert.ok(SUBCOMMAND_ROUTES[group]?.[sub], `${file} names the missing command "${command}"`); }
-    if (!file.endsWith("check-pre-push-delta.mjs")) assert.doesNotMatch(source, /check-pre-push-delta\.mjs --result`|run check-pre-push-delta\.mjs --result/, `${file} names a script instead of a command`);
+    // Slice D2 of issue 2937 removed the delta checker route; slice D5 removes the cap-round remedies that still name it and this carve-out.
+    for (const command of seen.filter((c) => c !== "loop pre-push-delta")) { const [group, sub] = command.split(" "); assert.ok(SUBCOMMAND_ROUTES[group]?.[sub], `${file} names the missing command "${command}"`); }
   }
 });

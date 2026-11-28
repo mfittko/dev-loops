@@ -57,7 +57,8 @@ const HISTORICAL_DOC_SUFFIXES = ["-review-notes.md"];
 // subcommand-route check only; an npm-run or anchor drift there would still
 // be a real dangling reference.
 // docs/atlas/ is a dated, unmaintained snapshot whose diagrams cite lifecycle subcommands the route table does not list.
-const SUBCOMMAND_CHECK_EXCLUDED_PREFIXES = ["docs/specs/", "docs/atlas/"];
+// docs/decisions/ records are historical: a record cites the commands of its day, and a later slice may remove one.
+const SUBCOMMAND_CHECK_EXCLUDED_PREFIXES = ["docs/specs/", "docs/atlas/", "docs/decisions/"];
 
 function isHistorical(relPath) {
   return HISTORICAL_DOC_SUFFIXES.some((suffix) => relPath.endsWith(suffix));

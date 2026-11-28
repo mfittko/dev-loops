@@ -328,7 +328,6 @@ export const SUBCOMMAND_ROUTES = {
     "ui-review-teardown":   "scripts/loop/ui-review-teardown.mjs",
     "visual-grill-capture": "scripts/loop/visual-grill-capture.mjs",
     "audit-session":        "scripts/loop/audit-pi-session.mjs",
-    "pre-push-delta":       "scripts/loop/check-pre-push-delta.mjs",
     "pre-pr-review":        "scripts/loop/record-pre-pr-review.mjs",
     "spec-lint":            "scripts/loop/spec-lint.mjs",
     "implementation-brief": "scripts/loop/implementation-brief.mjs",

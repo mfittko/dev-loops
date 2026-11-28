@@ -18,8 +18,8 @@ import { BLOCKED_BY_OPERATOR_STEPS, VALID_SEVERITIES, normalizeSeverity, hasSeve
 import { EvidenceSealError, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
-import { isDeltaBodyItem, normalizeThreadsPayload, operatorFocusActItems, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
-import { REVIEW_NODE_ID_PATTERN } from "@dev-loops/core/loop/fixer-disposition";
+import { startDeltaSequence, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
+import { isDeltaBodyItem, normalizeThreadsPayload, operatorFocusActItems, toDeltaActItems, REVIEW_NODE_ID_PATTERN } from "@dev-loops/core/loop/fixer-disposition";
 import { sequenceClosurePath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
@@ -182,8 +182,8 @@ const SKELETON_STATUS = "fixed|skipped";
 
 /**
  * The pre-filled `siteCoverage` of a commit_only handback, one record per act item with a siteQuery.
- * It reads the same act list that check-pre-push-delta verifies (`--act-list`, the cumulative list),
- * so its fingerprints and input forms match what the check demands.
+ * It reads the act list (`--act-list`, the cumulative list),
+ * so its fingerprints and input forms match the act items.
  * The sites are the ones the act item already names (stated surfaces and input forms);
  * the fixer fills each site's `status` (and `reason` for a skip, `test` for a fixed input form).
  * Items that share a fingerprint merge into one record, and a site text appears once (an input form wins).
@@ -309,7 +309,7 @@ ${JSON.stringify(workOrder, null, 2)}
   const { branch, allowedPaths } = workOrder.mutationAuthority;
   const verifier = workOrder.phase === "full" ? `node ${shellQuote(path.join(path.dirname(path.dirname(workOrder.executionRules.contract)), "scripts/github/verify-fixer-disposition.mjs"))} --repo ${shellQuote(workOrder.target.repo)} --pr ${workOrder.target.pr} --head-sha <pushed-head-sha> --fixer-plan ${shellQuote(path.join(path.dirname(path.dirname(dispositionPath)), PLAN_FILE))}` : null;
   const task = workOrder.phase === "commit_only"
-    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason?, sitelessSkipReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery.${workOrder.siteCoverage ? " Start from the \`siteCoverage\` skeleton in the work order JSON below:" : ""} Set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site. Run each siteQuery and set \`returnedSites\` to exactly the sites it returns (empty when it returns none), add each returned site missing from \`sites\`, then delete the \`FILL:\` \`noSitesReason\` when the query returned sites, else replace it with the query outcome. Keep fingerprints and \`input_form\` texts unchanged.${workOrder.handbackCheck ? ` Before you hand back, run the work order's \`handbackCheck\` command from your worktree and correct the record until it exits 0${workOrder.deltaFindings ? "" : " (skip it when you made no commit)"}.` : ""}${workOrder.deltaFindings ? " The earlier candidate commit at HEAD is your base: fix each listed task in a new commit on top of HEAD, and fix every lifecycle task." : ""}${workOrder.deltaFindings?.some((f) => f.residueOf && !(typeof f.site === "string" && f.site.trim())) ? " A residue with no site is a PR-body item: make no commit for it, and either record a sitelessSkipReason in its act item's siteCoverage entry or leave it for the coordinator's edit-pr.mjs body edit." : ""}`
+    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason?, sitelessSkipReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery.${workOrder.siteCoverage ? " Start from the \`siteCoverage\` skeleton in the work order JSON below:" : ""} Set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site. Run each siteQuery and set \`returnedSites\` to exactly the sites it returns (empty when it returns none), add each returned site missing from \`sites\`, then delete the \`FILL:\` \`noSitesReason\` when the query returned sites, else replace it with the query outcome. Keep fingerprints and \`input_form\` texts unchanged.${workOrder.deltaFindings ? " The earlier candidate commit at HEAD is your base: fix each listed task in a new commit on top of HEAD, and fix every lifecycle task." : ""}${workOrder.deltaFindings?.some((f) => f.residueOf && !(typeof f.site === "string" && f.site.trim())) ? " A residue with no site is a PR-body item: make no commit for it, and either record a sitelessSkipReason in its act item's siteCoverage entry or leave it for the coordinator's edit-pr.mjs body edit." : ""}`
     : workOrder.source === "review-body" ? reviewBodyFullTask(workOrder, verifier, dispositionPath)
     : workOrder.source === "ci-failure" ? ciFailureFullTask(workOrder, dispositionPath)
     : gateFixFullTask(workOrder, dispositionPath);
@@ -818,10 +818,10 @@ async function emitPlan({
   const delta = deltaResult ? await readSource("delta-result", abs(deltaResult), capture) : threadRecordPath && existsSync(threadRecordPath) ? await readSource("delta-result", threadRecordPath, capture) : null;
   if (delta && deltaResult) {
     // Verify the seal before any other use of the result, so an edited result gets the typed evidence refusal.
-    try { verifyEvidence(tmpRoot, abs(deltaResult), delta.parsed, delta.read.sha256); } catch (error) { throw new Refusal(`delta result ${deltaResult} refused (GATE-EXEC-EVIDENCE-SEALED): ${error.message}; re-run the delta review in this order: a fresh reviewer-input run, the reviewer writes and seals the result, then check-pre-push-delta.mjs --result, then rerun this emit`); }
+    try { verifyEvidence(tmpRoot, abs(deltaResult), delta.parsed, delta.read.sha256); } catch (error) { throw new Refusal(`delta result ${deltaResult} refused (GATE-EXEC-EVIDENCE-SEALED): ${error.message}; the delta review is retired, so run emit --phase full instead`); }
     // The delta result must belong to this act list and this head (its pinned review baseline).
     const errors = validateDeltaResult(delta.parsed, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }), membershipOnly: true });
-    if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}; re-run the delta review for this act list and baseline in this order: a fresh reviewer-input run, the reviewer writes and seals the result, then check-pre-push-delta.mjs --result, then rerun this emit`);
+    if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}; the delta review is retired, so run emit --phase full instead`);
   }
   if (phase === "commit_only") await capture.read(gateDeltaRecordPath(tmpRoot, headSha));
   // ADR 0235: a commit_only thread-route re-dispatch carries the delta record's findings as act items.
@@ -855,7 +855,7 @@ async function emitPlan({
     const sealed = threadsFile ? readSealedGateDeltaRecord(tmpRoot, headSha) : actRecord;
     const recordPath = gateDeltaRecordPath(tmpRoot, headSha);
     if (!sealed || (threadsFile && sha256(readFileSync(threadRecordPath)) !== delta.read.sha256)) {
-      throw new Refusal(`delta record ${recordPath} is not sealed for ${headSha} or differs from the pinned read, so its findings are not evidence; re-run check-pre-push-delta --result to write it`);
+      throw new Refusal(`delta record ${recordPath} is not sealed for ${headSha} or differs from the pinned read, so its findings are not evidence; the delta checker that wrote it is retired, so run emit --phase full instead`);
     }
     const text = (value) => typeof value === "string" && value.length <= 2000;
     // The 20-entry cap bounds the record's own findings; the synthetic act-ref tasks are bounded by the act list.
@@ -906,9 +906,6 @@ async function emitPlan({
     outputRefs: [outputRef],
     // Only a commit_only handback writes or checks site coverage, so a full order carries no skeleton (ADR 0311).
     siteCoverage: phase === "commit_only" && actListFile ? buildSiteCoverageSkeleton(source.parsed) : undefined,
-    handbackCheck: phase === "commit_only" && actListFile
-      ? `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(actListCopy)} --baseline ${headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(outputRef)} --repo ${repo} --pr ${Number(pr)}`
-      : undefined,
     executionRules: {
       contract: fileURLToPath(new URL("agents/fixer.agent.md", PACKAGE_ROOT)),
       phase,

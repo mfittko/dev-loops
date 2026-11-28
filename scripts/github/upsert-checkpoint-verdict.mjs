@@ -7,7 +7,7 @@ import { parseGateReviewCommentMarkerBody } from "@dev-loops/core/github/copilot
 import { wrapOperatorOwnedPhrases } from "@dev-loops/core/github/operator-owned-lines";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { BLOCKED_BY_OPERATOR_STEPS, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, isPastRoundCap, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, pastCapBlockers, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
-import { composeBodyOnlyConvergedDraftGate, convergedActItemKey } from "@dev-loops/core/loop/pre-push-delta-review";
+import { composeBodyOnlyConvergedDraftGate, convergedActItemKey } from "@dev-loops/core/loop/fixer-disposition";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
 import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -69,10 +69,112 @@ import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
-import { countPrOwnCommits as realCountPrOwnCommits } from "../loop/check-pre-push-delta.mjs";
 import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 import { buildValidationResultsPath, capStopFacts, countCapRounds, isCleanCapRound, ledgerTmpRoot, prBodySha256, readGateContext, readReviewedBodySha256, refusesPastScopedRound, resolveCapRound, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
+import { spawnSync } from "node:child_process";
+import { gitEnvNoDirOverrides, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
+import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
+import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
+import { defaultFetchOrigin } from "../loop/standing-authorization.mjs";
+
+function gitRevParse(worktree, rev) {
+  const out = spawnSync("git", ["-C", worktree, "rev-parse", "--verify", `${rev}^{commit}`], {
+    encoding: "utf8", env: gitEnvNoDirOverrides(),
+  });
+  if (out.status !== 0) throw new Error(`git rev-parse ${rev} failed in ${worktree}: ${out.stderr.trim()}`);
+  return out.stdout.trim();
+}
+
+function gitIsAncestor(worktree, ancestor, descendant) {
+  const out = spawnSync("git", ["-C", worktree, "merge-base", "--is-ancestor", ancestor, descendant], {
+    encoding: "utf8", env: gitEnvNoDirOverrides(),
+  });
+  if (out.status === 0) return true;
+  if (out.status === 1) return false;
+  throw new Error(`git merge-base --is-ancestor failed in ${worktree}: ${out.stderr.trim()}`);
+}
+
+function gitRevList(worktree, from, to, extra = []) {
+  const out = spawnSync("git", ["-C", worktree, "rev-list", ...extra, `${from}..${to}`], { encoding: "utf8", env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
+  if (out.status !== 0) throw new Error(`git rev-list ${from}..${to} failed in ${worktree}: ${out.stderr.trim()}`);
+  return out.stdout.split("\n").filter(Boolean);
+}
+
+// `git show --remerge-diff` of a two-parent merge: the merge against an automatic remerge of its parents, with the merge settings and output formats pinned.
+const gitRemergeShow = (repoRoot, merge, outputFlags, encoding) => spawnSync("git", ["-C", repoRoot, "-c", "core.quotePath=false", "-c", "merge.renames=true", "-c", "merge.directoryRenames=false", "-c", "merge.conflictStyle=merge", "-c", "merge.renameLimit=7000", "show", "--remerge-diff", "--format=", ...outputFlags, "--no-renames", "--ignore-submodules=none", "--submodule=short", merge], { encoding, env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
+
+const replacementRemedy = () => renderCliText("node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number> while this PR is still open");
+
+// Refreshes origin/<base> and requires it to resolve: a stale or absent base ref fails here, before any measurement against it.
+function fetchAndResolveBase(worktree, base, { revParse, fetchBase }) {
+  const repoRoot = resolveRepoRoot(worktree);
+  // RECOVERY-COMMAND-REQUIRED: the fetch acts on the repository this run read (the resolved worktree), never on the caller's cwd.
+  const gitC = `git -C ${shellQuote(path.resolve(worktree))}`;
+  try { fetchBase(base, { repoRoot }); } catch (error) { throw new Error(`body-only post: git fetch origin ${base} failed (${error?.message}); cannot trust the local origin/${base} ref. Run \`${gitC} fetch origin ${base}\` and rerun`); }
+  try { revParse(worktree, `origin/${base}`); } catch { throw new Error(`body-only post: origin/${base} does not exist in ${worktree}; run \`${gitC} fetch origin ${base}\` and rerun`); }
+}
+
+// The PR-own commit count of baseline..head: non-merge commits origin/<base> lacks plus non-base-only merges whose remerge diff names a path.
+// A clean merge whose parents overlap adds review paths and counts as one PR-own commit: the body-only post must not carry a verdict across it unreviewed.
+export async function countPrOwnCommits(worktree, baseline, head, base, { revParse = gitRevParse, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin, isAncestor = gitIsAncestor } = {}) {
+  fetchAndResolveBase(worktree, base, { revParse, fetchBase });
+  // A head that does not descend from the baseline (reset or force-pushed backward) has an empty baseline..head range, which must not read as "no PR-own commit".
+  if (baseline !== head && !isAncestor(worktree, baseline, head)) throw new Error(`own_commit_in_range: ${head} does not descend from the reviewed head ${baseline}; the head moved backward or sideways, so the range holds code the cap round never reviewed`);
+  const { ownCommits, resolvedMerges, overlapMerges } = await prOwnCommitRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base });
+  return ownCommits + resolvedMerges.length + overlapMerges;
+}
+const realCountPrOwnCommits = countPrOwnCommits;
+
+async function prOwnCommitRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base }) {
+  const repoRoot = resolveRepoRoot(worktree);
+
+  const ownCommits = revList(worktree, baseline, head, ["--no-merges", `^origin/${base}`]).length;
+  // A merge that is not base-only is reviewed through its resolution diff (`git show --remerge-diff`: the merge against an automatic remerge of its parents), whose paths join the PR-own paths.
+  const resolvedMerges = [];
+  let overlapMerges = 0;
+  for (const merge of revList(worktree, baseline, head, ["--merges", `^origin/${base}`])) {
+    if (await baseOnlyMerge({ fromHead: revParse(worktree, `${merge}^1`), head: merge, mainRef: `origin/${base}`, repoRoot })) continue;
+    const parents = spawnSync("git", ["-C", repoRoot, "rev-list", "--parents", "-n", "1", merge], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+    const shown = parents.status === 0 && parents.stdout.trim().split(" ").length === 3
+      ? gitRemergeShow(repoRoot, merge, ["--name-only", "-z"], "utf8") : null;
+    if (shown?.status !== 0) throw new Error(`non_base_only_merge: merge ${merge} in ${baseline}..${head} ${shown || parents.status !== 0 ? "has a resolution diff or parents that cannot be read" : `is an octopus merge (${parents.stdout.trim().split(" ").length - 1} parents)`} (${((shown ?? parents).stderr ?? "").trim() || (shown ?? parents).error?.message}); the body-only post fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
+    const paths = shown.stdout.split("\0").filter(Boolean);
+    if (paths.length === 0) {
+      // A clean merge adds no change of its own, but the files both parents changed since their merge base are reviewed: the range covers where main and the PR meet.
+      const [, p1, p2] = parents.stdout.trim().split(" ");
+      // Criss-cross history has several best bases (the ort merge used a virtual base of all of them): union the overlap over every one.
+      const mb = spawnSync("git", ["-C", repoRoot, "merge-base", "--all", p1, p2], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: gitEnvNoDirOverrides() });
+      const fail = (why) => new Error(`non_base_only_merge: cannot read the paths merge ${merge} brought in (${why}); the body-only post fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
+      // Each side is listed with rename detection, as the ort merge applies one side's edit of a renamed file to its destination.
+      const sideNames = (mergeBase, tip) => {
+        const r = spawnSync("git", ["-C", repoRoot, "diff", "-M", "--no-relative", "--no-ext-diff", "--ignore-submodules=none", "--name-status", "-z", mergeBase, tip], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: gitEnvNoDirOverrides() });
+        if (r.status !== 0) throw fail((r.stderr ?? "").trim() || r.error?.message);
+        const fields = r.stdout.split("\0").filter(Boolean), names = [], renames = [];
+        for (let i = 0; i < fields.length;) {
+          const copyOrRename = /^[RC]/.test(fields[i]);
+          if (fields[i].startsWith("R")) renames.push([fields[i + 1], fields[i + 2]]);
+          names.push(...fields.slice(i + 1, i + (copyOrRename ? 3 : 2)));
+          i += copyOrRename ? 3 : 2;
+        }
+        return { names, renames };
+      };
+      if (mb.status !== 0 || !mb.stdout.trim()) throw new Error(`non_base_only_merge: cannot read the merge base of merge ${merge} (${(mb.stderr ?? "").trim() || mb.error?.message}); the body-only post fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
+      const overlap = new Set();
+      for (const mergeBase of mb.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
+        const pr = sideNames(mergeBase, p1), main = sideNames(mergeBase, p2);
+        const mainSet = new Set(main.names), prSet = new Set(pr.names);
+        for (const f of pr.names) if (mainSet.has(f)) overlap.add(f);
+        for (const [from, to] of pr.renames) if (mainSet.has(from)) overlap.add(to);
+        for (const [from, to] of main.renames) if (prSet.has(from)) overlap.add(to);
+      }
+      if (overlap.size > 0) overlapMerges += 1;
+      continue;
+    }
+    resolvedMerges.push(merge);
+  }
+  return { ownCommits, resolvedMerges, overlapMerges };
+}
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in

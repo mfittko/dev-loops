@@ -11,8 +11,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, test } from "bun:test";
 import { setCommentTrustConfig } from "@dev-loops/core/github/comment-trust";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
-import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
-import { startDeltaSequence, toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
+import { normalizeFixerDispositionHandoff, siteCoverageGaps, toDeltaActItems } from "@dev-loops/core/loop/fixer-disposition";
+import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { renderOperatorFocusSection } from "../../scripts/loop/_operator-focus.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../../scripts/github/_fixer-emission-evidence.mjs";
@@ -21,7 +21,6 @@ import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
-import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { readSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, missingCapLedgerRefusal, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
@@ -163,7 +162,7 @@ async function withFixture(fn) {
     await writeFile(files.actList, JSON.stringify(ACT));
     await writeFile(files.threads, JSON.stringify(THREADS));
     await writeFile(files.delta, JSON.stringify(clearingDeltaFor(head)));
-    // The thread-route delta record for `head` that --phase full needs (written by check-pre-push-delta --result).
+    // The thread-route delta record for `head` that a commit_only re-emission reads.
     const recordPath = path.join(root, "tmp", "gate-delta", `${head}.json`);
     const writeRecord = async (over = {}, { seal = false } = {}) => {
       await mkdir(path.dirname(recordPath), { recursive: true });
@@ -396,57 +395,6 @@ test("a closure record at the head retires a full emission", async () => {
   });
 });
 
-test("THREAD no_commit and head_moved close an authenticated sequence and allow the next push", async () => {
-  const { checkFixPushAuthority } = await import("../../scripts/loop/check-fix-push-authority.mjs");
-  for (const move of ["none", "descendant", "amended"]) await withFixture(async ({ root, wt, head, files, emit }) => {
-    const outcome = move === "none" ? "no_commit" : "head_moved";
-    const unit = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
-    assert.equal(pull(unit, root).status, 0);
-    const output = unit.workOrder.outputRefs[0];
-    await mkdir(path.dirname(output), { recursive: true });
-    await writeFile(output, JSON.stringify({ headSha: head, dispositions: [] }));
-    if (move !== "none") git(wt, "commit", "-q", "--allow-empty", ...(move === "amended" ? ["--amend"] : []), "-m", "developer change");
-    const located = await locateFixerUnit({ ref: unit.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] });
-    if (move === "amended") assert.match(located.stale, /no longer contains/);
-    else assert.equal(located.stale, undefined);
-    const args = ["--threads-file", files.threads, "--repo", REPO, "--pr", String(PR), "--baseline", head, "--spec-identity", "s", "--result-path", path.join(wt, "delta-result.json"), "--fixer-plan", unit.planPath, "--site-coverage", output, "--worktree", wt];
-    if (move !== "amended") assert.equal(checkFixPushAuthority(wt).ok, false);
-    const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
-    const original = await readFile(marker);
-    await writeFile(marker, JSON.stringify({ baselineHead: head, branch: "other", fullGranted: false }));
-    await assert.rejects(runCli(args, { stdout: { write() {} } }), /matching active commit_only branch marker/);
-    assert.equal(existsSync(marker), true);
-    await writeFile(marker, original);
-    const result = await runCli(args, { stdout: { write() {} } });
-    assert.equal(result.outcome, outcome);
-    assert.equal(result.nextStep, "push_to_gate");
-    assert.equal(existsSync(marker), false);
-    assert.equal(checkFixPushAuthority(wt).ok, true);
-  });
-});
-
-test("the no_commit close under a held head lock throws SEQUENCE_LOCK_BUSY and leaves the marker in place", async () => {
-  await withFixture(async ({ root, wt, head, files, emit }) => {
-    const unit = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
-    assert.equal(pull(unit, root).status, 0);
-    const output = unit.workOrder.outputRefs[0];
-    await mkdir(path.dirname(output), { recursive: true });
-    await writeFile(output, JSON.stringify({ headSha: head, dispositions: [] }));
-    const args = ["--threads-file", files.threads, "--repo", REPO, "--pr", String(PR), "--baseline", head, "--spec-identity", "s", "--result-path", path.join(wt, "delta-result.json"), "--fixer-plan", unit.planPath, "--site-coverage", output, "--worktree", wt];
-    const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
-    const lock = path.join(root, "tmp", "gate-delta", `${head}.sequence-lock`);
-    await mkdir(lock, { recursive: true });
-    const future = new Date(Date.now() + 86_400_000);
-    utimesSync(lock, future, future); // never stale
-    const realNow = Date.now;
-    let clock = realNow();
-    Date.now = () => (clock += 2_000); // each read advances, so the 10 second wait expires
-    try {
-      await assert.rejects(runCli(args, { stdout: { write() {} } }), (error) => error.code === "SEQUENCE_LOCK_BUSY");
-    } finally { Date.now = realNow; }
-    assert.equal(existsSync(marker), true);
-  });
-});
 
 for (const phase of ["commit_only", "full"]) test(`capture preserves genuine ${phase} delivery before replacement without granting archive authority`, async () => {
   await withFixture(async ({ root, wt, emit }) => {
@@ -883,7 +831,6 @@ test("C15: the pinned act-list read is the emitter's own copy and survives an ov
     const pinned = await readFile(read.path);
     await writeFile(files.actList, "[]");
     assert.deepEqual(await readFile(read.path), pinned);
-    assert.match(workOrder.handbackCheck, /act-list\.json/);
   });
 });
 
@@ -914,7 +861,6 @@ test("an act-list source and a threads source emit a full-phase order with no de
       assert.deepEqual(unit.workOrder.requiredReads.map((read) => read.kind), [source]);
       assert.equal(unit.workOrder.authority.deltaResultDigest, undefined);
       assert.equal(unit.workOrder.siteCoverage, undefined);
-      assert.equal(unit.workOrder.handbackCheck, undefined);
       assert.equal(unit.joinRef, unit.workOrder.outputRefs[0]);
       const text = await readFile(unit.promptPath, "utf8");
       assert.doesNotMatch(text, /pre-push-delta|delta review|delta record|--construct/);
@@ -2514,22 +2460,11 @@ test("commit_only work order carries a siteCoverage skeleton built from the act 
     assert.deepEqual(query.sites, []);
     assert.match(query.noSitesReason, /^FILL:/);
     assert.match(await readFile(promptPath, "utf8"), /Start from the `siteCoverage` skeleton/);
-    assert.match(await readFile(promptPath, "utf8"), /run the work order's `handbackCheck` command/);
-    assert.equal(workOrder.handbackCheck, `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(workOrder.requiredReads.find((r) => r.kind === "act-list").path)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])} --repo ${workOrder.mutationAuthority.repo} --pr ${workOrder.mutationAuthority.pr}`);
+    assert.doesNotMatch(await readFile(promptPath, "utf8"), /handbackCheck/);
     const threads = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     assert.equal(threads.workOrder.siteCoverage, undefined);
     const threadsPrompt = await readFile(threads.promptPath, "utf8");
     assert.doesNotMatch(threadsPrompt, /handbackCheck|`siteCoverage` skeleton/);
-  });
-});
-
-test("handbackCheck is machine-local: two commit_only emissions with different executions share a digest", async () => {
-  await withFixture(async ({ files, emit }) => {
-    await writeFile(files.actList, JSON.stringify(SKELETON_ACT));
-    const a = await emit({ phase: "commit_only", deltaResult: undefined });
-    const b = await emit({ phase: "commit_only", deltaResult: undefined });
-    assert.notEqual(a.workOrder.handbackCheck, b.workOrder.handbackCheck);
-    assert.equal(a.workOrderDigest, b.workOrderDigest);
   });
 });
 
@@ -2544,31 +2479,6 @@ test("the skeleton merges a shared fingerprint and dedupes repeated site texts",
     assert.deepEqual(workOrder.siteCoverage[0].returnedSites, []);
     assert.deepEqual(workOrder.siteCoverage[0].sites.map((x) => x.site), ["a.md", "--x", "b.md"]);
     assert.equal(workOrder.siteCoverage[0].sites.find((s) => s.site === "--x").kind, "input_form");
-  });
-});
-
-test("a handback made by filling the skeleton passes check-pre-push-delta input mode", async () => {
-  await withFixture(async ({ files, emit, head }) => {
-    await writeFile(files.actList, JSON.stringify(SKELETON_ACT));
-    const { workOrder } = await emit({ phase: "commit_only", deltaResult: undefined });
-    const siteCoverage = structuredClone(workOrder.siteCoverage);
-    for (const site of siteCoverage.flatMap((r) => r.sites ?? [])) {
-      if (site.kind === "input_form") Object.assign(site, { status: "fixed", test: "test/a.test.mjs" });
-      else Object.assign(site, { status: "skipped", reason: "out of scope" });
-    }
-    for (const r of siteCoverage) {
-      if (r.sites.length) { r.returnedSites = r.sites.map((x) => x.site); delete r.noSitesReason; }
-    }
-    siteCoverage[1].noSitesReason = "the query returned nothing";
-    const candidate = "b".repeat(40);
-    const coverage = path.join(path.dirname(files.actList), "coverage.json");
-    await writeFile(coverage, JSON.stringify({ headSha: candidate, siteCoverage }));
-    const seam = { stdout: { write: () => {} }, tmpRoot: path.dirname(files.actList), revParse: (_w, rev) => (rev === "HEAD" ? candidate : rev), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }) };
-    const out = await runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--handback", "--site-coverage", coverage], seam);
-    assert.equal(out.input.siteCoverage.length, 3);
-    // The unfilled skeleton is refused.
-    await writeFile(coverage, JSON.stringify({ headSha: candidate, siteCoverage: workOrder.siteCoverage }));
-    await assert.rejects(runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--handback", "--site-coverage", coverage], seam), /expected fixed or skipped/);
   });
 });
 
@@ -3367,7 +3277,7 @@ test("issue 2787 C12: malformed delta findings refuse", async () => {
 test("issue 2787 C12: an unsealed delta record holding findings refuses with the re-run action", async () => {
   await withFixture(async (fx) => {
     await fx.writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", findings: [FINDING] });
-    await assert.rejects(threadsCommitOnly(fx), /not sealed.*check-pre-push-delta --result/);
+    await assert.rejects(threadsCommitOnly(fx), /not sealed.*run emit --phase full instead/);
   });
 });
 
@@ -3718,39 +3628,6 @@ test("issue 2787 C13/C14: resetting the worktree to the original candidate does 
     git(fx.wt, "reset", "-q", "--hard", candidate);
     const unit = await fx.emit({ phase: "commit_only", deltaResult: undefined, keepRecord: true, headSha: candidate, fetchVerdictMarkers: verdictPostedAt(candidate), fetchPr: async () => ({ headRefName: "issue-1", headRefOid: candidate }) });
     assert.equal(unit.workOrder.phase, "commit_only");
-  });
-});
-
-// Issue 3111 AC1 + AC2: a no-commit commit_only emission after a refused delta result is append-only, so the delta coverage still binds.
-test("a same-head no-commit emission with a delta result keeps the plan and marker, and a delta re-invocation still binds to the original coverage", async () => {
-  await withFixture(async ({ root, wt, head, files, emit }) => {
-    const prior = await emit({ phase: "commit_only", deltaResult: undefined });
-    assert.equal(pull(prior, root).status, 0);
-    git(wt, "commit", "-q", "--allow-empty", "-m", "fixing F");
-    const fixing = git(wt, "rev-parse", "HEAD");
-    const report = prior.workOrder.outputRefs[0];
-    await mkdir(path.dirname(report), { recursive: true });
-    await writeFile(report, JSON.stringify({ headSha: fixing, siteCoverage: [{ fingerprint: ACT_REF, returnedSites: [], sites: [], noSitesReason: "  actual query returned nothing  " }] }));
-    const log = path.join(path.dirname(files.actList), "findings.json");
-    await writeFile(log, JSON.stringify({ headSha: head, provenance: { perAngle: [{ angle: "correctness" }] } }));
-    const args = ["--act-list", files.actList, "--baseline", head, "--worktree", wt, "--fixer-plan", prior.planPath, "--site-coverage", report];
-    const input = ["--spec-identity", "spec@1", "--findings-log", log, "--result-path", path.join(path.dirname(log), "delta-result.json")];
-    const first = await runCli([...args, ...input], { stdout: { write() {} } });
-    // The reviewer returned locally_clear for the fixing commit; the result check refused it, so the coordinator re-dispatches the fixer.
-    await writeFile(files.delta, JSON.stringify({ ...first.input.resultShape, actionableItems: first.input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["focused check"] })), newFindings: [], widenedReads: [], outcome: "locally_clear" }));
-    sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
-    const planBytes = await readFile(prior.planPath), markerPath = path.join(root, "tmp/gate-delta", `${head}.sequence`), marker = await readFile(markerPath);
-    // The fixer re-dispatch after the refusal makes no commit.
-    const again = await emit({ phase: "commit_only", keepRecord: true });
-    assert.notEqual(again.planPath, prior.planPath);
-    assert.deepEqual(await readFile(prior.planPath), planBytes, "the bound plan is not superseded");
-    assert.deepEqual(await readFile(markerPath), marker, "the sequence marker keeps the original execution");
-    assert.equal((await locateFixerUnit({ ref: again.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] })).stale, undefined, "the new order is locatable and not stale");
-    assert.equal(pull(again, root).status, 0, "the keyed order stays pullable");
-    assert.equal((await locateFixerUnit({ ref: prior.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] })).stale, undefined, "the original unit is not superseded");
-    const rerun = await runCli([...args, ...input], { stdout: { write() {} } });
-    assert.deepEqual(rerun.input.origin, first.input.origin, "the re-invocation binds the original execution");
-    assert.equal(rerun.input.origin.executionIdentity, prior.executionIdentity);
   });
 });
 

@@ -22,7 +22,7 @@ afterAll(() => { if (HOST_STALE_MAX_AGE !== undefined) process.env.DEVLOOPS_STAL
 const FORBIDDEN = [/\brm\b/i, /delete the marker/i, /deleting the marker/i, /ask the operator/i];
 const sanctionedNames = Object.values(SANCTIONED_COMMANDS).flatMap((group) => Object.values(group)).filter((file) => typeof file === "string").map((file) => path.basename(file));
 // A remedy names a sanctioned command (by its script name), one of the loop commands below, or a rerun of the refusing command.
-const LOOP_COMMANDS = ["gate close-sequence", "loop pre-push-delta", "check-pre-push-delta.mjs", "emit --phase", "emit-fixer-work-order.mjs"];
+const LOOP_COMMANDS = ["gate close-sequence", "loop pre-push-delta", "emit --phase", "emit-fixer-work-order.mjs"];
 const RERUN = /\b[Rr]erun\b|[Rr]e-run|\bWait for\b|Pass --repo|Pass the --/u;
 const NAMES_AGENT_STEP = { test: (text) => RERUN.test(text) || [...sanctionedNames, ...LOOP_COMMANDS].some((name) => text.includes(name)) };
 const assertAgentStep = (label, text) => {

@@ -237,7 +237,7 @@ test("a padded input_form residue site matches only its verbatim recorded skip",
   assert.equal(run(" 12 ").outcome, "locally_clear");
   const borrowed = run("12");
   assert.equal(borrowed.outcome, "needs_fix");
-  assert.ok(borrowed.errors.some((e) => /PRE-PUSH-DELTA-RESIDUE/.test(e)));
+  assert.ok(borrowed.errors.some((e) => /^residue: newFindings\[/.test(e)));
 });
 
 test("an omitted residue site never matches a recorded skipped empty input_form site", () => {
@@ -254,7 +254,7 @@ test("an omitted residue site never matches a recorded skipped empty input_form 
   for (const extra of [{}, { site: "" }, { site: undefined }, { site: null }, { site: 0 }]) {
     const out = run(extra);
     assert.equal(out.outcome, "needs_fix");
-    assert.ok(out.errors.some((e) => /PRE-PUSH-DELTA-RESIDUE/.test(e)));
+    assert.ok(out.errors.some((e) => /^residue: newFindings\[/.test(e)));
   }
 });
 
@@ -338,7 +338,7 @@ test("a siteless residue is skipped only by sitelessSkipReason, never by noSites
   assert.equal(run({ sitelessSkipReason: reason }).outcome, "locally_clear");
   const open = run({});
   assert.equal(open.outcome, "needs_fix");
-  assert.ok(open.errors.some((e) => /PRE-PUSH-DELTA-RESIDUE/.test(e)));
+  assert.ok(open.errors.some((e) => /^residue: newFindings\[/.test(e)));
   assert.throws(() => record([coverageItem({ sitelessSkipReason: " " })]), /sitelessSkipReason must be a non-empty string/);
   assert.throws(() => record([coverageItem({ sitelessSkipReason: "FILL: x" })]), /sitelessSkipReason is the unedited skeleton placeholder/);
 });

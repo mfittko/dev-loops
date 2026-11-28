@@ -71,6 +71,7 @@ const ORPHAN_ALLOWLIST = new Map([
   ["scripts/github/create-label.mjs","standalone — operator tool for one-off label creation"],
   ["scripts/github/manage-sub-issues.mjs", "standalone — agent/operator sub-issue tree command (documented in scripts/README)"],
   ["scripts/github/withdraw-copilot-review-request.mjs", "standalone — Copilot review withdrawal step, agent-invoked"],
+  ["scripts/loop/seal-evidence.mjs", "retired — its only caller was the delta checker; slice D4 of issue 2937 deletes it"],
   ["scripts/loop/check-retro-tooling.mjs", "standalone — retrospective-tooling check (whole script); its analyzeTranscript export is separately ratcheted as a predicate orphan"],
   ["scripts/loop/conductor-monitor.mjs", "standalone — agent/operator conductor monitor tool (documented in scripts/README)"],
   ["scripts/loop/detect-refinement-grill-state.mjs", "standalone — refinement-grill state detector, agent-invoked"],

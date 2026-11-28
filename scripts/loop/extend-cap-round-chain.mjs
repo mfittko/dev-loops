@@ -72,7 +72,7 @@ export function parseExtendCapRoundChainCliArgs(argv) {
 }
 
 // RECOVERY-COMMAND-REQUIRED: `recovery` is the one command to run next, or `operator: <action>` when only the operator may act.
-// The one render site: every recovery names CLI calls in the active harness's launcher form, as check-pre-push-delta does.
+// The one render site: every recovery names CLI calls in the active harness's launcher form.
 const refuse = (reason, detail, recovery) => ({ ok: false, refused: true, reason, detail, recovery: renderCliText(recovery) });
 // The command that reruns this tool for the PR once its refusal cause is fixed.
 // The resolved worktree is part of it: the tool refuses `head_mismatch` from a caller directory whose HEAD is not the PR head.

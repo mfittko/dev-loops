@@ -229,11 +229,7 @@ test("every PR-creating route loads Copilot Loop Operations or the local SKILL",
 // Delta mode: one fresh reviewer between the gate act-list fix commit and its
 // push. The contract owns the rules; the SKILL and fixer only cross-reference.
 const DELTA_RULES = [
-  ["PRE-PUSH-DELTA-PINNED-BASELINE", /MUST/, ["reviewBaselineHead..candidateHead", "A..C", "B..C", "new gate round"]],
-  ["PRE-PUSH-DELTA-INPUT", /MUST NOT/, ["judge dispositions", "spec identity", "surface hints", "checklist", "diff bytes", "sibling reviewer verdicts", "widenedReads[]", "MUST review every hunk", "provenance.perAngle", "staleSurfaceHits[]", "an act-list input run without `--findings-log`"]],
   ["PRE-PUSH-DELTA-RESULT", /MUST/, ["resolved", "not_resolved", "cannot_verify", "widenedReads[]", "{ path, reason }", "missing or unknown status", "the reported defect is gone", "introduces no new finding of severity medium or higher", "staleSurfaceHits[]", "stale-surface-hits-truncated"]],
-  ["PRE-PUSH-DELTA-EXIT-BOUND", /MUST NOT/, ["locally_clear", "medium or higher", "three", "bounded_out", "no fourth review", "normal gate path"]],
-  ["PRE-PUSH-DELTA-FRESHNESS", /MUST NOT/, ["candidateHead", "current worktree head", "authorize the push"]],
   ["PRE-PUSH-DELTA-NOT-GATE-EVIDENCE", /MUST NOT/, ["gate verdict", "ledger", "thread", "fan-out", "authorize merge"]],
 ];
 
@@ -266,7 +262,6 @@ test("delta mode states the decision record, the full-phase refusal and the fixe
   for (const text of ["<tmp-root>/gate-delta/<reviewBaselineHead>.json", "The run without `--result` writes only the cumulative patch", "refuses `--phase full`", "`--phase commit_only` first", "A fixed reply", "`not_resolved` or `cannot_verify`", "`threadId` or by the fingerprint"]) {
     assert.ok(doc.includes(text), `contract must state: ${text}`);
   }
-  assert.doesNotMatch(readRepo("scripts/loop/check-pre-push-delta.mjs"), /Read-only:/, "the --result run is no longer read-only");
 });
 
 test("the Copilot follow-up skill emits the thread fix pass in the full phase with no delta review", () => {
