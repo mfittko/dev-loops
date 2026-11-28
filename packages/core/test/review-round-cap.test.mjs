@@ -22,6 +22,9 @@ describe("decideCapRound (GATE-EXEC-CAP-BRAKES)", () => {
       ["wholeLogicLoc above twice the forecast stops", { round: 1, wholeLogicLoc: 721 }, { action: "operator", reason: "growth_past_forecast", numbers: { wholeLogicLoc: 721, forecastWloc: 360 } }],
       ["wholeLogicLoc at twice the forecast continues", { round: 1, wholeLogicLoc: 720 }, { action: "full_round" }],
       ["no forecast never trips growth", { round: 1, wholeLogicLoc: 9999, forecastWloc: null }, { action: "full_round" }],
+      ["a body-only rerun past the scoped round is a full round, not a cap round", { round: cap + 2, bodyOnlyRerun: true }, { action: "full_round" }],
+      ["a body-only rerun at round cap+1 over the fix budget does not trip cap_fix_over_budget", { round: cap + 1, bodyOnlyRerun: true, fixBudget: { ...ok, logicLoc: 61 } }, { action: "full_round" }],
+      ["a body-only rerun still stops on growth", { round: cap + 1, bodyOnlyRerun: true, wholeLogicLoc: 721 }, { action: "operator", reason: "growth_past_forecast", numbers: { wholeLogicLoc: 721, forecastWloc: 360 } }],
     ])(`${gate}: %s`, (_name, input, expected) => {
       expect(decideCapRound({ ...base, ...input })).toEqual(expected);
     });

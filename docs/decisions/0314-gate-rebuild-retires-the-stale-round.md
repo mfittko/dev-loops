@@ -6,6 +6,8 @@ Accepted — 2026-11-21 ([issue 3416](https://github.com/mfittko/dev-loops/issue
 
 Amends `GATE-EXEC-ROUND-RETIREMENT` in the gate review sub-loop contract: the rule body no longer says the builder never retires implicitly. Retirement is automatic for an undispatched or finished round without a verdict and refuses with a `recovery` field when a verdict exists. The explicit `retire-gate-round.mjs` command stays for a round with a verdict and for a rewrite of a prior-dispositions or scoped-variant file.
 
+Amended by [issue 3604](https://github.com/mfittko/dev-loops/issues/3604), 2026-11-27: a round whose open act items are all `remedyKind: pr_body` items retires automatically when the PR body changed, see the amendment of [ADR 0271](./0271-body-only-cap-round-exit.md). The decision text below stays as written.
+
 ## Context
 
 A coordinator that rebuilt the gate context or re-ran `emit-fanout-dispatch.mjs` at a head with an old round left that round's sentinels, dispatch records and artifacts in place. Fresh reviewers were then refused, and a refused reviewer overwrote real findings with a blocked artifact. Only an explicit retirement cleared the state, and no refusal named it.

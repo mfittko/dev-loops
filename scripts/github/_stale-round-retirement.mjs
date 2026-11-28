@@ -1,6 +1,8 @@
 import { access, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { validateAngleResult } from "@dev-loops/core/loop/gate-fanin";
+import { listOpenActItems, validateAngleResult } from "@dev-loops/core/loop/gate-fanin";
+import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
+import { claimRetainedRound, nextRetainedPath, readSealed } from "./_gate-artifact-seal.mjs";
 import { retireGateRound } from "./retire-gate-round.mjs";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 import { gateScopePrefix } from "./_gate-names.mjs";
@@ -51,7 +53,7 @@ export function buildRetireCommand({ gate, headSha, tmpRoot, findingsDir = null,
 /**
  * Retire the undispatched or finished round of one gate at one head, through retire-gate-round's logic, so a rebuilt
  * context or a re-emission mints a fresh round (GATE-EXEC-ROUND-RETIREMENT). A round with a posted verdict (a findings
- * log at that head) is never retired: the result is a refusal with a `recovery` field. So is a round
+ * log at that head) is never retired, except a round whose open act items are all `remedyKind: pr_body` and whose PR body digest changed (issue 3604): it retires through the scoped body-reading retirement when the caller passes `bodyReadingUnits` and `currentPrBodySha256`. Any other posted round gets a refusal with a `recovery` field. So does a round
  * with a live sentinel (no valid artifact for its unit newer than it): its reviewer may still be running. An error other
  * than ENOENT while probing the round throws, so the guards fail closed.
  *
@@ -79,8 +81,28 @@ export async function retireStaleRound(args) {
   }
 }
 
+/**
+ * The body digest a posted ledger read when the round is superseded by a PR-body edit (issue 3604): the ledger has at least one open act item,
+ * every one a PR-body item, and its `prBodySha256` is a digest that differs from `currentPrBodySha256`. Null otherwise, and for an unreadable ledger, so every other case keeps the refusal.
+ */
+async function readBodyOnlySupersededDigest(ledgerPath, currentPrBodySha256) {
+  try {
+    return bodyOnlySupersededDigest(JSON.parse(await readSealed(ledgerPath)), currentPrBodySha256);
+  } catch {
+    return null;
+  }
+}
+
+/** {@link readBodyOnlySupersededDigest} over a parsed ledger. The context writer, the detector and the retirement all read the condition here. */
+export function bodyOnlySupersededDigest(log, currentPrBodySha256) {
+  if (!/^[0-9a-f]{64}$/.test(String(currentPrBodySha256)) || !/^[0-9a-f]{64}$/.test(String(log?.prBodySha256)) || log.prBodySha256 === currentPrBodySha256) return null;
+  const open = listOpenActItems(log.findings);
+  // `remedyKind: "pr_body"` is required: isDeltaBodyItem also accepts a fileless code finding, which a body edit cannot fix.
+  return open.length > 0 && open.every((item) => isDeltaBodyItem(item) && item.remedyKind === "pr_body") ? log.prBodySha256 : null;
+}
+
 // `otherSpecDigests` are further digests the spec source could have; the stop needs the pinned digest to differ from all of them and from `currentSpecDigest`.
-async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdictRoots = [tmpRoot], findingsTmpRoot = tmpRoot, recordsTmpRoot = tmpRoot, liveOnly = false, currentSpecDigest = null, otherSpecDigests = [], specDecisionOnly = false }, state) {
+async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdictRoots = [tmpRoot], findingsTmpRoot = tmpRoot, recordsTmpRoot = tmpRoot, liveOnly = false, currentSpecDigest = null, otherSpecDigests = [], specDecisionOnly = false, currentPrBodySha256 = null, bodyReadingUnits = null }, state) {
   const head = String(headSha).trim().toLowerCase();
   if (!FULL_SHA_RE.test(head)) return { retiredRound: null };
   const findingsDir = buildGateReviewsDir({ repo, pr, gate, headSha: head, tmpRoot: findingsTmpRoot });
@@ -109,11 +131,23 @@ async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdic
   const stopped = currentSpecDigest ? await findSpecDecisionStop({ repo, pr, gate, head, verdictRoots, specDigests: [currentSpecDigest, ...otherSpecDigests], roundFiles }) : null;
   if (specDecisionOnly && !stopped) return { retiredRound: null };
   state.stopped = stopped !== null;
+  const supersededBodies = [];
+  const seenMarkers = new Set();
   for (const root of verdictRoots) {
     const key = { repo, pr, gate, headSha: head, tmpRoot: root };
     // Only the findings log marks a posted verdict: the verdict comment renders only from it (ADR 0336).
     const marker = buildLogPath(key);
+    // One directory named as a relative and an absolute root is one ledger: claim it once.
+    if (seenMarkers.has(path.resolve(marker))) continue;
+    seenMarkers.add(path.resolve(marker));
     if (await exists(marker)) {
+      // GATE-EXEC-ROUND-RETIREMENT: a round whose open act items are all PR-body items and whose body digest is stale retires; the ledger stays as a retained round.
+      // The scoped rerun needs the caller's body-reading units; a caller that names none keeps the refusal.
+      const priorBody = Array.isArray(bodyReadingUnits) ? await readBodyOnlySupersededDigest(marker, currentPrBodySha256) : null;
+      if (priorBody !== null) {
+        supersededBodies.push({ marker, priorBody });
+        continue;
+      }
       return {
         refusal: {
           error: `GATE-EXEC-ROUND-RETIREMENT: refusing to retire the ${gate} round at head ${head}: a verdict is already recorded at ${marker}. A posted verdict is never retired automatically.`,
@@ -133,26 +167,40 @@ async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdic
       },
     };
   }
-  const reason = stopped
+  // The ledger moves first: a crash after it leaves a round with no live ledger, which the next rebuild retires as an ordinary stale round that reruns every unit (GATE-EXEC-BODY-ONLY-RERUN).
+  for (const { marker } of supersededBodies) await claimRetainedRound(marker, await nextRetainedPath(marker));
+  const reason = supersededBodies.length > 0
+    ? `automatic: GATE-EXEC-BODY-ONLY-RERUN, every open act item is a PR-body item and the PR body changed (prBodySha256 ${shortDigest(supersededBodies[0].priorBody)} to ${shortDigest(currentPrBodySha256)}); the ledger is kept as a retained round`
+    : stopped
     ? `automatic: SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT stopped the round and the spec changed (specDigest ${shortDigest(stopped.pinnedDigest)} to ${[currentSpecDigest, ...otherSpecDigests].map(shortDigest).join(" or ")}); no verdict was posted`
     : "automatic: the gate context was rebuilt or the round re-emitted at the same head before any verdict was recorded";
   const distinctRecords = recordsTmpRoot !== tmpRoot && recordNames.some((n) => n.endsWith(suffix) && n.startsWith(recordPrefix));
-  const findingsOpt = hasFindings ? { findingsDir } : { noFindingsArtifacts: true };
+  // A body-only round retires only the units that hold a body-reading angle (GATE-EXEC-BODY-ONLY-RERUN): their sentinels, dispatch records and artifacts move; every other unit keeps its own.
+  const bodyOnlyScopes = supersededBodies.length > 0 ? bodyReadingUnits.map((unit) => unit.scope) : null;
+  let findingsOpt = hasFindings ? { findingsDir } : { noFindingsArtifacts: true };
+  let scopedOpt = {};
+  if (bodyOnlyScopes) {
+    const artifacts = bodyReadingUnits.flatMap((unit) => unit.angles).map((angle) => path.join(findingsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`));
+    const findingsFiles = [];
+    for (const file of artifacts) if (await exists(file)) findingsFiles.push(file);
+    findingsOpt = { noFindingsArtifacts: true, findingsFiles };
+    scopedOpt = { scopes: bodyOnlyScopes };
+  }
   let result = { noop: true };
   let recordsResult = null;
   if (await exists(tmpRoot)) {
     result = await retireGateRound({ // the findings dir may live under another root than the sentinels
-      gate, headSha: head, tmpRoot, repo, pr, reason, ...findingsOpt,
+      gate, headSha: head, tmpRoot, repo, pr, reason, ...findingsOpt, ...scopedOpt,
     });
     // The dispatch records follow --tmp-root, so a distinct records root retires them in a second audited move.
-    if (distinctRecords) recordsResult = await retireGateRound({ gate, headSha: head, tmpRoot: recordsTmpRoot, reason, noFindingsArtifacts: true });
+    if (distinctRecords) recordsResult = await retireGateRound({ gate, headSha: head, tmpRoot: recordsTmpRoot, reason, noFindingsArtifacts: true, ...scopedOpt });
   } else if (distinctRecords || hasFindings) {
     // The sentinel root is missing, so it holds no sentinels and retireGateRound would refuse it; retire the records and findings through the roots that hold them.
-    result = await retireGateRound({ gate, headSha: head, tmpRoot: distinctRecords ? recordsTmpRoot : findingsTmpRoot, repo, pr, reason, ...findingsOpt });
+    result = await retireGateRound({ gate, headSha: head, tmpRoot: distinctRecords ? recordsTmpRoot : findingsTmpRoot, repo, pr, reason, ...findingsOpt, ...scopedOpt });
   }
-  if (result.noop && !recordsResult) return { retiredRound: null };
+  if (result.noop && !recordsResult) return { retiredRound: null, bodyOnlyScopes };
   const base = result.noop ? recordsResult : result;
-  return { retiredRound: { retirementDir: path.resolve(base.retirementDir), retired: result.retired, sentinels: result.sentinels, dispatchPromptRecords: [...result.dispatchPromptRecords, ...(recordsResult?.dispatchPromptRecords ?? [])], findingsDirRetired: result.findingsDirRetired } };
+  return { bodyOnlyScopes, retiredRound: { retirementDir: path.resolve(base.retirementDir), retired: result.retired, sentinels: result.sentinels, dispatchPromptRecords: [...result.dispatchPromptRecords, ...(recordsResult?.dispatchPromptRecords ?? [])], findingsDirRetired: result.findingsDirRetired } };
 }
 
 /**
