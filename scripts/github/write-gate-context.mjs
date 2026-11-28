@@ -877,6 +877,9 @@ export async function unionMustRerunAngles(resolvedAngles, { repo, pr, gate, hea
   if (plan?.ok !== true || !Array.isArray(plan.mustRerun) || !same(plan.repo, repo) || !same(plan.gate, gate) || !same(plan.headSha, headSha) || String(plan.pr) !== String(pr)) return none;
   const configured = ["draft", "preApproval", "spike"].flatMap((g) => (Array.isArray(config?.gates?.[g]?.angles) ? config.gates[g].angles : []))
     .map((a) => (typeof a === "string" ? a : a?.name)).filter((n) => typeof n === "string");
+  // An angle whose every config entry is `enabled: false` stays undispatched.
+  const entries = ["draft", "preApproval", "spike"].flatMap((g) => (Array.isArray(config?.gates?.[g]?.angles) ? config.gates[g].angles : []));
+  const isDisabled = (n) => { const own = entries.filter((a) => same(typeof a === "string" ? a : a?.name, n)); return own.length > 0 && own.every((a) => typeof a !== "string" && a?.enabled === false); };
   // A sibling name (`<angle>-delta-at-<sha>`) maps to its base angle; the synthetic `copilot-body` is no reviewer.
   const known = new Set(resolvedAngles.map((a) => a.trim().toLowerCase()));
   const added = [];
@@ -887,7 +890,7 @@ export async function unionMustRerunAngles(resolvedAngles, { repo, pr, gate, hea
     known.add(raw.toLowerCase());
     const base = configured.find((n) => same(n, raw)) ?? raw;
     const prompt = resolveReviewerRole(config, base).prompt;
-    (typeof prompt === "string" && prompt.trim().length > 0 ? added : skipped).push(base);
+    (typeof prompt === "string" && prompt.trim().length > 0 && !isDisabled(base) ? added : skipped).push(base);
   }
   return { angles: [...resolvedAngles, ...added], added, skipped };
 }
@@ -898,7 +901,7 @@ export function unionRationale(rationale, { added, skipped }) {
   const rows = rationale.filter((r) => !addedSet.has(r.angle));
   for (const angle of added) rows.push({ angle, action: "added", reason: "carry_forward_must_rerun" });
   for (const angle of skipped) {
-    if (!rows.some((r) => r.angle === angle)) rows.push({ angle, action: "dropped", reason: "skipped: no_resolvable_prompt" });
+    if (!rows.some((r) => r.angle === angle)) rows.push({ angle, action: "dropped", reason: "skipped: no_resolvable_prompt_or_disabled_entry" });
   }
   return rows;
 }

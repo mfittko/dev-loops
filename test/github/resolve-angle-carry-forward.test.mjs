@@ -1816,11 +1816,11 @@ for (const [fileClass, opts, want] of [
 // Issue 3647: the dispatch set is the head-resolved angles plus every mustRerun angle of the keyed plan.
 const planId = { repo: "owner/repo", pr: 12, gate: "draft_gate", headSha: "abc1234567890" };
 const orphanRow = [{ angle: "orphan-angle", reason: "no_perangle_row" }];
-async function withPlanContext(plan, gate, fn) {
+async function withPlanContext(plan, gate, fn, orphanEntry = { name: "orphan-angle", persona: "review", prompt: "p" }) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-mustrerun-"));
   const id = { ...planId, gate };
   // orphan-angle sits in another gate's pool: configured with a prompt, yet not resolved at this head.
-  const input = { config: { version: 1, gates: { draft: { angles: ["correctness"] }, spike: { angles: [{ name: "orphan-angle", persona: "review", prompt: "p" }] }, review: { angles: ["correctness"] } } }, ...id, hasFullLabel: true };
+  const input = { config: { version: 1, gates: { draft: { angles: ["correctness"] }, spike: { angles: [orphanEntry] }, review: { angles: ["correctness"] } } }, ...id, hasFullLabel: true };
   try {
     await fn({
       writePlan: async () => {
@@ -1852,9 +1852,19 @@ test("buildGateContext records an added rationale row for a union-added angle an
     assert.deepEqual(artifact.resolvedAngles, ["correctness", "orphan-angle"]);
     assert.deepEqual(artifact.rationale.filter((r) => r.angle !== "correctness"), [
       { angle: "orphan-angle", action: "added", reason: "carry_forward_must_rerun" },
-      { angle: "ghost-angle", action: "dropped", reason: "skipped: no_resolvable_prompt" },
+      { angle: "ghost-angle", action: "dropped", reason: "skipped: no_resolvable_prompt_or_disabled_entry" },
     ]);
+    assert.ok(artifact.fanout.preflight.pendingGroups.some((g) => JSON.stringify(g).includes("orphan-angle")));
   });
+});
+
+test("buildGateContext mustRerun union skips an angle whose only config entry is enabled false", async () => {
+  await withPlanContext({ mustRerun: orphanRow }, "draft_gate", async ({ writePlan, buildArtifact }) => {
+    await writePlan();
+    const artifact = await buildArtifact();
+    assert.deepEqual(artifact.resolvedAngles, ["correctness"]);
+    assert.ok(artifact.rationale.some((r) => r.angle === "orphan-angle" && r.reason.startsWith("skipped:")));
+  }, { name: "orphan-angle", persona: "review", prompt: "p", enabled: false });
 });
 
 test("unionRationale replaces the resolver dropped row of a union-added angle with the added row", () => {
