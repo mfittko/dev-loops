@@ -264,7 +264,7 @@ test("classifyFile: docs for .markdown files", () => {
 test("isProsePath: prose surface — articles, presentations, README*, narrative docs/*.md", () => {
   assert.equal(isProsePath("docs/articles/introducing-dev-loops.md"), true);
   assert.equal(isProsePath("docs/articles/how-dev-loops-decided-itself.html"), true);
-  assert.equal(isProsePath("docs/presentations/process-observability-presentation.md"), true);
+  assert.equal(isProsePath("docs/presentations/state-graph-surface-presentation.md"), true);
   assert.equal(isProsePath("README.md"), true);
   assert.equal(isProsePath("README-hi.md"), true);
   assert.equal(isProsePath("docs/index.md"), true);

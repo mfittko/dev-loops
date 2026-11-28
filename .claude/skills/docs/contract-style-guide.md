@@ -33,6 +33,7 @@ A short orientation paragraph introduces the document; normative rules live only
 | <!-- rule: PURPOSE-DETERMINISTIC-FIT --> `PURPOSE-DETERMINISTIC-FIT` | Parent: `PURPOSE-HIGHEST-SAFE-AUTONOMY`. A hard, blocking check MUST cover only narrow, well-defined input. When the input has too many edge cases to anticipate, even for new code, use a maintained library, a narrow check with a stated ceiling, or LLM judgement with a warning. This covers parsers, classifiers, validators, free-text matchers and gate state rules. The line is fuzzy, and accepting fuzziness is valid. Weigh library candidates by edge-case density, consumer install size, runtime (Bun and Node `>=24`, hooks) and license. ADR 0270 records this rule. |
 | <!-- rule: STYLE-NO-DRIFT-BLESSING --> `STYLE-NO-DRIFT-BLESSING` | When produced output breached a contract, the contract MUST NOT be amended to bless that drift: enforcement MUST be fixed at the source and the missed artifacts backfilled instead. |
 | <!-- rule: STYLE-CONSISTENCY-NOT-CONFORMANCE --> `STYLE-CONSISTENCY-NOT-CONFORMANCE` | Uniform-looking artifacts are not self-certifying: conformance MUST be checked against each artifact's external spec (deterministically), never by comparing artifacts to each other. |
+| <!-- rule: WORKFLOW-DOCS-NO-REDEFINE-HELPER --> `WORKFLOW-DOCS-NO-REDEFINE-HELPER` | Skills and phase docs explain workflow procedure and durable planning intent; they MUST NOT silently redefine shipped helper behavior |
 
 ## Reference syntax
 

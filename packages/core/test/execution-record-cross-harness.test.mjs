@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "bun:test";
 
 import { buildExecutionUnitRecord, TELEMETRY_HARNESS_PROFILES } from "../src/loop/execution-record.mjs";
-import { HARNESS_VALUES } from "../src/loop/role-budget-bound.mjs";
+import { HARNESS_VALUES } from "../src/loop/reviewer-unit-bound.mjs";
 import { buildWatchCycleExecutionRecord } from "../../../scripts/loop/run-watch-cycle.mjs";
 
 const HEAD_SHA = "c".repeat(40);

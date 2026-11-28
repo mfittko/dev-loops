@@ -210,18 +210,10 @@ test("lightweight non-durable check accepts a valid fixture and fails each broke
 });
 
 test("local workflow docs define tracker-backed local canonicality and no-dup rules", async () => {
-  const [workflowDoc, localImplSkill, scriptsReadme] = await Promise.all([
-    readRepo("docs/IMPLEMENTATION_WORKFLOW.md"),
+  const [localImplSkill, scriptsReadme] = await Promise.all([
     readRepo("skills/local-implementation/SKILL.md"),
     readRepo("scripts/README.md"),
   ]);
-
-  assertMatchesAll(workflowDoc, [
-    /Tracker-backed local issue spec/i,
-    /tracker issue is the durable canonical spec/i,
-    /resolve-tracker-local-spec\.mjs/i,
-    /do \*\*not\*\* also maintain.*Phase Plan.*for that same tracker-backed session/i,
-  ], "docs/IMPLEMENTATION_WORKFLOW.md");
 
   assertMatchesAll(localImplSkill, [
     /Local implementation supports these spec-of-record inputs/i,
@@ -274,44 +266,11 @@ test("worktree guidance docs define the canonical checkout-isolation contract", 
   });
 
 
-test("phase-truth docs agree that Phase 8 is active and Phase 7 is deferred", async () => {
-  const [plan, docsIndex, implementationState, phase7, phase8, agents] = await Promise.all([
-    readRepo("PLAN.md"),
-    readRepo("docs/index.md"),
-    readRepo("docs/IMPLEMENTATION_STATE.md"),
-    readRepo("docs/phases/phase-7.md"),
-    readRepo("docs/phases/phase-8.md"),
-    readRepo("AGENTS.md"),
-  ]);
-
-  assert.match(plan, /Current active phase[\s\S]*Phase 8/i);
-  assert.match(plan, /Phase 7[\s\S]*deferred/i);
-
-  assert.match(docsIndex, /Active local phase doc[\s\S]*phase-8\.md/i);
+test("AGENTS keeps the one-phase-at-a-time rule and points to no deleted phase-flow doc", async () => {
+  const agents = await readRepo("AGENTS.md");
 
   assert.match(agents, /Implement one phase at a time/i);
-  assert.match(agents, /reprioritization exception/i);
-  assert.match(agents, /Implementation State\]\(docs\/IMPLEMENTATION_STATE\.md\)/i);
-
-  assert.match(implementationState, /Phase 7 second-repo pilot is deferred, not completed/i);
-  assert.match(implementationState, /Phase 8 is the active durable phase/i);
-  assert.match(implementationState, /explicit deviation from the repo's normal one-phase-at-a-time guidance/i);
-  assert.match(implementationState, /Active phase: `phase-8`/i);
-  assert.match(implementationState, /Status: `active \(slice-1-implemented; additional Phase 8 closure work pending\)`/i);
-  assert.doesNotMatch(implementationState, /Active phase: `phase-7`/i);
-
-  assert.match(phase7, /## Status[\s\S]*deferred/i);
-  assert.match(phase7, /Phase 8 was pulled forward ahead of this pilot/i);
-
-  assert.match(phase8, /## Status[\s\S]*active \(slice-1-implemented; additional Phase 8 closure work pending\)/i);
-  assert.match(phase8, /Phase 8 was pulled forward ahead of the deferred Phase 7 pilot/i);
-  assert.match(phase8, /\.pi\/dev-loop\/defaults\.yaml/i);
-  assert.match(phase8, /\.pi\/dev-loop\/settings\.yaml/i);
-  assert.match(phase8, /settings\.\*`?[^\n]*overrides\.\*`?[^\n]*defaults\.\*`?[^\n]*built-in defaults/i);
-  assert.match(phase8, /shipped-defaults vs repo-local-settings ownership/i);
-  assert.doesNotMatch(phase8, /durable-vs-session split/i);
-  assert.doesNotMatch(phase8, /session \(gitignored\) config/i);
-  assert.doesNotMatch(phase8, /defaults\.json|overrides\.json/i);
+  assert.doesNotMatch(agents, /IMPLEMENTATION_STATE|IMPLEMENTATION_WORKFLOW|PLAN\.md|docs\/phases/);
 });
 
 test("AGENTS stays compact and resolver-first", async () => {

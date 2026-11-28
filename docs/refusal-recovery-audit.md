@@ -291,7 +291,6 @@ One row per refusal site (line numbers drift; the baseline counts per file). The
 | `packages/core/src/loop/base-merge-verdict-carry.mjs:171` | MISSING |
 | `packages/core/src/loop/base-merge-verdict-carry.mjs:174` | MISSING |
 | `packages/core/src/loop/cache-telemetry-evidence.mjs:239` | MISSING |
-| `packages/core/src/loop/child-launch-bound.mjs:142` | MISSING |
 | `packages/core/src/loop/codex-execution-evidence.mjs:335` | MISSING |
 | `packages/core/src/loop/codex-execution-evidence.mjs:337` | MISSING |
 | `packages/core/src/loop/codex-execution-evidence.mjs:344` | MISSING |
@@ -336,7 +335,6 @@ One row per refusal site (line numbers drift; the baseline counts per file). The
 | `packages/core/src/loop/queue-driver.mjs:285` | MISSING |
 | `packages/core/src/loop/queue-driver.mjs:297` | MISSING |
 | `packages/core/src/loop/reviewer-unit-bound.mjs:363` | MISSING |
-| `packages/core/src/loop/role-budget-bound.mjs:229` | MISSING |
 | `packages/core/src/loop/run-context.mjs:211` | MISSING |
 | `packages/core/src/loop/run-context.mjs:227` | MISSING |
 | `packages/core/src/loop/run-context.mjs:235` | MISSING |

@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { resolveApprovalState, stripNonAssertionMarkdown, verifyReleaseApproval } from "../../scripts/release/verify-release-approval.mjs";
-import { APPROVAL_CODE_SPAN_FIXTURES } from "../../scripts/lib/code-span-fixtures.mjs";
+import { APPROVAL_CODE_SPAN_FIXTURES } from "../fixtures/code-span-fixtures.mjs";
 
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts", "release", "verify-release-approval.mjs");
 const runCli = (args, env = {}) => spawnSync("node", [CLI, ...args], { encoding: "utf8", env: { ...process.env, ...env } });

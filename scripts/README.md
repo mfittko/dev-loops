@@ -38,7 +38,7 @@ Optional:
 - `--root <path>` — override the repo root to scan (used by deterministic tests and local dry-runs against another checkout)
 
 Contract:
-- scans these markdown sources only: `README.md`, `PLAN.md`, `AGENTS.md`, `scripts/README.md`, `extension/README.md`, `docs/**/*.md` (excluding `docs/archive/**`), `skills/**/*.md`, and `agents/**/*.md`
+- scans these markdown sources only: `README.md`, `AGENTS.md`, `scripts/README.md`, `extension/README.md`, `docs/**/*.md` (excluding `docs/archive/**`), `skills/**/*.md`, and `agents/**/*.md`
 - validates inline relative markdown links after resolving them from the containing file
 - strips any `#fragment` before checking the filesystem
 - treats existing files and directories as valid targets

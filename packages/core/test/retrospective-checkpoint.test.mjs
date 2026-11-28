@@ -4,7 +4,6 @@ import { test } from "bun:test";
 import {
   RETROSPECTIVE_CHECKPOINT_STATE,
   RETROSPECTIVE_PROVENANCE,
-  RETROSPECTIVE_QUALIFYING_GATES,
   evaluateRetrospectiveGate,
   normalizeCheckpointCycleIdentity,
   normalizeRetroProvenance,
@@ -38,28 +37,6 @@ test("RETROSPECTIVE_CHECKPOINT_STATE exports all four required state values", ()
 
 test("RETROSPECTIVE_CHECKPOINT_STATE is frozen", () => {
   assert.ok(Object.isFrozen(RETROSPECTIVE_CHECKPOINT_STATE));
-});
-
-// ---------------------------------------------------------------------------
-// RETROSPECTIVE_QUALIFYING_GATES constants
-// ---------------------------------------------------------------------------
-
-test("RETROSPECTIVE_QUALIFYING_GATES includes the two required GitHub-first gates", () => {
-  assert.ok(RETROSPECTIVE_QUALIFYING_GATES.includes("copilot_pr_followup"));
-  assert.ok(RETROSPECTIVE_QUALIFYING_GATES.includes("issue_intake"));
-});
-
-test("RETROSPECTIVE_QUALIFYING_GATES is frozen", () => {
-  assert.ok(Object.isFrozen(RETROSPECTIVE_QUALIFYING_GATES));
-});
-
-test("RETROSPECTIVE_QUALIFYING_GATES aligns with actual DEV_LOOP_GATE values", () => {
-  for (const gate of RETROSPECTIVE_QUALIFYING_GATES) {
-    assert.ok(
-      Object.values(DEV_LOOP_GATE).includes(gate),
-      `qualifying gate "${gate}" must be a valid DEV_LOOP_GATE value`,
-    );
-  }
 });
 
 // ---------------------------------------------------------------------------

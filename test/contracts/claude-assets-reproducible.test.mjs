@@ -70,9 +70,8 @@ test("shared docs + dev-loop templates are bundled so generated skill links reso
   assert.ok(followup, "copilot-pr-followup skill must be generated");
   const source = "skills/copilot-pr-followup/SKILL.md";
   const raw = fs.readFileSync(path.join(repoRoot, source), "utf8");
-  const { version } = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
   assertPiOnlyProjection(raw, followup.content);
-  assert.equal(followup.content, transformSkill({ source, raw, version }));
+  assert.equal(followup.content, transformSkill({ source, raw }));
 });
 
 test("Pi-runtime-only prose is stripped from generated assets but retained in source (#817)", () => {

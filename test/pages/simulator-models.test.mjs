@@ -134,7 +134,7 @@ test('Overview adds refine and self-check nodes and keeps the existing trace lin
   assert.deepEqual(fresh.trace.slice(0, 4), [
     'startup: no AC / DoD matrix → grill first',
     'grill: AC / DoD matrix and non-goals recorded',
-    'refine: code graph read; work-order context (planned: 2588) and size forecast (planned: 2756)',
+    'refine: code graph read; work-order context and size forecast',
     'implement: commit A in the worktree',
   ]);
 });
@@ -175,11 +175,11 @@ test('Overview keeps every pre-existing scenario trace unchanged apart from the 
 
 // Early-detection scenarios: [overview id, detailed id, catching stage, planned issue].
 const EARLY = [
-  ['specgap', 26, 'grill', undefined],
-  ['oversize', 27, 'refine', 2756],
-  ['early', 28, 'pre-PR review', 2807],
-  ['nongoal', 29, 'self-check', undefined],
-  ['context', 30, 'draft_gate · gap', 2588],
+  ['specgap', 26, 'grill'],
+  ['oversize', 27, 'refine'],
+  ['early', 28, 'pre-PR review'],
+  ['nongoal', 29, 'self-check'],
+  ['context', 30, 'draft_gate · gap'],
 ];
 const DEFECT = { specgap: 'spec gap', oversize: 'oversize', early: 'docs drift', nongoal: 'non-goal breach', context: 'missing context' };
 
@@ -204,13 +204,12 @@ function runDetailed(overrides) {
   return { model, S };
 }
 
-for (const [oid, did, stage, planned] of EARLY) {
+for (const [oid, did, stage] of EARLY) {
   test(`Overview scenario ${oid} is caught at ${stage}`, () => {
     const model = overviewModel();
     const sc = model.SCEN.find((x) => x.id === oid);
     assert.equal(sc.w.defect, DEFECT[oid]);
     assert.equal(run(sc.w).st.caught, stage);
-    assert.equal(model.PLANNED[sc.planned], planned);
     assert.ok(sc.stage);
   });
   test(`Detailed scenario ${did} is caught at ${stage}`, () => {
@@ -219,16 +218,10 @@ for (const [oid, did, stage, planned] of EARLY) {
     const { model, S } = runDetailed(sc.w);
     assert.equal(S.done, true);
     assert.equal(S.st.caught, stage);
-    assert.equal(model.PLANNED[sc.planned], planned);
     assert.ok(sc.stage);
     assert.equal(S.trace.some((t) => t.includes('late catch')), stage.endsWith('gap'));
   });
 }
-
-test('Both models share the same PLANNED stage-to-issue map', () => {
-  assert.deepEqual(detailedModel().PLANNED, { refine: 2756, prepr: 2807, brief: 2588 });
-  assert.deepEqual(overviewModel().PLANNED, detailedModel().PLANNED);
-});
 
 test('Detailed keeps every pre-existing scenario trace unchanged apart from the size forecast line', () => {
   // Pins: sha256 prefix of the JSON trace, generated from the pre-change origin/main model.
@@ -247,28 +240,24 @@ test('Detailed routes a spec gap on a refined body through refine and an early d
   assert.equal(S.trace.some((t) => t.includes('late catch')), false);
 });
 
-// Both views flag an uncaught defect at the draft gate on every path, and derive the planned badge from the recorded catch.
-test('Both views flag the same late defects and derive the planned badge from the catch', () => {
+// Both views flag an uncaught defect at the draft gate on every path.
+test('Both views flag the same late defects', () => {
   const cases = [
-    [{ defect: 'missing context', early: true }, 'refine', 2588],
-    [{ defect: 'missing context', early: false }, 'draft_gate · gap', 2588],
-    [{ defect: 'missing context', early: false, judge: 'spec_cannot_decide' }, 'draft_gate · gap', 2588],
-    [{ defect: 'docs drift', early: true }, 'pre-PR review', 2807],
-    [{ defect: 'oversize', early: true }, 'refine', 2756],
-    [{ defect: 'oversize', early: false }, 'draft_gate · gap', 2756],
-    [{ defect: 'spec gap', matrix: false, early: true }, 'grill', undefined],
-    [{ defect: 'spec gap', matrix: true, early: true }, 'refine', undefined],
-    [{ defect: 'correctness', early: true }, 'self-check', undefined],
+    [{ defect: 'missing context', early: true }, 'refine'],
+    [{ defect: 'missing context', early: false }, 'draft_gate · gap'],
+    [{ defect: 'missing context', early: false, judge: 'spec_cannot_decide' }, 'draft_gate · gap'],
+    [{ defect: 'docs drift', early: true }, 'pre-PR review'],
+    [{ defect: 'oversize', early: true }, 'refine'],
+    [{ defect: 'oversize', early: false }, 'draft_gate · gap'],
+    [{ defect: 'spec gap', matrix: false, early: true }, 'grill'],
+    [{ defect: 'spec gap', matrix: true, early: true }, 'refine'],
+    [{ defect: 'correctness', early: true }, 'self-check'],
   ];
-  for (const [w, caught, planned] of cases) {
-    const detailed = detailedModel();
+  for (const [w, caught] of cases) {
     const d = runDetailed(w.matrix === false ? { defect: w.defect, body: 'checklist only' } : w);
-    const overview = overviewModel();
     const o = run(w);
     assert.equal(d.S.st.caught, caught, JSON.stringify(w));
     assert.equal(o.st.caught, caught, JSON.stringify(w));
-    assert.equal(detailed.plannedFor(d.S.st.caught, w.defect), planned, JSON.stringify(w));
-    assert.equal(overview.plannedFor(o.st.caught, w.defect), planned, JSON.stringify(w));
   }
   // Early stages off: the detailed forecast reports no split.
   const off = runDetailed({ defect: 'oversize', early: false });

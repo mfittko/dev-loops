@@ -28,7 +28,7 @@ Add `dev-loop queue` as a first-class subcommand that drives multiple issues/PRs
 - Queue UI (CLI only)
 - Automatic dependency detection (operator specifies `--after`)
 - Replacing single-issue `dev-loop` workflow
-- Queue persistence across machine restarts (Git-tracked `.pi/dev-loop-queue.json` is sufficient)
+- Queue persistence across machine restarts (the local, untracked `.pi/dev-loop-queue.json` is sufficient)
 - Parallel fan-out beyond the `--parallel` flag (no adaptive workload distribution)
 
 ## 3. Architecture
@@ -36,12 +36,14 @@ Add `dev-loop queue` as a first-class subcommand that drives multiple issues/PRs
 ### 3.1 CLI surface
 
 ```
-dev-loop queue <number...> [--parallel] [--after <issue>...]
+dev-loops queue run --repo <owner/name> [--merge-authorized] [--parallel] [--redispatch-max-retries <n>]
 ```
 
-- Positional args: ordered issue/PR numbers
+- `--repo`: the repository whose queue entries run
+- `--merge-authorized`: allow the queue to merge
 - `--parallel`: enable parallel execution (opt-in)
-- `--after <issue>`: declare dependency (repeatable); queue respects topological order
+- `--redispatch-max-retries`: cap on re-dispatches per entry
+- Entries and their `dependsOn` order come from `.pi/dev-loop-queue.json`
 
 ### 3.2 Queue state schema (`.pi/dev-loop-queue.json`)
 

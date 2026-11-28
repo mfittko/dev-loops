@@ -8,8 +8,7 @@ source_commit: f6619004d3edc2caccc98edd96914a5706c5d59b
 
 ## Ideas and roadmap (not decided)
 
-This section maps what the open backlog proposes. Every item here is not decided. Milestones are planning labels that the operator moves, and an open issue can change scope, move or close without shipping. The v2 epic states that it "defines requirements to qualify, not delivered capabilities", and a search of the repository code finds no v2 runtime (no Octokit and no SQLite store), so every v2 diagram is marked spec-only. The only code hits for "sqlite" are the `--experimental-sqlite` Node flag in `packages/core/src/loop/bash-command-classify.mjs` and its hook and test fixture copies. All issue counts come from one snapshot on 2026-11-23 of `gh issue list --state open --limit 500 --json number,title,milestone`, run in the repository checkout, which returned 237 open issues. Local phase status comes from `docs/IMPLEMENTATION_STATE.md` and `docs/phases/phase-8.md`.
-
+This section maps what the open backlog proposes. Every item here is not decided. Milestones are planning labels that the operator moves, and an open issue can change scope, move or close without shipping. The v2 epic states that it "defines requirements to qualify, not delivered capabilities", and a search of the repository code finds no v2 runtime (no Octokit and no SQLite store), so every v2 diagram is marked spec-only. The only code hits for "sqlite" are the `--experimental-sqlite` Node flag in `packages/core/src/loop/bash-command-classify.mjs` and its hook and test fixture copies. All issue counts come from one snapshot on 2026-11-23 of `gh issue list --state open --limit 500 --json number,title,milestone`, run in the repository checkout, which returned 237 open issues.
 <a id="d182"></a>
 
 ### Open issues per milestone
@@ -165,28 +164,6 @@ kanban
     k2840[Review catalog epic 2840]
     k3085[Loop state outside checkout 3085]
     k2995[v2 runtime epic 2995]
-```
-
-<a id="d188"></a>
-
-### Local phase status
-
-Type: `stateDiagram-v2`
-
-State diagram of the local durable phases. Phases 0 to 6 are complete, Phase 7 (second-repo pilot) is deferred and not started, and Phase 8 (workflow configuration contract) is active with slice 1 on `main`. The insight: Phase 8 was pulled forward ahead of Phase 7, and the state file leaves later phases undescribed on purpose, so any phase after 8 is not decided. Derived from `docs/IMPLEMENTATION_STATE.md` and `docs/phases/phase-8.md`; no count is shown.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Done
-    state "Phases 0 to 6 complete" as Done
-    state "Phase 7 pilot deferred" as P7
-    state "Phase 8 config contract active" as P8
-    state "Later phases (not decided)" as Later
-    Done --> P8: pulled forward
-    Done --> P7: planned order
-    P8 --> P7: revisit after Phase 8 closes
-    P7 --> Later: replan
-    P8 --> Later: replan
 ```
 
 <a id="d189"></a>

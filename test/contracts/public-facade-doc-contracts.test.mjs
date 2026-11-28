@@ -92,17 +92,12 @@ test("root docs path does not become a second semantic owner for the public dev-
 });
 
 test("workflow docs keep helper/runtime authority code-owned and dev-loop scope procedure-owned", async () => {
-  const [workflowDoc, scriptsReadme, localImplementationSkill] = await Promise.all([
-    readRepo("docs/IMPLEMENTATION_WORKFLOW.md"),
+  const [scriptsReadme, localImplementationSkill] = await Promise.all([
     readRepo("scripts/README.md"),
     readRepo("skills/local-implementation/SKILL.md"),
   ]);
 
-  assert.match(workflowDoc, /shipped helper\/runtime semantics stay owned by code, tests, and the relevant contract docs/i);
-  assert.match(workflowDoc, /\[Scripts Documentation\]\(\.\.\/scripts\/README\.md\) summarizes those semantics/i);
-  assert.match(workflowDoc, /state-graph\/contract docs under `docs\/` remain part of the authoritative shipped contract surface/i);
-  assertRuleOwned("WORKFLOW-DOCS-NO-REDEFINE-HELPER", "docs/IMPLEMENTATION_WORKFLOW.md");
-  assert.match(workflowDoc, /WORKFLOW-DOCS-NO-REDEFINE-HELPER/);
+  assertRuleOwned("WORKFLOW-DOCS-NO-REDEFINE-HELPER", "skills/docs/contract-style-guide.md");
 
   assert.match(scriptsReadme, /code, tests, and the helper entrypoints themselves are authoritative for shipped runtime behavior/i);
   assert.match(scriptsReadme, /this README summarizes those contracts for operators and maintainers; if behavior changes, update the code\/tests and then sync this document/i);
@@ -112,10 +107,8 @@ test("workflow docs keep helper/runtime authority code-owned and dev-loop scope 
 });
 
 test("repo docs define dev-loop as the public façade and keep internal routed logic behind it", async () => {
-  const [plan, agents, workflowDoc, publicContract, extensionReadme, devLoopSkill, copilotFollowupSkill] = await Promise.all([
-    readRepo("PLAN.md"),
+  const [agents, publicContract, extensionReadme, devLoopSkill, copilotFollowupSkill] = await Promise.all([
     readRepo("AGENTS.md"),
-    readRepo("docs/IMPLEMENTATION_WORKFLOW.md"),
     readRepo("skills/docs/public-dev-loop-contract.md"),
     readRepo("extension/README.md"),
     readRepo("skills/dev-loop/SKILL.md"),
@@ -132,15 +125,9 @@ test("repo docs define dev-loop as the public façade and keep internal routed l
   assert.match(publicContract, /Single-entrypoint convergence posture/i);
   assert.match(publicContract, /Surfaced-UX deprecation readiness bar/i);
 
-  for (const [label, content] of [
-    ["PLAN.md", plan],
-    ["AGENTS.md", agents],
-    ["docs/IMPLEMENTATION_WORKFLOW.md", workflowDoc],
-  ]) {
-    assert.match(content, /`dev-loop`/i, `${label} should mention the public dev-loop entrypoint`);
-    assert.match(content, /public/i, `${label} should preserve public-entrypoint framing`);
-    assert.match(content, /internal|canonical/i, `${label} should preserve internal/canonical framing`);
-  }
+  assert.match(agents, /`dev-loop`/i, "AGENTS.md should mention the public dev-loop entrypoint");
+  assert.match(agents, /public/i, "AGENTS.md should preserve public-entrypoint framing");
+  assert.match(agents, /internal|canonical/i, "AGENTS.md should preserve internal/canonical framing");
 
   assert.match(extensionReadme, /single public workflow entrypoint/i, "extension README should lead with the public entrypoint");
   assert.doesNotMatch(extensionReadme, /\/skill:copilot-dev-loop|\/skill:copilot-autopilot/i, "extension README should not surface internal seam names as readiness choices");
@@ -245,7 +232,7 @@ test("status reporting contract requires authoritative state-first resolution an
 
   assert.match(publicContract, /Authoritative-state-first status reporting contract/i);
   assertRuleOwned("FACADE-STATUS-AUTHORITATIVE-FAIL-CLOSED", PUBLIC_CONTRACT_PATH);
-  assert.match(publicContract, /resolveAuthoritativeDevLoopStatus/i);
+  assert.match(publicContract, /resolveAuthoritativeStartupResumeBundle/i);
   assert.match(publicContract, /issue↔PR linkage resolution/i);
   assert.match(publicContract, /detect-linked-issue-pr\.mjs/i);
 

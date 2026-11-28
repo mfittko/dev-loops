@@ -4,8 +4,6 @@ Start here for repository documentation.
 
 ## Current operator + contract surface
 
-- [Implementation State](./IMPLEMENTATION_STATE.md) — current execution snapshot and fresh-session read order
-- [Implementation Workflow](./IMPLEMENTATION_WORKFLOW.md) — workflow/process authority boundaries
 - [Conductor Routing Contract](../skills/docs/conductor-routing-contract.md) — canonical outer-loop routing contract
 - [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md) — canonical family-local PR lifecycle contract
 - [Pre-push Review Contract](../skills/docs/pre-pr-review-contract.md) — developer-briefed fresh-context general-purpose review before the first push; ephemeral, bounded, config-resolved model, pre-filter to the fan-out gate (issue #2305); plus bounded delta mode before a gate act-list or Copilot-thread fix push (issues #2423, #2575)
@@ -20,6 +18,11 @@ Start here for repository documentation.
 - [Gate Review Comment Contract](../skills/docs/gate-review-comment-contract.md)
 - [Worktree Usage Guidance](../skills/docs/worktree-guidance.md) — canonical local checkout isolation and cleanup rules
 - [Steering Contract](./steering-contract.md)
+- [Fix Loop State Graph](./fix-loop-state-graph.md)
+- [Refinement Grill State Graph](./refinement-grill-state-graph.md)
+- [Migrating to dev-loops](./migrating-to-dev-loops.md)
+- [Repo Wiki, Manual First](./repo-wiki-manual-first.md)
+- [Simulator](./simulator.md)
 - [UI Validation Contract](../skills/docs/ui-validation-contract.md)
 - [UI Smoke Harness](../skills/docs/ui-smoke-harness.md)
 - [UI Artifact Contract](../skills/docs/ui-artifact-contract.md)
@@ -29,14 +32,6 @@ Start here for repository documentation.
 - [A/B Contrast Deslop Step](../skills/docs/ab-contrast-deslop-step.md)
 - [Docs-Grill Step](../skills/docs/docs-grill-step.md) — autonomous in-loop check of a change against its contracts/docs
 - [Bun 1.4.1 benchmark verdict](./benchmarks/bun-1.4.1/verdict.md) — accepted contributor-toolchain migration evidence
-
-## Active local phase doc
-
-- [Phase 8 Plan](./phases/phase-8.md) — active phase plan
-
-## Deferred local phase docs
-
-- [Phase 7 Plan](./phases/phase-7.md) — deferred second-repo pilot plan
 
 ## Articles
 
@@ -48,8 +43,6 @@ Start here for repository documentation.
 
 ## Presentations
 
-- [Applied Dev Loops Presentation](./presentations/applied-dev-loops-presentation.md)
-- [Process Observability Presentation](./presentations/process-observability-presentation.md)
 - [The State Graph Is the Surface (deck)](./presentations/state-graph-surface.html) — the graph/loop reframe in a self-contained presentation
 - [The State Graph Is the Surface (Slidev companion)](./presentations/state-graph-surface-presentation.md) — headline-level source companion to the publishable HTML deck
 - [How dev-loops Decided Itself Into Shape (deck)](./presentations/how-dev-loops-decided-itself.html) — the evolution/history narrated through the decision log

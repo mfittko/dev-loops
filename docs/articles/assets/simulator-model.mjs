@@ -165,7 +165,7 @@ export function createModel() {
       ["synthesize","synthesize","R5 write the sections",260,282,{a:"agent",src:"GRILL-SUBLOOP-FULL-REWRITE, GRILL-SUBLOOP-NO-EMBED-SYNTHESIS, GRILL-SUBLOOP-RATIONALE-COMMENT",L:["goal","The agent replaces the AC / DoD matrix and Non-goals sections and posts the results comment. The raw Q&A stays in tmp/."]}],
       ["re_grill","re_grill","R6 fixed point?",260,366,{a:"agent,code",src:"GRILL-SUBLOOP-ITERATE-TO-CLEAN",L:["retry","The grill runs again on the new body. It stops at a fixed point, with no numeric cap in code."]}],
       ["blocked","blocked","blocked_needs_user_decision",10,156,{k:"ret exit",w:180}],
-      ["forecast","size forecast","R7 band check",540,198,{a:"agent",src:"planned: issue #2756 (size forecast)",L:["goal","Refine records the size forecast. A unit over the band is split here, before any code exists. Planned: issue 2756."]}],
+      ["forecast","size forecast","R7 band check",540,198,{a:"agent",src:"size forecast, issue #2756",L:["goal","Refine records the size forecast. A unit over the band is split here, before any code exists. Planned: issue 2756."]}],
       ["grill_clean","grill_clean","back to the lifecycle",540,114,{k:"ret"}],
       ["needs_human_handoff","handoff","needs_human_handoff",540,282,{k:"ret exit"}],
     ],
@@ -196,7 +196,7 @@ export function createModel() {
       ["G13","ledger","G13 durable findings",1,1,{a:"code",src:"write-gate-findings-log.mjs; GATE-EXEC-DISPOSITION-LEDGER, GATE-EXEC-ANGLE-COVERAGE",L:["facts","The ledger is the durable record of the round. It refuses a verdict that contradicts its findings."]}],
       ["G14","judge-pass","G14 act list",1,0,{k:"gate",a:"code",src:"scripts/loop/judge-pass.mjs; GATE-EXEC-DEFERRAL-RECORD",L:["output","judge-pass turns the judge verdict into the act list and one batched deferral comment."]}],
       ["G16","post verdict","G16 one COMMENT review",2,0,{a:"agent,code",src:"scripts/github/upsert-checkpoint-verdict.mjs; GATE-COMMENT-SINGLE-SURFACE; ADR 0089",L:["output","One COMMENT review per round: inline threads for locatable findings, the rest in the body."]}],
-      ["G17","fixer","G17 act list only",2,1,{a:"agent",src:"scripts/loop/emit-fixer-work-order.mjs FIXER_PHASES; role-budget-bound.mjs",L:["jobcard","The fixer gets only the act list. Phase commit_only commits without a push."]}],
+      ["G17","fixer","G17 act list only",2,1,{a:"agent",src:"scripts/loop/emit-fixer-work-order.mjs FIXER_PHASES",L:["jobcard","The fixer gets only the act list. Phase commit_only commits without a push."]}],
       ["G18","delta review","G18 pre-push, max 3",2,2,{k:"gate",a:"agent,code",src:"pre-push-delta-review.mjs decideDeltaNextStep; PRE-PUSH-DELTA-EXIT-BOUND",L:["retry","The delta review checks the fix before the push. It runs at most 3 times."]}],
       ["G19","reply / resolve","G19 dispositions",2,3,{a:"agent,code",src:"reply-resolve-review-thread.mjs; verify-fixer-disposition.mjs; GATE-EXEC-FIXER-DISPOSITION-BOUNDARY",L:["evidence","Each thread gets a disposition. fixed needs a contained 40-character SHA."]}],
       ["G20","gate close","G20 close threads",2,4,{k:"gate",a:"code",src:"scripts/github/close-gate-findings.mjs; _gate-finding-surface.mjs isDeferredAtRound",L:["budget","Threads close by severity and round. A medium closes only after the fix window."]}],
@@ -366,7 +366,7 @@ export function createModel() {
       ["L0","pre-flight","L0 pre-flight-gate",0,0,{k:"gate",a:"code",src:"LOCAL-PREFLIGHT-GATE-MANDATORY; scripts/loop/pre-flight-gate.mjs",L:["failclosed","The worktree and branch must match before any write."]}],
       ["L1","resume point","L1 earliest open phase",0,1,{a:"agent",src:"SKILL.md \"Determine where to resume\"",L:["facts","The agent reads IMPLEMENTATION_STATE.md, the phase doc and tmp/phases/index.json. Docs win on disagreement."]}],
       ["L2","plan","L2 variants, merged",0,2,{a:"agent",src:"LOCAL-PLAN-REVIEW-GATE, LOCAL-PHASE-ONE-AT-A-TIME",L:["check","The refiner writes 2 or 3 variants and a merged plan. The merged plan passes an adversarial review first."]}],
-      ["L3","implement","L3 test first",0,3,{a:"agent,code",src:"LOCAL-TEST-FIRST-COVERAGE; VALIDATE-TARGETED-FIRST; role-budget-bound.mjs",L:["back","Tests first, then code, then the narrowest targeted check. A failing check sends the work back."]}],
+      ["L3","implement","L3 test first",0,3,{a:"agent,code",src:"LOCAL-TEST-FIRST-COVERAGE; VALIDATE-TARGETED-FIRST",L:["back","Tests first, then code, then the narrowest targeted check. A failing check sends the work back."]}],
       ["L4","self-check","L4 one pass",0,4,{a:"agent",src:"LOCAL-DEV-SELF-CHECK-NO-FANOUT",L:["check","Exactly one self-review. It is not gate evidence."]}],
       ["L5","docs + retro","L5 fresh context",1,4,{a:"agent",src:"LOCAL-RETRO-FRESH-CONTEXT-DISPATCH, LOCAL-RETROSPECTIVE-REQUIRED",L:["nested","A fresh-context subagent writes the summary, the phase retro and the manifest."]}],
       ["L6","exit gate","L6 clean worktree",1,3,{k:"gate",a:"code",src:"LOCAL-COMMIT-BEFORE-EXIT; hook-decisions.mjs decideSubagentStopGuard",L:["failclosed","A dirty worktree under tmp/worktrees/ blocks SubagentStop with exit 2."]}],
@@ -408,12 +408,6 @@ export function createModel() {
     edges:[["RL1","RL2",""],["RL2","RL3","stable"],["RL2","RL4","prerelease",{c:1,side:"r",bulge:44}],["RL3","RL4","approve release v<version>"],["RL4","RL5",""],["RL5","RL6",""]]},
   };
   const ORDER = ["life","startup","rules","queue","grill","epic","impl","spike","plan","light","gate","ready","cop","merge","retro","review","ui","release"];
-  // Planned stages and the issue that owns each.
-  const PLANNED = {refine:2756, prepr:2807, brief:2588};
-  // The planned issue behind a recorded catch. A catch at a shipped stage (grill, self-check) or none has no badge.
-  // A spec gap has no owner: refine is shipped and only its size forecast is planned.
-  const OWNER = {oversize:"refine", "missing context":"brief", "docs drift":"prepr"};
-  const plannedFor = (caught, defect) => caught && !["—","grill","self-check"].includes(caught) ? PLANNED[OWNER[defect]] : undefined;
   // ---------- starting conditions ----------
   const F = [
     {g:"Entry", k:"entry", lbl:"entry flag", type:"sel", opts:["--issue","--pr","--pr --review","--pr --ui-review","--plan-file","--spike","--lightweight","--lightweight --issue"]},
@@ -480,10 +474,10 @@ export function createModel() {
     {id:24, g:"Other routes", name:"Spike graduates", about:"A spike file with its Recommendation filled, exited with graduate.", shows:"The spike writes a plan file. The plan enters local-planning at refine, a person reviews it, and promote opens a draft PR.", w:{entry:"--spike"}},
     {id:21, g:"Runtime", name:"Agent stall and recovery", about:"The developer child goes silent for more than 5 minutes during implementation.", shows:"The stall detector returns stalled. Recovery verifies, bails the child and starts a fresh-context child. The run continues.", w:{stall:true}},
     {id:26, g:"Early detection", name:"Spec gap caught at grill", about:"The issue body is a checklist, and its spec has a gap.", shows:"The grill writes the missing AC into the matrix. The record shows the catch at the grill, before any code exists.", stage:"grill", w:{body:"checklist only", defect:"spec gap"}},
-    {id:27, g:"Early detection", name:"Oversize, split at planning", about:"The size forecast is over the band for one PR.", shows:"Refine splits the unit before any code exists. The first slice continues and the record shows the catch at refine.", stage:"refine · size forecast", planned:"refine", w:{defect:"oversize"}},
-    {id:28, g:"Early detection", name:"Docs drift, caught pre-PR", about:"The change leaves a doc stale.", shows:"The pre-PR review sweep finds it before the first push. A local edit fixes it.", stage:"pre-PR review · stale-surface sweep", planned:"prepr", w:{defect:"docs drift"}},
+    {id:27, g:"Early detection", name:"Oversize, split at planning", about:"The size forecast is over the band for one PR.", shows:"Refine splits the unit before any code exists. The first slice continues and the record shows the catch at refine.", stage:"refine · size forecast", w:{defect:"oversize"}},
+    {id:28, g:"Early detection", name:"Docs drift, caught pre-PR", about:"The change leaves a doc stale.", shows:"The pre-PR review sweep finds it before the first push. A local edit fixes it.", stage:"pre-PR review · stale-surface sweep", w:{defect:"docs drift"}},
     {id:29, g:"Early detection", name:"Non-goal breach, self-check", about:"The diff touches something the issue lists as a non-goal.", shows:"The developer self-check compares the diff with the AC, ADRs and non-goals and catches it before asking for a review.", stage:"developer self-check (L4)", w:{defect:"non-goal breach"}},
-    {id:30, g:"Early detection", name:"Context gap reaches the gate", about:"The work order lacks a fact the developer needed. Every early stage misses it.", shows:"The draft gate finds it and the record flags the late catch as a gap. The fix costs a new head and another round.", stage:"draft_gate · gap", planned:"brief", w:{defect:"missing context", early:false}},
+    {id:30, g:"Early detection", name:"Context gap reaches the gate", about:"The work order lacks a fact the developer needed. Every early stage misses it.", shows:"The draft gate finds it and the record flags the late catch as a gap. The fix costs a new head and another round.", stage:"draft_gate · gap", w:{defect:"missing context", early:false}},
     {id:25, g:"Runtime", name:"Harness wait difference", about:"A ready PR started with --pr on Pi, waiting for Copilot.", shows:"On Pi the child exits on a pending wait and the main agent re-dispatches it. Switch harness to claude: the child waits inline.", w:{entry:"--pr", prState:"ready, no Copilot review yet", harness:"pi"}},
   ];
   // ---------- world helpers ----------
@@ -748,7 +742,7 @@ export function createModel() {
     L4(s,w,f){ const c = catchAt(s, w, "selfcheck"); return {next:"L5", title:"L4 self-check", note:"One self-review of the diff against the AC, the ADRs and the non-goals. No fan-out; it is not gate evidence.", pill:[c ? "caught" : "done","yes"], set:c ? c.set : undefined, tr:"L4: self-check" + (c ? c.tr : "")}; },
     L5(s,w,f){ return {next:"L6", title:"L5 docs and retro", note:"A fresh-context subagent writes summary.md, retrospective.md, the manifest and IMPLEMENTATION_STATE.md.", pill:["written","yes"], tr:"L5: phase docs and retro"}; },
     L6(s,w,f){ return {next:"L7", title:"L6 exit gate", note:"git status --porcelain is clean under tmp/worktrees/. SubagentStop is allowed.", pill:["clean","yes"], read:["dirty"], tr:"L6: worktree clean"}; },
-    L7(s,w,f){ const c = catchAt(s, w, "prepr"); return {next:"L8", title:"L7 pre-PR review", note:"One fresh reviewer (role pre-push-reviewer) reads the change and sweeps the surfaces it leaves stale. The sweep is planned (issue 2807). " + (c ? "It catches the docs drift, and a local edit fixes it before the push." : "It is clean in round 1 of at most 2.") + " The branch is pushed once.", pill:[c ? "caught" : "clean","yes"], set:{headSha:"A", ...(c ? c.set : {})}, tr:c ? "L7: pre-PR review:" + c.tr + "; push A" : "L7: pre-PR review clean, push A"}; },
+    L7(s,w,f){ const c = catchAt(s, w, "prepr"); return {next:"L8", title:"L7 pre-PR review", note:"One fresh reviewer (role pre-push-reviewer) reads the change and sweeps the surfaces it leaves stale. " + (c ? "It catches the docs drift, and a local edit fixes it before the push." : "It is clean in round 1 of at most 2.") + " The branch is pushed once.", pill:[c ? "caught" : "clean","yes"], set:{headSha:"A", ...(c ? c.set : {})}, tr:c ? "L7: pre-PR review:" + c.tr + "; push A" : "L7: pre-PR review clean, push A"}; },
     L8(s,w,f){ return {next:{up:"pr",via:"ret_pr"}, title:"L8 finalize", note: lightweight(w) ? "The spec is the PR body. The next step creates the draft PR." : "Tracker-backed: the next step is a draft PR and draft_gate. A direct local merge is not allowed.", pill:["draft PR","info"], tr:"L8: finalize → draft PR"}; },
   },
 
@@ -1053,5 +1047,5 @@ export function createModel() {
   const RORDER = ["operator","orchestrator","coordinator","gate-coordinator","refiner","developer","reviewer","judge","fixer","docs","retro agent","script","Copilot","CI"];
   const RDESC = {"operator":"the person who owns the work: intent, AC, waivers, merge","orchestrator":"main session: dispatches coordinators, merges, runs retros","coordinator":"dev-loop coordinator: drives one unit through its steps","gate-coordinator":"runs one gate round for one head","refiner":"grills and refines specs","developer":"writes the change and its tests","reviewer":"pre-PR, lens and delta reviews","judge":"act, defer or reject per finding","fixer":"works the act list, replies on threads","docs":"keeps docs in line with the change","retro agent":"fresh-context review of the run","script":"deterministic code decides","Copilot":"external PR reviewer","CI":"GitHub Actions checks"};
   const JUMP = {3:"refine",4:"refine",5:"refine",9:"draft_gate",10:"draft_gate",11:"draft_gate",12:"draft_gate",13:"draft_gate",14:"draft_gate",15:"draft_gate",16:"ready",17:"ready",18:"copilot",19:"copilot",20:"merge",21:"implement",24:"spike"};
-  return { I, GR, ORDER, F, SC, PLANNED, plannedFor, H, GROUPS, ROLE, ROLE_INF, RK, RORDER, RDESC, JUMP, defaults, fresh, relevant };
+  return { I, GR, ORDER, F, SC, H, GROUPS, ROLE, ROLE_INF, RK, RORDER, RDESC, JUMP, defaults, fresh, relevant };
 }

@@ -1,0 +1,3 @@
+### Changed
+
+- Removed the unwired role budget bound and child launch bound (`@dev-loops/core/loop/role-budget-bound` and `@dev-loops/core/loop/child-launch-bound`), the dead status reconcile path (`resolveAuthoritativeDevLoopStatus`, `DEV_LOOP_STATUS_REPORT_KIND`), the retired `retrospective_gate_pending` status and `RETROSPECTIVE_QUALIFYING_GATES`; retired this repository's own phase flow (`PLAN.md`, `docs/IMPLEMENTATION_STATE.md`, `docs/IMPLEMENTATION_WORKFLOW.md`, `docs/phases/`; ADR 0340); recorded the delivered and withdrawn parts of ADR 0074 (ADR 0341); and corrected stale docs, headers and config pointers (#3476)

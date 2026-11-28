@@ -27,7 +27,6 @@ import {
   DEV_LOOP_ROUTE_KIND,
   DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND,
   DEV_LOOP_STATUS,
-  DEV_LOOP_STATUS_REPORT_KIND,
   DEV_LOOP_TARGET_KIND,
   DEV_LOOP_TARGET_PREFERENCE,
   DEV_LOOP_VARIATION_PARAMETER_CONTRACT,
@@ -1391,116 +1390,6 @@ const BUILT_IN_DEFAULT_TARGET_PREFERENCE = DEV_LOOP_TARGET_PREFERENCE.PREFER_LOC
 // because test suites run from the repo root and would pick up the
 // repo's own .devloops, making tests depend on live config.
 const DEFAULT_TARGET_PREFERENCE = BUILT_IN_DEFAULT_TARGET_PREFERENCE;
-
-function buildStatusReconcile(
-  reason,
-  canonicalState = null,
-  nextAction = "Stop and reconcile the authoritative active artifact and current loop state before answering status.",
-  executionMode = DEV_LOOP_EXECUTION_MODE.BOUNDED_HANDOFF,
-  waitSemantics = DEV_LOOP_WAIT_SEMANTICS.DEFAULT,
-  waitTimeoutPolicy = null,
-  asyncRun = null,
-  { artifactState = null, loopState = null, issueLinkageResolution = null } = {},
-) {
-  const result = {
-    statusKind: DEV_LOOP_STATUS_REPORT_KIND.NEEDS_RECONCILE,
-    reason,
-    activeArtifact: canonicalState ? buildStatusArtifactIdentity(canonicalState) : null,
-    artifactState: null,
-    loopState: "unknown",
-    nextAction,
-    selectedGate: DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE,
-    routeKind: DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE,
-    selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.NONE,
-    executionMode,
-    waitSemantics,
-    waitTimeoutPolicy,
-    asyncRun,
-    canonicalState,
-  };
-  return {
-    ...result,
-    contractTrace: buildContractTrace({
-      selectedGate: result.selectedGate,
-      routeKind: result.routeKind,
-      selectedStrategy: result.selectedStrategy,
-      executionMode,
-      waitSemantics,
-      waitTimeoutPolicy,
-      canonicalState,
-      reason,
-      boundary: {
-        boundaryKind: "authoritative_status_refresh",
-        refreshRequired: true,
-        refreshReason: "Status answers are derived from refreshed authoritative state and must fail closed when that refresh cannot justify the stop classification.",
-        ...(loopState !== null ? { loopState } : {}),
-        ...(artifactState !== null ? { artifactState } : {}),
-        ...(issueLinkageResolution !== null ? { issueLinkageResolution } : {}),
-      },
-    }),
-  };
-}
-
-export function resolveAuthoritativeDevLoopStatus(input = {}) {
-  const { intent: _ignoredIntent, ...statusInput } = input;
-  const bundle = resolveAuthoritativeStartupResumeBundle(statusInput);
-  if (bundle.bundleKind === DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND.NEEDS_RECONCILE) {
-    return buildStatusReconcile(
-      bundle.reason,
-      bundle.canonicalState,
-      bundle.nextAction,
-      bundle.executionMode,
-      bundle.waitSemantics,
-      bundle.waitTimeoutPolicy,
-      bundle.asyncRun,
-      {
-        artifactState: bundle.contractTrace?.stateRefresh?.artifactState ?? bundle.artifactState,
-        loopState: bundle.contractTrace?.stateRefresh?.loopState ?? bundle.loopState,
-        issueLinkageResolution: bundle.contractTrace?.stateRefresh?.issueLinkageResolution ?? bundle.issueLinkageResolution,
-      },
-    );
-  }
-
-  const result = {
-    statusKind: DEV_LOOP_STATUS_REPORT_KIND.RESOLVED,
-    activeArtifact: bundle.activeArtifact,
-    artifactState: bundle.artifactState,
-    loopState: bundle.loopState,
-    nextAction: bundle.nextAction,
-    selectedGate: bundle.selectedGate,
-    routeKind: bundle.routeKind,
-    selectedStrategy: bundle.selectedStrategy,
-    executionMode: bundle.executionMode,
-    waitSemantics: bundle.waitSemantics,
-    waitTimeoutPolicy: bundle.waitTimeoutPolicy,
-    asyncRun: bundle.asyncRun,
-    issueAssignmentSeam: bundle.issueAssignmentSeam,
-    canonicalState: bundle.canonicalState,
-    reason: bundle.reason,
-  };
-
-  return {
-    ...result,
-    contractTrace: buildContractTrace({
-      selectedGate: result.selectedGate,
-      routeKind: result.routeKind,
-      selectedStrategy: result.selectedStrategy,
-      executionMode: result.executionMode,
-      waitSemantics: result.waitSemantics,
-      waitTimeoutPolicy: result.waitTimeoutPolicy,
-      canonicalState: result.canonicalState,
-      reason: result.reason,
-      boundary: {
-        boundaryKind: "authoritative_status_refresh",
-        refreshRequired: true,
-        refreshReason: "Status answers record the authoritative refreshed loop state that justified the reported state.",
-        loopState: result.loopState,
-        artifactState: result.artifactState,
-        issueLinkageResolution: bundle.issueLinkageResolution,
-      },
-    }),
-  };
-}
 
 export function evaluatePublicDevLoopRouting(input = {}) {
   const intent = normalizeIntent(input.intent);

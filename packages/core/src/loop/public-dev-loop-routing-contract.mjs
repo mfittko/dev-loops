@@ -50,7 +50,6 @@ export const DEV_LOOP_STATUS = Object.freeze({
   APPROVAL_READY: "approval_ready",
   MERGE_READY: "merge_ready",
   DONE: "done",
-  RETROSPECTIVE_GATE_PENDING: "retrospective_gate_pending",
 });
 
 export const DEV_LOOP_AUTHORIZATION = Object.freeze({
@@ -101,11 +100,6 @@ export const DEV_LOOP_ARTIFACT_STATE = Object.freeze({
   CLOSED: "closed",
   MERGED: "merged",
   NOT_APPLICABLE: "not_applicable",
-});
-
-export const DEV_LOOP_STATUS_REPORT_KIND = Object.freeze({
-  RESOLVED: "resolved",
-  NEEDS_RECONCILE: "needs_reconcile",
 });
 
 export const DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION = Object.freeze({

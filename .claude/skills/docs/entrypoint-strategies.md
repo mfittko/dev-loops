@@ -4,7 +4,7 @@ State vocabulary, first actions and required reads by strategy.
 
 ## Copilot PR follow-up
 
-State vocabulary: `waiting_for_initial_copilot_implementation`, `waiting_for_copilot_review`, `review_feedback_received`, `linked_pr_ready_for_followup`, `blocked_needs_user_decision`
+State vocabulary: `waiting_for_initial_copilot_implementation`, `waiting_for_copilot_review`, `linked_pr_ready_for_followup`, `blocked_needs_user_decision`
 
 Next-action sentence: "Load PR state from `detect-copilot-loop-state.mjs`, resolve gate coordination, then execute the appropriate follow-up action (fix, review, wait, or escalate)."
 

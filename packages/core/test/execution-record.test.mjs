@@ -14,7 +14,7 @@ import {
   validateExecutionUnitRecord,
   writeExecutionUnitRecord,
 } from "../src/loop/execution-record.mjs";
-import { HARNESS_VALUES } from "../src/loop/role-budget-bound.mjs";
+import { HARNESS_VALUES } from "../src/loop/reviewer-unit-bound.mjs";
 
 const HEAD_SHA = "a".repeat(40);
 

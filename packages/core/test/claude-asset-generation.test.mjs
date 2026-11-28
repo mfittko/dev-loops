@@ -37,12 +37,12 @@ test("rewriteCliInvocation keeps a top-level skill-local <resolved-skill-scripts
 
 test("transformAgent and transformSkill rewrite the package-local CLI form to the launcher form", () => {
   const agentRaw = `---\nname: a\ndescription: d\ntools: [read]\n---\nRun \`node <dev-loops-package-root>/cli/index.mjs loop startup\`.\n`;
-  const agent = transformAgent({ source: "agents/a.agent.md", raw: agentRaw, version: "1.2.3" });
+  const agent = transformAgent({ source: "agents/a.agent.md", raw: agentRaw });
   assert.ok(agent.includes("dev-loops-run cli/index.mjs loop startup"));
   assert.equal(agent.includes("<dev-loops-package-root>"), false);
 
   const skillRaw = `---\nname: s\ndescription: d\nallowed-tools: read\n---\nRun \`node <dev-loops-package-root>/cli/index.mjs loop info\`.\n`;
-  const skill = transformSkill({ source: "skills/s/SKILL.md", raw: skillRaw, version: "1.2.3" });
+  const skill = transformSkill({ source: "skills/s/SKILL.md", raw: skillRaw });
   assert.ok(skill.includes("dev-loops-run cli/index.mjs loop info"));
   assert.equal(skill.includes("<dev-loops-package-root>"), false);
 });
@@ -188,7 +188,7 @@ test("isSkillExcludedFromClaude detects exclusion flags", () => {
 
 test("transformCommand keeps description+argument-hint, rewrites CLI, adds banner (#972)", () => {
   const raw = `---\ndescription: "Show state."\nargument-hint: "<issue|pr>"\n---\nRun \`node <dev-loops-package-root>/cli/index.mjs loop info --issue $ARGUMENTS\`.\n`;
-  const out = transformCommand({ source: "commands/info.command.md", raw, version: "1.2.3" });
+  const out = transformCommand({ source: "commands/info.command.md", raw });
   assert.match(out, /^---\ndescription: "Show state\."\nargument-hint: "<issue\|pr>"\n---\n/);
   assert.match(out, /<!-- GENERATED from commands\/info\.command\.md by/);
   assert.ok(out.includes("dev-loops-run cli/index.mjs loop info --issue $ARGUMENTS"));

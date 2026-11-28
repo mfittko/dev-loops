@@ -16,7 +16,6 @@ import {
   DEV_LOOP_ROUTE_KIND,
   DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND,
   DEV_LOOP_STATUS,
-  DEV_LOOP_STATUS_REPORT_KIND,
   DEV_LOOP_TARGET_KIND,
   DEV_LOOP_TARGET_PREFERENCE,
   DEV_LOOP_VARIATION_PARAMETER_CONTRACT,
@@ -29,7 +28,6 @@ import {
   PUBLIC_DEV_LOOP_GATE_CONTRACT,
   publicContractUrl,
   readFile,
-  resolveAuthoritativeDevLoopStatus,
   resolveAuthoritativeStartupResumeBundle,
   RETROSPECTIVE_CHECKPOINT_STATE,
   test,
@@ -694,27 +692,6 @@ test("authoritative startup/resume bundle preserves inspect semantics despite mi
   assert.equal(bundle.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
 });
 
-test("authoritative status fails closed when retrospective checkpoint input is invalid", () => {
-  const report = resolveAuthoritativeDevLoopStatus({
-    currentState: {
-      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
-      ownership: DEV_LOOP_ACTOR.COPILOT,
-      nextActor: DEV_LOOP_ACTOR.COPILOT,
-      status: DEV_LOOP_STATUS.ACTIVE,
-      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
-    },
-    artifactState: DEV_LOOP_ARTIFACT_STATE.OPEN,
-    issueLinkageResolution: DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.NOT_APPLICABLE,
-    loopState: "copilot_followup_active",
-    retrospectiveCheckpointState: "bogus",
-  });
-
-  assert.equal(report.statusKind, DEV_LOOP_STATUS_REPORT_KIND.NEEDS_RECONCILE);
-  assert.equal(report.selectedGate, DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE);
-  assert.match(report.reason, /retrospective checkpoint-state/i);
-});
-
-
 test("authoritative startup/resume bundle keeps the routed nextAction on a missing retrospective checkpoint", () => {
   const bundle = resolveAuthoritativeStartupResumeBundle({
     currentState: {
@@ -735,28 +712,6 @@ test("authoritative startup/resume bundle keeps the routed nextAction on a missi
   assert.equal(bundle.contractTrace.stateRefresh.loopState, "copilot_followup_active");
   assert.equal(bundle.contractTrace.stateRefresh.artifactState, DEV_LOOP_ARTIFACT_STATE.OPEN);
   assert.equal(bundle.contractTrace.stateRefresh.issueLinkageResolution, DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.NOT_APPLICABLE);
-});
-
-test("authoritative status keeps the routed nextAction on a missing retrospective checkpoint", () => {
-  const report = resolveAuthoritativeDevLoopStatus({
-    currentState: {
-      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
-      ownership: DEV_LOOP_ACTOR.COPILOT,
-      nextActor: DEV_LOOP_ACTOR.COPILOT,
-      status: DEV_LOOP_STATUS.ACTIVE,
-      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
-    },
-    artifactState: DEV_LOOP_ARTIFACT_STATE.OPEN,
-    issueLinkageResolution: DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.NOT_APPLICABLE,
-    loopState: "copilot_followup_active",
-    retrospectiveCheckpointState: RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
-  });
-
-  assert.equal(report.statusKind, DEV_LOOP_STATUS_REPORT_KIND.RESOLVED);
-  assert.doesNotMatch(report.nextAction, /Complete or explicitly skip/i);
-  assert.equal(report.contractTrace.stateRefresh.loopState, "copilot_followup_active");
-  assert.equal(report.contractTrace.stateRefresh.artifactState, DEV_LOOP_ARTIFACT_STATE.OPEN);
-  assert.equal(report.contractTrace.stateRefresh.issueLinkageResolution, DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.NOT_APPLICABLE);
 });
 
 test("missing retrospective checkpoint leaves the contract trace classification unchanged", () => {
@@ -799,45 +754,4 @@ test("authoritative startup/resume bundle carries refreshed wait-state trace con
   assert.equal(bundle.contractTrace.stateRefresh.boundaryKind, "startup_resume_refresh");
   assert.equal(bundle.contractTrace.stateRefresh.loopState, "waiting_for_copilot_review");
   assert.equal(bundle.contractTrace.stateRefresh.artifactState, DEV_LOOP_ARTIFACT_STATE.OPEN);
-});
-
-test("authoritative status carries resolved wait-state trace context", () => {
-  const report = resolveAuthoritativeDevLoopStatus({
-    currentState: {
-      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
-      ownership: DEV_LOOP_ACTOR.COPILOT,
-      nextActor: DEV_LOOP_ACTOR.COPILOT,
-      status: DEV_LOOP_STATUS.WAITING,
-      authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
-    },
-    artifactState: DEV_LOOP_ARTIFACT_STATE.OPEN,
-    issueLinkageResolution: DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.NOT_APPLICABLE,
-    loopState: "waiting_for_copilot_review",
-  });
-
-  assert.equal(report.statusKind, DEV_LOOP_STATUS_REPORT_KIND.RESOLVED);
-  assert.equal(report.contractTrace.decision.contractClassification, DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.HEALTHY_WAIT);
-  assert.equal(report.contractTrace.stateRefresh.boundaryKind, "authoritative_status_refresh");
-  assert.equal(report.contractTrace.stateRefresh.loopState, "waiting_for_copilot_review");
-  assert.equal(report.contractTrace.stateRefresh.artifactState, DEV_LOOP_ARTIFACT_STATE.OPEN);
-});
-
-test("authoritative status carries contract trace classification on a missing retrospective checkpoint", () => {
-  const report = resolveAuthoritativeDevLoopStatus({
-    currentState: {
-      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
-      ownership: DEV_LOOP_ACTOR.COPILOT,
-      nextActor: DEV_LOOP_ACTOR.COPILOT,
-      status: DEV_LOOP_STATUS.ACTIVE,
-      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
-    },
-    artifactState: DEV_LOOP_ARTIFACT_STATE.OPEN,
-    issueLinkageResolution: DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.NOT_APPLICABLE,
-    loopState: "copilot_followup_active",
-    retrospectiveCheckpointState: RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
-  });
-
-  assert.equal(report.statusKind, DEV_LOOP_STATUS_REPORT_KIND.RESOLVED);
-  assert.notEqual(report.contractTrace.stopReason.classification, DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.RECONCILE);
-  assert.equal(report.contractTrace.stateRefresh.boundaryKind, "authoritative_status_refresh");
 });

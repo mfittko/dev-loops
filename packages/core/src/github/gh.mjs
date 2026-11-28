@@ -1,8 +1,6 @@
 /**
  * Shared `gh` CLI invoke-and-parse helpers (child 6 of the simplification
- * epic #1689). This module introduces the shared implementation only; the
- * ~19 call-site migrations are the follow-up children (projects: #1696;
- * github/loop/refine: #1697).
+ * epic #1689). The call sites under `scripts/` import them.
  *
  * `ghJson` is the composed SUPERSET the callers share (per #1695's AC): a
  * label-conditional non-zero-exit message — `gh command failed: <detail>` with

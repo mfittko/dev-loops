@@ -1,6 +1,6 @@
 /**
  * watcher-exclusivity.mjs — dev-loop execution-cap watcher-exclusivity
- * resolver. Mirrors ./reviewer-unit-bound.mjs and ./role-budget-bound.mjs's
+ * resolver. Mirrors ./reviewer-unit-bound.mjs's
  * style: a bounded, deterministic primitive that resolves the current
  * watch-owner verdict for a (target, head, wait-kind) boundary from
  * caller-supplied lease/transition evidence, and always fails closed
@@ -22,7 +22,7 @@
  * tell whether the process invoking it IS the recorded lease owner — that
  * caller-identity check (verifying the calling runner matches
  * `evidence.owner`, and gating the wait before it starts) is the consumer's
- * responsibility and is deferred to the slice-b live wiring.
+ * responsibility; `scripts/loop/run-watch-cycle.mjs` enforces it live.
  *
  * Pure and offline: no runtime/harness adapter import, no file reads, no
  * network, no state held across calls. This primitive is a post-hoc verdict

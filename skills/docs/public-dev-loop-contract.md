@@ -74,7 +74,7 @@ The public router consumes one canonical current state with these top-level dime
 | `status` | `active` \| `waiting` \| `blocked` \| `approval_ready` \| `merge_ready` \| `done` |
 | `authorization` | `authorized` \| `needs_confirmation` \| `not_authorized` |
 
-The authoritative first-slice evaluator, status-report helper (`resolveAuthoritativeDevLoopStatus()`), and startup/resume bundle helper (`resolveAuthoritativeStartupResumeBundle()`) all live in `packages/core/src/loop/public-dev-loop-routing.mjs`. Tests: `packages/core/test/public-dev-loop-routing-*.test.mjs`.
+The authoritative first-slice evaluator and startup/resume bundle helper (`resolveAuthoritativeStartupResumeBundle()`) all live in `packages/core/src/loop/public-dev-loop-routing.mjs`. Tests: `packages/core/test/public-dev-loop-routing-*.test.mjs`.
 
 ## Authoritative-state-first status reporting contract
 

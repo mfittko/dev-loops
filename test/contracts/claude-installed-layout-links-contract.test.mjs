@@ -49,7 +49,6 @@ function stripFragment(target) {
 const CONSUMER_ARTIFACT_BASENAMES = new Set([
   "PLAN.md",
   "AGENTS.md",
-  "IMPLEMENTATION_STATE.md",
   "IMPLEMENTATION_WORKFLOW.md",
   "phase-x.md",
   "phases",

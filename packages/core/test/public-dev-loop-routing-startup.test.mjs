@@ -16,7 +16,6 @@ import {
   DEV_LOOP_ROUTE_KIND,
   DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND,
   DEV_LOOP_STATUS,
-  DEV_LOOP_STATUS_REPORT_KIND,
   DEV_LOOP_TARGET_KIND,
   DEV_LOOP_TARGET_PREFERENCE,
   DEV_LOOP_VARIATION_PARAMETER_CONTRACT,
@@ -29,32 +28,10 @@ import {
   PUBLIC_DEV_LOOP_GATE_CONTRACT,
   publicContractUrl,
   readFile,
-  resolveAuthoritativeDevLoopStatus,
   resolveAuthoritativeStartupResumeBundle,
   RETROSPECTIVE_CHECKPOINT_STATE,
   test,
 } from "./public-dev-loop-routing-test-helpers.mjs";
-
-test("authoritative status resolution uses the canonically linked PR identity", () => {
-  const report = resolveAuthoritativeDevLoopStatus({
-    currentState: {
-      target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 89, linkedPr: 92 },
-      ownership: DEV_LOOP_ACTOR.COPILOT,
-      nextActor: DEV_LOOP_ACTOR.COPILOT,
-      status: DEV_LOOP_STATUS.ACTIVE,
-      authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
-    },
-    artifactState: DEV_LOOP_ARTIFACT_STATE.OPEN,
-    issueLinkageResolution: DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.RESOLVED_LINKED_PR,
-    loopState: "unresolved_feedback_present",
-  });
-
-  assert.equal(report.statusKind, DEV_LOOP_STATUS_REPORT_KIND.RESOLVED);
-  assert.equal(report.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
-  assert.equal(report.activeArtifact.kind, DEV_LOOP_TARGET_KIND.PR);
-  assert.equal(report.activeArtifact.issue, 89);
-  assert.equal(report.activeArtifact.pr, 92);
-});
 
 test("authoritative startup/resume bundle resolves routed state with authoritative minimum fields", () => {
   const bundle = resolveAuthoritativeStartupResumeBundle({

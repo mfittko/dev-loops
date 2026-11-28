@@ -2,11 +2,10 @@
 /**
  * check-size-budget
  *
- * Fail-closed PR size/tier budget — Phase 1: PURE COMPUTATION ONLY. This
- * module has no enforcement wiring (that is a later phase's `readyForReview()`
- * / `pre-pr-ready-gate.mjs` change); it computes `logicLoc`, resolves the
+ * Fail-closed PR size/tier budget. This module computes `logicLoc`, resolves the
  * file→tier mapping from `gates.size` config, and emits an outcome
- * (`pass` | `escalate` | `block`) plus the reasons that produced it.
+ * (`pass` | `escalate` | `block`) plus the reasons that produced it. The
+ * callers (`create-pr.mjs`, `ready-for-review.mjs` and the gate scripts) enforce it.
  *
  * `logicLoc = (addedCode - addedComments) + deletionDiscount * (removedCode - removedComments)
  * + testDiscount * test`, summed from the
@@ -52,9 +51,8 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 
 const USAGE = `Usage: check-size-budget.mjs --base <ref> [--head <ref>] [--waived] [--approved-by <name>]
 
-Fail-closed PR size/tier budget: PURE COMPUTATION only (no enforcement —
-this script does not block \`gh pr ready\`; a later phase wires it into
-readyForReview()/pre-pr-ready-gate.mjs). Reads gates.size config, computes
+Fail-closed PR size/tier budget: this script only computes the outcome; its
+callers (create-pr.mjs, ready-for-review.mjs) enforce it. Reads gates.size config, computes
 logicLoc = (addedCode - addedComments) + deletionDiscount * (removedCode -
 removedComments) + testDiscount * test from the existing diff
 classifier (generated/lockfile content excluded via the classifier's own
@@ -68,9 +66,8 @@ Required:
 Optional:
   --head <ref>          Git ref for the PR head (default: HEAD)
   --waived              Record that a size-budget waiver was granted for
-                         this computation (the ready-for-review.mjs waiver
-                         CLI surface itself is a later phase; this flag only
-                         feeds the outcome computation)
+                         this computation (this flag only feeds the outcome
+                         computation)
   --approved-by <name>  Named human approver; REQUIRED for a valid T1-slice
                          waiver (a default-tier waiver needs only --waived)
   --help, -h             Show this help
@@ -80,12 +77,14 @@ Output (stdout, JSON):
     "ok": true|false,
     "outcome": "pass"|"escalate"|"block",
     "wholeLogicLoc": 120,
+    "waivable": false,
     "t1SliceLoc": 0,
     "tierLogicLoc": { "default": 120, "t1": 0, "t3": 0 },
     "thresholds": { "testDiscount": 0.25, "deletionDiscount": 0.25, "absoluteHardLoc": 2000,
                      "default": { "softLoc": 400, "waiverLoc": 1500 },
                      "t1": null },
     "ambiguous": false,
+    "fullDiffMissing": false,
     "configErrorCount": 0,
     "waiver": { "requested": false, "approvedBy": null, "t1Valid": false, "defaultValid": false },
     "reasons": []

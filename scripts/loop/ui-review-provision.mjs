@@ -8,8 +8,8 @@
  * (destructive ones fail closed pending ack), boots the branch's app via the
  * project's declared run recipe, and waits on an HTTP readiness probe.
  *
- * This is a thin adapter: it wires real IO seams (git worktree, config, npm
- * install, shell migration commands, spawn, HTTP probe) into the pure core
+ * This is a thin adapter: it wires real IO seams (git worktree, config, the
+ * lockfile-matched install, shell migration commands, spawn, HTTP probe) into the pure core
  * orchestrator (packages/core/src/loop/ui-review-provision.mjs).
  */
 import { execFileSync, spawn } from "node:child_process";

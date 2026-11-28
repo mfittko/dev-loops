@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-25 ([issue 2462](https://github.com/mfittko/dev-loops/issues/2462))
 
+Amended by [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md).
+
 Amends [ADR 0168](./0168-draft-gate-low-nit-convergence.md): after a `draft_gate` round converges under 0168, tooling will refuse a code commit on that head. Enforcement ships in a later slice of issue 2462. Until then `GATE-EXEC-LOW-NIT-CONVERGENCE` is unchanged and still prescribes the one `commit_only` fixer pass for an all-low/nit act list. The records that introduced 0168 stay unedited.
 
 ## Context

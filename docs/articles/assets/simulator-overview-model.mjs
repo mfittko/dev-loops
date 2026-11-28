@@ -1,11 +1,5 @@
 // Native Overview teaching model; its lifecycle record is not the Detailed schema.
 export function createModel() {
-  // Planned stages and the issue that owns each.
-  const PLANNED = {refine:2756, prepr:2807, brief:2588};
-  // The planned issue behind a recorded catch. A catch at a shipped stage (grill, self-check) or none has no badge.
-  // A spec gap has no owner: refine is shipped and only its size forecast is planned.
-  const OWNER = {oversize:"refine", "missing context":"brief", "docs drift":"prepr"};
-  const plannedFor = (caught, defect) => caught && !["—","grill","self-check"].includes(caught) ? PLANNED[OWNER[defect]] : undefined;
   // ---------- starting conditions ----------
   const F = [
     {k:"config", lbl:".devloops config", type:"sel", opts:["loads","unknown key (stale CLI)"]},
@@ -36,11 +30,11 @@ export function createModel() {
     {id:"adr", name:"New ADR", issue:"#110 Launcher resolves CLI forms", about:"The PR adds a new architecture decision record.", shows:"The ADR tripwire fires at the ready boundary. Only the operator may waive it, so the PR parks.", w:{tripwire:"new ADR"}},
     {id:"race", name:"Push before merge", issue:"#111 Fail closed on config errors", about:"Everything is clean, then a new commit lands just before the merge.", shows:"The merge wrapper compares the head it checked with the head it merges. They differ, so it refuses and the new head is gated again.", w:{headmove:true}},
     {id:"human", name:"Human merge only", issue:"#112 Release v1.0.6", about:"The repo requires a person to approve every merge.", shows:"The gates are clean, but evidence is not authority. The PR waits for the operator.", w:{auth:"human approval required"}},
-    {id:"early", name:"Caught early", issue:"#114 Rename a flag in the CLI", about:"The change leaves a doc stale. The pre-PR review sweep finds it.", shows:"The record shows where the defect was caught. Finding it before the first push costs one local edit.", stage:"pre-PR review · stale-surface sweep", planned:"prepr", w:{defect:"docs drift"}},
+    {id:"early", name:"Caught early", issue:"#114 Rename a flag in the CLI", about:"The change leaves a doc stale. The pre-PR review sweep finds it.", shows:"The record shows where the defect was caught. Finding it before the first push costs one local edit.", stage:"pre-PR review · stale-surface sweep", w:{defect:"docs drift"}},
     {id:"specgap", name:"Spec gap caught at grill", issue:"#116 Add an export flag", about:"The issue has no AC / DoD matrix, and its spec has a gap.", shows:"The grill writes the missing criterion into the matrix. The record shows the catch at the grill, before any code exists.", stage:"grill", w:{matrix:false, defect:"spec gap"}},
-    {id:"oversize", name:"Oversize, split at planning", issue:"#117 Rework the gate join", about:"The size forecast is over the band for one PR.", shows:"Refine splits the unit before any code exists. The first slice continues and the record shows the catch at refine.", stage:"refine · size forecast", planned:"refine", w:{defect:"oversize"}},
+    {id:"oversize", name:"Oversize, split at planning", issue:"#117 Rework the gate join", about:"The size forecast is over the band for one PR.", shows:"Refine splits the unit before any code exists. The first slice continues and the record shows the catch at refine.", stage:"refine · size forecast", w:{defect:"oversize"}},
     {id:"nongoal", name:"Non-goal breach, self-check", issue:"#118 Tighten the retro lint", about:"The diff touches something the issue lists as a non-goal.", shows:"The developer self-check compares the diff with the AC, ADRs and non-goals and catches it before asking for a review.", stage:"developer self-check", w:{defect:"non-goal breach"}},
-    {id:"context", name:"Context gap", issue:"#115 Add a worker brief field", about:"The work order lacks a fact the developer needed. Every early stage misses it.", shows:"The draft gate finds it and the record flags the late catch as a gap. The fix costs a new head and another round.", stage:"draft_gate · gap", planned:"brief", w:{defect:"missing context", early:false}},
+    {id:"context", name:"Context gap", issue:"#115 Add a worker brief field", about:"The work order lacks a fact the developer needed. Every early stage misses it.", shows:"The draft gate finds it and the record flags the late catch as a gap. The fix costs a new head and another round.", stage:"draft_gate · gap", w:{defect:"missing context", early:false}},
     {id:"fresh", name:"New idea", issue:"#113 A quick idea from the operator", about:"A new issue with no acceptance criteria yet, and a first draft with problems.", shows:"The grill turns the idea into an AC / DoD matrix first. The pre-PR review sends the draft back before anything is pushed.", w:{matrix:false, prepr:"finds issues"}},
   ];
   const W = 128, H = 46;
@@ -89,7 +83,7 @@ export function createModel() {
     closed:{tag:"Fail closed", txt:"A config that does not load cannot decide a gate. Startup stops instead of running every gate on silent defaults.", slide:"Slide 13: advancement requires evidence"},
     order:{tag:"One state, one next action", txt:"The outer loop reads the record and refuses to start new work while the previous unit is unfinished. The retro checkpoint is part of finishing.", slide:"Slides 20 and 22: routing rules and the outer loop"},
     grill:{tag:"Make the goal testable", txt:"Questions until the goal, scope and evidence are clear. Agents may propose answers; a person decides intent and tradeoffs.", slide:"Slide 7: the grilling sub-loop"},
-    refine:{tag:"Size and context before code", txt:"Refine reads the code graph and carries work-order context (planned: issue 2588) and adds a size forecast (planned: issue 2756). A missing fact found here costs one edit. Found at the draft gate, it costs a full gate round.", slide:"Slide 7: the grilling sub-loop"},
+    refine:{tag:"Size and context before code", txt:"Refine reads the code graph and carries work-order context and adds a size forecast. A missing fact found here costs one edit. Found at the draft gate, it costs a full gate round.", slide:"Slide 7: the grilling sub-loop"},
     selfcheck:{tag:"Check your own work first", txt:"The developer compares the diff with the AC, the ADRs and the non-goals.", slide:"Slide 14: try again needs a reason"},
     gap:{tag:"A gap: caught late", txt:"The defect passed every early stage and the draft gate found it. The early stage that should have caught it is a known gap.", slide:"Slide 14: try again needs a reason"},
     card:{tag:"A job card for the worker", txt:"The developer gets the target, the required reads, one bounded next action and the stop rules. It works in its own worktree.", slide:"Slide 21: give the worker a job card"},
@@ -165,8 +159,8 @@ export function createModel() {
       S.lens = L.card; S.pending = ["selfcheck"]; S.trace.push(`implement: commit ${HEADS[S.h]} in the worktree`);
     }
     else if (node === "refine"){
-      take(S, "refine-impl"); out(S, "refine", world.defect === "oversize" && world.early ? "over band · split" : "forecast ~210 wLOC", "info"); S.title = "refine"; S.note = "The refiner reads the code graph, writes the work order context (planned: issue 2588) and records a size forecast (planned: issue 2756). A unit over the size band is split here, before any code exists.";
-      S.lens = L.refine; S.pending = ["implement"]; S.trace.push("refine: code graph read; work-order context (planned: 2588) and size forecast (planned: 2756)"); catchAt(S, world, "refine");
+      take(S, "refine-impl"); out(S, "refine", world.defect === "oversize" && world.early ? "over band · split" : "forecast ~210 wLOC", "info"); S.title = "refine"; S.note = "The refiner reads the code graph, writes the work order context and records a size forecast. A unit over the size band is split here, before any code exists.";
+      S.lens = L.refine; S.pending = ["implement"]; S.trace.push("refine: code graph read; work-order context and size forecast"); catchAt(S, world, "refine");
     }
     else if (node === "selfcheck"){
       take(S, "self-prepr"); S.title = "self-check"; S.note = "The developer checks the diff against the AC, the ADRs and the non-goals, before asking for a review.";
@@ -285,5 +279,5 @@ export function createModel() {
       S.reply = previous.reply;
     }
   }
-  return { F, SCEN, PLANNED, plannedFor, W, H, P, SUB, NAME, EXIT, GATE, CT, E, defaults, fresh, freshState, advance, relevant };
+  return { F, SCEN, W, H, P, SUB, NAME, EXIT, GATE, CT, E, defaults, fresh, freshState, advance, relevant };
 }

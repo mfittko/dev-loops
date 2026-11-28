@@ -21,7 +21,6 @@ import {
   DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND,
   DEV_LOOP_WAIT_SEMANTICS,
   DEV_LOOP_ISSUE_LINKAGE_RESOLUTION,
-  DEV_LOOP_STATUS_REPORT_KIND,
   DEV_LOOP_STATUS,
   DEV_LOOP_TARGET_KIND,
   DEV_LOOP_TARGET_PREFERENCE,
@@ -31,7 +30,6 @@ import {
   PUBLIC_DEV_LOOP_ENTRYPOINT,
   evaluatePublicDevLoopRouting,
   resolveAuthoritativeStartupResumeBundle,
-  resolveAuthoritativeDevLoopStatus,
 } from "../src/loop/public-dev-loop-routing.mjs";
 import {
   EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY,
@@ -77,7 +75,6 @@ export {
   DEV_LOOP_ROUTE_KIND,
   DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND,
   DEV_LOOP_STATUS,
-  DEV_LOOP_STATUS_REPORT_KIND,
   DEV_LOOP_TARGET_KIND,
   DEV_LOOP_TARGET_PREFERENCE,
   DEV_LOOP_VARIATION_PARAMETER_CONTRACT,
@@ -90,7 +87,6 @@ export {
   PUBLIC_DEV_LOOP_GATE_CONTRACT,
   publicContractUrl,
   readFile,
-  resolveAuthoritativeDevLoopStatus,
   resolveAuthoritativeStartupResumeBundle,
   RETROSPECTIVE_CHECKPOINT_STATE,
   test,

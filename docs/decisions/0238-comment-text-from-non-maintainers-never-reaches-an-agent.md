@@ -6,6 +6,8 @@ Accepted — 2026-11-02 ([issue 3034](https://github.com/mfittko/dev-loops/issue
 
 Extends [ADR 0233](./0233-fixer-work-order-from-review-body.md). Accepted records remain unchanged.
 
+Amended by [ADR 0273](./0273-github-actions-bot-is-a-trusted-comment-author.md) and [ADR 0290](./0290-comment-trust-config-in-devloops.md).
+
 ## Context
 
 On a public repository any account can open a review thread or comment on a PR. A fixer work order carries thread text as an instruction, and the fixer runs commands on the operator's machine. A non-maintainer comment could therefore steer a fixer into arbitrary command execution (prompt injection). ADR 0233 filtered review bodies and the disposition markers. No review-thread path was filtered: the GraphQL thread queries never fetched `authorAssociation`.

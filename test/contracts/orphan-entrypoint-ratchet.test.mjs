@@ -77,7 +77,7 @@ const ORPHAN_ALLOWLIST = new Map([
   ["scripts/loop/match-copilot-threads-to-gate-findings.mjs", "standalone — Copilot-thread vs gate-finding matcher (issue #3396), agent/operator-invoked report tool"],
   ["scripts/loop/resolve-verdict-ledger-source.mjs", "standalone — verdict/ledger tooling source resolver (issue #1661), skill-agent-invoked to prefer worktree-source when installed CLI stale"],
   ["scripts/loop/run-refinement-audit.mjs", "standalone — refinement audit step (documented in scripts/README), agent-invoked"],
-  ["scripts/loop/validate-pr-body-spec.mjs", "delete or wire — CLI superseded by core validatePrBodySpec; its --expected-issue option has no caller (issue #1620 orphan)"],
+  ["scripts/loop/validate-pr-body-spec.mjs", "standalone — PR-body spec validator CLI run by skills/docs/acceptance-criteria-verification.md and skills/docs/merge-preconditions.md"],
   ["scripts/refine/refine-plan-file.mjs", "standalone — refine-flow phase-file step, agent-invoked"],
   ["scripts/refine/scaffold-spike-file.mjs", "standalone — refine-flow spike scaffold step, agent-invoked"],
   ["scripts/release/bump-version.mjs", "standalone — sanctioned five-surface version bump, the only supported bump path per skills/docs/release-runbook.md; operator/runbook-invoked, deliberately not on the consumer CLI (maintainer-only) and bump-only so it does not run in release.yml"],
@@ -104,7 +104,7 @@ const ORPHAN_ALLOWLIST = new Map([
 const PREDICATE_ORPHANS = new Map([
   [
     "scripts/loop/check-retro-tooling.mjs",
-    { export: "analyzeTranscript", disposition: "delete — transcript analyzer whose consumer was deliberately removed by ADR 0024; only a test importer remains" },
+    { export: "analyzeTranscript", disposition: "standalone — transcript analyzer called by run() in scripts/loop/check-retro-tooling.mjs" },
   ],
 ]);
 

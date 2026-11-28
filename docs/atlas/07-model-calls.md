@@ -292,15 +292,15 @@ block-beta
 
 Type: `xychart-beta`
 
-The maximum model turns and tool calls per role unit. The reviewer floor and cap come from `REVIEWER_UNIT_BUDGET` and `REVIEWER_UNIT_BUDGET_CAP`, and the angle suffix of every reviewer work order states the computed value. The judge, fixer and coordinator budgets come from `ROLE_BUDGETS`. A `grep -rln enforceRoleBudget` over the repo finds callers only in `packages/core/test`, so the runtime does not enforce those three budgets yet. The judge budget also caps input tokens at 100,000 and output tokens at 10,000. The coordinator budget caps output tokens at 20,000. Values read with `grep -n "max" packages/core/src/loop/role-budget-bound.mjs packages/core/src/loop/reviewer-unit-bound.mjs`.
+The maximum model turns and tool calls per role unit. The reviewer floor and cap come from `REVIEWER_UNIT_BUDGET` and `REVIEWER_UNIT_BUDGET_CAP`, and the angle suffix of every reviewer work order states the computed value. Values read with `grep -n "max" packages/core/src/loop/reviewer-unit-bound.mjs`.
 
 ```mermaid
 xychart-beta
   title "Per-unit budget (grep of budget constants)"
-  x-axis ["judge round", "coordinator phase", "fixer pass", "reviewer floor", "reviewer cap"]
+  x-axis ["reviewer floor", "reviewer cap"]
   y-axis "Count" 0 --> 110
-  bar [12, 40, 45, 45, 95]
-  bar [15, 50, 50, 50, 100]
+  bar [45, 95]
+  bar [50, 100]
 ```
 
 <a id="d98"></a>

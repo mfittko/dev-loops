@@ -53,20 +53,7 @@ Formal local dev mode and the required post-run behavioral retrospective are rel
 
 Routed GitHub-first async `dev-loop` runs do **not** need to be in full formal local dev mode. When `workflow.requireRetrospective` is enabled, they **do** require the retrospective checkpoint to be discharged before the next merge. A pending retrospective does not block start or resume (ADR 0125).
 
-## Qualifying completions
-
-A qualifying async `dev-loop` completion is one that:
-- routes through a GitHub-first Copilot-owned strategy gate, and
-- has `routeKind === "route"` (inspect/status-only results do not qualify).
-
-Qualifying gates:
-
-| Gate | Strategy | Description |
-|---|---|---|
-| `copilot_pr_followup` | Copilot PR follow-up | Primary routed GitHub-first async path |
-| `issue_intake` | Issue intake | Copilot-first issue assignment path |
-
-`RETROSPECTIVE_QUALIFYING_GATES` in `packages/core/src/loop/retrospective-checkpoint.mjs` enumerates these descriptively; no runtime consumer consults it. The practical arming trigger is the message-shape match in `.pi/extensions/dev-loop-behavioral-review.ts` (below).
+A checkpoint discharges exactly one qualifying completion; see `RETRO-CHECKPOINT-CYCLE-SCOPED` below. The arming trigger is the message-shape match in `.pi/extensions/dev-loop-behavioral-review.ts` (below).
 
 ## Checkpoint states
 
@@ -122,7 +109,6 @@ Callers have two supported integration options:
 3. Pass that value as `retrospectiveCheckpointState` to one of:
    - `evaluatePublicDevLoopRouting(...)`
    - `resolveAuthoritativeStartupResumeBundle(...)`
-   - `resolveAuthoritativeDevLoopStatus(...)`
 4. Use the returned result directly. A missing checkpoint does not change the routing; report it as `pendingRetrospectives` (see [Pending retrospectives and the merge precondition](#pending-retrospectives-and-the-merge-precondition)).
 
 #### Option B — explicit manual gate composition
@@ -166,10 +152,8 @@ observations honestly, and passes them back to the conductor (main agent) to
 **decide** what to do with them — but it MUST NOT block a merge or any PR-lifecycle
 transition of the current run on account of its findings. The only blocking input is the
 completion state of an earlier merge's checkpoint (`retrospective_checkpoint` in
-`merge-pr`, ADR 0125, which amends ADR 0024). The pre-merge retrospective gate (`evaluateRetrospectiveMergeApproval`
-and the `requireRetrospectiveGate` / `requireRetrospectiveInternalTooling` config
-keys) has been **removed**. There is no `retrospective_gate_pending` / `blocked`
-disposition on account of the internal-tooling raw-call record.
+`merge-pr`, ADR 0125, which amends ADR 0024). The internal-tooling raw-call record never yields a
+`blocked` disposition.
 
 ### How findings travel (Reading B)
 
@@ -191,7 +175,7 @@ An otherwise green PR becomes merge-ready with the violations **recorded**, not 
 ### Internal-tooling-only rule (issue #982) — now advisory
 
 The loop's own execution should use internal dev-loops tooling, not agent-level raw
-`gh`/`python`/`node -e` escape hatches. **It no longer blocks.** The flagged calls
+`gh`/`python`/`node -e` escape hatches. **It does not block.** The flagged calls
 are reported as advisory findings via the envelope + PR comment.
 
 **Flagged as raw-call violations:** `gh ...` (including `gh api`, `gh ... --jq`),
