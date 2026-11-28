@@ -213,7 +213,7 @@ watch on a blocked request or suppression. Refresh canonical handoff state and a
 blocked/refusal outcomes stop and report; a proven clean terminal open-PR outcome
 ends only the Copilot sub-loop and consults fresh same-head gate coordination.
 
-Practical rules: do not poll manually. `waiting_for_copilot_review` → `run-watch-cycle.mjs` or report-and-resume. `waiting_for_ci` with pending/none CI → `node <dev-loops-package-root>/cli/index.mjs loop watch-ci` or report-and-resume; `node <dev-loops-package-root>/cli/index.mjs loop watch-cycle` also auto-routes a `waiting_for_ci` boundary to this CI watcher. Before considering the bounded CI exception, read [Zero-suite local-validation exception](../docs/copilot-ci-status-contract.md#zero-suite-local-validation-exception), including its unavailable CLI input; never self-certify `none` as green. `ciStatus=failure` → stop/fix, never wait.
+Practical rules: do not poll manually. `waiting_for_copilot_review` → `run-watch-cycle.mjs` or report-and-resume. `waiting_for_ci` with pending/none CI → `node <dev-loops-package-root>/cli/index.mjs loop watch-ci` or report-and-resume; `node <dev-loops-package-root>/cli/index.mjs loop watch-cycle` also auto-routes a `waiting_for_ci` boundary to this CI watcher. Before considering the bounded CI exception, read [Zero-suite local-validation exception](../docs/copilot-ci-status-contract.md#zero-suite-local-validation-exception); never self-certify `none` as green. `ciStatus=failure` → stop/fix, never wait.
 
 Preferred approach:
 - route decisions through `copilot-pr-handoff.mjs` output; enter watcher only on `action: "watch"` with `watchEntryConfirmed=true`; prefer `node <dev-loops-package-root>/cli/index.mjs loop watch-cycle` for deterministic handoff → watch
