@@ -11,7 +11,7 @@ import {
   resolveGateAnglesDynamic,
   resolveGateTier,
 } from "@dev-loops/core/config";
-import { resolveAngleCarryForward, resolveCarryForwardAngles, resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
+import { resolveAngleCarryForward,resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
 
 import { computeSizeBudget } from "../../scripts/loop/check-size-budget.mjs";
 import { isNotableChange } from "../../scripts/docs/validate-changelog-completeness.mjs";
@@ -142,13 +142,6 @@ test("rules decide post-convergence triviality exactly as classifyFile does", ()
   assert.equal(isTrivialDocumentationOnlyPath("notes/x.md", rules), false);
   assert.equal(isTrivialDocumentationOnlyPath("docs/App/x.md", rules), false);
   assert.equal(isTrivialDocumentationOnlyPath("docs/app/x.md", rules), true);
-});
-
-test("resolveCarryForwardAngles threads classify rules", () => {
-  const rules = compileClassifyRules({ extensions: { docs: [".foo"] } });
-  const run = (r) => resolveCarryForwardAngles({ prevAngles: ["correctness"], changedFiles: ["a.foo"], rules: r });
-  assert.equal(run(rules).carried.length, 1);
-  assert.equal(run(undefined).mustRerun.length, 1);
 });
 
 test("an asset-only diff with no tier selects the mandatory floor angles", async () => {

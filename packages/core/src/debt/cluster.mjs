@@ -175,18 +175,8 @@ function buildFinding(signals, clusterReason) {
  * are deferred to the next pass.
  *
  * @param {Array<object>} signals — array of debt_signal-compatible objects
- * @returns {Array<object>} array of clean debt_finding shapes (no internal fields)
- */
-export function clusterSignals(signals) {
-  const enriched = clusterSignalsEnriched(signals);
-  return enriched.map(({ _clusterReason, _signalCount, _categories, ...clean }) => clean);
-}
-
-/**
- * Cluster signals and return findings enriched with internal metadata
- * for shaping (_clusterReason, _signalCount, _categories).
+ * Findings carry internal shaping metadata (_clusterReason, _signalCount, _categories).
  *
- * @param {Array<object>} signals — array of debt_signal-compatible objects
  * @returns {Array<object>} array of enriched debt_finding shapes
  */
 export function clusterSignalsEnriched(signals) {
