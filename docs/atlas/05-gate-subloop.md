@@ -173,7 +173,7 @@ flowchart TD
 
 Type: `flowchart`
 
-What `applyJudgeDispositions` does with one cluster disposition before the fixer sees it. A `defer` on a cluster with a `high`, a `question` or only `nit` members fails the judge pass closed. An `act` on a low/nit-only cluster is coerced by gate and round (`GATE-EXEC-LOW-FIX-UNTIL-CAP`), and `failOpen` promotes a low to medium. Any undisposed cluster also fails closed. Derived from `applyJudgeDispositions`, `neverDeferredSeverity` and `validateJudgeVerdict` in `packages/core/src/loop/gate-fanin.mjs`, `scripts/github/write-gate-context.mjs` (`resolveDraftRoundCap`) and `scripts/loop/judge-pass.mjs`.
+What `applyJudgeDispositions` does with one cluster disposition before the fixer sees it. A `defer` on a cluster with a `high`, a `question` or only `nit` members fails the judge pass closed. An `act` on a low/nit-only cluster is coerced by gate and round (`GATE-EXEC-LOW-ROUND-FLOOR`), a `defer` on a low cluster from draft round 2 rejects the same way unless the judge sets `lowException`, and `failOpen` promotes a low to medium. Any undisposed cluster also fails closed. Derived from `applyJudgeDispositions`, `neverDeferredSeverity` and `validateJudgeVerdict` in `packages/core/src/loop/gate-fanin.mjs`, `scripts/github/write-gate-context.mjs` (`resolveDraftRoundCap`) and `scripts/loop/judge-pass.mjs`.
 
 ```mermaid
 flowchart TD
@@ -189,10 +189,12 @@ flowchart TD
   FO -->|no| AN{"All nit?"}
   AN -->|yes| R1{"draft_gate round 1?"}
   R1 -->|yes| ACT
-  R1 -->|no| REJ2["reject (low_fix_until_cap)"]
+  R1 -->|no| REJ2["reject (low_floor)"]
   AN -->|no| PA{"pre_approval_gate?"}
-  PA -->|yes| DEF2["defer (low_fix_until_cap)"]
-  PA -->|no| ACT
+  PA -->|yes| DEF2["defer (low_floor)"]
+  PA -->|no| LF{"draft round 2 or later<br/>and no lowException?"}
+  LF -->|yes| REJ2
+  LF -->|no| ACT
   ACT --> AL["Fixer act list"]
   PRO --> AL
 ```

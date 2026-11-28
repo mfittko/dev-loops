@@ -129,15 +129,15 @@ test("cited rule IDs reach the judge with their text and owning doc (issue 3092)
     await mkdir(path.join(root, "judge-fixture"), { recursive: true });
     const findingsFile = "judge-fixture/ledger.json";
     await writeFile(path.join(root, findingsFile), JSON.stringify({ overallVerdict: "findings_present", findings: [
-      { severity: "low", summary: "violates STYLE-SINGLE-OWNER and GATE-EXEC-LOW-FIX-UNTIL-CAP and NOT-A-REGISTERED-RULE-ID and GATE-EXEC-LOW-FIX-UNTIL-CAP again" }] }));
+      { severity: "low", summary: "violates STYLE-SINGLE-OWNER and GATE-EXEC-LOW-ROUND-FLOOR and NOT-A-REGISTERED-RULE-ID and GATE-EXEC-LOW-ROUND-FLOOR again" }] }));
     const plan = await emitJudgeWorkOrder(await seed(root, { findingsFile }));
-    assert.deepEqual(plan.workOrder.citedRules.map((rule) => rule.id).sort(), ["GATE-EXEC-LOW-FIX-UNTIL-CAP", "STYLE-SINGLE-OWNER"]);
-    const rule = plan.workOrder.citedRules.find((r) => r.id === "GATE-EXEC-LOW-FIX-UNTIL-CAP");
+    assert.deepEqual(plan.workOrder.citedRules.map((rule) => rule.id).sort(), ["GATE-EXEC-LOW-ROUND-FLOOR", "STYLE-SINGLE-OWNER"]);
+    const rule = plan.workOrder.citedRules.find((r) => r.id === "GATE-EXEC-LOW-ROUND-FLOOR");
     assert.equal(rule.doc, "skills/docs/gate-review-sub-loop-contract.md");
-    assert.match(rule.text, /The fixer fixes a `low` at the `draft_gate` in every round/);
+    assert.match(rule.text, /A `low` cluster is fixed in `draft_gate` round 1/);
     const text = await readFile(plan.promptPath, "utf8");
     assert.match(text, /## Cited rules/);
-    assert.match(text, /\| `GATE-EXEC-LOW-FIX-UNTIL-CAP` \| skills\/docs\/gate-review-sub-loop-contract\.md \| .*The fixer fixes a `low`/);
+    assert.match(text, /\| `GATE-EXEC-LOW-ROUND-FLOOR` \| skills\/docs\/gate-review-sub-loop-contract\.md \| .*A `low` cluster is fixed in `draft_gate` round 1/);
     const row = text.split("\n").find((line) => line.startsWith("| `STYLE-SINGLE-OWNER`"));
     assert.equal(row.split(/(?<!\\)\|/).length - 2, 3);
     assert.doesNotMatch(row, /\\\|\s*\|$/);
@@ -478,7 +478,7 @@ test("the work order carries the round and the medium fix window as judge inputs
     const text = await readFile(plan.promptPath, "utf8");
     assert.match(text, /Dispose each cluster once/);
     assert.match(text, /No rule defers a finding from severity or round alone/);
-    assert.match(text, /GATE-EXEC-LOW-FIX-UNTIL-CAP/);
+    assert.match(text, /GATE-EXEC-LOW-ROUND-FLOOR/);
     assert.match(text, /a cluster that contains a `high` or a `question`, and an all-`nit` cluster, is never deferred/);
     assert.match(text, /`title`.*`detail`.*`fix`.*`reason`/s);
     assert.match(text, /no em dashes and no arrows/);
