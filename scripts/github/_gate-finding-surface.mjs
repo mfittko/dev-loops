@@ -1070,7 +1070,7 @@ export function countUnresolvedGateAuthoredThreadsFromRawNodes(rawNodes, login =
  * trust boundary for the gate-authored provenance decision, identical to
  * `selectDispositionTargets`' author check) and lists review threads once,
  * reusing that same fetch for both countUnresolvedGateAuthoredThreads (the
- * total fetchUnresolvedGateThreadCount below returns) and
+ * total fetchUnresolvedGateThreadState below returns) and
  * countUnresolvedGateAuthoredThreadsBySeverity (the breakdown
  * fetchDraftGateEvidence's `unresolvedGateThreadBreakdown` field returns) — no
  * extra gh round-trip for the breakdown. Throws on gh failure — callers
