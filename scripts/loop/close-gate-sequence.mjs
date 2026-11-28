@@ -188,7 +188,7 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   }
   if (condition === null) {
     return executionIdentity
-      ? refuse("sequence_live", `the PR head is still ${head} and the fixer execution ${executionIdentity} is not proven abandoned`, `The delta review is retired. Run \`${fullPhaseEmitCommand({ repo, pr, head })}\`, or rerun after the dispatch grace if no fixer ever pulled the work order.`)
+      ? refuse("sequence_live", `the PR head is still ${head} and the fixer execution ${executionIdentity} is not proven abandoned`, `Wait for the fixer's handback or the dispatch grace, then rerun close-sequence. Run \`${fullPhaseEmitCommand({ repo, pr, head })}\` only after the first fixer handed back; a second fixer on the same branch must not start while it may still commit.`)
       : refuse("abandonment_unproven", `the PR head is still ${head} and the marker names no fixer execution`, `The delta review is retired. Run \`${fullPhaseEmitCommand({ repo, pr, head })}\`, then rerun close-sequence.`);
   }
   // The rest runs under the head's sequence lock (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC): a pull admission and a marker re-emit take the same lock, so neither interleaves with the checks below.

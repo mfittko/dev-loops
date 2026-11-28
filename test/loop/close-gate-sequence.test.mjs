@@ -68,7 +68,7 @@ test("a live sequence (head unchanged, fixer dispatched recently) is refused and
     const mtime = statSync(sequenceMarkerPath(tmpRoot, HEAD)).mtimeMs;
     const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: () => mtime + 60_000 }));
     assert.equal(result.refusal, "sequence_live");
-    assert.ok(result.remedy);
+    assert.match(result.remedy, /^Wait for the fixer's handback or the dispatch grace, then rerun close-sequence\..*only after the first fixer handed back/);
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
 });

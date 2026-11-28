@@ -124,7 +124,7 @@ test("the refusal for a marker that names no branch does not name the no-commit 
       mutate();
       const refused = checkFixPushAuthority(root);
       assert.equal(refused.ok, false);
-      assert.doesNotMatch(refused.reason, /closes with the gate close-sequence command|delet/i);
+      assert.doesNotMatch(refused.reason, /emit-fixer-work-order\.mjs --phase full|delet/i);
       assert.match(refused.reason, /names no branch.*PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery/);
     }
   });

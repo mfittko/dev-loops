@@ -11,7 +11,7 @@ import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 setDefaultTimeout(30000); // each case seeds a real git repo
 
 // The PR 3087 state. The baseline B1, a fix commit, then a base refresh merged in.
-function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evilMerge = false, overlap = false } = {}) {
+function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evilMerge = false, octopus = false, overlap = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-"));
   initGitFixture(dir, { branch: "main", commit: null });
   const git = (...args) => runGitFixture(dir, args);
@@ -44,18 +44,20 @@ function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evil
     git("commit", "-qm", "refresh base with a resolution");
   } else git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
   const mergeHead = git("rev-parse", "HEAD");
-  if (nonBaseOnlyMerge || evilMerge) {
+  if (nonBaseOnlyMerge || evilMerge || octopus) {
     // A merge of a branch that holds PR-own work is not a base-only merge.
-    git("checkout", "-qb", "side", baseline);
-    fs.writeFileSync(path.join(dir, "side.mjs"), "export const side = 1;\n");
-    git("add", "."); git("commit", "-qm", "feat: side");
+    for (const name of octopus ? ["side", "side2"] : ["side"]) {
+      git("checkout", "-qb", name, baseline);
+      fs.writeFileSync(path.join(dir, `${name}.mjs`), `export const ${name} = 1;\n`);
+      git("add", "."); git("commit", "-qm", `feat: ${name}`);
+    }
     git("checkout", "-q", "pr");
     if (evilMerge) {
       // A merge that carries content of its own (a conflict resolution): the resolution diff names evil.mjs, which no parent holds.
       git("merge", "-q", "--no-ff", "--no-commit", "side");
       fs.writeFileSync(path.join(dir, "evil.mjs"), "export const evil = 1;\n");
       git("add", "."); git("commit", "-qm", "merge side with a resolution");
-    } else git("merge", "-q", "--no-ff", "-m", "merge side", "side");
+    } else git("merge", "-q", "--no-ff", "-m", "merge side", ...(octopus ? ["side", "side2"] : ["side"]));
   }
   return { dir, baseline: conflictOnly ? fix : baseline, fix, mergeHead, head: git("rev-parse", "HEAD") };
 }
@@ -182,5 +184,110 @@ test("countPrOwnCommits is 1 for a clean merge whose base commit touches a PR-ch
   git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
   try {
     assert.equal(await countPrOwnCommits(dir, before, git("rev-parse", "HEAD"), "main", { fetchBase: () => {} }), 1);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("countPrOwnCommits fails closed on an octopus merge in the range", async () => {
+  const repo = reviewerOnlyRepo({ octopus: true });
+  try {
+    await assert.rejects(countPrOwnCommits(repo.dir, repo.baseline, repo.head, "main", { fetchBase: () => {} }), /non_base_only_merge: .*octopus merge/);
+  } finally { cleanup(repo); }
+});
+
+test("countPrOwnCommits fails closed when the base fetch throws", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    await assert.rejects(countPrOwnCommits(repo.dir, repo.baseline, repo.head, "main", { fetchBase: () => { throw new Error("offline"); } }), /git fetch origin main failed/);
+  } finally { cleanup(repo); }
+});
+
+test("gitStaleSurfaceHits throws on an absent commit instead of reporting no hits", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "stale-absent-"));
+  try {
+    runGitFixture(dir, ["init", "-q"]);
+    assert.throws(() => gitStaleSurfaceHits(dir, "a".repeat(40), "b".repeat(40)));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+const renameFixtureBody = (n) => `${n}\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n`;
+
+function renameRepo(mainEdits) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "own-commits-rename-"));
+  initGitFixture(dir, { branch: "main", commit: null });
+  const git = (...args) => runGitFixture(dir, args);
+  git("config", "commit.gpgsign", "false");
+  fs.writeFileSync(path.join(dir, "old.mjs"), renameFixtureBody("top")); fs.writeFileSync(path.join(dir, "b.mjs"), "b0\n");
+  git("add", "."); git("commit", "-qm", "base");
+  git("checkout", "-qb", "pr");
+  fs.writeFileSync(path.join(dir, "a.mjs"), "a\n"); git("add", "."); git("commit", "-qm", "feat: a");
+  git("mv", "old.mjs", "new.mjs"); git("commit", "-qm", "rename old");
+  const baseline = git("rev-parse", "HEAD");
+  git("checkout", "-q", "main");
+  fs.writeFileSync(path.join(dir, mainEdits), mainEdits === "old.mjs" ? renameFixtureBody("main-top") : "b1\n"); git("commit", "-qam", "main edit");
+  git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
+  git("checkout", "-q", "pr");
+  git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
+  return { dir, baseline, head: git("rev-parse", "HEAD") };
+}
+
+test("countPrOwnCommits counts a PR rename of a file main edited and ignores a main edit of an unrelated file", async () => {
+  const deps = { fetchBase: () => {} };
+  const overlap = renameRepo("old.mjs");
+  try { assert.equal(await countPrOwnCommits(overlap.dir, overlap.baseline, overlap.head, "main", deps), 1); } finally { cleanup(overlap); }
+  const unrelated = renameRepo("b.mjs");
+  try { assert.equal(await countPrOwnCommits(unrelated.dir, unrelated.baseline, unrelated.head, "main", deps), 0); } finally { cleanup(unrelated); }
+});
+
+test("countPrOwnCommits counts a main rename of a file the PR edited", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "own-commits-main-rename-"));
+  initGitFixture(dir, { branch: "main", commit: null });
+  const git = (...args) => runGitFixture(dir, args);
+  git("config", "commit.gpgsign", "false");
+  fs.writeFileSync(path.join(dir, "old.mjs"), renameFixtureBody("top"));
+  git("add", "."); git("commit", "-qm", "base");
+  git("checkout", "-qb", "pr");
+  fs.writeFileSync(path.join(dir, "old.mjs"), renameFixtureBody("pr-top")); git("commit", "-qam", "pr edit");
+  const baseline = git("rev-parse", "HEAD");
+  git("checkout", "-q", "main");
+  git("mv", "old.mjs", "new.mjs"); git("commit", "-qm", "main rename");
+  git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
+  git("checkout", "-q", "pr");
+  git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
+  try {
+    assert.equal(await countPrOwnCommits(dir, baseline, git("rev-parse", "HEAD"), "main", { fetchBase: () => {} }), 1);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("countPrOwnCommits unions the overlap over every merge base of a criss-cross history", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "own-commits-crisscross-"));
+  initGitFixture(dir, { branch: "main", commit: null });
+  const git = (...args) => runGitFixture(dir, args);
+  const put = (name, text) => fs.writeFileSync(path.join(dir, name), text);
+  git("config", "commit.gpgsign", "false");
+  const lines = (top, bottom) => `${top}\n1\n2\n3\n4\n5\n6\n7\n8\n9\n${bottom}\n`;
+  put("f.txt", lines("top", "bottom")); put("e.txt", "e0\n"); put("p.txt", "p0\n"); put("m.txt", "m0\n");
+  git("add", "."); git("commit", "-qm", "base");
+  git("checkout", "-qb", "pr");
+  put("p.txt", "p1\n"); git("commit", "-qam", "pr 1");
+  const pr1 = git("rev-parse", "HEAD");
+  git("checkout", "-q", "main");
+  put("m.txt", "m1\n"); git("commit", "-qam", "main 1");
+  const main1 = git("rev-parse", "HEAD");
+  git("checkout", "-q", "pr");
+  git("merge", "-q", "--no-ff", "--no-commit", main1); put("e.txt", "e-pr\n"); git("commit", "-qam", "pr merges main 1, edits e");
+  git("checkout", "-q", "main");
+  git("merge", "-q", "--no-ff", "-m", "main merges pr 1", pr1);
+  git("checkout", "-q", "pr");
+  put("f.txt", lines("pr-top", "bottom")); git("commit", "-qam", "pr 2");
+  const baseline = git("rev-parse", "HEAD");
+  git("checkout", "-q", "main");
+  put("f.txt", lines("top", "main-bottom")); put("e.txt", "e-pr\n"); put("p.txt", "p2\n"); put("m.txt", "m2\n"); git("commit", "-qam", "main 2");
+  git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
+  git("checkout", "-q", "pr");
+  git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
+  const head = git("rev-parse", "HEAD");
+  try {
+    assert.equal(git("merge-base", "--all", `${head}^1`, `${head}^2`).split("\n").filter(Boolean).length, 2, "the fixture has two merge bases");
+    assert.equal(await countPrOwnCommits(dir, baseline, head, "main", { fetchBase: () => {} }), 1);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

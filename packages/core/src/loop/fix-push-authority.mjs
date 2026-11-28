@@ -102,7 +102,7 @@ export const isSafeMarkerName = (name) => typeof name === "string" && (/^(?:[0-9
 
 /** The runnable full-phase emission; each part the caller does not know stays a placeholder. */
 export const fullPhaseEmitCommand = ({ repo = "<owner/name>", pr = "<number>", head = "<head sha>" } = {}) =>
-  `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --phase full --repo ${repo} --pr ${pr} --head-sha ${head} --act-list-file <act list> --gate <gate> --allowed-path <path> --harness <claude|pi|codex>`;
+  `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --phase full --repo ${repo} --pr ${pr} --head-sha ${head} (--act-list-file <act list> --gate <gate> | --threads-file <threads file>) --allowed-path <path> --harness <claude|pi|codex>`;
 
 /**
  * The recovery pointer the refusal reason carries (ADR 0218). The no-commit close left with the delta checker. A fix commit keeps the marker and takes the full-phase push, and once that push moves the head,
