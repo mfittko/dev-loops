@@ -11,7 +11,7 @@ import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output
 import { gateScopePrefix, LIFECYCLE_GATES, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE, dispatchPromptLayoutRecordPath } from "./record-dispatch-prompt-layout.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, workOrderDigest, writeExecutionIndex } from "./_work-order-protocol.mjs";
-import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseDiffFileBlocks, renderRequiredReadLine } from "./write-gate-context.mjs";
+import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseDiffFileBlocks, readCompletedAnglesForHead, renderRequiredReadLine } from "./write-gate-context.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
@@ -93,6 +93,10 @@ Optional:
                                exceed the stdout count. Only the stdout "units"
                                are dispatched, and --expected-dispatch-units
                                takes the stdout count.
+                               A unit whose angles all have a terminal artifact newer
+                               than the gate-context file is dropped and stays in the
+                               plan as resumed. When every pending unit is dropped the
+                               run refuses and its recovery names consolidate-fanin.mjs.
   --retry-crashed <unit>       Repeatable, only with --pending. <unit> is the "name" field of an emitted
                                stdout unit. The unit's
                                agent ended without result artifacts: its work order also passes
@@ -503,8 +507,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // every successful emission: a refused run followed by a --pending run finds the latest prior units. fan-in never reads the sidecar.
   const priorPlanSidecar = `${buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot })}.prior`;
   let priorPlan = null;
+  let priorText = null;
   if (pendingOnly) {
-    const priorText = await readFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), "utf8").catch(() => null)
+    priorText = await readFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), "utf8").catch(() => null)
       ?? await readFile(priorPlanSidecar, "utf8").catch(() => null);
     try {
       priorPlan = priorText === null ? null : JSON.parse(priorText);
@@ -673,11 +678,16 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // plan and refuses — silently falling back would mask a broken plan and
   // re-emit the full set the caller explicitly did not ask for.
   let units;
+  let liveCompleted = new Set();
   if (pendingOnly && fanout.pendingGroups !== undefined) {
     if (!Array.isArray(fanout.pendingGroups)) {
       return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout.pendingGroups is present but not an array (malformed plan); re-run write-gate-context.mjs` }, false);
     }
     units = fanout.pendingGroups;
+    // Drop a unit whose angles all have a terminal artifact written after the gate-context file was built.
+    // Artifacts older than the context (a body-only rerun rebuilt it) are not trusted as finished.
+    liveCompleted = new Set(await readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot, newerThanMs: (await stat(contextPath)).mtimeMs }, { repoRoot: process.cwd(), config }));
+    units = units.filter((unit) => !(normalizeUnitAngles(unit).length > 0 && normalizeUnitAngles(unit).every((angle) => liveCompleted.has(angle))));
   } else {
     units = fanout.groups;
   }
@@ -697,6 +707,15 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const allCarried = pendingOnly && Array.isArray(fanout.groups) && fanout.groups.length > 0
     && fanout.groups.every((unit) => normalizeUnitAngles(unit).length > 0
       && normalizeUnitAngles(unit).every((angle) => carried.has(angle.trim().toLowerCase())));
+  if (liveCompleted.size > 0 && Array.isArray(units) && units.length === 0 && !allCarried && priorText !== null) {
+    // The start-of-flow rm deleted the keyed plan: restore it so fan-in still finds the round's units.
+    try {
+      await persistPlan(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), priorText, "utf8");
+    } catch (error) {
+      return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — every pending unit already finished at this head and restoring the keyed emit plan failed: ${error.message}`, recovery: `Restore the keyed emit plan from its .prior sidecar, then run fan-in (consolidate-fanin.mjs).` }, false);
+    }
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — every pending unit already finished at this head — nothing to dispatch`, recovery: "All pending units already finished at this head; run fan-in (consolidate-fanin.mjs) instead of another dispatch." }, false);
+  }
   if (!Array.isArray(units) || (units.length === 0 && !allCarried)) {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout dispatch plan resolves zero units (${pendingOnly ? "pendingGroups" : "groups"}) — nothing to dispatch` }, false);
   }
@@ -1009,7 +1028,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
   // Units of the prior plan whose angles all completed in this round and are not re-emitted keep their fan-in
   // provenance: they stay in the persisted plan, marked resumed, but never in the dispatch list printed above.
-  const completedAngles = new Set(artifact.fanout?.preflight?.completedAngles ?? []);
+  const completedAngles = new Set([...(artifact.fanout?.preflight?.completedAngles ?? []), ...liveCompleted]);
   const emittedAngles = new Set(emitted.flatMap((unit) => unit.angles));
   const priorUnits = priorPlan?.gate === gate && priorPlan.headSha === headSha && Array.isArray(priorPlan.units) ? priorPlan.units.filter((unit) => unit !== null && typeof unit === "object") : [];
   const isResumed = (unit) => Array.isArray(unit.angles) && unit.angles.length > 0

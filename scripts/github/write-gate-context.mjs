@@ -708,7 +708,7 @@ export function readsPrBody(angle, config) {
  *
  * @returns {Promise<string[]>} angle names with a terminal (clean or findings_present) artifact at this head
  */
-export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot = "tmp", prBodySha256 = null }, { repoRoot = process.cwd(), config } = {}) {
+export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot = "tmp", prBodySha256 = null, newerThanMs = null }, { repoRoot = process.cwd(), config } = {}) {
   const priorBodySha256 = typeof prBodySha256 === "string" ? await readPriorPrBodySha256({ repo, pr, gate, headSha, tmpRoot }, { repoRoot }) : null;
   // A missing prior digest counts as changed: an always-angle artifact cannot be shown to have read this body.
   const bodyChanged = typeof prBodySha256 === "string" && priorBodySha256 !== prBodySha256;
@@ -723,6 +723,8 @@ export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpR
   const completed = [];
   for (const entry of entries) {
     if (!entry.endsWith(".json")) continue;
+    // newerThanMs: only artifacts written after that instant count (e.g. after the context was built).
+    if (newerThanMs !== null && !((await stat(path.join(dir, entry)).catch(() => null))?.mtimeMs > newerThanMs)) continue;
     let parsed;
     try {
       parsed = JSON.parse(await readFile(path.join(dir, entry), "utf8"));
