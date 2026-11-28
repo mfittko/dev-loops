@@ -162,6 +162,12 @@ test("the amendment parser matches this repo's decision records", async () => {
   assert.ok(amends("0072").has("0048"), "0072 amends 0048");
 });
 
+test("the usage text names the deletionDiscount wloc formula (AC3)", async () => {
+  const stdout = buffer();
+  assert.equal(await main(["--help"], { stdout: stdout.stream, stderr: buffer().stream }), 0);
+  assert.match(stdout.read(), /added code \+ deletionDiscount \* removed code \+ testDiscount \* test/);
+});
+
 test("a missing or non-directory --repo-root exits 1", async () => {
   const root = await fixtureRepo();
   const bodyFile = path.join(root, "body.md");

@@ -3389,7 +3389,8 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
       const roundOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.findingsLedger ? ledgerTmpRoot(options.findingsLedger) : undefined, operatorFocusFile: options.operatorFocusFile };
       const roundBase = coordinationContext?.prData?.baseRefName;
       const roundNo = options.convergedJson ? 0 : capRoundHead ? draftGateConfig.maxReviewRounds : await countCapRounds(roundOptions, { repoRoot, prBase: roundBase });
-      if (await refusesPastScopedRound(roundOptions, { repoRoot, prBase: roundBase, cap: draftGateConfig.maxReviewRounds, round: roundNo })) {
+      const reviewedBodySha = await readReviewedBodySha256(options, canonicalHeadSha, repoRoot).catch(() => null);
+      if (await refusesPastScopedRound(roundOptions, { repoRoot, prBase: roundBase, cap: draftGateConfig.maxReviewRounds, round: roundNo, bodySha256: reviewedBodySha })) {
         const stop = await capStopFacts(roundOptions, { repoRoot, prBase: roundBase, cap: draftGateConfig.maxReviewRounds });
         throw roundCapReachedError(roundNo, draftGateConfig.maxReviewRounds, stop);
       }

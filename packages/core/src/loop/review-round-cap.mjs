@@ -19,12 +19,14 @@ export const GROWTH_FACTOR = 2;
  * The cap brakes of draft_gate and pre_approval_gate (GATE-EXEC-CAP-BRAKES): the one policy that decides
  * whether round `round` (1-based, the round about to run) is a full round, the scoped final round, or goes to the operator.
  * `fixBudget` is `{ logicLoc, addedFiles, maxLines }` for the PR-own diff since the cap-round head. A null `forecastWloc` never trips growth.
+ * `bodyOnlyRerun` marks the same-head rerun of the body-reading units after a PR-body edit: it is a full round at any round count (growth still stops it).
  * @returns {{action: "full_round"|"scoped_final_round"}|{action: "operator", reason: string, numbers: object}}
  */
-export function decideCapRound({ round, cap, fixBudget, wholeLogicLoc, forecastWloc }) {
+export function decideCapRound({ round, cap, fixBudget, wholeLogicLoc, forecastWloc, bodyOnlyRerun = false }) {
   const operator = (reason, numbers) => ({ action: "operator", reason, numbers });
   if (forecastWloc > 0 && wholeLogicLoc > GROWTH_FACTOR * forecastWloc) return operator("growth_past_forecast", { wholeLogicLoc, forecastWloc });
-  if (!(cap > 0) || round <= cap) return { action: "full_round" };
+  // A body-only rerun (GATE-EXEC-BODY-ONLY-RERUN) re-reviews a PR-body edit at the same head: it is no cap round and has no fix to budget.
+  if (!(cap > 0) || round <= cap || bodyOnlyRerun) return { action: "full_round" };
   if (round > cap + 1) return operator("round_cap_reached", { round, cap });
   const { logicLoc, addedFiles, maxLines } = fixBudget;
   if (logicLoc > maxLines || addedFiles > 0) return operator("cap_fix_over_budget", { logicLoc, maxLines, addedFiles });

@@ -1068,7 +1068,14 @@
           "properties": {
             "testDiscount": {
               "default": 0.25,
-              "description": "Weight applied to test LOC when computing logicLoc = code + testDiscount * test.",
+              "description": "Weight applied to test LOC when computing logicLoc = addedCode + deletionDiscount * removedCode + testDiscount * test.",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "deletionDiscount": {
+              "default": 0.25,
+              "description": "Weight applied to removed code lines when computing logicLoc (added lines weigh 1).",
               "type": "number",
               "minimum": 0,
               "maximum": 1
@@ -1173,7 +1180,7 @@
             }
           },
           "additionalProperties": false,
-          "description": "Fail-closed PR size/tier budget: testDiscount, absoluteHardLoc, and per-tier soft/waiver/slice thresholds + patterns."
+          "description": "Fail-closed PR size/tier budget: testDiscount, deletionDiscount, absoluteHardLoc, and per-tier soft/waiver/slice thresholds + patterns."
         },
         "requireFanoutEvidence": {
           "type": "boolean",
