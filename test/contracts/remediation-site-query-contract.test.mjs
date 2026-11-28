@@ -9,7 +9,6 @@ import { assertRuleOwned } from "./_rule-helpers.mjs";
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const readRepo = (rel) => fs.readFileSync(path.join(repoRoot, rel), "utf8");
 const GATE_CONTRACT = "skills/docs/gate-review-sub-loop-contract.md";
-const PUSH_CONTRACT = "skills/docs/pre-pr-review-contract.md";
 
 function ruleText(file, id) {
   const text = readRepo(file);
@@ -36,13 +35,7 @@ test("the judge and fixer agent definitions name the rule and their halves of it
   for (const needle of ["one test per form", "returnedSites[]", "skip reason", "ruleCitations[]", "residue"]) assert.ok(fixer.includes(needle), `fixer names ${needle}`);
 });
 
-test("the pre-push delta contract lists the remedy fields and states the residue rule", () => {
-  assertRuleOwned("PRE-PUSH-DELTA-RESIDUE", PUSH_CONTRACT);
-  const input = ruleText(PUSH_CONTRACT, "PRE-PUSH-DELTA-INPUT");
-  assert.ok(input.includes("authorizedRemediation") && input.includes("siteQuery"));
-  const residue = ruleText(PUSH_CONTRACT, "PRE-PUSH-DELTA-RESIDUE");
-  for (const needle of ["residueOf", "never defers", "rationale", "same fix commit", "skipReason", "blocks", "siteCoverage", "commit_only", "MUST equal the reason"]) assert.ok(residue.includes(needle), `residue rule names ${needle}`);
-  assert.ok(ruleText(PUSH_CONTRACT, "PRE-PUSH-DELTA-EXIT-BOUND").includes("PRE-PUSH-DELTA-RESIDUE"));
+test("the spec-authority conflict-evidence rule names the remedy fields", () => {
   const conflictEvidence = ruleText("skills/docs/spec-authority-contract.md", "SPEC-AUTHORITY-CONFLICT-EVIDENCE");
   assert.ok(conflictEvidence.includes("defectClass") && conflictEvidence.includes("siteQuery"));
 });

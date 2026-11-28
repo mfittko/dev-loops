@@ -68,7 +68,7 @@ test("a live sequence (head unchanged, fixer dispatched recently) is refused and
     const mtime = statSync(sequenceMarkerPath(tmpRoot, HEAD)).mtimeMs;
     const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: () => mtime + 60_000 }));
     assert.equal(result.refusal, "sequence_live");
-    assert.ok(result.remedy);
+    assert.match(result.remedy, /^Wait for the fixer's handback or the dispatch grace, then rerun close-sequence\..*only after the first fixer handed back/);
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
 });
@@ -810,7 +810,7 @@ test("MARKER_UNREADABLE: a corrupt marker with a live sealed record of the basel
     boundedRecord(tmpRoot, execution(tmpRoot), { outcome: "needs_fix", nextStep: "fix_and_rereview" });
     const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
     assert.equal(result.refusal, "sequence_live");
-    assert.match(result.remedy, /pre-push delta review/);
+    assert.match(result.remedy, /delta review is retired\. Run `dev-loops-run scripts\/loop\/emit-fixer-work-order\.mjs --phase full --repo \S+ --pr \d+ --head-sha \w{40} /);
     assert.equal(existsSync(sequenceMarkerPath(tmpRoot, HEAD)), true);
   });
 });

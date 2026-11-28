@@ -16,7 +16,7 @@ A `draft_gate` or `pre_approval_gate` round is a fixed pipeline of deterministic
 
 Type: `flowchart`
 
-The full round as the coordinator drives it, from the context bundle to the re-gate. The insight is that every agent step sits between two deterministic scripts, and every push passes through the delta review first. Derived from `cli/index.mjs` (the `gate` and `loop` subcommand routes), `scripts/github/write-gate-context.mjs`, `scripts/github/emit-fanout-dispatch.mjs`, `scripts/loop/wait-for-gate-units.mjs`, `scripts/loop/consolidate-fanin.mjs`, `scripts/loop/judge-pass.mjs`, `scripts/loop/emit-fixer-work-order.mjs` and `scripts/loop/check-pre-push-delta.mjs`.
+The full round as the coordinator drives it, from the context bundle to the re-gate. The insight is that every agent step sits between two deterministic scripts. Derived from `cli/index.mjs` (the `gate` and `loop` subcommand routes), `scripts/github/write-gate-context.mjs`, `scripts/github/emit-fanout-dispatch.mjs`, `scripts/loop/wait-for-gate-units.mjs`, `scripts/loop/consolidate-fanin.mjs`, `scripts/loop/judge-pass.mjs` and `scripts/loop/emit-fixer-work-order.mjs`.
 
 ```mermaid
 flowchart TD
@@ -44,7 +44,7 @@ flowchart TD
 
 Type: `sequenceDiagram`
 
-The same round as a message exchange. The coordinator is the only actor that talks to every role, and each child is joined by `gate wait-for-units` before the next script reads its output. The judge never sees a raw finding list; it sees clusters. Derived from `scripts/github/emit-fanout-dispatch.mjs`, `scripts/loop/wait-for-gate-units.mjs`, `scripts/loop/emit-judge-work-order.mjs`, `scripts/loop/judge-pass.mjs`, `scripts/loop/emit-fixer-work-order.mjs` and `scripts/loop/check-pre-push-delta.mjs`.
+The same round as a message exchange. The coordinator is the only actor that talks to every role, and each child is joined by `gate wait-for-units` before the next script reads its output. The judge never sees a raw finding list; it sees clusters. Derived from `scripts/github/emit-fanout-dispatch.mjs`, `scripts/loop/wait-for-gate-units.mjs`, `scripts/loop/emit-judge-work-order.mjs`, `scripts/loop/judge-pass.mjs` and `scripts/loop/emit-fixer-work-order.mjs`.
 
 ```mermaid
 sequenceDiagram
@@ -245,7 +245,7 @@ stateDiagram-v2
 
 Type: `stateDiagram-v2`
 
-The decision after each delta invocation. A fresh, valid `locally_clear` result grants the push. Below the bound a stale result re-reviews the current head and a fresh failing one goes back to the fixer. At the third invocation the sequence ends `bounded_out`: it pushes into the normal gate path and claims no success. The bound of 3 was read with `grep -n "DELTA_MAX_INVOCATIONS =" packages/core/src/loop/pre-push-delta-review.mjs`. Derived from `resolveDeltaTrigger`, `deriveDeltaOutcome` and `decideDeltaNextStep` in `packages/core/src/loop/pre-push-delta-review.mjs` and `scripts/loop/check-pre-push-delta.mjs`.
+The decision after each delta invocation. A fresh, valid `locally_clear` result grants the push. Below the bound a stale result re-reviews the current head and a fresh failing one goes back to the fixer. At the third invocation the sequence ends `bounded_out`: it pushes into the normal gate path and claims no success. The bound of 3 was read with `grep -n "DELTA_MAX_INVOCATIONS =" packages/core/src/loop/pre-push-delta-review.mjs`. Derived from `resolveDeltaTrigger`, `deriveDeltaOutcome` and `decideDeltaNextStep` in `packages/core/src/loop/pre-push-delta-review.mjs`.
 
 ```mermaid
 stateDiagram-v2

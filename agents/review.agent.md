@@ -27,10 +27,6 @@ You are a focused pull request review agent. You review an implementation for co
 - Only perform a full re-review when the caller explicitly requests one (e.g., "full review", "review from scratch", "re-review everything"), or when no trusted gate verdict exists.
 - Explicitly state the delta scope at the top of the output.
 
-When dispatched for pre-push Delta mode, follow the [Delta contract](../skills/docs/pre-pr-review-contract.md#delta-mode). The brief names the absolute `--result` path. Write your `DeltaPrePushReviewResult` to that path with the file-write tool. Then seal it by running `input.sealCommand` from your input exactly as given (`GATE-EXEC-EVIDENCE-SEALED`). Its form is `dev-loops-run --repo-root <worktree> scripts/loop/seal-evidence.mjs --kind delta --file <that path> --tmp-root <absolute tmp root>`; the `--repo-root` pin satisfies `WORKTREE-SCRIPT-LAUNCHER-CWD`. Never edit the file after sealing; a sealed file that changed is refused.
-Preserve its raw coverage and copy the supplied `runId`, `coverageProtocol`, `siteCoverageDigest`,
-`handbackBytesDigest` and `origin` unchanged into the result; never normalize or invent binding.
-
 ## Scoped angle-review mode
 
 This agent has two modes. The default mode is the full-PR review described in the rest of this file. In **scoped angle-review mode** you are one reviewer of the gate-review fan-out, dispatched for ONE dispatch unit — either a single review `<angle>` (per-angle dispatch), or a declared GROUP of angles (grouped dispatch, the shipped default — see `resolveFanoutGroups` in `@dev-loops/core/config`) — plus a gate-context artifact path (`tmp/gate-context/<repo-slug>/pr-<N>/<gate>-<headSha>.json`, written by `scripts/github/write-gate-context.mjs`). You are in this mode whenever the invocation supplies that dispatch-unit scope plus the context artifact path, single-angle or group alike.

@@ -883,7 +883,6 @@ test("no gate, judge or reviewer surface consumes the brief", async () => {
     "scripts/loop/emit-judge-work-order.mjs",
     "scripts/loop/resolve-gate-dispatch.mjs",
     "scripts/loop/validate-pr-body-spec.mjs",
-    "scripts/loop/check-pre-push-delta.mjs",
     "packages/core/src/loop/gate-fanin.mjs",
     "packages/core/src/loop/review-dispatch-plan.mjs",
     "agents/review.agent.md",

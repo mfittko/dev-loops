@@ -298,8 +298,8 @@ describe("result schema", () => {
     const open = result({ newFindings: [{ severity: "low", summary: "s", evidence: ["e"], residueOf: "act-1" }] });
     const errors = validateDeltaResult(open, { sequence: sequence() }).join("\n");
     assert.match(errors, /locally_clear requires/);
-    assert.match(errors, /PRE-PUSH-DELTA-RESIDUE/);
-    assert.match(buildDeltaInput({ sequence: sequence(), candidateHead: B }).resultShape.newFindings[0].residueOf, /PRE-PUSH-DELTA-RESIDUE/);
+    assert.match(errors, /no residueOf finding without a skipReason/);
+    assert.match(buildDeltaInput({ sequence: sequence(), candidateHead: B }).resultShape.newFindings[0].residueOf, /an open residueOf finding \(no skipReason\) blocks locally_clear at any severity/);
   });
 
   test("rejects a result bound to another baseline", () => {

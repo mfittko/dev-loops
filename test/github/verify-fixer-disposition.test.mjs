@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { afterAll, describe, test } from "bun:test";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { mintEvidenceRunId } from "@dev-loops/core/loop/evidence-seal";
 import { decideDeltaNextStep, startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
 
@@ -24,7 +25,7 @@ import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.m
 import { selectActThreadBinding } from "../../scripts/github/_fixer-act-thread-bindings.mjs";
 import { DELIVERY_WAIT_SECONDS, fixerReportPath, materializationHash, pullReceiptPath, pullWorkOrder, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitFixerWorkOrder, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
-import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
+import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { operatorFocusDigestEntry } from "../../scripts/loop/_operator-focus.mjs";
 import { sealDeltaFixture } from "../loop/_seal-fixture.mjs";
@@ -2172,14 +2173,17 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   await mkdir(path.dirname(originPath), { recursive: true });
   await writeFile(originPath, JSON.stringify({ headSha: fixing, siteCoverage }));
   await writeFile(logPath, JSON.stringify({ headSha: baseline, provenance: { perAngle: [{ angle: "correctness" }] } }));
-  const args = ["--act-list", actPath, "--baseline", baseline, "--worktree", repoRoot, "--fixer-plan", prior.planPath, "--site-coverage", originPath];
-  const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", logPath, "--result-path", path.join(tmpRoot, "delta-result.json")], { stdout: { write() {} } });
+  // The delta checker is gone: the result, its coverage binding and the sealed record are written directly.
+  const handbackText = JSON.stringify({ headSha: fixing, siteCoverage });
+  const binding = { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex(siteCoverage).slice(7), handbackBytesDigest: sha256Hex(Buffer.from(handbackText)).slice(7),
+    origin: { workOrderRef: prior.workOrderRef, workOrderDigest: prior.workOrderDigest, executionIdentity: prior.executionIdentity } };
+  const sequence = startDeltaSequence({ reviewBaselineHead: baseline, actList });
   if (residual) git("commit", "-q", "--allow-empty", "-m", "candidate B");
-  const candidate = git("rev-parse", "HEAD"), items = input.input.actItems.map(({ ref }, index) => ({ ref, status: isResidual(index) ? "cannot_verify" : "resolved", evidence: ["focused check"] }));
-  const delta = { ...input.input.resultShape, candidateHead: residual ? fixing : candidate, actionableItems: items, newFindings: [], widenedReads: [], outcome: residual ? "bounded_out" : "locally_clear" };
+  const candidate = git("rev-parse", "HEAD"), items = sequence.actItems.map(({ ref }, index) => ({ ref, status: isResidual(index) ? "cannot_verify" : "resolved", evidence: ["focused check"] }));
+  const delta = { reviewBaselineHead: baseline, candidateHead: residual ? fixing : candidate, actSetId: sequence.actSetId, runId: mintEvidenceRunId(), ...binding, actionableItems: items, newFindings: [], widenedReads: [], outcome: residual ? "bounded_out" : "locally_clear" };
   await writeFile(deltaPath, JSON.stringify(delta));
   sealDeltaFixture(resolveGateArtifactTmpRoot(repoRoot), deltaPath);
-  assert.equal((await runCli([...args, "--result", deltaPath, "--invocation", residual ? "3" : "1"], { stdout: { write() {} } })).nextStep, residual ? "push_to_gate" : "push");
+  writeGateDeltaRecord({ tmpRoot: resolveGateArtifactTmpRoot(repoRoot), sequence, candidateHead: candidate, invocation: residual ? 3 : 1, decision: { outcome: delta.outcome, nextStep: residual ? "push_to_gate" : "push", ...binding }, result: delta });
   const threadBindings = kind === "threadless" ? [] : [{ threadId: "PRRT_MERGED", fingerprints: [ACT_FP, second] }, { threadId: "PRRT_SHARED", fingerprints: [ACT_FP] }];
   const dispositions = threadBindings.map(({ threadId, fingerprints }) => ({ threadId, fixingCommitSha: fixing,
     disposition: actList.some((item, index) => fingerprints.includes(item.fingerprint) && isResidual(index)) ? "deferred" : "tackled" }));

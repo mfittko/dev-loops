@@ -30,6 +30,7 @@ import {
 } from "@dev-loops/core/loop/fixer-disposition";
 import { deltaCoverageBinding, isDeltaBodyItem, isDeltaResultFresh, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
+import { fullPhaseEmitCommand } from "@dev-loops/core/loop/fix-push-authority";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { LOOP_DERIVED_CI_CHECK_NAMES } from "@dev-loops/core/loop/copilot-ci-status";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
@@ -1220,7 +1221,7 @@ function residualReason(failures) {
 function deltaBlockedReason(incomplete) {
   const parts = incomplete.map((entry) => `thread ${entry.threadId} (failed step: ${entry.failedStep}${entry.deltaStatus ? `, delta status: ${entry.deltaStatus}` : ""})`);
   return `Fixer disposition is incomplete for ${incomplete.length} tackled thread(s): ${parts.join("; ")}. `
-    + "A delta_blocked thread is not fixed yet: fix it, re-run the delta review (dev-loops loop pre-push-delta), then re-run this verifier.";
+    + "A delta_blocked thread is not fixed yet: fix it. The delta review is retired, so run `" + fullPhaseEmitCommand() + "`, then re-run this verifier.";
 }
 
 async function main() {

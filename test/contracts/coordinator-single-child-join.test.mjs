@@ -110,8 +110,5 @@ test("the delta reviewer is told to write its result to the absolute --result pa
   for (const file of ["skills/docs/pre-pr-review-contract.md", "skills/docs/gate-review-sub-loop-contract.md"]) {
     assert.match(read(file), sentence, file);
   }
-  for (const file of ["agents/review.agent.md", ".claude/agents/review.md"]) {
-    assert.ok(read(file).includes("Write your `DeltaPrePushReviewResult` to that path with the file-write tool."), file);
-  }
 });
 

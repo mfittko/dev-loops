@@ -252,7 +252,6 @@ classDiagram
         +Read[] requiredReads
         +string[] outputRefs
         +object siteCoverage
-        +string handbackCheck
         +ExecutionRules executionRules
     }
     class IdentityTriple {

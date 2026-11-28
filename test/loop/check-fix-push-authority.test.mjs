@@ -107,7 +107,8 @@ test("the refusal names the no-commit close command with the baseline head, and 
     writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head, branch: "issue-a" });
     const refused = checkFixPushAuthority(root);
     assert.equal(refused.ok, false);
-    assert.match(refused.reason, new RegExp(`check-pre-push-delta\\.mjs \\(--act-list <act-list> --findings-log <findings-log> \\| --threads-file <threads-file> --repo <owner/name> --pr <n>\\) --baseline ${head} .*--fixer-plan <fixer-plan> --site-coverage <handback>.*no_commit`));
+    assert.match(refused.reason, new RegExp(`emit-fixer-work-order\\.mjs --phase full --repo <owner/name> --pr <number> --head-sha ${head} .*gate close-sequence closes the marker with HEAD_MOVED \\(baseline ${head}\\)`));
+    assert.doesNotMatch(refused.reason, /emit --phase full/);
     assert.doesNotMatch(refused.reason, /delete the marker|delet/i);
     assert.match(refused.reason, /dev-loops-run cli\/index\.mjs gate close-sequence --head <baseline sha> --repo <owner\/name> --pr <number>/);
     assert.doesNotMatch(refused.reason, /close-gate-sequence\.mjs/);
@@ -123,7 +124,7 @@ test("the refusal for a marker that names no branch does not name the no-commit 
       mutate();
       const refused = checkFixPushAuthority(root);
       assert.equal(refused.ok, false);
-      assert.doesNotMatch(refused.reason, /check-pre-push-delta|delet/i);
+      assert.doesNotMatch(refused.reason, /emit-fixer-work-order\.mjs --phase full|delet/i);
       assert.match(refused.reason, /names no branch.*PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery/);
     }
   });
@@ -178,11 +179,11 @@ test("END-TO-END REGRESSION abandoned sequence lockout: refused, close-sequence,
   }
 });
 
-test("recoveryHint renders the close command only for a 40 or 64 char lowercase hex baseline head", () => {
-  for (const ok of ["a".repeat(40), "0123456789abcdef".repeat(4)]) assert.match(recoveryHint(ok, "/m", "issue-a"), new RegExp(`check-pre-push-delta\\.mjs .*--baseline ${ok} `));
+test("recoveryHint renders the emission command only for a 40 or 64 char lowercase hex baseline head", () => {
+  for (const ok of ["a".repeat(40), "0123456789abcdef".repeat(4)]) assert.match(recoveryHint(ok, "/m", "issue-a"), new RegExp(`--head-sha ${ok} .*gate close-sequence closes the marker with HEAD_MOVED \\(baseline ${ok}\\)`));
   for (const bad of ["A".repeat(40), "a".repeat(39), "a".repeat(41), "a".repeat(40) + "; rm -rf /", "$(id)", "a".repeat(63), ""]) {
     const hint = recoveryHint(bad, "/m", "issue-a");
-    assert.doesNotMatch(hint, /check-pre-push-delta/, bad);
+    assert.doesNotMatch(hint, /emit-fixer-work-order\.mjs --phase full/, bad);
     assert.match(hint, /PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery/);
     assert.match(hint, /sequence marker is \/m/);
   }

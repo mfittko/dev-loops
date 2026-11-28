@@ -195,7 +195,7 @@ Totals: 0 `pending`, 0 `in progress`, 50 `changed`, 18 `unchanged`, eight `non-p
 | `skills/docs/main-agent-contract.md` | 3 | changed | Phase 3a. Merged the restated coordinator write boundary into the shared intro and dropped exemption history and dispatch rationale. Reserved passages (issue 2438) are byte-identical: the coordinator verify-delegation passage in the intro plus `COORDINATOR-VERIFY-BOUNDARY` (the table's `COORDINATOR-VERIFY-DELEGATION`; see the Phase 3 contradiction register), and `MAIN-AGENT-FILING-BLOCKER-ONLY`. |
 | `skills/docs/merge-preconditions.md` | 3 | changed | Phase 3a. Condensed the gate-evidence server-side narrative, title-marker rationale, size-budget and wrapper restatements, and dropped the removed `--local-validation-head-sha` flag. Reserved passage: the post-merge duties (issue 2438), byte-identical. |
 | `skills/docs/pr-lifecycle-contract.md` | 3 | changed | Phase 3a. Cited the merge-preconditions owner for title-marker constructions, condensed the changelog rule mechanics and removed history rows. Transition bullets and state vocabulary stay. |
-| `skills/docs/pre-pr-review-contract.md` | 3 | changed | Phase 3b. Removed "Why this phase exists" and rationale sentences inside the rules. Every `PRE-PR-*` and `PRE-PUSH-DELTA-*` rule keeps its MUST text. Reserved passages (issue 2447) are byte-identical: delta sequence Step 3 and `PRE-PUSH-DELTA-EXIT-BOUND`. |
+| `skills/docs/pre-pr-review-contract.md` | 3 | changed | Phase 3b. Removed "Why this phase exists" and rationale sentences inside the rules. Every `PRE-PR-*` and `PRE-PUSH-DELTA-*` rule keeps its MUST text, except the six `PRE-PUSH-DELTA-*` rules that slice D2 of issue 2937 removed with the delta checker. Reserved passages (issue 2447) are byte-identical: delta sequence Step 3. |
 | `skills/docs/projects-queue-contract.md` | 3 | changed | Phase 3a. Merged duplicated Setup, Usage and configuration restatements into their owning sections and dropped GraphQL query bodies the helper scripts own. Every `QUEUE-*` rule, command, flag, reason literal and linked anchor stays. |
 | `skills/docs/public-dev-loop-contract.md` | 3 | changed | Phase 3a. Loaded on every startup route. Dropped the mermaid diagram, slice non-goals, example mappings and ownership-race narration, and merged the convergence posture restatement. Every `FACADE-*` rule, gate row, routing step and transition bullet stays. |
 | `skills/docs/release-runbook.md` | 3 | changed | Phase 3b. Dropped the v1.0.0 incident narration, the npm-vs-Bun rationale and repeated changelog mechanics. Every command, staging rule, approval refusal and failure-mode recovery stays. |
@@ -479,7 +479,7 @@ Phase 3b:
 - Checklist MUST: dropped "so the strong model reviews systematically".
 - `PRE-PR-MODEL-CONFIG-RESOLVED`: dropped the harness-parity sentence; resolution per harness stays.
 - `PRE-PR-EPHEMERAL-NO-ARTIFACTS`, `PRE-PR-BOUNDED-TWO-ROUNDS`, `PRE-PR-NOT-GATE-EVIDENCE`: dropped one rationale sentence each. `LOCAL-DEV-SELF-CHECK-NO-FANOUT` stays cited in `PRE-PR-ONE-FRESH-REVIEWER`.
-- Delta mode intro: dropped the regression-cost rationale and the gate-coordinator-returned aside. Step 3 and `PRE-PUSH-DELTA-EXIT-BOUND` (issue 2447) are byte-identical.
+- Delta mode intro: dropped the regression-cost rationale and the gate-coordinator-returned aside. Step 3 (issue 2447) is byte-identical.
 
 `skills/docs/sub-issue-tree-contract.md`:
 

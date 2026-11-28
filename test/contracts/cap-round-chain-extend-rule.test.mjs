@@ -19,7 +19,7 @@ test("GATE-EXEC-ROUND-CAP-CHAIN-EXTEND names the reviewer-only route, its bindin
 test("ADR 0255 amends the remedy of ADR 0254 and the pre-push delta contract names the reviewer-only route", () => {
   assert.match(read("docs/decisions/0255-code-range-delta-without-fixer-plan.md"), /^Amends the remedy of \[ADR 0254\]/m);
   const contract = read("skills/docs/pre-pr-review-contract.md");
-  for (const rule of ["PRE-PUSH-DELTA-PINNED-BASELINE", "PRE-PUSH-DELTA-RESULT", "PRE-PUSH-DELTA-INPUT-CAP-CHAIN", "PRE-PUSH-DELTA-EXIT-BOUND"]) {
+  for (const rule of ["PRE-PUSH-DELTA-RESULT", "PRE-PUSH-DELTA-INPUT-CAP-CHAIN"]) {
     const line = contract.split("\n").find((l) => l.startsWith(`\`${rule}\``));
     assert.match(line, /reviewer-only/, `${rule} names the reviewer-only route`);
   }
@@ -33,7 +33,8 @@ test("GATE-EXEC-ROUND-CAP-CHAIN-EXTEND describes the CI-failed cap-round path wi
   // The MUST covers the plain reviewer-only run: the cover run starts at the cap-round head (issue 3443 delta review).
   assert.match(rule, /The plain reviewer-only delta MUST start at that candidate, never at the cap-round head, because a plain run at the cap-round head refuses/);
   assert.match(rule, /the cover run \(`--cover-uncovered`\) is the one reviewer-only run that starts at the cap-round head/);
-  assert.match(rule, /`logic_commit_in_range` and `delta_range_mismatch` refusals return `recovery` naming the reviewer-only run at the start of the logic range/);
+  assert.match(rule, /`logic_commit_in_range` and `delta_range_mismatch` refusals return `recovery` naming the replacement-PR restart, as do `record_not_clearing` and the `no_cap_round_chain` cover-run cases/);
+  assert.match(rule, /The reviewer-only route and the cover run left with the delta checker CLI in slice D2 of issue 2937, while issue 3461 deletes the rest of the cap-round chain/);
   assert.match(rule, /`no_cap_round_chain` returns `recovery` by case: `loop gate-coordination` when no cap round resolves/);
   assert.match(rule, /`git -C <worktree> fetch origin <cap-round-head-sha>` when the cap-round head is not in this clone/);
   assert.match(rule, /Its `recovery` is `operator:` followed by the full procedure/);
@@ -48,7 +49,7 @@ test("GATE-EXEC-ROUND-CAP-CHAIN-EXTEND describes the CI-failed cap-round path wi
   assert.match(rule, /the `no_cap_round_chain` case with no resolved cap round is the exception: coordination does not route back from it/);
   assert.match(rule, /A replacement PR is the operator recovery for an orphaned baseline, for a candidate \(on a draft PR\) or cap-round head outside the PR head's history, and, as the alternative to the cover run, for a non-covering record/);
   // Issue 3443 (ADR 0255 amendment): the cover run names the uncovered refs' recovery, and the empty-act-list statement is limited to the chain-end reviewer-only run.
-  assert.match(rule, /the cover run \(`loop pre-push-delta --reviewer-only --cover-uncovered` over the cap-round head\.\.PR head, below\) when a sealed record at the cap-round head leaves act refs uncovered/);
+  assert.match(rule, /the replacement-PR restart \(the cover run over the cap-round head\.\.PR head left with the delta checker CLI, below\) when a sealed record at the cap-round head leaves act refs uncovered/);
   assert.match(rule, /A reviewer-only run with a chain-end baseline derives an empty act list \(ADR 0255\) and covers no act ref, so it is not the recovery for an uncovered ref/);
   assert.match(rule, /`history_unresolved`/);
   // Issue 3443 delta review: the exact set of records the cover run never replaces, the chain-start wording, the draft rule, the 16-combination limit and the compare-and-swap.

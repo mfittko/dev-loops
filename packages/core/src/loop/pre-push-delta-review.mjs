@@ -1,6 +1,6 @@
 /**
  * pre-push-delta-review.mjs: deterministic checks for the pre-push reviewer's
- * delta mode (skills/docs/pre-pr-review-contract.md, PRE-PUSH-DELTA-* rules).
+ * delta mode (retired; ADR 0337, slice D5 of issue 2937 deletes this module).
  *
  * Delta mode runs one fresh reviewer between the gate fixer's commit of a
  * judge act-list fix and its push. This module owns the trigger predicate, the
@@ -307,7 +307,7 @@ export function buildDeltaInput({ sequence, candidateHead, runId, specIdentity =
         summary: "<non-empty string>",
         evidence: ["<non-empty string>"],
         // Set for a same-class site of an act item; skipReason copies the reason that input.siteCoverage records for that site.
-        residueOf: "<act item ref, optional; an open residueOf finding (no skipReason) blocks locally_clear at any severity: PRE-PUSH-DELTA-RESIDUE>",
+        residueOf: "<act item ref, optional; an open residueOf finding (no skipReason) blocks locally_clear at any severity>",
         site: "<site name in input.siteCoverage, required with skipReason>",
         skipReason: "<non-empty string, optional>",
       }],
@@ -386,7 +386,7 @@ export function deltaResultShapeErrors(result, { checkOutcome = true } = {}) {
   }
   if (!DELTA_OUTCOMES.includes(r.outcome)) errors.push(`outcome ${JSON.stringify(r.outcome)} is unknown`);
   else if (checkOutcome && r.outcome === "locally_clear" && deriveDeltaOutcome(r, { reviewerOnly: true }) !== "locally_clear") {
-    errors.push("locally_clear requires every act item resolved (a cannot_verify or not_resolved item forbids it), no new finding of severity medium or higher, and no residueOf finding without a skipReason (PRE-PUSH-DELTA-RESIDUE)");
+    errors.push("locally_clear requires every act item resolved (a cannot_verify or not_resolved item forbids it), no new finding of severity medium or higher, and no residueOf finding without a skipReason");
   }
   return errors;
 }
@@ -438,7 +438,7 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], valid
       const site = typeof f.site === "string" && f.site.trim() ? f.site : null;
       const recorded = recordedSkipReason(validationCoverage, fp, site);
       if (recorded !== f.skipReason.trim()) {
-        errors.push(`PRE-PUSH-DELTA-RESIDUE: newFindings[${i}].skipReason must equal the reason recorded for site ${JSON.stringify(f.site)} of act item ${f.residueOf}: ${JSON.stringify(recorded)}`);
+        errors.push(`residue: newFindings[${i}].skipReason must equal the reason recorded for site ${JSON.stringify(f.site)} of act item ${f.residueOf}: ${JSON.stringify(recorded)}`);
       }
     }
   }
@@ -447,7 +447,7 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], valid
   // The outcome-consistency check belongs to a full validation: a membershipOnly caller accepts a sealed bounded_out downgrade of a locally_clear result.
   if (membershipOnly) return errors;
   if (result.outcome === "locally_clear" && deriveDeltaOutcome(result, { reviewerOnly: sequence?.reviewerOnly === true }) !== "locally_clear") {
-    errors.push("locally_clear requires every act item resolved, no new finding of severity medium or higher, and no residueOf finding without a skipReason equal to the recorded reason, at any severity (PRE-PUSH-DELTA-RESIDUE)");
+    errors.push("locally_clear requires every act item resolved, no new finding of severity medium or higher, and no residueOf finding without a skipReason equal to the recorded reason, at any severity");
   } else if (result.outcome === "locally_clear") {
     const open = unaddressedStaleSurfaceHits(staleSurfaceHits, { newFindings: findings ?? [], siteCoverage: validationCoverage });
     if (open.length > 0) errors.push(`PRE-PUSH-DELTA-RESULT: locally_clear leaves stale-surface hits unaddressed (a newFindings[] entry naming the file or a skipped siteCoverage[] site is required): ${open.map((h) => h.site).join(", ")}`);

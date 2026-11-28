@@ -1,6 +1,6 @@
 /**
  * stale-surface-hits.mjs: the deterministic stale-surface check of the pre-push delta review
- * (skills/docs/pre-pr-review-contract.md, PRE-PUSH-DELTA-INPUT and PRE-PUSH-DELTA-RESULT).
+ * (skills/docs/pre-pr-review-contract.md, PRE-PR-STALE-SURFACE-SWEEP).
  *
  * A fix can remove a sentence or rename an identifier while another tracked file still carries
  * the old text. This module extracts the removed sentences (Markdown and test hunks) and removed

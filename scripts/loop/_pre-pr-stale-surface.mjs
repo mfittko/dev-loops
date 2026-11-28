@@ -1,20 +1,52 @@
 /**
- * The stale-surface sweep of the full pre-PR review (PRE-PR-STALE-SURFACE-SWEEP): the delta review's
- * deterministic scan over `base...HEAD`, plus the PR body versus linked issue comparison. The scan
+ * The stale-surface sweep of the full pre-PR review (PRE-PR-STALE-SURFACE-SWEEP): the deterministic scan over `base...HEAD`, plus the PR body versus linked issue comparison. The scan
  * writes nothing. The record gate refuses while a hit is neither fixed nor skipped with a reason.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { diffPrBodyAgainstIssue } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { collectStaleSurface } from "@dev-loops/core/loop/stale-surface-hits";
 import { staleSurfaceTruncatedHit, unaddressedStaleSurfaceHits } from "@dev-loops/core/loop/pre-push-delta-review";
 import { fetchIssueBody } from "./detect-issue-refinement-artifact.mjs";
-import { gitStaleSurfaceHits } from "./check-pre-push-delta.mjs";
 import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
 import { pathsMissingFromMatrix } from "../github/waive-adr-tripwire.mjs";
 import { CONTRACT_DOC_RE, parseNameStatus } from "./check-adr-tripwire.mjs";
 
 export const PRE_PR_STALE_SURFACE_UNADDRESSED = "pre_pr_stale_surface_unaddressed";
+
+// `git diff baseline..head`; with `ownPaths` the cumulative diff limited to those paths.
+const rangeCommand = (flags, baseline, head, ownPaths) => ["diff", ...flags, `${baseline}..${head}`, ...(ownPaths ? ["--", ...ownPaths.map((file) => `:(top,literal)${file}`)] : [])];
+
+// Tracked-file hits of the sentences and identifiers the range removed, grepped at the candidate head.
+// A git failure throws (fail closed), including a missing baseline or head object. The diff and grep
+// formats are pinned so operator git config (prefix, color, external diff, textconv, algorithm, renames, path quoting, submodules, diff.orderFile via -O/dev/null, relative paths via --no-relative, hunk merging via --inter-hunk-context=0) cannot blank the check.
+export function gitStaleSurfaceHits(worktreeArg, baseline, head, ownPaths) {
+  // Run from the top level so a subdirectory --worktree cannot scope the diff or grep to that subtree.
+  const top = spawnSync("git", ["-C", worktreeArg, "rev-parse", "--show-toplevel"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+  if (top.status !== 0 || !top.stdout.trim()) throw new Error(`git rev-parse --show-toplevel failed in ${worktreeArg}: ${top.stderr.trim()}; the stale-surface check cannot locate the repository`);
+  const worktree = top.stdout.trim();
+  const git = (...args) => spawnSync("git", ["-C", worktree, "-c", "core.quotePath=false", ...args], { encoding: "utf8", env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
+  for (const rev of [baseline, head]) {
+    const exists = git("cat-file", "-e", `${rev}^{commit}`);
+    if (exists.status !== 0) throw new Error(`git cat-file ${rev} failed in ${worktree}: ${exists.stderr.trim()}; the stale-surface check cannot read the delta range`);
+  }
+  const diff = git(...rangeCommand(["-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--diff-algorithm=myers", "--no-renames", "-O/dev/null", "--no-relative", "--ignore-submodules=none", "--submodule=short", "--inter-hunk-context=0"], baseline, head, ownPaths));
+  if (diff.status !== 0) throw new Error(`git diff ${baseline}..${head} failed in ${worktree}: ${diff.stderr.trim()}; the stale-surface check cannot read the delta range`);
+  const grep = (needle, { word }) => {
+    const out = git("grep", "-n", "-I", "--full-name", "-F", "--no-color", "--no-recurse-submodules", ...(word ? ["-w"] : []), "-e", needle, head);
+    if (out.status === 1) return [];
+    if (out.status !== 0) throw new Error(`git grep failed in ${worktree} (exit ${out.status}): ${out.stderr.trim()}`);
+    const rows = out.stdout.split("\n").filter(Boolean);
+    const hits = rows.flatMap((row) => {
+      const match = /^[^:]*:(.+?):(\d+):/u.exec(row);
+      return match ? [{ file: match[1], line: Number(match[2]) }] : [];
+    });
+    if (rows.length > 0 && hits.length === 0) throw new Error(`git grep output could not be parsed in ${worktree}: the stale-surface check fails closed`);
+    return hits;
+  };
+  return collectStaleSurface({ diffText: diff.stdout, grep });
+}
 
 const git = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: gitEnvNoDirOverrides() }).trim();
 
