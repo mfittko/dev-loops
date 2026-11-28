@@ -13,7 +13,7 @@ import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 
 import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
-import { detectPrGateCoordinationState, onlyStaleGateRoundThreadsOpen, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveCapBrakes, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, onlyStaleGateRoundThreadsOpen, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveBodyOnlyRetire, resolveCapBrakes, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
@@ -22,7 +22,7 @@ import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copi
 import { buildFindingMarker, countUnresolvedGateAuthoredThreadsFromRawNodes, fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { parseUpsertCheckpointVerdictCliArgs, renderGateReviewCommentBody, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { foldDraftGateSatisfied, isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
-import { main as writeGateContextMain, resolveDraftCapRoundFact } from "../../scripts/github/write-gate-context.mjs";
+import { main as writeGateContextMain, prBodySha256, resolveDraftCapRoundFact } from "../../scripts/github/write-gate-context.mjs";
 import { evaluateToolchainAuthority, TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { evaluateMergePreconditions } from "@dev-loops/core/loop/merge-approval";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
@@ -5489,6 +5489,46 @@ test("resolveCapBrakes returns the round facts and the named items of the head's
     assert.deepEqual({ gate: draft.gate, round: draft.round, cap: draft.cap }, { gate: "draft_gate", round: 3, cap: 2 });
     // A head with no judged round of its own carries no facts.
     assert.equal(await resolveCapBrakes(ctx("9".repeat(40), false), { repoRoot: tempDir, config: { version: 1 } }), null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// Issue 3604: bodyOnlyRetire is true only when the latest round at the head (live, or retained after the automatic retirement) holds PR-body act items and read another PR body.
+test("resolveBodyOnlyRetire reads the gate of the PR state, the live and the retained ledger, and refuses every other case", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "body-only-retire-"));
+  try {
+    const oldBody = "Original body";
+    const bodyItem = { severity: "medium", angle: "scope", summary: "body", judgeDisposition: "act", remedyKind: "pr_body" };
+    const codeItem = { severity: "medium", angle: "correctness", summary: "code", files: ["src/a.mjs"], line: 1, judgeDisposition: "act" };
+    const head = "1".repeat(40);
+    const write = async (gate, h, findings, name = `${gate}-${h}.json`) => {
+      const file = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10", name);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 10, gate, headSha: h, verdict: "findings_present", loggedAt: "2026-11-01T00:00:00.000Z", prBodySha256: prBodySha256(oldBody), findings }), "utf8");
+    };
+    const ctx = (h, isDraft, body) => ({ repo: "owner/repo", pr: 10, currentHeadSha: h, prData: { isDraft, body } });
+    await write("draft_gate", head, [bodyItem]);
+    assert.equal(await resolveBodyOnlyRetire(ctx(head, true, "Edited body"), { repoRoot: tempDir }), true);
+    // The gate follows the PR state: a ready PR reads pre_approval_gate, which holds no ledger.
+    assert.equal(await resolveBodyOnlyRetire(ctx(head, false, "Edited body"), { repoRoot: tempDir }), false);
+    await write("pre_approval_gate", head, [bodyItem]);
+    assert.equal(await resolveBodyOnlyRetire(ctx(head, false, "Edited body"), { repoRoot: tempDir }), true);
+    // An unchanged body, a non-string body, a malformed head and a ledger at another head each keep the earlier routing.
+    assert.equal(await resolveBodyOnlyRetire(ctx(head, true, oldBody), { repoRoot: tempDir }), false);
+    assert.equal(await resolveBodyOnlyRetire(ctx(head, true, undefined), { repoRoot: tempDir }), false);
+    assert.equal(await resolveBodyOnlyRetire(ctx("not-a-sha", true, "Edited body"), { repoRoot: tempDir }), false);
+    assert.equal(await resolveBodyOnlyRetire(ctx("2".repeat(40), true, "Edited body"), { repoRoot: tempDir }), false);
+    // A code act item keeps the fixer route.
+    await write("draft_gate", "3".repeat(40), [bodyItem, codeItem]);
+    assert.equal(await resolveBodyOnlyRetire(ctx("3".repeat(40), true, "Edited body"), { repoRoot: tempDir }), false);
+    // Crash-resume (AC5): only the retained ledger remains once the emitter moved the live one.
+    await write("draft_gate", "4".repeat(40), [bodyItem], `draft_gate-${"4".repeat(40)}.round-1.json`);
+    assert.equal(await resolveBodyOnlyRetire(ctx("4".repeat(40), true, "Edited body"), { repoRoot: tempDir }), true);
+    // A later ledger at another head does not hide the current head's body-only round.
+    await write("draft_gate", "5".repeat(40), [bodyItem]);
+    await write("draft_gate", "6".repeat(40), [codeItem]);
+    assert.equal(await resolveBodyOnlyRetire(ctx("5".repeat(40), true, "Edited body"), { repoRoot: tempDir }), true);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

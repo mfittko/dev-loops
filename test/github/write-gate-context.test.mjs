@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, link, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { existsSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -46,6 +46,7 @@ import {
   renderRequiredReadLine,
   readClosedPriorRoundLogs,
   dropBodyReadingCarriedAngles,
+  prBodySha256,
   readCompletedAnglesForHead,
   readsPrBody,
   resolveFanoutDispatch,
@@ -12066,6 +12067,60 @@ test("refusesPastScopedRound applies the base-merge-forced union rule: a decisio
       for (const k of ["e", "f"]) assert.ok(error.message.includes(fingerprintFinding(act(k))), `names the ${k} set`);
       return true;
     });
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3604: the same-head rerun after a PR-body edit of a round of PR-body act items is no cap round, so it never trips the round cap or the fix budget.
+test("resolveScopedFinalRound runs a body-only rerun as a full round past the cap, and refuses the same state when the PR body is unchanged", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    const oldBody = "Original body";
+    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-68");
+    await mkdir(dir, { recursive: true });
+    const heads = ["1", "2", "3", "4", "5", "6", "7", "8"].map((c) => c.repeat(40));
+    for (const [i, head] of [...heads, headSha].entries()) {
+      const findings = head === headSha ? [{ angle: "scope", severity: "medium", summary: "body", judgeDisposition: "act", remedyKind: "pr_body" }] : [];
+      await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 68, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-${String(i + 1).padStart(2, "0")}T00:00:00.000Z`, prBodySha256: prBodySha256(oldBody), findings }), "utf8");
+    }
+    const options = { repo: "owner/repo", pr: 68, gate: "draft_gate", headSha };
+    assert.equal(await resolveScopedFinalRound({ ...options, prBody: "Edited body" }, { repoRoot, prBase: "main", config: {} }), null);
+    await assert.rejects(resolveScopedFinalRound({ ...options, prBody: oldBody }, { repoRoot, prBase: "main", config: {} }), /./);
+    // The draft_gate poster passes the digest the rerun read: past the cap the cap refusal holds for an unchanged body and lifts for the edited one.
+    const cap = 4;
+    const round = await countCapRounds(options, { repoRoot, prBase: "main", includeLiveCurrentHead: true });
+    const past = { repoRoot, prBase: "main", cap, round, includeLiveCurrentHead: true };
+    assert.equal(await refusesPastScopedRound(options, { ...past, bodySha256: prBodySha256(oldBody) }), true);
+    assert.equal(await refusesPastScopedRound(options, past), true);
+    assert.equal(await refusesPastScopedRound(options, { ...past, bodySha256: prBodySha256("Edited body") }), false);
+    // Crash-resume: the emitter moved the live ledger to a retained round; the rerun is still no cap round.
+    await rename(path.join(dir, `draft_gate-${headSha}.json`), path.join(dir, `draft_gate-${headSha}.round-1.json`));
+    assert.equal(await resolveScopedFinalRound({ ...options, prBody: "Edited body" }, { repoRoot, prBase: "main", config: {} }), null);
+    assert.equal(await refusesPastScopedRound(options, { ...past, bodySha256: prBodySha256("Edited body") }), false);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3604: an emptied PR body is a body edit too (the emitter hashes the empty read), and the rerun's own ledger is no completed round.
+test("a body-only rerun past the cap: an emptied PR body runs a full round, and the rerun ledger adds no round to the count", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    const oldBody = "Original body";
+    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-68");
+    await mkdir(dir, { recursive: true });
+    const ledger = (head, i, extra) => JSON.stringify({ repo: "owner/repo", pr: 68, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-${String(i).padStart(2, "0")}T00:00:00.000Z`, findings: [], ...extra });
+    const bodyRound = { prBodySha256: prBodySha256(oldBody), findings: [{ angle: "scope", severity: "medium", summary: "body", judgeDisposition: "act", remedyKind: "pr_body" }] };
+    for (const [i, c] of ["1", "2", "3", "4", "5", "6", "7", "8"].entries()) await writeFile(path.join(dir, `draft_gate-${c.repeat(40)}.json`), ledger(c.repeat(40), i + 1), "utf8");
+    const options = { repo: "owner/repo", pr: 68, gate: "draft_gate", headSha };
+    await writeFile(path.join(dir, `draft_gate-${headSha}.json`), ledger(headSha, 9, bodyRound), "utf8");
+    assert.equal(await resolveScopedFinalRound({ ...options, prBody: null }, { repoRoot, prBase: "main", config: {} }), null);
+    // The emitter moved the superseded ledger to a retained round; the rerun's own ledger is written beside it.
+    await rename(path.join(dir, `draft_gate-${headSha}.json`), path.join(dir, `draft_gate-${headSha}.round-1.json`));
+    const before = await countCapRounds(options, { repoRoot, prBase: "main", includeLiveCurrentHead: true });
+    await writeFile(path.join(dir, `draft_gate-${headSha}.json`), ledger(headSha, 10, { prBodySha256: prBodySha256("Edited body") }), "utf8");
+    assert.equal(await countCapRounds(options, { repoRoot, prBase: "main", includeLiveCurrentHead: true }), before);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

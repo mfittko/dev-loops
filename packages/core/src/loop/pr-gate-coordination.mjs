@@ -1324,7 +1324,10 @@ function evaluatePrGateCoordinationCore(input = {}) {
 
   // GATE-EXEC-CAP-BRAKES: `capBrakes` is `{ gate, round, cap, items, operatorCleared?, notClearable? }` for the gate whose round is posted at this head. The one policy
   // (decideCapRound) stops the lane before another fixer pass; only an operator focus decision that names the items clears the stop (`operatorCleared: true` routes past it; `notClearable: true` marks a set that already had its one re-open, which no focus file clears).
-  const capStop = input.capBrakes ? decideCapRound({ ...input.capBrakes, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 } }) : null;
+  // Issue 3604: `bodyOnlyRetire` marks a posted round of PR-body act items whose PR body was edited since; the gate round reruns the body-reading units, so it is no cap round and no fixer or body-only converged post applies.
+  // On draft_gate it applies only when the cap refuses the round: below the cap the ADR 0332 body-only converged post stays the route.
+  const bodyOnlyRetire = input.bodyOnlyRetire === true && (input.draftRoundRefused === true || input.capBrakes?.gate === "pre_approval_gate");
+  const capStop = input.capBrakes ? decideCapRound({ ...input.capBrakes, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 }, bodyOnlyRerun: bodyOnlyRetire }) : null;
   // Issue 3105 AC15 (ADR 0288): the open draft_gate act list at the current head; the fixer route below consumes it.
   const actList = input.draftOpenActList;
   // A carried list (a base-only merge of the cap head A) keeps its findings_present marker at A: findings_present markers never carry across a merge.
@@ -1338,7 +1341,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
     && (draftGate.verdict === "findings_present" || (draftGate.verdict === "blocked" && actList?.operatorCleared === true))))
     && actListHeadBound
     && Number.isInteger(actList.openActCount) && actList.openActCount > 0
-    && input.draftRoundRefused !== true;
+    && input.draftRoundRefused !== true
+    && !bodyOnlyRetire;
   // ADR 0271: a round of PR-body items only has no fixer route; its exit is the body-only converged post, named in the cap refusal below.
   const bodyOnlyList = headActList && actList.bodyOnly === true;
   // AC7: a forecast with a failed growth read stops the lane like a growth stop, so a transient read failure never clears it; only an operator decision does.
@@ -1761,7 +1765,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
 
     // GATE-EXEC-CAP-BRAKES: the next draft_gate round is past the scoped final round; the context writer refuses it, so never route to it.
     // ADR 0332: an all-PR-body act list takes this route at every round up to the cap, so run_draft_gate (refused at the same head) is never offered.
-    if ((input.draftRoundRefused === true || actBlockers.length > 0 || bodyOnlyList) && !draftReady) {
+    if (((input.draftRoundRefused === true && !bodyOnlyRetire) || actBlockers.length > 0 || bodyOnlyList) && !draftReady) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
       pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, ...draftReviewForbidden]);
       return buildResult({
