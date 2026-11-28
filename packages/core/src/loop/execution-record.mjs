@@ -26,11 +26,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { HARNESS_VALUES } from "./role-budget-bound.mjs";
+import { HARNESS_VALUES } from "./reviewer-unit-bound.mjs";
 
 export const EXECUTION_RECORD_SCHEMA_VERSION = 1;
 
-/** The five execution-unit kinds this record covers (superset of role-budget-bound's ROLE_VALUES). */
+/** The five execution-unit kinds this record covers. */
 export const EXECUTION_UNIT_ROLES = Object.freeze([
   "coordinator_phase",
   "reviewer_unit",
@@ -96,7 +96,7 @@ function isSafePathSegment(value) {
 
 /**
  * Recursively freeze a plain object/array's own nested plain objects/arrays.
- * Mirrors reviewer-unit-bound.mjs / role-budget-bound.mjs / watcher-exclusivity.mjs.
+ * Mirrors reviewer-unit-bound.mjs / watcher-exclusivity.mjs.
  * @param {unknown} value @param {WeakSet<object>} [seen] @returns {unknown}
  */
 function deepFreeze(value, seen = new WeakSet()) {

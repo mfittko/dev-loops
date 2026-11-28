@@ -67,10 +67,3 @@ only the script and workflow are committed.
 
 Pages is enabled (repo **Settings → Pages → Source: GitHub Actions**), so no
 manual step is needed — merging to `main` deploys. The audience is public.
-
-### Private-repo caveat
-
-This repo is private. A **public** Pages site from a private repo requires a
-plan that permits it (GitHub Pro/Team/Enterprise). Pages is currently enabled;
-if it is ever disabled, the deploy job will fail until it is re-enabled (the
-build job, which makes no Pages API call, still succeeds).

@@ -17,14 +17,14 @@ Canonical owner for the internal `local_implementation` route behind the public 
 
 Use it only after the public dispatcher has already resolved `selectedStrategy: local_implementation`. This skill owns the local phase procedure and artifact discipline for that route; it does not redefine the shipped runtime semantics of helper CLIs, shared loop logic, or extension commands.
 
-Read the authoritative public routing contract at [Public Dev Loop Contract](../docs/public-dev-loop-contract.md) and keep any repository-specific decisions grounded in [Project Plan](../../PLAN.md), durable phase docs, source, tests, config, and actual validation commands.
+Read the authoritative public routing contract at [Public Dev Loop Contract](../docs/public-dev-loop-contract.md) and keep any repository-specific decisions grounded in Project Plan (`PLAN.md`), durable phase docs, source, tests, config, and actual validation commands.
 For UI validation under `dev-loop`, see [UI Validation Contract](../docs/ui-validation-contract.md), [UI Smoke Harness](../docs/ui-smoke-harness.md), [UI Artifact Contract](../docs/ui-artifact-contract.md), and [UI Designer Review Loop](../docs/ui-designer-review-loop.md) (designer + `uiReviewMode: vision`).
 
 ## Minimal required project inputs
 
 For a new project, the only required inputs are:
 
-1. [Project Plan](../../PLAN.md)
+1. Project Plan (`PLAN.md`)
 2. [this skill file](./SKILL.md)
 
 Everything else is optional and may be bootstrapped by this skill.
@@ -36,7 +36,7 @@ Read the canonical entrypoint briefing first: [Entrypoint Strategies](../docs/en
 - [Agent Instructions](../../AGENTS.md) (repo constitution)
 - [Public Dev Loop Contract](../docs/public-dev-loop-contract.md)
 - [Retrospective Checkpoint Contract](../docs/retrospective-checkpoint-contract.md) (when async state applies)
-- [Project Plan](../../PLAN.md) and phase/tracker docs when relevant
+- Project Plan (`PLAN.md`) and phase/tracker docs when relevant
 - Relevant issue/PR, validation surface, and task files
 
 Treat missing optional files as normal bootstrap conditions, not errors.
@@ -115,10 +115,10 @@ Follow [Anti-patterns](../docs/anti-patterns.md) for the general tooling-interna
 - <!-- rule: LOCAL-TEST-FIRST-COVERAGE --> You MUST work **test-first** for all non-trivial logic; coverage thresholds are owned by [VALIDATE-COVERAGE-THRESHOLD](../docs/validation-policy.md).
 - Log detailed iteration artifacts under `tmp/` using the required structure below.
 - Spec-of-record split (phase-doc-backed vs. tracker-backed vs. lightweight): see [Tracker-backed local implementation](#tracker-backed-local-implementation) above.
-- When a phase changes durable product truth in ways `PLAN.md` should express (for example command surface, accepted product decisions, resolved open questions, or scope changes), update [Project Plan](../../PLAN.md) before closing the phase.
+- When a phase changes durable product truth in ways `PLAN.md` should express (for example command surface, accepted product decisions, resolved open questions, or scope changes), update Project Plan (`PLAN.md`) before closing the phase.
 - Branch, commit, pre-approval-gate, and finalization mechanics: see [Branch / review / merge policy](#branch--review--merge-policy), [Commit policy](#commit-policy), and [Implementation loop for the phase](#implementation-loop-for-the-phase) below.
 - When subagents are used, log what each subagent was asked to do and what it concluded.
-- If [Project Plan](../../PLAN.md) is too rough or ambiguous to safely start the current phase, do not guess: run a clarification/interview step with the user first.
+- If Project Plan (`PLAN.md`) is too rough or ambiguous to safely start the current phase, do not guess: run a clarification/interview step with the user first.
 
 ## Structural quality
 
@@ -140,7 +140,7 @@ node scripts/loop/detect-change-scope.mjs
 ## Deterministic logging structure
 
 Treat the workflow as three layers:
-- [Project Plan](../../PLAN.md) = strategic product and architecture truth
+- Project Plan (`PLAN.md`) = strategic product and architecture truth
 - [Phase Plan](../../docs/phases/phase-x.md) or the canonical tracker issue = durable per-phase plan and acceptance criteria for the active local session
 - `tmp/` = temporary local execution audit trail and machine-friendly continuation state
 
@@ -177,8 +177,8 @@ Use deterministic helper scripts from `../dev-loop/scripts/` (the sibling `skill
 If these files are missing, create them from the `../dev-loop/templates/` directory before continuing:
 
 - missing [Agent Instructions](../../AGENTS.md) -> create from [Bootstrap Agents Template](../dev-loop/templates/bootstrap-agents.md)
-- missing [Implementation State](../../docs/IMPLEMENTATION_STATE.md) -> create from [Bootstrap Implementation State Template](../dev-loop/templates/bootstrap-implementation-state.md)
-- missing [Implementation Workflow](../../docs/IMPLEMENTATION_WORKFLOW.md) -> create from [Bootstrap Implementation Workflow Template](../dev-loop/templates/bootstrap-implementation-workflow.md)
+- missing Implementation State (`docs/IMPLEMENTATION_STATE.md`) -> create from [Bootstrap Implementation State Template](../dev-loop/templates/bootstrap-implementation-state.md)
+- missing Implementation Workflow (`docs/IMPLEMENTATION_WORKFLOW.md`) -> create from [Bootstrap Implementation Workflow Template](../dev-loop/templates/bootstrap-implementation-workflow.md)
 - missing [Phase Plan](../../docs/phases/phase-x.md) for the active phase -> create from [Phase Doc Template](../dev-loop/templates/phase-doc.md)
 - missing `tmp/phases/index.json` -> create or reinitialize it
 
@@ -187,7 +187,7 @@ The bootstrap files are support infrastructure; the layers in [Deterministic log
 For bootstrap/setup phases, do not mark the phase `completed` or `awaiting-finalization` until the expected durable support files for the chosen workflow contract actually exist in the repository. Temporary `tmp/` execution artifacts do not need to be committed.
 ## Plan sufficiency check
 
-Before phase planning, check whether [Project Plan](../../PLAN.md) contains enough information to proceed safely.
+Before phase planning, check whether Project Plan (`PLAN.md`) contains enough information to proceed safely.
 
 At minimum, the current phase needs enough information to infer:
 - the goal of the phase
@@ -206,8 +206,8 @@ When the plan is insufficient, use one of these modes:
 - prefer a short interview or wizard-style sequence over one giant question dump
 - record the answers in `Clarification Log` (`tmp/phases/phase-x/clarification.md`)
 - update [Phase Plan](../../docs/phases/phase-x.md) with clarified durable phase intent, scope, or acceptance criteria
-- update [Project Plan](../../PLAN.md) only if the clarified information is durable product/project truth beyond the current phase
-- update [Implementation State](../../docs/IMPLEMENTATION_STATE.md) if the clarification changes the next phase boundary
+- update Project Plan (`PLAN.md`) only if the clarified information is durable product/project truth beyond the current phase
+- update [Implementation State](../dev-loop/templates/bootstrap-implementation-state.md) if the clarification changes the next phase boundary
 
 ### Mode B — auto clarification
 Use this when the user explicitly asks for an auto option, says to just proceed, or is clearly optimizing for speed over discussion.
@@ -225,7 +225,7 @@ Do not begin fan-out planning until the current phase is sufficiently specified,
 
 ## Determine where to resume
 
-Read [Implementation State](../../docs/IMPLEMENTATION_STATE.md) and identify the next unfinished phase.
+Read [Implementation State](../dev-loop/templates/bootstrap-implementation-state.md) and identify the next unfinished phase.
 Read [Phase Plan](../../docs/phases/phase-x.md) for that phase if it exists.
 
 If `tmp/phases/index.json` exists locally, use it as a fast index for prior artifacts.
@@ -235,7 +235,7 @@ If the state file is ambiguous, resolve ambiguity conservatively:
 - prefer the earliest clearly unfinished phase
 - do not skip ahead
 - note the ambiguity in the phase plan audit log under `tmp/`
-- if this is a first-run bootstrap, start from the earliest phase implied by [Project Plan](../../PLAN.md)
+- if this is a first-run bootstrap, start from the earliest phase implied by Project Plan (`PLAN.md`)
 
 ## Phase planning loop
 
@@ -503,11 +503,11 @@ After the phase plan passes review:
    - The developer self-check artifact and any local review notes are NOT lifecycle-gate evidence. Gate evidence is only the visible gate comment and disposition ledger on the current pull request head, defined by [Gate Review Comment Contract](../docs/gate-review-comment-contract.md).
    - Fail closed on completeness: any review — this developer self-check or a later pull-request gate pass — with a reviewer that did not complete MUST NOT be summarized as clean; an unfinished reviewer yields a non-clean result.
 5. Update [Phase Plan](../../docs/phases/phase-x.md) so it reflects the phase as actually implemented, including any accepted scope or validation changes.
-6. Update [Project Plan](../../PLAN.md) when the phase changed durable product truth, resolved an open question, or made the shipped command/behavior surface more concrete.
+6. Update Project Plan (`PLAN.md`) when the phase changed durable product truth, resolved an open question, or made the shipped command/behavior surface more concrete.
 7. Write `Phase Summary` (`tmp/phases/phase-x/summary.md`) using [Phase Summary Template](../dev-loop/templates/phase-summary.md).
 8. <!-- rule: LOCAL-RETRO-FRESH-CONTEXT-DISPATCH --> Write `Retrospective` (`tmp/phases/phase-x/retrospective.md`) — but the retrospective MUST be produced by a **fresh-context, independent subagent dispatch** (like a gate reviewer), never written inline by this working session: dispatch a fresh-context pass seeded with the cycle's full agent/subagent tool-call/action/result record (the existing session transcript/journal artifacts — reuse them, do not build a new transcript store) plus the phase docs and the issue's acceptance criteria / definition of done / non-goals, and have it evaluate neutrally against those contracts. Save the record path used and record the checkpoint with provenance via `checkpoint-contract.mjs --state complete ... --retro-context fresh --record-source <record-path>` (see [Retrospective Checkpoint Contract](../docs/retrospective-checkpoint-contract.md)); an inline self-authored retro fails the checkpoint (fail-closed, test-pinned). Use [Retrospective Template](../dev-loop/templates/retrospective.md).
 9. Update `tmp/phases/phase-x/manifest.json` and `tmp/phases/index.json`.
-10. Update [Implementation State](../../docs/IMPLEMENTATION_STATE.md).
+10. Update [Implementation State](../dev-loop/templates/bootstrap-implementation-state.md).
 11. <!-- rule: LOCAL-COMMIT-BEFORE-EXIT --> **Exit validation gate — no uncommitted changes.** Run `git status --porcelain` before exiting. Revert unintended/speculative deltas; validate intended changes with the narrowest justified check, then commit. For a session that pushes and opens a PR (the scope step 11b defines) the first push is deferred to the pre-PR review step (11b); phase-doc-backed sessions eligible for local merge do not push. Recheck that status is empty before declaring phase completion. Dirty exit is a workflow defect, never clean completion. The `SubagentStop` hook (`.claude/hooks/subagent-stop-uncommitted-guard.mjs`) refuses dirty exits under `tmp/worktrees/`, naming the rule and paths. The read-only roles listed in `READONLY_SUBAGENT_ROLES` (`packages/core/src/claude/hook-decisions.mjs`) are exempt: their foreign tracked edits produce an advisory naming the orchestrator as responsible. Enforcement remains for the orchestrator and every editing role (`developer`, `fixer`, `docs`, `quality`).
 11b. <!-- rule: LOCAL-PRE-PR-REVIEW-BEFORE-PUSH --> **Pre-PR review pass (before the first push).** For any session that pushes and opens a PR — tracker-backed, issue-less `--lightweight` (PR-body-as-spec), or a phase-doc-backed session requiring full validation; only a phase-doc-backed session eligible for local merge is exempt — after the step-11 commit and before the branch's first push and PR creation, run the pre-PR review phase per [Pre-push review contract](../docs/pre-pr-review-contract.md): hand a mandatory developer-authored review brief to ONE fresh-context general-purpose reviewer, paired with the adversarial-enumeration checklist and the stale-surface scan per `PRE-PR-STALE-SURFACE-SWEEP`. Resolve the reviewer model via `resolveRoleModel(config, { role: "pre-push-reviewer", harness })` and pass it only when non-null; on Claude dispatch the built-in `general-purpose` subagent with the brief as its prompt, on Pi dispatch one fresh subagent with the brief as its task (a general-purpose reviewer; the PR-bound `review` gate procedure does not apply). The reviewer returns findings only and MUST NOT edit the tree; the implementer applies the fixes. Apply findings in-tree, rerun the narrowest justified validation on the fixes (re-check after the final round), then commit them (follow-up commit or amend) so `git status --porcelain` is empty, and only THEN push once. After the final commit, write the review record as `PRE-PR-BEFORE-FIRST-PUSH` specifies; `pr create` (lightweight included) refuses without it. The pass is bounded to one reviewer per round and at most two rounds, is ephemeral (no PR/comment/thread/Copilot), and is NOT lifecycle-gate evidence. The full fan-out `draft_gate`/`pre_approval_gate` still runs afterward as the authority.
 12. For tracker-backed sessions, create the PR from the working branch against the resolved base branch — `.devloops` `workflow.baseBranch` when configured, else the repo's auto-detected default branch (`resolveBaseBranch(config, { cwd })` from `@dev-loops/core/config`; bare name, e.g. `main`) — never a hardcoded `--base main`: `node <dev-loops-package-root>/cli/index.mjs pr create --assignee @me --repo <owner/name> --base <resolved-base> --head <branch> --title "..." --body-file <body-file>` (fallback when the CLI helper is unavailable: `node <resolved-skill-scripts>/github/create-pr.mjs --repo <owner/name> --assignee @me --base <resolved-base> --head <branch> --title "..." --body-file <body-file>`); never raw `gh pr create`. Draft/assignment/`Closes #N` policy: [LOCAL-PR-CREATE-CANONICAL](#tracker-backed-local-implementation) above. For a phase-doc-backed session requiring full validation, use [plan-file promotion](../docs/local-planning.md#4-promote-to-a-single-draft-pr) instead so the committed phase doc remains the spec-of-record. At the PR gate, request any required local full-repository validation only through `node <dev-loops-package-root>/cli/index.mjs gate resolve-validation` on the clean, committed current HEAD and record its result.

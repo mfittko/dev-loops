@@ -361,7 +361,7 @@ test("the docs-reference surface covers the required root doc surfaces", async (
   // (say AGENTS.md) silently drops out of the scan, and false-fails on a
   // legitimate shrink of the docs surface. Naming the roots pins exactly what
   // `collectMarkdownFiles` must keep scanning.
-  for (const requiredRoot of ["README.md", "PLAN.md", "AGENTS.md"]) {
+  for (const requiredRoot of ["README.md", "AGENTS.md"]) {
     assert.ok(scanned.has(requiredRoot), `required root surface ${requiredRoot} is not in the scanned set — collectMarkdownFiles likely broken`);
   }
   assert.ok(

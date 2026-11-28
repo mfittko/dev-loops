@@ -33,7 +33,7 @@ xychart-beta
 
 Type: `stateDiagram-v2`
 
-`selectGateForState` maps the canonical `status`, `authorization`, `target.kind` and `ownership` to one of 13 gates. The order matters. Lifecycle stops (blocked, done, merge authorization, approval, waiting) win before any target or ownership check, so an explicit `--review` or `--ui-review` request can never bypass them. Anything that falls through ends at `fail_closed_reconcile`. The enum also defines `retrospective_gate_pending`. No code outside the enum file reads it, but the input check (`STATUS_SET`) accepts it, so it falls through to the target and ownership checks like `active`. Derived from `packages/core/src/loop/public-dev-loop-routing.mjs` and `packages/core/src/loop/public-dev-loop-routing-contract.mjs`.
+`selectGateForState` maps the canonical `status`, `authorization`, `target.kind` and `ownership` to one of 13 gates. The order matters. Lifecycle stops (blocked, done, merge authorization, approval, waiting) win before any target or ownership check, so an explicit `--review` or `--ui-review` request can never bypass them. Anything that falls through ends at `fail_closed_reconcile`. Derived from `packages/core/src/loop/public-dev-loop-routing.mjs` and `packages/core/src/loop/public-dev-loop-routing-contract.mjs`.
 
 ```mermaid
 stateDiagram-v2
@@ -82,7 +82,7 @@ stateDiagram-v2
 
 Type: `stateDiagram-v2`
 
-The status enum has no transition table. Each status maps to a route kind through the gate above. `not_authorized` stops every status first. `blocked`, `done` and a `merge_ready` state that still needs confirmation stop. `waiting` is the only status that yields a wait route. `approval_ready` and `merge_ready` without a pending confirmation route to final approval, but the router turns that into `needs_reconcile` when no clean current-head `pre_approval_gate` evidence is visible. `active` and the unreferenced `retrospective_gate_pending` route by target and ownership, and fall through to `needs_reconcile` when nothing matches. Derived from `packages/core/src/loop/public-dev-loop-routing-contract.mjs` (`DEV_LOOP_STATUS`, `DEV_LOOP_ROUTE_KIND`) and `selectGateForState` plus the gate-to-result branches in `packages/core/src/loop/public-dev-loop-routing.mjs`.
+The status enum has no transition table. Each status maps to a route kind through the gate above. `not_authorized` stops every status first. `blocked`, `done` and a `merge_ready` state that still needs confirmation stop. `waiting` is the only status that yields a wait route. `approval_ready` and `merge_ready` without a pending confirmation route to final approval, but the router turns that into `needs_reconcile` when no clean current-head `pre_approval_gate` evidence is visible. `active` routes by target and ownership, and fall through to `needs_reconcile` when nothing matches. Derived from `packages/core/src/loop/public-dev-loop-routing-contract.mjs` (`DEV_LOOP_STATUS`, `DEV_LOOP_ROUTE_KIND`) and `selectGateForState` plus the gate-to-result branches in `packages/core/src/loop/public-dev-loop-routing.mjs`.
 
 ```mermaid
 stateDiagram-v2
@@ -93,11 +93,9 @@ stateDiagram-v2
     approval_ready
     merge_ready
     done
-    retrospective_gate_pending
   }
   active --> route: target and owner gates
   active --> needs_reconcile: no gate matches
-  retrospective_gate_pending --> route: falls through like active
   waiting --> wait: wait_watch
   blocked --> stop: stop_blocked_or_not_authorized
   approval_ready --> route_final: final_approval
@@ -105,10 +103,6 @@ stateDiagram-v2
   merge_ready --> stop: needs_confirmation
   route_final --> needs_reconcile: no clean pre_approval evidence
   done --> stop: stop_done_terminal
-  note right of retrospective_gate_pending
-    defined in the enum only
-    no code reads or writes it
-  end note
 ```
 
 <a id="d31"></a>

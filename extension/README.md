@@ -13,48 +13,26 @@ Installing the package with `pi install git:github.com/mfittko/dev-loops` expose
 
 ## Command surface
 
-- `/dev-loops`
-  - defaults to help output for the available subcommands
-- `/dev-loops status`
+Each subcommand runs as `/dev-loops <subcommand>` in Pi and as `dev-loops <subcommand>` in the shell. Run `dev-loops help` for the shared help output. The bare command prints that help.
+
+- `/dev-loops status` or `dev-loops status`
   - concise readiness summary plus lightweight next steps
-- `/dev-loops doctor`
+- `/dev-loops doctor` or `dev-loops doctor`
   - full diagnostic report with explicit pass/fail detail
+- `/dev-loops gates` or `dev-loops gates`
+  - active review angles with their prompts from config
 - `/dev-loops hide`
-  - removes the readiness widget cleanly
-- `/dev-loops inspect open [--repo <owner/name>]`
+  - removes the readiness widget cleanly; `dev-loops hide` is unsupported and exits non-zero with a stderr message because `hide` is session-local Pi UI behavior
+- `/dev-loops inspect open [--repo <owner/name>]` or `dev-loops inspect open [--repo <owner/name>]`
   - start or reuse the managed local inspect-run viewer and best-effort open it in the browser
-- `/dev-loops inspect resume [--repo <owner/name>]`
+- `/dev-loops inspect resume [--repo <owner/name>]` or `dev-loops inspect resume [--repo <owner/name>]`
   - reattach only to a confirmed live managed inspect-run viewer; fails closed when nothing live is managed
-- `/dev-loops inspect status [--repo <owner/name>]`
+- `/dev-loops inspect status [--repo <owner/name>]` or `dev-loops inspect status [--repo <owner/name>]`
   - report one bounded local lifecycle state plus the current URL when known
-- `/dev-loops inspect stop [--repo <owner/name>]`
+- `/dev-loops inspect stop [--repo <owner/name>]` or `dev-loops inspect stop [--repo <owner/name>]`
   - stop only the recorded managed inspect-run viewer process
-- `/dev-loops inspect restart [--repo <owner/name>]`
+- `/dev-loops inspect restart [--repo <owner/name>]` or `dev-loops inspect restart [--repo <owner/name>]`
   - explicitly restart the recorded managed inspect-run viewer; never kill an unknown listener
-- `dev-loops`
-  - defaults to help output for the available subcommands
-- `dev-loops help`
-  - prints shell help for the shared command family
-- `dev-loops status`
-  - prints the concise readiness summary in shell-friendly output
-- `dev-loops doctor`
-  - prints the full diagnostic report in shell-friendly output
-- `dev-loops gates`
-  - prints active review angles with their prompts from config
-- `/dev-loops gates`
-  - same as above, but inside the Pi extension
-- `dev-loops inspect open [--repo <owner/name>]`
-  - same as the slash form: start or reuse the managed viewer and best-effort open it in the browser
-- `dev-loops inspect resume [--repo <owner/name>]`
-  - same as the slash form: reattach only to a confirmed live managed viewer
-- `dev-loops inspect status [--repo <owner/name>]`
-  - same as the slash form: report one bounded local lifecycle state plus the current URL when known
-- `dev-loops inspect stop [--repo <owner/name>]`
-  - same as the slash form: stop only the recorded managed viewer process
-- `dev-loops inspect restart [--repo <owner/name>]`
-  - same as the slash form: explicitly restart the recorded managed viewer; never kill an unknown listener
-- `dev-loops hide`
-  - is intentionally unsupported and exits non-zero with a shell-friendly stderr message because `hide` is session-local Pi UI behavior
 
 ## Inspect local UI lifecycle ownership
 

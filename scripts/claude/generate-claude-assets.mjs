@@ -59,7 +59,7 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
       const source = `agents/${entry}`;
       const raw = fs.readFileSync(path.join(repoRoot, source), "utf8");
       const base = entry.slice(0, -".agent.md".length);
-      assets.push({ target: `.claude/agents/${base}.md`, content: transformAgent({ source, raw, version }) });
+      assets.push({ target: `.claude/agents/${base}.md`, content: transformAgent({ source, raw }) });
     }
   }
 
@@ -72,7 +72,7 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
       const source = `commands/${entry}`;
       const raw = fs.readFileSync(path.join(repoRoot, source), "utf8");
       const base = entry.slice(0, -".command.md".length);
-      assets.push({ target: `.claude/commands/${base}.md`, content: transformCommand({ source, raw, version }) });
+      assets.push({ target: `.claude/commands/${base}.md`, content: transformCommand({ source, raw }) });
     }
   }
 
@@ -88,7 +88,7 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
       if (isSkillExcludedFromClaude(frontmatter)) {
         continue;
       }
-      assets.push({ target: `.claude/skills/${entry.name}/SKILL.md`, content: transformSkill({ source, raw, version }) });
+      assets.push({ target: `.claude/skills/${entry.name}/SKILL.md`, content: transformSkill({ source, raw }) });
     }
   }
 

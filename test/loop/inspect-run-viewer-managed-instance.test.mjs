@@ -745,7 +745,7 @@ test('classifyInspectRunViewerCiChanges only requests browser smoke when relevan
   ]);
   const irrelevant = classifyInspectRunViewerCiChanges([
     'README.md',
-    'docs/IMPLEMENTATION_WORKFLOW.md',
+    'docs/index.md',
   ]);
   assert.equal(irrelevant.shouldRun, false);
   assert.deepEqual(irrelevant.relevantPaths, []);

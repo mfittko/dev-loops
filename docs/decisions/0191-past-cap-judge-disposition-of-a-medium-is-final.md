@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-26 ([issue 2462](https://github.com/mfittko/dev-loops/issues/2462))
 
+Amended by [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md).
+
 Amends [ADR 0185](./0185-draft-gate-round-cap-and-post-convergence-no-code-commit.md) and [ADR 0189](./0189-draft-round-cap-counts-from-landing.md) for the `severity_disagreement` blocker, the cap-round fixer pass (ADR 0185 ran no fixer past the cap) and the one closure round after it. All other decisions of ADR 0185 and ADR 0189 are unchanged. The records of ADR 0185 and ADR 0189 stay unedited.
 
 ## Context

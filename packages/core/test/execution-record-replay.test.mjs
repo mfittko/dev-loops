@@ -5,7 +5,6 @@ import { dirname, join } from "node:path";
 import { describe, test } from "bun:test";
 
 import { buildExecutionUnitRecord } from "../src/loop/execution-record.mjs";
-import { enforceRoleBudget } from "../src/loop/role-budget-bound.mjs";
 import { enforceReviewerUnitBound } from "../src/loop/reviewer-unit-bound.mjs";
 import { buildWatchCycleExecutionRecord } from "../../../scripts/loop/run-watch-cycle.mjs";
 
@@ -16,32 +15,12 @@ const FIXTURE = JSON.parse(
 
 /**
  * Before/after execution-record replay (issue 2157 slice b2, AC3): drives the
- * SAME 5-role pipeline (coordinator_phase, reviewer_unit, judge_round,
- * fixer_pass, watch_cycle) through its REAL production primitive twice — once
+ * SAME pipeline (reviewer_unit, watch_cycle) through its REAL production primitive twice — once
  * for the fixture's "before" run, once for "after" — builds one compact
  * execution-unit record per unit FROM the primitive's own validated output
  * (never a hand-built record), and aggregates a phase-level before/after
  * delta report.
  */
-function buildRoleBudgetRecord({ role, run, headSha, consumed, snapshot, harness }) {
-  const verdict = enforceRoleBudget({ unit: { role, run, gateContext: { headSha } }, consumed });
-  assert.equal(verdict.ok, true, `${role} must stay within budget for this fixture`);
-  return buildExecutionUnitRecord({
-    harness,
-    role,
-    identity: { headSha: verdict.unit.gateContext.headSha, unit: run },
-    promptBytes: snapshot.promptBytes,
-    contextBytes: snapshot.contextBytes,
-    turns: verdict.consumed.modelTurns,
-    toolCalls: verdict.consumed.toolCalls,
-    providerTokens: snapshot.providerTokens,
-    localToolTimeMs: snapshot.localToolTimeMs,
-    childWallTimeMs: snapshot.childWallTimeMs,
-    waitOwner: null,
-    outcome: "ok",
-  });
-}
-
 function buildReviewerRecord({ headSha, snapshot, harness }) {
   const verdict = enforceReviewerUnitBound({
     unit: { run: snapshot.run, gateContext: { headSha }, angles: snapshot.angles },
@@ -65,14 +44,11 @@ function buildReviewerRecord({ headSha, snapshot, harness }) {
   });
 }
 
-/** Drive every real primitive for one fixture run ("before" or "after") and return its 5 records. */
+/** Drive every real primitive for one fixture run ("before" or "after") and return its 2 records. */
 function driveRun(run, harness) {
   const { headSha, units } = run;
   return [
-    buildRoleBudgetRecord({ role: "coordinator_phase", run: units.coordinator_phase.run, headSha, consumed: units.coordinator_phase.consumed, snapshot: units.coordinator_phase, harness }),
     buildReviewerRecord({ headSha, snapshot: units.reviewer_unit, harness }),
-    buildRoleBudgetRecord({ role: "judge_round", run: units.judge_round.run, headSha, consumed: units.judge_round.consumed, snapshot: units.judge_round, harness }),
-    buildRoleBudgetRecord({ role: "fixer_pass", run: units.fixer_pass.run, headSha, consumed: units.fixer_pass.consumed, snapshot: units.fixer_pass, harness }),
     buildWatchCycleExecutionRecord({
       owner: units.watch_cycle.owner,
       cycleDisposition: units.watch_cycle.cycleDisposition,
@@ -120,11 +96,11 @@ describe("execution-record before/after replay (issue 2157 slice b2, AC3)", () =
       assert.equal(record.headSha, FIXTURE.runs.before.headSha);
       assert.equal(record.harness, FIXTURE.harness);
     }
-    assert.deepEqual(beforeRecords.map((r) => r.role), ["coordinator_phase", "reviewer_unit", "judge_round", "fixer_pass", "watch_cycle"]);
+    assert.deepEqual(beforeRecords.map((r) => r.role), ["reviewer_unit", "watch_cycle"]);
   });
 
   test("watch_cycle is honestly unavailable on provider tokens even on the claude (available-profile) harness — no model turn occurred", () => {
-    const [, , , , watchCycleRecord] = driveRun(FIXTURE.runs.before, FIXTURE.harness);
+    const [, watchCycleRecord] = driveRun(FIXTURE.runs.before, FIXTURE.harness);
     assert.equal(watchCycleRecord.hasUnavailableProviderMetric, true);
     assert.equal(watchCycleRecord.providerTokens.input.available, false);
   });

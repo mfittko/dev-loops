@@ -341,10 +341,9 @@ test("new See Also markdown links resolve from docs files", async () => {
 test("docs index separates active docs and presentations", async () => {
   const content = await readRepo("docs/index.md");
   assert.match(content, /Start here/i);
-  assert.match(content, /phases\/phase-8\.md/i);
   assert.doesNotMatch(content, /archive\/phases\/phase-0\.md/i);
   assert.doesNotMatch(content, /archive\/workflow-remediation-prep\.md/i);
-  assert.match(content, /presentations\/applied-dev-loops-presentation\.md/i);
+  assert.match(content, /presentations\/state-graph-surface-presentation\.md/i);
   assert.match(content, /presentations\/style\.css/i);
 });
 test("checkpoint verdict comment contract owns its comment-field rules by ID (single owner)", () => {

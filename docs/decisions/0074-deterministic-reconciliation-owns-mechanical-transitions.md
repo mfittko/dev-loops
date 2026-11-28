@@ -6,6 +6,8 @@ Accepted — 2026-09-21 ([PR 2275](https://github.com/mfittko/dev-loops/pull/227
 
 Amended by [ADR 0081](./0081-harness-mediated-agent-io-context-contained.md).
 
+Amended by [ADR 0341](./0341-adr-0074-delivered-parts-and-withdrawn-sections.md): sections 5 and 19 to 24 are withdrawn.
+
 ## Context
 
 Issue [#2269](https://github.com/mfittko/dev-loops/issues/2269), under the efficiency epic [#2268](https://github.com/mfittko/dev-loops/issues/2268), asks how dev-loop should stop mechanical orchestration from accumulating in a long-lived model transcript while preserving gate semantics, interruption recovery, reviewer independence, carry-forward correctness, and human approval boundaries.

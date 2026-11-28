@@ -2,10 +2,10 @@
 // state machine rendered as a mermaid diagram, emitted DETERMINISTICALLY from
 // the code's own exported tables so the page can never drift from the code.
 //
-// Five diagrams come straight from packages/core/src/loop tables (copilot loop,
-// reviewer loop, outer conductor routing, the public dev-loop gate hub, and the
-// PR lifecycle contract); one more (the release pipeline workflow) is authored
-// from a documented, table-less source.
+// Most diagrams come straight from packages/core/src/loop tables (copilot loop,
+// reviewer loop, refinement grill, fix loop, outer conductor routing, the public
+// dev-loop gate hub, and the PR lifecycle contract); the release pipeline
+// workflow is authored from a documented, table-less source.
 //
 // The page reuses the article design system (docs/articles/introducing-dev-loops.html):
 // the same :root tokens, body gradient, and typography. It intentionally defines
@@ -169,7 +169,7 @@ const releaseDiagram = [
 
 const INTRO_PROSE = [
   'dev-loops drives every pull request through closed, deterministic state machines. Workflow control lives in the graph; agent judgment enters only as bounded, explicit inputs, never as hidden orchestration. Exactly one state applies at a time, and each state exposes the legal transitions out of it.',
-  "Every diagram on this page is generated at site-build time from the code's own exported tables — the copilot loop's <code>STATE</code>/<code>TRANSITIONS</code>, the reviewer loop's <code>REVIEWER_STATE</code>/<code>REVIEWER_TRANSITIONS</code>, the outer loop's <code>OUTER_STATE</code>/<code>OUTER_TRANSITIONS</code>, the public router's <code>PUBLIC_DEV_LOOP_GATE_CONTRACT</code>, and the PR lifecycle's <code>PR_LIFECYCLE_STATES</code>/<code>PR_LIFECYCLE_TRANSITIONS</code>. They cannot drift from the code: change a transition table and this page changes with it. One diagram (the release pipeline) is authored from a documented contract that has no single code table.",
+  "This page holds {diagramCount} diagrams. Every diagram on this page is generated at site-build time from the code's own exported tables — the copilot loop's <code>STATE</code>/<code>TRANSITIONS</code>, the reviewer loop's <code>REVIEWER_STATE</code>/<code>REVIEWER_TRANSITIONS</code>, the outer loop's <code>OUTER_STATE</code>/<code>OUTER_TRANSITIONS</code>, the public router's <code>PUBLIC_DEV_LOOP_GATE_CONTRACT</code>, and the PR lifecycle's <code>PR_LIFECYCLE_STATES</code>/<code>PR_LIFECYCLE_TRANSITIONS</code>. They cannot drift from the code: change a transition table and this page changes with it. One diagram (the release pipeline) is authored from a documented contract that has no single code table.",
   'The state names are not labels for a picture — they are the literal contract identifiers that appear in logs, handoff envelopes, and gate artifacts. Nodes are coloured by role: <strong>active / in-progress</strong> steps the loop advances itself, <strong>waiting-on-external</strong> states that block on something outside the loop (CI, Copilot, a human), <strong>blocked / fail-closed</strong> states that stop or reconcile rather than guess, and <strong>terminal</strong> states where the slice is complete.',
 ];
 
@@ -179,7 +179,7 @@ const SECTIONS = [
     title: 'Public dev-loop gate hub',
     source: 'packages/core/src/loop/public-dev-loop-routing-contract.mjs — PUBLIC_DEV_LOOP_GATE_CONTRACT',
     prose: [
-      'The single public entrypoint, <code>dev-loop</code>, resolves the canonical current state to exactly one of eleven gates. Each gate carries a closed route-kind — <code>route</code> to an internal strategy, <code>stop</code> for a human decision or terminal work, or <code>wait</code> on an external signal — and the internal strategy it selects.',
+      `The single public entrypoint, <code>dev-loop</code>, resolves the canonical current state to exactly one of ${PUBLIC_DEV_LOOP_GATE_CONTRACT.length} gates. Each gate carries a closed route-kind — <code>route</code> to an internal strategy, <code>stop</code> for a human decision or terminal work, or <code>wait</code> on an external signal — and the internal strategy it selects.`,
       'This is the table the startup resolver walks on every invocation: it is not a one-time setup step but the routing decision re-made each time. Ambiguous, conflicting, or unsupported state does not get a guessed route — it fails closed to <code>fail_closed_reconcile</code>. Edge labels below are the route-kind; each node names the gate and the strategy it selects.',
     ],
     diagram: gateDiagram,
@@ -311,7 +311,7 @@ ${items}
  * @returns {string}
  */
 export function buildStateAtlasHtml() {
-  const intro = INTRO_PROSE.map((p) => `      <p class="lede">${p}</p>`).join('\n');
+  const intro = INTRO_PROSE.map((p) => `      <p class="lede">${p.replace('{diagramCount}', SECTIONS.length)}</p>`).join('\n');
   const sections = SECTIONS.map(sectionMarkup).join('\n');
   return `<!DOCTYPE html>
 <html lang="en">

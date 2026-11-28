@@ -289,7 +289,7 @@ validation:
     - { match: ["test/loop/*.test.mjs", "test/github/*.test.mjs", "test/docs/*.test.mjs", "test/projects/*.test.mjs", "test/pages/*.test.mjs", "test/security/*.test.mjs"], surface: scripts, commands: ["bun scripts/run-bun-test.mjs {path}"], gateSuites: [test:scripts] }
     - { match: "scripts/claude/generate-claude-assets.mjs", surface: generated, commands: ["bun run assets:check", "bun run test:doc-guard"] }
     - { match: ["docs/presentations/introducing-dev-loops.html", "test/playwright/intro-deck.spec.mjs"], surface: ui, commands: ["bun run test:playwright:intro-deck"] }
-    - { match: ["docs/presentations/dev-loops-deep-dive.html", "test/playwright/deep-dive.spec.mjs", "test/playwright/deep-dive-deck.spec.mjs"], surface: ui, commands: ["bun run test:playwright:deep-dive"] }
+    - { match: ["docs/presentations/dev-loops-deep-dive.html", "test/playwright/deep-dive-deck.spec.mjs"], surface: ui, commands: ["bun run test:playwright:deep-dive"] }
     - { match: ["docs/presentations/how-dev-loops-decided-itself.html", "test/playwright/how-decided-deck.spec.mjs"], surface: ui, commands: ["bun run test:playwright:how-decided-deck"] }
     - { match: ["docs/presentations/state-graph-surface.html", "test/playwright/state-graph-surface-deck.spec.mjs"], surface: ui, commands: ["bun run test:playwright:state-graph-surface-deck"] }
     - { match: ["docs/presentations/finding-the-flow.html", "test/playwright/finding-the-flow-deck.spec.mjs"], surface: ui, commands: ["bun run test:playwright:finding-the-flow-deck"] }

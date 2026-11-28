@@ -1,7 +1,6 @@
 /**
  * reviewer-unit-bound.mjs — dev-loop execution-cap bounded scoped-reviewer
- * dispatch unit. Mirrors
- * ./child-launch-bound.mjs's style: a bounded, deterministic primitive that
+ * dispatch unit. A bounded, deterministic primitive that
  * caps a reviewer unit at a small assigned-angle set, denies every operation
  * outside a narrow allow-list by default, and always produces a durable
  * blocker record — never a silent pass — when the unit runs over budget or
@@ -12,10 +11,8 @@
  */
 
 /**
- * Dev-loop harnesses this bound recognizes. Re-declared locally (not
- * imported from child-launch-bound.mjs) so this primitive stays free of any
- * cross-module coupling; it does not branch on harness, it only carries the
- * label through caller-supplied gateContext.
+ * Dev-loop harnesses this bound recognizes. It does not branch on harness,
+ * it only carries the label through caller-supplied gateContext.
  */
 export const HARNESS_VALUES = Object.freeze(["pi", "claude", "codex"]);
 
@@ -186,8 +183,8 @@ export function validateReviewerUnit(unit) {
     throw new TypeError("unit.gateContext.headSha must be a non-empty string");
   }
   // harness is optional (absent is allowed), but when present it must be a
-  // recognized dev-loop harness — mirrors child-launch-bound.mjs's own
-  // harness enforcement instead of silently carrying an unrecognized label.
+  // recognized dev-loop harness, instead of silently carrying an
+  // unrecognized label.
   if (gateContext.harness != null && !HARNESS_VALUES.includes(gateContext.harness)) {
     throw new TypeError(`unit.gateContext.harness must be one of ${HARNESS_VALUES.join(", ")}, got ${JSON.stringify(gateContext.harness)}`);
   }

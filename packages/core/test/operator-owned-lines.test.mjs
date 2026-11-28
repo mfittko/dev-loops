@@ -7,7 +7,7 @@ import { parseCopilotBodyDispositionMarker } from "../src/github/copilot-body-di
 import { verifyFreshHumanApproval } from "../src/loop/merge-approval.mjs";
 import { resolveApprovalState, stripNonAssertionMarkdown as releaseStrip } from "../../../scripts/release/verify-release-approval.mjs";
 import { stripNonAssertionMarkdown } from "../src/github/non-assertion-markdown.mjs";
-import { APPROVAL_CODE_SPAN_FIXTURES } from "../../../scripts/lib/code-span-fixtures.mjs";
+import { APPROVAL_CODE_SPAN_FIXTURES } from "../../../test/fixtures/code-span-fixtures.mjs";
 import { extractWaiverLines } from "../../../scripts/loop/adr-waiver-markers.mjs";
 
 const SHA = "a".repeat(40);

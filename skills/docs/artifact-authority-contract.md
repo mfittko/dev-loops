@@ -9,8 +9,7 @@ Canonical owner for the artifact-selection model: whether a work item originates
      model was two-tier); retained as-is for ID stability, not renamed. -->
 dev-loops supports three mutually exclusive artifact authority origins. Every work item MUST originate from exactly one authoritative artifact: a GitHub issue, a persisted markdown plan file, or — on the sanctioned lightweight path — the PR description itself as the spec-of-record (no committed plan artifact). Work MUST NOT originate from a PR (other than the sanctioned lightweight PR-body-as-spec path) or a direct local change unless explicitly requested.
 
-The shipped extension default selects local-planning; see [Shipped default posture](#shipped-default-posture) below. The mode names that follow describe the origins; "default" in their headings refers to the local-first code-level default in `BUILT_IN_DEFAULTS`.
-
+The shipped extension default selects local-planning; see [Shipped default posture](#shipped-default-posture) below.
 ### Tracker-first
 
 **GitHub issues are the authoritative artifact store.** Work originates from a GitHub issue. A linked PR is the execution artifact. GitHub is the canonical source of truth for issue identity, acceptance criteria, scope, and lifecycle state.

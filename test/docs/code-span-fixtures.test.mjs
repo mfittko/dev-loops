@@ -15,7 +15,7 @@ import {
   APPROVAL_CODE_SPAN_FIXTURES,
   APPROVAL_MARKER,
   buildCodeSpanFixtures,
-} from "../../scripts/lib/code-span-fixtures.mjs";
+} from "../fixtures/code-span-fixtures.mjs";
 import {
   resolveApprovalState,
   stripNonAssertionMarkdown,

@@ -9,7 +9,6 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 
 const DEFAULT_SCAN_PATHS = Object.freeze([
   "README.md",
-  "PLAN.md",
   "AGENTS.md",
   "scripts/README.md",
   "extension/README.md",

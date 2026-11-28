@@ -249,10 +249,10 @@ function normalizeToolList(value) {
  * loaded config to tune the generated tree per repo. A Claude-only `claudeModel`
  * frontmatter key is the fallback when the resolver returns inherit, so a role
  * without a tier does not inherit its dispatcher's model and config still wins.
- * @param {{ source: string, raw: string, version?: string, config?: object }} input
+ * @param {{ source: string, raw: string, config?: object }} input
  * @returns {string} Full generated file content.
  */
-export function transformAgent({ source, raw, version = "latest", config = {} }) {
+export function transformAgent({ source, raw, config = {} }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
   const body = rewriteWrapperInvocation(rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody))));
   const tools = mapTools(normalizeToolList(frontmatter.tools));
@@ -295,10 +295,10 @@ export function transformAgent({ source, raw, version = "latest", config = {} })
  * is a prompt (with `$ARGUMENTS`) that invokes the existing entrypoint, so there is NO routing
  * logic here. Frontmatter keeps Claude's command fields (`description`, `argument-hint`); the body
  * is passed through `stripPiOnlyBlocks` + `rewriteCliInvocation` like agents/skills.
- * @param {{ source: string, raw: string, version?: string }} input
+ * @param {{ source: string, raw: string }} input
  * @returns {string} Full generated file content.
  */
-export function transformCommand({ source, raw, version = "latest" }) {
+export function transformCommand({ source, raw }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
   const body = rewriteWrapperInvocation(rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody))));
 
@@ -349,10 +349,10 @@ export function isSkillExcludedFromClaude(frontmatter) {
 
 /**
  * Transform a canonical `skills/<name>/SKILL.md` into a Claude `.claude/skills/<name>/SKILL.md`.
- * @param {{ source: string, raw: string, version?: string }} input
+ * @param {{ source: string, raw: string }} input
  * @returns {string} Full generated file content.
  */
-export function transformSkill({ source, raw, version = "latest" }) {
+export function transformSkill({ source, raw }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
   const body = rewriteWrapperInvocation(rewriteCliInvocation(stripPiOnlyBlocks(rawBody)));
   const tools = mapTools(normalizeToolList(frontmatter["allowed-tools"]));

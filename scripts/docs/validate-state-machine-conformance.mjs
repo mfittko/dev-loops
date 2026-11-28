@@ -1092,8 +1092,8 @@ const FIX_LOOP_TO_FIXTURE = new Map([
 ]);
 
 export const FIX_LOOP_KNOWN_GAPS = new Map([
-  ["head_moved->full_gate_round", "slice 3 (C19): unresolved gate-thread recovery admission deferred until PR #2990 merges"],
-  ["no_commit->full_gate_round", "slice 3 (C19): unresolved gate-thread recovery admission deferred until PR #2990 merges"],
+  ["head_moved->full_gate_round", "C19: unresolved gate-thread recovery admission has no replay proof"],
+  ["no_commit->full_gate_round", "C19: unresolved gate-thread recovery admission has no replay proof"],
 ]);
 
 {

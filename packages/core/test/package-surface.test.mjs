@@ -13,7 +13,6 @@ test("packages/core exports the sanctioned runtime boundary and de-exports unuse
   assert.equal(packageJson.exports["./github/repo-slug"], "./src/github/repo-slug.mjs");
   assert.equal(packageJson.exports["./github/review-threads"], "./src/github/review-threads.mjs");
   assert.equal(packageJson.exports["./loop/async-start-contract"], "./src/loop/async-start-contract.mjs");
-  assert.equal(packageJson.exports["./loop/child-launch-bound"], "./src/loop/child-launch-bound.mjs");
   assert.equal(packageJson.exports["./loop/finding-cluster"], "./src/loop/finding-cluster.mjs");
   assert.equal(packageJson.exports["./loop/conductor-routing"], "./src/loop/conductor-routing.mjs");
   assert.equal(packageJson.exports["./loop/copilot-ci-status"], "./src/loop/copilot-ci-status.mjs");
@@ -27,7 +26,6 @@ test("packages/core exports the sanctioned runtime boundary and de-exports unuse
   assert.equal(packageJson.exports["./loop/retrospective-checkpoint"], undefined);
   assert.equal(packageJson.exports["./loop/reviewer-loop-state"], "./src/loop/reviewer-loop-state.mjs");
   assert.equal(packageJson.exports["./loop/reviewer-unit-bound"], "./src/loop/reviewer-unit-bound.mjs");
-  assert.equal(packageJson.exports["./loop/role-budget-bound"], "./src/loop/role-budget-bound.mjs");
   assert.equal(packageJson.exports["./loop/run-inspection"], "./src/loop/run-inspection.mjs");
   assert.equal(packageJson.exports["./loop/steering"], "./src/loop/steering.mjs");
   assert.equal(packageJson.exports["./loop/timeout-policy"], "./src/loop/timeout-policy.mjs");

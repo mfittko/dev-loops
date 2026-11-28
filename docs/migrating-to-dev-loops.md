@@ -4,9 +4,8 @@ This project was renamed from **`pi-dev-loops`** to **`dev-loops`** as part of m
 the tool harness-agnostic (it runs under both Claude Code and Pi, and standalone via
 `npx`). This guide lists every change a consumer repo must make.
 
-Because the project is still `0.x`, these breaking changes ship without a long
-deprecation window. Where a cheap compatibility shim was feasible it is noted below;
-the dev-loops-owned environment variables are a deliberate clean break (no aliases).
+Where a cheap compatibility shim was feasible it is noted below; the
+dev-loops-owned environment variables are a deliberate clean break (no aliases).
 
 ## 1. Package name
 
@@ -18,8 +17,8 @@ the dev-loops-owned environment variables are a deliberate clean break (no alias
 Update `package.json` dependencies and any `npx`/import references:
 
 ```diff
-- "dev-loops": "npx pi-dev-loops@<version>"
-+ "dev-loops": "npx dev-loops@<version>"
+- "pi-dev-loops": "<version>"
++ "dev-loops": "<version>"
 ```
 
 ```bash

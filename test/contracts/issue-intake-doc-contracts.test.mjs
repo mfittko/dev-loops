@@ -206,7 +206,6 @@ test("watch timing and persistence route to existing operation and state owners"
 
 test("issue-intake surface keeps issue refinement separate from the phase-scoped refiner and explains thin entrypoint agents", async () => {
   const skillContent = await readIssueIntakeSurface();
-  const planContent = await readRepo("PLAN.md");
   const agentFiles = (await readdir(fromRepoRoot("agents")))
     .filter((name) => name.endsWith(".agent.md"))
     .sort();
@@ -214,17 +213,13 @@ test("issue-intake surface keeps issue refinement separate from the phase-scoped
   assert.doesNotMatch(skillContent, /ask the refiner to emit/i);
   assert.equal(agentFiles.includes("copilot-autopilot.agent.md"), false);
   assert.match(skillContent, /issue-refinement specialist/i);
-  assert.match(planContent, /Thin workflow entrypoint agents are still allowed/i);
-  assert.match(planContent, /must stay thin, defer sequencing and workflow policy to the skill/i);
 });
 
 test("issue-intake normalization docs require issue state checks and avoid the stale top-level-workflow roadmap question", async () => {
   const skillContent = await readIssueIntakeSurface();
-  const planContent = await readRepo("PLAN.md");
 
   assert.match(skillContent, /node scripts\/github\/view-issue\.mjs --repo <(?:owner\/name|resolved-repo)> --issue <number> --json number,title,body,state,labels,assignees,milestone/);
   assert.match(skillContent, /If a matching issue exists:[\s\S]*if the matching issue is closed, stop for a user decision[\s\S]*if a PR already exists, classify bootstrap-wait versus follow-up/i);
-  assert.doesNotMatch(planContent, /remain a mode of `copilot-dev-loop`, or become a separate top-level workflow/i);
 });
 
 test("issue-intake docs cover issue URLs, state-all issue search, and abstract ideas without plan docs", async () => {
@@ -363,7 +358,6 @@ test("issue-intake overlay resolves the target repo for non-issue inputs", async
 
 test("issue-intake safety layer contract is documented", async () => {
   const skillContent = await readIssueIntakeSurface();
-  const planContent = await readRepo("PLAN.md");
 
   assert.match(skillContent, /New-idea safety layer \(default contract in this repo\)/);
   assertRuleOwned("INTAKE-NEW-IDEA-SAFETY", "skills/docs/issue-intake-procedure.md");
@@ -402,8 +396,6 @@ test("issue-intake safety layer contract is documented", async () => {
   assert.match(skillContent, /machine-readable JSON snapshot/i);
   assert.match(skillContent, /run a second async mutation pass \(dispatched via the procedure\)/i);
   assert.match(skillContent, /emit a concise post-mutation verification artifact/i);
-  assert.match(planContent, /Proposal-first new-idea safety layer/i);
-  assert.match(planContent, /stopped_overlap_needs_decision`, `stopped_low_confidence`, `stopped_explicit_reject`/i);
 });
 
 test("approval stop-gate check accepts reworded prose and rejects a lost stop or checkpoint route", async () => {

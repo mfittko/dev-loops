@@ -40,22 +40,6 @@ export const RETROSPECTIVE_CHECKPOINT_STATE = Object.freeze({
 });
 
 /**
- * The set of internal dev-loop strategy gate names that represent qualifying
- * GitHub-first async completions in this repository.
- *
- * A post-run behavioral retrospective must be discharged before the next merge
- * (`merge-pr` `retrospective_checkpoint`) when the previous run used one of these gates.
- *
- * Qualifying gates:
- * - copilot_pr_followup: Copilot-owned PR follow-up (primary routed GitHub-first path)
- * - issue_intake: Copilot-first issue intake (GitHub-first issue assignment path)
- */
-export const RETROSPECTIVE_QUALIFYING_GATES = Object.freeze([
-  "copilot_pr_followup",
-  "issue_intake",
-]);
-
-/**
  * Provenance context values for a recorded retrospective (issue #1870).
  *
  * A retrospective MUST be produced by a FRESH-CONTEXT, independent dispatch

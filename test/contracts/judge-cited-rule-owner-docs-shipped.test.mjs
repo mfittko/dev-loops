@@ -16,5 +16,5 @@ test("every docs/ file that owns a registered rule is published", async () => {
     owned.set(doc, [...(owned.get(doc) ?? []), id]);
   }
   for (const [doc, ids] of owned) assert.ok(files.includes(doc), `${doc} owns ${ids.join(", ")} and must be in package.json files`);
-  assert.ok(owned.size >= 3, "the scan finds the known owner docs");
+  assert.ok(owned.size >= 2, "the scan finds the known owner docs");
 });

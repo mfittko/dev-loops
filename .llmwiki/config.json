@@ -25,8 +25,7 @@
     "include": [
       "README.md",
       "AGENTS.md",
-      "docs/IMPLEMENTATION_WORKFLOW.md",
-      "docs/public-dev-loop-contract.md",
+      "skills/docs/public-dev-loop-contract.md",
       "skills/docs/conductor-routing-contract.md",
       "docs/repo-wiki-manual-first.md",
       "scripts/README.md",
@@ -34,8 +33,6 @@
     ],
     "exclude": [
       "CHANGELOG.md",
-      "docs/archive/**",
-      "docs/old/**",
       "docs/phases/**"
     ],
     "stale_after_days": 180,

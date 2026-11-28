@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-26 ([issue 2937](https://github.com/mfittko/dev-loops/issues/2937) S4b)
 
+Amended by [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md).
+
 Amends [ADR 0191](./0191-past-cap-judge-disposition-of-a-medium-is-final.md) for the count of a head that only merges the PR base after the cap round and for the diff of the closure round. All other decisions of ADR 0191 are unchanged. The record of ADR 0191 stays unedited.
 
 Amended by [ADR 0298](./0298-clean-overlapping-merge-is-not-base-only.md): `isBaseOnlyMergeSince` carries a merge that resolves a PR-own file to the merged base version when the head holds that file byte-identical to `fromHead` (an identical change on both parents). The refusal for a PR-own file resolved to the base version otherwise stays in force.

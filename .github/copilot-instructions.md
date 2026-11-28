@@ -18,7 +18,7 @@ Validation → `../skills/docs/validation-policy.md`
 Merge preconditions → `../skills/docs/merge-preconditions.md`
 Structural quality → `../skills/docs/structural-quality.md`
 
-## Per-strategy entrypoint briefings (30-50 lines each)
+## Per-strategy entrypoint briefings
 
 `../skills/docs/entrypoint-strategies.md` — load the per-strategy section for the routed strategy.
 

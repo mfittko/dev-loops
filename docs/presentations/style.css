@@ -55,10 +55,6 @@
   color: #ddd6fe;
 }
 
-.hero-top {
-  margin-top: 0;
-}
-
 .hero-card,
 .glass-card,
 .metric-card {
@@ -66,11 +62,6 @@
   border: 1px solid rgba(148, 163, 184, 0.18) !important;
   box-shadow: 0 22px 60px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(12px);
-}
-
-.hero-card,
-.glass-card,
-.metric-card {
   border-radius: 24px;
   padding: 1.25rem 1.35rem;
 }
@@ -123,12 +114,6 @@
 }
 
 
-.section-lead {
-  color: #cbd5e1;
-  font-size: 1.05rem;
-  margin-bottom: 0.8rem;
-}
-
 .metric-card {
   background: linear-gradient(180deg, rgba(24, 36, 61, 0.92), rgba(17, 24, 39, 0.78)) !important;
   border-color: rgba(129, 140, 248, 0.35) !important;
@@ -144,18 +129,6 @@
   color: #cbd5e1;
   margin-top: 0.85rem;
   font-size: 0.95rem;
-}
-
-.note-top-sm {
-  margin-top: 0.5rem;
-}
-
-.note-top-md {
-  margin-top: 0.75rem;
-}
-
-.section-heading-loose {
-  margin-bottom: 1.2rem !important;
 }
 
 .tight-list {

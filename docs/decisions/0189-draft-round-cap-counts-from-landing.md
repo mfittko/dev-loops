@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-26 ([issue 2462](https://github.com/mfittko/dev-loops/issues/2462))
 
+Amended by [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md).
+
 Amends [ADR 0185](./0185-draft-gate-round-cap-and-post-convergence-no-code-commit.md) for its Count bullet only. All other ADR 0185 decisions are unchanged. The record of ADR 0185 stays unedited.
 
 ## Context

@@ -4,6 +4,8 @@
 
 Accepted — 2026-05-12 ([commit ea2114d2](https://github.com/mfittko/dev-loops/commit/ea2114d27e563260d69f43ef8ff96fdfc93d2f76))
 
+Amended by [ADR 0340](./0340-adr-0001-layering-applies-to-consumer-repos-only.md): the layering applies to consumer repos only.
+
 ## Context
 
 The repo supports two workflows side by side: a local phased workflow driven by phase docs and a GitHub-first remote workflow driven by issues and PRs (`docs/IMPLEMENTATION_WORKFLOW.md`). With both active, four kinds of truth — durable roadmap decisions, backlog, current execution snapshot, and ephemeral run artifacts — were at risk of blurring into one another. Parallel backlog files started appearing alongside GitHub issues, and workflow/phase docs began restating (and drifting from) the behavior of already-shipped helpers whose semantics are owned by code and tests. `PLAN.md`, `docs/IMPLEMENTATION_STATE.md`, and `docs/index.md` each carried partial answers to "where does this fact live," but nothing made the split binding, dating from the 2026-05-12 workflow bootstrap.
