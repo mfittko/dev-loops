@@ -3872,7 +3872,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
       throw new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes at head ${options.headSha} (${options.gate}): the live-sentinel scan failed (${scanError.code ?? scanError.message}) — cannot rule out an in-flight fan-out for this head, and a rebuild that splits a live round must not be allowed through a broken scan. The existing (recorded) prefix hash is ${priorPrefixHash}; the attempted rebuild would write hash ${newPrefixHash}. Fix the scan first (make tmp/ listable again — restore read permission on the tmp/ directory or remove a file/blocker masquerading as it), then either retire the round explicitly before rebuilding (retire-gate-round moves sentinels out of the live namespace, so a rebuild then sees no live sentinels) or confirm no fan-out is in flight: ${retireCommand}`);
     } else {
       // Issue 3416: retire the undispatched or partial round at this head automatically, so the fresh round starts clean.
-      // A live round has sentinels or dispatch records; a round with a posted verdict is never retired: the refusal stands, with its recovery.
+      // A live round has sentinels or dispatch records; a round with a posted verdict is never retired here (this writer passes no bodyReadingUnits; only emit-fanout-dispatch retires a body-only round, issue 3604): the refusal stands, with its recovery.
       const stale = await retireStaleRound({ ...staleRoundArgs, ...loadedSpecDigests(options) });
       if (stale.refusal) throw Object.assign(new Error(`${stale.refusal.error} recovery: ${stale.refusal.recovery}`), { recovery: stale.refusal.recovery });
       retiredRound = stale.retiredRound;
