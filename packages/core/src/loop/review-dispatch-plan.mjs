@@ -1,7 +1,6 @@
 /**
  * review-dispatch-plan.mjs — cache-aware review dispatch: harness capability
- * model, request-prefix fingerprinting, stable/volatile request separation,
- * and the deterministic per-gate-round dispatch-plan builder.
+ * model, request-prefix fingerprinting, and the deterministic per-gate-round dispatch-plan builder.
  *
  * Pure and offline: no GitHub, no harness, no clock; runtime execution
  * adapters consume it, it never executes a reviewer itself. A capability a
@@ -473,7 +472,7 @@ export function buildAngleRequestGroups({
 }
 
 /* ------------------------------------------------------------------ *
- * 6. Dispatch-prompt layout alignment
+ * 4. Dispatch-prompt layout alignment
  * ------------------------------------------------------------------ */
 
 // Leading-bytes capture cap for a dispatched reviewer prompt (the
@@ -577,7 +576,7 @@ export function verifyPromptLeadingAlignment({ promptLeading, prefixBytes, prefi
 }
 
 /* ------------------------------------------------------------------ *
- * 7. Diff filtering for the shared per-head block
+ * 5. Diff filtering for the shared per-head block
  * ------------------------------------------------------------------ */
 
 /**

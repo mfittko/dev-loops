@@ -538,7 +538,7 @@ describe("buildAngleRequestGroups — angle -> model bucketing into requestGroup
   });
 });
 
-describe("sha256Hex — deterministic hashing + opaque markers", () => {
+describe("sha256Hex — deterministic hashing", () => {
   test("sha256Hex produces sha256:<64 hex> for a string", () => {
     assert.match(sha256Hex("x"), /^sha256:[0-9a-f]{64}$/);
   });

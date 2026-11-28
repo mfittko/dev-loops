@@ -1127,8 +1127,9 @@ function scanPlainBullets(sections, patterns) {
 // (Acceptance criteria / Definition of done / Non-goals) plus the sanctioned
 // `<!-- loop-grill: ... -->` marker in the durable issue/PR body. The body
 // MUST NOT embed the raw grill transcript/synthesis/Q&A headings
-// (GRILL-SUBLOOP-NO-EMBED-SYNTHESIS). These pure predicates are the only
-// mechanically-enforceable part of that contract; the judgment-bound clauses
+// (GRILL-SUBLOOP-NO-EMBED-SYNTHESIS). The pure predicate
+// `detectGrillEmbedHeading` is the only mechanically-enforceable part of that
+// contract; the judgment-bound clauses
 // ("resolve every gap the grill decided", "stale contradicting prose") stay
 // agent-level.
 
