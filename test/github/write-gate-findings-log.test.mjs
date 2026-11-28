@@ -2790,7 +2790,7 @@ async function writeCapRound(tmpDir, rawFindings, dispositions) {
   return JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", `draft_gate-${CAP_HEAD}.json`), "utf8")).findings;
 }
 
-test("writeGateFindingsLog counts rounds from the custom --tmp-root it persists to, without seeded ledgers (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
+test("writeGateFindingsLog counts rounds from the custom --tmp-root it persists to, without seeded ledgers (GATE-EXEC-LOW-ROUND-FLOOR)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-cap-root-"));
   try {
     const custom = path.join(tmpDir, "custom-root");
@@ -2821,7 +2821,7 @@ test("writeGateFindingsLog counts rounds from the custom --tmp-root it persists 
   }
 });
 
-test("writeGateFindingsLog at pre_approval_gate defers a judge-acted low with low_fix_until_cap (#2724 wiring)", async () => {
+test("writeGateFindingsLog at pre_approval_gate defers a judge-acted low with low_floor (#2724 wiring)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-pre-approval-"));
   try {
     const judgeVerdict = path.join(tmpDir, "judge-verdict.json");
@@ -2836,7 +2836,7 @@ test("writeGateFindingsLog at pre_approval_gate defers a judge-acted low with lo
     }, { repoRoot: tmpDir });
     const [finding] = JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", `pre_approval_gate-${CAP_HEAD}.json`), "utf8")).findings;
     assert.equal(finding.judgeDisposition, "defer");
-    assert.match(finding.judgeReason, /^low_fix_until_cap/);
+    assert.match(finding.judgeReason, /^low_floor/);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -2891,7 +2891,7 @@ test("writeGateFindingsLog records capClosed on a past-cap defer or reject, neve
     { severity: "medium", angle: "correctness", summary: "still act" },
   ];
   const dispositions = [
-    { disposition: "defer", followUpDraft: { title: "t", body: "b" } },
+    { disposition: "defer", lowException: "regression", followUpDraft: { title: "t", body: "b" } },
     { disposition: "reject" }, { disposition: "reject" }, { disposition: "reject" }, { disposition: "act" },
   ];
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-capclosed-"));
@@ -2978,7 +2978,7 @@ test("writeGateFindingsLog counts the live same-head ledger it retains, so its r
   try {
     for (const head of capPriorHeads.slice(0, 2)) await writeCapPrior(tmpDir, { head, findings: [] });
     const low = { severity: "low", angle: "docs", summary: "low deferred" };
-    const defer = [{ disposition: "defer", followUpDraft: { title: "t", body: "b" } }];
+    const defer = [{ disposition: "defer", lowException: "regression", followUpDraft: { title: "t", body: "b" } }];
     const first = await writeCapRound(tmpDir, [low], defer);
     assert.equal(first[0].capClosed, undefined, "round 3 is below the cap of 4");
     const rewrite = await writeCapRound(tmpDir, [low], defer);

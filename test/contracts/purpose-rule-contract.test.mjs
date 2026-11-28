@@ -10,7 +10,7 @@ const STATEMENT =
 const CITING = {
   "skills/docs/gate-review-sub-loop-contract.md": [
     "GATE-EXEC-JUDGE-PRIME-AUTHORITY",
-    "GATE-EXEC-LOW-FIX-UNTIL-CAP",
+    "GATE-EXEC-LOW-ROUND-FLOOR",
     "GATE-EXEC-ROUND-CAP",
     "GATE-EXEC-FIXER-CYCLE-BOUND",
     "GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE",

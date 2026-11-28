@@ -747,7 +747,7 @@ async function emitPlan({
     }
     if (lowNitOnly && actSeverities.length > 0 && (lowFixCapped || (actSeverities.every((s) => normalizeSeverity(s) === "nit") && round !== 1))) {
       const where = lowFixCapped ? "at pre_approval_gate" : "outside draft_gate round 1";
-      throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${guardFile} holds only low or nit items ${where}; low and nit findings no longer reach the fixer`);
+      throw new WorkOrderRefusal("low_floor", `low_floor (GATE-EXEC-LOW-ROUND-FLOOR): act list ${guardFile} holds only low or nit items ${where}; low and nit findings no longer reach the fixer`);
     }
   }
   // A carried act list is bound to this head's round: its findings ledger must exist here (or at the carry origin), so an older-head or foreign list refuses.
