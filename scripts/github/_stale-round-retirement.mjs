@@ -142,8 +142,8 @@ async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdic
     seenMarkers.add(path.resolve(marker));
     if (await exists(marker)) {
       // GATE-EXEC-ROUND-RETIREMENT: a round whose open act items are all PR-body items and whose body digest is stale retires; the ledger stays as a retained round.
-      // The scoped rerun needs the caller's body-reading units; a caller that names none keeps the refusal.
-      const priorBody = Array.isArray(bodyReadingUnits) ? await readBodyOnlySupersededDigest(marker, currentPrBodySha256) : null;
+      // The scoped rerun needs at least one body-reading unit; a caller that names none (or an empty list) keeps the refusal, since retiring would rerun nothing (issue 3667).
+      const priorBody = Array.isArray(bodyReadingUnits) && bodyReadingUnits.length > 0 ? await readBodyOnlySupersededDigest(marker, currentPrBodySha256) : null;
       if (priorBody !== null) {
         supersededBodies.push({ marker, priorBody });
         continue;
