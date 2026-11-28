@@ -325,7 +325,8 @@ test("analyzeDiff + resolveDynamicAngles: a pure Ruby diff prunes instead of fal
     changeCategories: r.t1.changeCategories,
     ambiguous: r.ambiguous,
     anglePool: DRAFT_ANGLES,
-  });  assert.ok(resolved.skippedAngles.length > 0, "pruning skipped at least one angle");
+  });
+  assert.ok(resolved.skippedAngles.length > 0, "pruning skipped at least one angle");
 });
 
 test("analyzeDiff: non-prose docs diff (skills/docs) does NOT get PROSE_PRESENT", () => {
@@ -685,7 +686,8 @@ test("analyzeDiff: hunk-less mixed code+prose keeps prose and the code-review co
   for (const angle of ["correctness", "coverage", "determinism", "contract-surface", "link-check"]) {
     assert.ok(dyn.recommendedAngles.includes(angle), `expected ${angle} in hunk-less mixed subset`);
   }
-  assert.ok(dyn.recommendedAngles.length < DRAFT_ANGLES.length);});
+  assert.ok(dyn.recommendedAngles.length < DRAFT_ANGLES.length);
+});
 
 test("analyzeDiff: rename-only → unambiguous", () => {
   const result = analyzeDiff({ nameStatusOutput: "R100\told.mjs\tnew.mjs" });
@@ -716,7 +718,8 @@ test("analyzeDiff → resolveDynamicAngles: pure code-only resolves to core subs
     configuredAngles: DRAFT_ANGLES,
     changeCategories: result.t1.changeCategories,
     ambiguous: result.ambiguous,
-  });  for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface", "gate-evidence"]) {
+  });
+  for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface", "gate-evidence"]) {
     assert.ok(dyn.recommendedAngles.includes(a), `expected ${a} in core subset`);
   }
   assert.ok(dyn.recommendedAngles.length < DRAFT_ANGLES.length, `must be narrower than the full pool of ${DRAFT_ANGLES.length}`);
@@ -762,7 +765,8 @@ test("analyzeDiff → resolveDynamicAngles: mixed logic+CI resolves to core ∪ 
     configuredAngles: DRAFT_ANGLES,
     changeCategories: result.t1.changeCategories,
     ambiguous: result.ambiguous,
-  });  // core subset present …
+  });
+  // core subset present …
   for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface"]) {
     assert.ok(dyn.recommendedAngles.includes(a), `expected ${a} in core subset`);
   }
@@ -829,7 +833,8 @@ test("analyzeDiff → resolveDynamicAngles: .devloops + .markdown repro classifi
     configuredAngles: DRAFT_ANGLES,
     changeCategories: result.t1.changeCategories,
     ambiguous: result.ambiguous,
-  });  assert.ok(dyn.recommendedAngles.includes("link-check"), "docs file must pull link-check");
+  });
+  assert.ok(dyn.recommendedAngles.includes("link-check"), "docs file must pull link-check");
   assert.ok(dyn.recommendedAngles.includes("config-drift"), "config file must pull config-drift");
   // Pin the exact pruned set: a loose length check hid that the .devloops
   // hunk's -old/+new lines also emit LOGIC_CHANGE (analyzeT1's hasLogicChange

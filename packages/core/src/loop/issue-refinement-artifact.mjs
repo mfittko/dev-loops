@@ -375,8 +375,8 @@ function parseChecklistItems(sectionBody) {
  * that). Thin wrapper over `parseChecklistItems` so the text-only contract
  * stays byte-identical to its original shape.
  */
-export function extractChecklistItems(sectionBody, options) {
-  return parseChecklistItems(sectionBody, options).map((item) => item.text);
+export function extractChecklistItems(sectionBody) {
+  return parseChecklistItems(sectionBody).map((item) => item.text);
 }
 
 /**
@@ -1131,8 +1131,6 @@ function scanPlainBullets(sections, patterns) {
 // mechanically-enforceable part of that contract; the judgment-bound clauses
 // ("resolve every gap the grill decided", "stale contradicting prose") stay
 // agent-level.
-
-export const GRILL_MARKER_PATTERN = /<!--\s*loop-grill:\s*.*?-->/iu;
 
 /** Case-insensitive **section heading names** that embed grill material. */
 export const GRILL_EMBED_HEADING_PATTERNS = Object.freeze([

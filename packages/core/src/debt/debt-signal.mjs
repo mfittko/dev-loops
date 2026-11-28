@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const DebtSignalSourceType =z.enum([
+const DebtSignalSourceType = z.enum([
   "pr_review_deep_persona",
   "repo_audit",
   "flaky_test",
@@ -12,7 +12,7 @@ const DebtSignalSourceType =z.enum([
   "workflow_pain",
 ]);
 
-const DebtSignalSeverity =z.enum([
+const DebtSignalSeverity = z.enum([
   "info",
   "low",
   "medium",
@@ -20,7 +20,7 @@ const DebtSignalSeverity =z.enum([
   "critical",
 ]);
 
-const DebtSignalLocation =z.strictObject({
+const DebtSignalLocation = z.strictObject({
   filePath: z.string().min(1).optional(),
   lineStart: z.number().int().positive().optional(),
   lineEnd: z.number().int().positive().optional(),
@@ -28,7 +28,7 @@ const DebtSignalLocation =z.strictObject({
   url: z.string().url().optional(),
 });
 
-const DebtSignalRepository =z.strictObject({
+const DebtSignalRepository = z.strictObject({
   owner: z.string().min(1),
   name: z.string().min(1),
 });

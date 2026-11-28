@@ -11,7 +11,7 @@ import {
   resolveGateAnglesDynamic,
   resolveGateTier,
 } from "@dev-loops/core/config";
-import { resolveAngleCarryForward,resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
+import { resolveAngleCarryForward, resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
 
 import { computeSizeBudget } from "../../scripts/loop/check-size-budget.mjs";
 import { isNotableChange } from "../../scripts/docs/validate-changelog-completeness.mjs";

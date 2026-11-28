@@ -3038,7 +3038,7 @@ test("draft PR blocked reason names the missing matrix arm for a #1877 AC+DoD li
       status: "missing",
       linkedIssue: 902,
       specSource: "linked_issue",
-      source: "issue-body-ac",
+      source: "issue-body-matrix",
       reason: "Issue body carries the Acceptance criteria and Definition of done checklists but no explicit Non-goals section; the tracker-backed refinement contract requires the full AC/DoD/Non-goals matrix (#1877, rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR).",
       finding: "missing_explicit_non_goals",
     },
@@ -3068,7 +3068,7 @@ test("draft PR is not blocked when refinement artifact is present (#532)", () =>
     refinementArtifact: {
       status: "present",
       linkedIssue: 532,
-      source: "issue-body-ac",
+      source: "issue-body-matrix",
       acItems: ["First AC", "Second AC"],
       reason: "Found 2 Acceptance criteria checklist item(s) in the issue body.",
     },
