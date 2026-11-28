@@ -617,7 +617,6 @@ async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand
       issue,
       artifact: detectIssueRefinementArtifact({
         body,
-        issueNumber: issue,
         resolveLinkedDoc: (p) => existsSync(path.isAbsolute(p) ? p : path.resolve(docAnchor, p)),
       }),
     });
@@ -1497,7 +1496,7 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, operator
   if (ledgerHead !== head) return null;
   // Past the cap the act list belongs to the operator (GATE-EXEC-CAP-BRAKES): this route offers the fixer only once an operator decision cleared the stop.
   if (cap > 0 && round > cap) return operatorCleared ? { headSha: head, openActCount: open.length, blockers: [], operatorCleared: true } : null;
-  // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so that list keeps the earlier routing.
+  // The emitter refuses a nit-only act list outside draft round 1 (low_floor), so that list keeps the earlier routing.
   const severities = open.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity]));
   if (round !== 1 && severities.every((s) => normalizeSeverity(s) === "nit")) return null;
   return { headSha: head, openActCount: open.length, blockers: isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [] };

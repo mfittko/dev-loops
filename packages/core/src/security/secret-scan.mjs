@@ -1,5 +1,6 @@
 /**
- * Secret scan over the ADDED lines of a unified git diff.
+ * Secret scan over a unified git diff. The added and context lines of each
+ * file are linted as one source; only matches touching an added line count.
  *
  * Detection runs through the maintained `@secretlint/core` engine with the
  * `@secretlint/secretlint-rule-preset-recommend` rule set (provider token
@@ -106,15 +107,6 @@ export function parseDiffLines(diffText) {
     }
   }
   return entries;
-}
-
-/**
- * Added lines only, as `{ file, line, text }`.
- * @param {string} diffText
- * @returns {{ file: string, line: number, text: string }[]}
- */
-export function parseAddedLines(diffText) {
-  return parseDiffLines(diffText).filter((e) => e.added).map(({ file, line, text }) => ({ file, line, text }));
 }
 
 /**

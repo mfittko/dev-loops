@@ -111,8 +111,6 @@ export function isProsePath(filePath) {
 /**
  * @typedef {object} T0Result
  * @property {string[]} files — flat file paths
- * @property {string[]} extensions — unique file extensions (lowercase, with dot)
- * @property {string[]} directories — unique top-level path segments
  * @property {boolean} renameOnly — true when all entries are renames (no adds/deletes/modifies)
  * @property {boolean} allDocs — true when all files are under docs/ or have a docs extension (.md/.markdown)
  */
@@ -225,8 +223,6 @@ export function compileClassifyRules(classifyConfig) {
 export function analyzeT0(nameStatusOutput, rules) {
   const lines = nameStatusOutput.trim().split("\n").filter(Boolean);
   const files = [];
-  const extensions = new Set();
-  const directories = new Set();
   let renameCount = 0;
   // Prose arming is scoped to content-carrying rows: a pure deletion (`D`) has
   // no prose content to strip, so it must not arm deslop. Added/modified/
@@ -241,12 +237,6 @@ export function analyzeT0(nameStatusOutput, rules) {
     if (!path) continue;
 
     files.push(path);
-
-    const ext = path.includes(".") ? "." + path.split(".").pop().toLowerCase() : "";
-    if (ext) extensions.add(ext);
-
-    const dir = path.split("/")[0];
-    if (dir) directories.add(dir);
 
     if (status.startsWith("R")) renameCount++;
     // Pure deletions (`D`) and a pure `R100` rename (100% similarity, no content
@@ -266,8 +256,6 @@ export function analyzeT0(nameStatusOutput, rules) {
 
   return {
     files,
-    extensions: [...extensions].sort(),
-    directories: [...directories].sort(),
     renameOnly,
     allDocs,
     prosePresent,

@@ -4,8 +4,6 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import {
-  isActionableComment,
-  isActionableThread,
   parseReviewThreads,
 } from "../src/github/review-threads.mjs";
 
@@ -14,36 +12,6 @@ const fixturePath = path.resolve("packages/core/test/fixtures/github/review-thre
 async function loadFixture() {
   return JSON.parse(await readFile(fixturePath, "utf8"));
 }
-
-test("isActionableComment filters bot and empty comments deterministically", () => {
-  assert.equal(
-    isActionableComment({ body: "Please add a test", author: { login: "reviewer", __typename: "User" } }),
-    true,
-  );
-  assert.equal(
-    isActionableComment({ body: "Automated note", author: { login: "copilot[bot]", __typename: "Bot" } }),
-    false,
-  );
-  assert.equal(isActionableComment({ body: "   ", author: { login: "reviewer", __typename: "User" } }), false);
-  assert.equal(isActionableComment({ body: "System event", author: null }), false);
-});
-
-test("isActionableThread requires an unresolved thread with at least one actionable comment", () => {
-  assert.equal(
-    isActionableThread({
-      isResolved: false,
-      comments: { nodes: [{ body: "Needs a test", author: { login: "reviewer", __typename: "User" } }] },
-    }),
-    true,
-  );
-  assert.equal(
-    isActionableThread({
-      isResolved: true,
-      comments: { nodes: [{ body: "Needs a test", author: { login: "reviewer", __typename: "User" } }] },
-    }),
-    false,
-  );
-});
 
 test("parseReviewThreads normalizes fixture-backed review thread data", async () => {
   const payload = await loadFixture();

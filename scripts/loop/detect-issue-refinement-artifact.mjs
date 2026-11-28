@@ -24,7 +24,7 @@ Success output (stdout, JSON):
     "ok": true,
     "repo": "owner/name",
     "issue": 532,
-    "source": "issue-body-matrix" | "issue-body-ac" | "issue-body-dod" | "linked-doc" | "missing",
+    "source": "issue-body-matrix" | "linked-doc" | "missing",
     "hasACs": true | false,
     "acItems": [...],
     "dodItems": [...],
@@ -145,13 +145,13 @@ export async function detectIssueRefinementArtifactFromOptions(options, { env = 
     const body = typeof payload.body === "string" ? payload.body : "";
     const issue = Number.isInteger(payload.issue) ? payload.issue : options.issue ?? null;
     const repo = typeof payload.repo === "string" ? payload.repo : options.repo ?? null;
-    const artifact = detectIssueRefinementArtifact({ body, issueNumber: issue });
+    const artifact = detectIssueRefinementArtifact({ body });
     return toOutput(repo, issue, artifact);
   }
   if (typeof options.repo === "string" && options.repo.length > 0 && Number.isInteger(options.issue)) {
     parseRepoSlug(options.repo);
     const body = await fetchIssueBody({ repo: options.repo, issue: options.issue }, { env, ghCommand });
-    const artifact = detectIssueRefinementArtifact({ body, issueNumber: options.issue });
+    const artifact = detectIssueRefinementArtifact({ body });
     return toOutput(options.repo, options.issue, artifact);
   }
   throw new Error("detect-issue-refinement-artifact requires either --input <path> or --repo/--issue");

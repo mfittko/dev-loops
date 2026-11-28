@@ -99,7 +99,6 @@ export const ALWAYS_INCLUDE = new Set(["gate-evidence", "renderer-security", "pr
  *   merges addedAngles on top to form the full effective run set
  * @property {string[]} skippedAngles — angles skipped with reasons
  * @property {Record<string, string>} reasons — why each angle was skipped
- * @property {boolean} fallbackToAll — retained for compatibility; always false
  * @property {string[]} addedAngles — catalog angles added (additive mode only, see #1048)
  * @property {Record<string, string>} addedReasons — why each added angle was added
  */
@@ -226,7 +225,6 @@ export function resolveDynamicAngles({
     recommendedAngles,
     skippedAngles,
     reasons,
-    fallbackToAll: false,
     addedAngles,
     addedReasons,
   };

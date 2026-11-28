@@ -147,7 +147,6 @@ function normalizeLifecycleState(value) {
  * {
  *   phase,              // explicit phase string (overrides infer)
  *   hasLinkedPr,        // boolean: open linked PR exists
- *   prIsDraft,          // boolean: PR is in draft state
  *   hasUnresolvedThreads, // boolean: unresolved review threads exist
  *   preApprovalGatePassed, // boolean: current-head pre_approval_gate clean
  *   mergeAuthorized,    // boolean: explicit merge authorization granted
@@ -181,15 +180,13 @@ function normalizeLifecycleState(value) {
  *    clear (not sizeBudgetHumanApprovalRequired) → merge
  * 4. Pre-approval passed + PR exists → pre_approval_gate
  * 5. Unresolved threads + PR exists → feedback_resolution
- * 6. Draft PR → implementation
- * 7. Ready PR (not draft) → implementation
- * 8. No linked PR → issue_intake
+ * 6. Linked PR (draft or ready) → implementation
+ * 7. No linked PR → issue_intake
  */
 export function resolveLifecycleState(input = {}) {
   const {
     phase = null,
     hasLinkedPr = false,
-    prIsDraft = false,
     hasUnresolvedThreads = false,
     preApprovalGatePassed = false,
     mergeAuthorized = false,
@@ -246,17 +243,12 @@ export function resolveLifecycleState(input = {}) {
     return buildResult(LIFECYCLE_STATE.FEEDBACK_RESOLUTION);
   }
 
-  // 6. Draft PR → implementation
-  if (prIsDraft && hasLinkedPr) {
+  // 6. Linked PR (draft or ready) → implementation
+  if (hasLinkedPr) {
     return buildResult(LIFECYCLE_STATE.IMPLEMENTATION);
   }
 
-  // 7. PR exists (not draft) → implementation
-  if (hasLinkedPr && !prIsDraft) {
-    return buildResult(LIFECYCLE_STATE.IMPLEMENTATION);
-  }
-
-  // 8. No linked PR → issue intake
+  // 7. No linked PR → issue intake
   return buildResult(LIFECYCLE_STATE.ISSUE_INTAKE);
 }
 
