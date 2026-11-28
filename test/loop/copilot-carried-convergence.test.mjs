@@ -151,7 +151,8 @@ function gateEvidenceEntry(extraComments = []) {
   };
 }
 
-const REVIEWS_ENTRY = { matchByClaims: true, assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/pulls/${PR}/reviews?per_page=100`], stdout: "[]\n" };
+const NO_COPILOT_REQUEST_ENTRY = { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: line({ users: [], teams: [] }) };
+const REVIEWS_ENTRY ={ matchByClaims: true, assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/pulls/${PR}/reviews?per_page=100`], stdout: "[]\n" };
 
 // Every gh call must match a declared fixture: no row may pass on the mock's
 // unmatched-call exit code.
@@ -389,8 +390,9 @@ describe("round cap: body-only Copilot feedback goes to the judge unless a recor
         { matchByClaims: true, assertArgs: ["pr", "view", String(PR)], stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews: fixture.reviews }) },
         ...fixture.shared,
         ...extra,
+        NO_COPILOT_REQUEST_ENTRY,
       ]);
-      const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR, reviewRequestStatusOverride: "none" }, { env: {}, ghCommand: "gh", runChild });
+      const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR },{ env: {}, ghCommand: "gh", runChild });
       assert.deepEqual(unmatched, []);
       assert.equal(snapshot.copilotBodyFeedbackUnresolved, !cleared);
       const interpretation = interpretLoopState(snapshot, { maxCopilotRounds: 2 });
@@ -423,8 +425,9 @@ describe("round cap: a judge-bound defer record clears the body finding", () => 
         const { runChild } = strictRunChild([
           { matchByClaims: true, assertArgs: ["pr", "view", String(PR)], stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews: fixture.reviews }) },
           ...fixture.shared,
+          NO_COPILOT_REQUEST_ENTRY,
         ]);
-        const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR, reviewRequestStatusOverride: "none" }, { env: {}, ghCommand: "gh", runChild, cwd: ledgerRoot });
+        const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR },{ env: {}, ghCommand: "gh", runChild, cwd: ledgerRoot });
         assert.equal(snapshot.copilotBodyFeedbackUnresolved, !cleared);
         assert.equal(interpretLoopState(snapshot, { maxCopilotRounds: 2 }).state === "round_cap_clean_fallback", cleared);
       } finally {
@@ -645,8 +648,9 @@ describe("round cap: an earlier-head body-only finding goes to the judge unless 
       const { runChild } = makeGhMock([
         { matchByClaims: true, assertArgs: ["pr", "view", String(PR)], stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews }) },
         ...shared,
+        NO_COPILOT_REQUEST_ENTRY,
       ]);
-      const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR, reviewRequestStatusOverride: "none" }, { env: {}, ghCommand: "gh", runChild });
+      const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR },{ env: {}, ghCommand: "gh", runChild });
       assert.equal(snapshot.copilotBodyFeedbackUnresolved, false);
       assert.equal(snapshot.copilotPriorHeadBodyFeedbackUnresolved, !cleared);
       const interpretation = interpretLoopState({ ...snapshot, ciStatus: "success" }, { maxCopilotRounds: 2 });
@@ -756,8 +760,9 @@ describe("latest-review timestamp tie fails closed", () => {
     const { runChild } = makeGhMock([
       { matchByClaims: true, assertArgs: ["pr", "view", String(PR)], stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews }) },
       ...shared,
+      NO_COPILOT_REQUEST_ENTRY,
     ]);
-    const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR, reviewRequestStatusOverride: "none" }, { env: {}, ghCommand: "gh", runChild });
+    const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR },{ env: {}, ghCommand: "gh", runChild });
     assert.equal(snapshot.copilotPriorHeadBodyFeedbackUnresolved, true);
     assert.equal(interpretLoopState({ ...snapshot, ciStatus: "success" }, { maxCopilotRounds: 2 }).state, "round_cap_reached");
   });

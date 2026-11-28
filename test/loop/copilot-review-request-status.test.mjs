@@ -37,16 +37,6 @@ function timelineEvent(login, createdAt) {
   return JSON.stringify({ login, created_at: createdAt });
 }
 
-test("override passthrough returns override verbatim", async () => {
-  for (const override of ["already-requested", "unavailable", "failed", "none", "requested"]) {
-    const status = await resolveCopilotReviewRequestStatus(
-      { ...CTX, reviewSummary: {}, reviewRequestStatusOverride: override },
-      { runChild: makeRunChild({ requestedReviewersPayload: reviewers(COPILOT_LOGIN) }) },
-    );
-    assert.equal(status, override);
-  }
-});
-
 test("pending current-head review is genuinely outstanding -> requested", async () => {
   const status = await resolveCopilotReviewRequestStatus(
     { ...CTX, reviewSummary: { hasPendingReviewOnCurrentHead: true }, copilotRequested: true },

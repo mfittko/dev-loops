@@ -211,33 +211,6 @@ async function fetchCurrentHeadCiEvidence({ repo, headSha, prVisibleCheckNames }
     ],
   };
 }
-function hasLocalValidationForCurrentHead(localValidationHeadSha, currentHeadSha) {
-  if (typeof localValidationHeadSha !== "string" || typeof currentHeadSha !== "string") {
-    return false;
-  }
-  const normalizedValidationHeadSha = localValidationHeadSha.trim().toLowerCase();
-  const normalizedCurrentHeadSha = currentHeadSha.trim().toLowerCase();
-  return normalizedValidationHeadSha.length > 0
-    && normalizedCurrentHeadSha.length > 0
-    && normalizedCurrentHeadSha.startsWith(normalizedValidationHeadSha);
-}
-function shouldPromoteCrediblyGreen({
-  refreshedCurrentHeadCi,
-  fallbackCiStatus,
-  localValidationHeadSha,
-  currentHeadSha,
-  reviewSummary,
-  unresolvedThreadCount,
-  actionableThreadCount,
-}) {
-  return refreshedCurrentHeadCi?.status === "none"
-    && refreshedCurrentHeadCi?.observedZeroSuitesAndStatuses === true
-    && fallbackCiStatus === "success"
-    && hasLocalValidationForCurrentHead(localValidationHeadSha, currentHeadSha)
-    && reviewSummary?.hasSubmittedReviewOnCurrentHead === true
-    && unresolvedThreadCount === 0
-    && actionableThreadCount === 0;
-}
 function hasSubmittedCopilotReviewOffCurrentHead(reviewSummary, currentHeadSha) {
   if (currentHeadSha == null) {
     return false;
@@ -268,7 +241,7 @@ function normalizeMergeEnum(value) {
   return normalized.length > 0 ? normalized : null;
 }
 
-export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride, localValidationHeadSha, draftGateResetAtMs, checkpointDir }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd } = {}) {
+export async function autoDetectSnapshot({ repo, pr, draftGateResetAtMs, checkpointDir }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd } = {}) {
   const prData = await fetchPrView({ repo, pr }, { env, ghCommand, runChild });
   if (prData === null) {
     return normalizeSnapshot({ prExists: false });
@@ -294,7 +267,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
   const fallbackDerivation = deriveLoopCiStatusFromRollup(prData.statusCheckRollup);
   const fallbackCiStatus = fallbackDerivation.status;
   const copilotReviewRequestStatus = await resolveCopilotReviewRequestStatus(
-    { repo, pr, reviewSummary, reviewRequestStatusOverride },
+    { repo, pr, reviewSummary },
     { env, ghCommand, runChild },
   );
   let unresolvedThreadCount = 0;
@@ -317,13 +290,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
   const shouldRefreshCurrentHeadCi =
     prHeadSha !== null
     && fallbackCiStatus === "success"
-    && (
-      hasSubmittedCopilotReviewOffCurrentHead(reviewSummary, prHeadSha)
-      || (
-        reviewSummary.hasSubmittedReviewOnCurrentHead
-        && hasLocalValidationForCurrentHead(localValidationHeadSha, prHeadSha)
-      )
-    );
+    && hasSubmittedCopilotReviewOffCurrentHead(reviewSummary, prHeadSha);
   const prVisibleCheckNames = extractPrVisibleCheckNames(prData.statusCheckRollup);
   let currentHeadCiStatus = fallbackCiStatus;
   let failureDetails = [];
@@ -333,17 +300,6 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
     currentHeadCiStatus = refreshed?.status ?? "none";
     failureDetails = refreshed?.failureDetails ?? [];
     excludedFailureDetails = refreshed?.excludedFailureDetails ?? [];
-    if (shouldPromoteCrediblyGreen({
-      refreshedCurrentHeadCi: refreshed,
-      fallbackCiStatus,
-      localValidationHeadSha,
-      currentHeadSha: prHeadSha,
-      reviewSummary,
-      unresolvedThreadCount,
-      actionableThreadCount,
-    })) {
-      currentHeadCiStatus = "crediblyGreen";
-    }
   }
   // Shared with detect-pr-gate-coordination-state.mjs and the request tool: a
   // trusted copilot-body-disposition record clears the body finding.

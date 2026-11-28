@@ -81,17 +81,13 @@ export async function fetchLatestCopilotReviewRequestAt({ repo, pr }, { env = pr
 // @param {string} params.repo - "owner/name"
 // @param {number} params.pr
 // @param {object} params.reviewSummary - from summarizeCopilotReviews()
-// @param {string} [params.reviewRequestStatusOverride] - explicit override
 // @param {boolean} [params.copilotRequested] - pre-fetched requested_reviewers result (avoids duplicate API call)
 // @param {object} runtime - { env, ghCommand, runChild }
 // @returns {Promise<"none"|"requested"|"already-requested"|"unavailable"|"failed">}
 export async function resolveCopilotReviewRequestStatus(
-  { repo, pr, reviewSummary, reviewRequestStatusOverride, copilotRequested },
+  { repo, pr, reviewSummary, copilotRequested },
   { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {},
 ) {
-  if (reviewRequestStatusOverride !== undefined) {
-    return reviewRequestStatusOverride;
-  }
   // A PENDING review on the current head is genuinely unsettled (Copilot is
   // actively reviewing); do not reconcile it away.
   if (reviewSummary?.hasPendingReviewOnCurrentHead) {

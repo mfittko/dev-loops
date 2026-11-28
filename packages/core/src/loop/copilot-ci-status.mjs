@@ -243,16 +243,6 @@ export function summarizeHeadScopedCheckRunsSignal(payload) {
 }
 
 /**
- * Normalize the GitHub check-runs API payload for one head SHA into a stable status.
- *
- * @param {object} payload
- * @returns {"success"|"failure"|"pending"|"none"}
- */
-export function normalizeHeadScopedCheckRunsStatus(payload) {
-  return summarizeHeadScopedCheckRunsSignal(payload).status;
-}
-
-/**
  * Normalize the GitHub commit-status API payload for one head SHA into a stable status.
  *
  * @param {object} payload
@@ -311,20 +301,6 @@ export function mergeHeadScopedCiStatuses(checkRunsStatus, commitStatus) {
     return "success";
   }
   return "none";
-}
-
-/**
- * Normalize the PR `statusCheckRollup` payload into the shared machine-readable contract output.
- *
- * @param {Array<object>} rollup
- * @returns {{
- *  overallStatus: "success"|"failure"|"pending"|"none",
- *  rollup: { success: boolean, pending: boolean, failure: boolean, none: boolean },
- *  semantics: { wait: boolean, blocked: boolean, timeoutDisposition: "remain_waiting"|"not_applicable" }
- * }}
- */
-export function normalizeStatusCheckRollupContract(rollup) {
-  return buildCiContract(normalizeStatusCheckRollupStatus(rollup));
 }
 
 /**

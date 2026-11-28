@@ -8,11 +8,10 @@ Installed skill/runtime consumers should read this bundled `skills/docs/` copy v
 
 Implementation: `@dev-loops/core/loop/copilot-ci-status` (`packages/core/src/loop/copilot-ci-status.mjs`).
 
-- `normalizeStatusCheckRollupContract(statusCheckRollup)` normalizes the `gh pr view` rollup.
 - `normalizeHeadScopedCiContract({ checkRunsStatus, commitStatus })` normalizes explicit current-head check-runs/commit-status refreshes.
 - `deriveLoopCiStatusFromRollup(statusCheckRollup)` excludes loop-derived checks and returns `{ status, excludedFailureDetails }`.
 
-The first two return the shared machine-readable shape documented below.
+`normalizeHeadScopedCiContract` returns the shared machine-readable shape documented below.
 
 ## Loop-derived check exclusion
 
@@ -46,15 +45,9 @@ probing, polling budgets, exit codes, or gate evidence.
 
 ### Zero-suite local-validation exception
 
-`"crediblyGreen"` is reserved for the bounded zero-suite local-validation exception, never produced by gate-evidence exclusion. Its prerequisites remain: zero current-head suites/statuses, previous-head green, and a sanctioned local full-validation result for that same head from `node <dev-loops-package-root>/cli/index.mjs gate resolve-validation`. These facts do not authorize self-certifying CI or overriding `none`; refresh the detector and proceed under this exception only on authoritative current-head `crediblyGreen` evidence.
-
-The CLI rejects the removed `--local-validation-head-sha` flag and supplies no local-validation evidence input, so an ordinary refresh cannot activate this exception. If the result remains `none`, follow the existing wait/reconciliation policy. The internal promotion helper additionally requires matching local-validation/head identity, successful fallback rollup, a current-head submitted Copilot review and zero unresolved/actionable threads; those checks do not make the missing CLI input available.
+No detector path produces `"crediblyGreen"`, and gate-evidence exclusion never produces it. The value is valid only in a supplied `--input` snapshot. These facts do not authorize self-certifying CI or overriding `none`. If a refresh returns `none`, follow the existing wait/reconciliation policy.
 
 ## Inputs
-
-### `normalizeStatusCheckRollupContract(statusCheckRollup)`
-
-- `statusCheckRollup` — the raw PR `statusCheckRollup` array from `gh pr view`; entries may be CheckRun-like (`status` + `conclusion`) or legacy StatusContext-like (`state`)
 
 ### `normalizeHeadScopedCiContract({ checkRunsStatus, commitStatus })`
 
