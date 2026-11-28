@@ -19,7 +19,7 @@
  * `RUNTIME_PIN_BASENAMES` contributes 0 to source counters and `logicLoc`
  * regardless of category. Likewise a vendored file (`.claude/hooks/_vendor/**`) or a
  * generated hook mirror (an exact `HOOK_BUNDLE_TARGETS` path) contributes 0; the hook
- * mirrors' `packages/core` sources still count. `commentOnly` is the count of a code file's changed lines
+ * mirrors' `packages/core` sources still count. A code file's comment lines are its changed lines
  * the comment-discipline guard's shared `isCommentLine` detector recognizes as
  * comments (the comment analogue of `testDiscount`); fail-closed, an
  * ambiguous/unparseable changed line is never a comment and stays logic.
@@ -82,7 +82,7 @@ Output (stdout, JSON):
     "wholeLogicLoc": 120,
     "t1SliceLoc": 0,
     "tierLogicLoc": { "default": 120, "t1": 0, "t3": 0 },
-    "thresholds": { "testDiscount": 0.25, "deletionDiscount": 0.25,"absoluteHardLoc": 2000,
+    "thresholds": { "testDiscount": 0.25, "deletionDiscount": 0.25, "absoluteHardLoc": 2000,
                      "default": { "softLoc": 400, "waiverLoc": 1500 },
                      "t1": null },
     "ambiguous": false,
@@ -335,7 +335,7 @@ export function computeSizeBudget({
     let logic = 0;
     if (!excludedFromLogic && category === "code") {
       // Comment-aware: discount changed lines the comment-discipline detector
-      // recognizes as comments, clamped to [0, changedLines] so a diff-body vs
+      // recognizes as comments, clamped per side (added, removed) so a diff-body vs
       // numstat count skew can never produce negative logic or discount more
       // than the file changed. A file with no detected comment lines keeps its
       // full count, so a real-code change is scored exactly as before.

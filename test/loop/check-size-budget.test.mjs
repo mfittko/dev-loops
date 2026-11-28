@@ -950,10 +950,10 @@ test("deletion-only code diff counts removed lines at the deletion discount (AC1
 });
 
 test("mixed diff weighs added lines in full and removed lines at the discount, minus comments (AC2)", () => {
-  const diffOutput = "diff --git a/src/m.mjs b/src/m.mjs\n--- a/src/m.mjs\n+++ b/src/m.mjs\n@@ -1,6 +1,4 @@\n+// new note\n+const a = 1;\n+const b = 2;\n-// old note\n-const c = 3;\n-const d = 4;\n-const e = 5;\n-const f = 6;\n";
-  const result = computeSizeBudget({ nameStatusOutput: "M\tsrc/m.mjs\n", numstatOutput: numstatZ([[3, 5, "src/m.mjs"]]), diffOutput });
-  // added 3 - 1 comment = 2; removed 5 - 1 comment = 4 * 0.25 = 1
-  assert.equal(result.wholeLogicLoc, 3);
+  const diffOutput = "diff --git a/src/m.mjs b/src/m.mjs\n--- a/src/m.mjs\n+++ b/src/m.mjs\n@@ -1,8 +1,3 @@\n+// new note\n+const a = 1;\n+const b = 2;\n-// old a\n-// old b\n-// old c\n-// old d\n-const c = 3;\n-const d = 4;\n-const e = 5;\n-const f = 6;\n";
+  const result = computeSizeBudget({ nameStatusOutput: "M\tsrc/m.mjs\nM\ttest/m.test.mjs\n", numstatOutput: numstatZ([[3, 8, "src/m.mjs"], [4, 4, "test/m.test.mjs"]]), diffOutput });
+  // code: added 3 - 1 comment = 2; removed 8 - 4 comments = 4 * 0.25 = 1; test: 8 lines * 0.25 = 2
+  assert.equal(result.wholeLogicLoc, 5);
 });
 
 test("deletionDiscount 1 reproduces the undiscounted count (AC4)", () => {
