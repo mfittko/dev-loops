@@ -179,11 +179,11 @@ test("END-TO-END REGRESSION abandoned sequence lockout: refused, close-sequence,
   }
 });
 
-test("recoveryHint renders the close command only for a 40 or 64 char lowercase hex baseline head", () => {
-  for (const ok of ["a".repeat(40), "0123456789abcdef".repeat(4)]) assert.match(recoveryHint(ok, "/m", "issue-a"), new RegExp(`an abandoned sequence closes with the gate close-sequence command named below \\(baseline ${ok}\\)`));
+test("recoveryHint renders the emission command only for a 40 or 64 char lowercase hex baseline head", () => {
+  for (const ok of ["a".repeat(40), "0123456789abcdef".repeat(4)]) assert.match(recoveryHint(ok, "/m", "issue-a"), new RegExp(`--head-sha ${ok} .*gate close-sequence closes the marker with HEAD_MOVED \\(baseline ${ok}\\)`));
   for (const bad of ["A".repeat(40), "a".repeat(39), "a".repeat(41), "a".repeat(40) + "; rm -rf /", "$(id)", "a".repeat(63), ""]) {
     const hint = recoveryHint(bad, "/m", "issue-a");
-    assert.doesNotMatch(hint, /closes with the gate close-sequence command/, bad);
+    assert.doesNotMatch(hint, /emit-fixer-work-order\.mjs --phase full/, bad);
     assert.match(hint, /PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery/);
     assert.match(hint, /sequence marker is \/m/);
   }
