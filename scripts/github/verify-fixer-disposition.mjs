@@ -1221,7 +1221,7 @@ function residualReason(failures) {
 function deltaBlockedReason(incomplete) {
   const parts = incomplete.map((entry) => `thread ${entry.threadId} (failed step: ${entry.failedStep}${entry.deltaStatus ? `, delta status: ${entry.deltaStatus}` : ""})`);
   return `Fixer disposition is incomplete for ${incomplete.length} tackled thread(s): ${parts.join("; ")}. `
-    + "A delta_blocked thread is not fixed yet: fix it, re-run the delta review (dev-loops loop pre-push-delta), then re-run this verifier.";
+    + "A delta_blocked thread is not fixed yet: fix it, the delta review is retired, so run emit --phase full instead, then re-run this verifier.";
 }
 
 async function main() {

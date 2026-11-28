@@ -810,7 +810,7 @@ test("MARKER_UNREADABLE: a corrupt marker with a live sealed record of the basel
     boundedRecord(tmpRoot, execution(tmpRoot), { outcome: "needs_fix", nextStep: "fix_and_rereview" });
     const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
     assert.equal(result.refusal, "sequence_live");
-    assert.match(result.remedy, /pre-push delta review/);
+    assert.match(result.remedy, /delta review is retired.*emit --phase full/);
     assert.equal(existsSync(sequenceMarkerPath(tmpRoot, HEAD)), true);
   });
 });

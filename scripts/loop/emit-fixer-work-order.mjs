@@ -861,7 +861,7 @@ async function emitPlan({
     // The 20-entry cap bounds the record's own findings; the synthetic act-ref tasks are bounded by the act list.
     const recordFindings = openAtHead ? actRecord.findings ?? [] : deltaFindings;
     if (!Array.isArray(deltaFindings) || !Array.isArray(recordFindings) || recordFindings.length > 20 || !deltaFindings.every((f) => text(f?.severity) && VALID_SEVERITIES.has(normalizeSeverity(f.severity)) && text(f.summary) && text(f.evidence) && ["residueOf", "site"].every((key) => f[key] === undefined || text(f[key])))) {
-      throw new Refusal(`delta record findings at ${recordPath} are malformed (an array of at most 20 entries of strings of at most 2000 characters: severity, summary, evidence, optional residueOf and site); re-run the delta review (dev-loops loop pre-push-delta) to rewrite the record`);
+      throw new Refusal(`delta record findings at ${recordPath} are malformed (an array of at most 20 entries of strings of at most 2000 characters: severity, summary, evidence, optional residueOf and site); the delta review is retired, so run emit --phase full instead`);
     }
   }
   // Mutation authority comes from the PR itself, never from the caller.

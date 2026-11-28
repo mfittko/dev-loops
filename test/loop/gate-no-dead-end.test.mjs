@@ -242,7 +242,7 @@ test("the remedy texts of the cap-round tools name only CLI commands that exist"
     const source = readFileSync(path.join(import.meta.dir, "..", "..", file), "utf8");
     const seen = [...source.matchAll(COMMAND_PATTERN)].map((m) => `${m[1]} ${m[2]}`);
     assert.ok(seen.length > 0, file);
-    // Slice D2 of issue 2937 removed the delta checker route; slice D5 removes the cap-round remedies that still name it and this carve-out.
+    // Slice D2 of issue 2937 removed the delta checker route; issue 3461 slices 2 and 3 own the cap-round remedies that still name it and this carve-out.
     for (const command of seen.filter((c) => c !== "loop pre-push-delta")) { const [group, sub] = command.split(" "); assert.ok(SUBCOMMAND_ROUTES[group]?.[sub], `${file} names the missing command "${command}"`); }
   }
 });

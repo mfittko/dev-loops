@@ -85,6 +85,58 @@ test("identifiers removed by a base-only merge are excluded from the stale-surfa
   } finally { cleanup(repo); }
 });
 
+test("gitStaleSurfaceHits reports the hit file and line, whatever the operator's git config", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "stale-cfg-"));
+  try {
+    const git = (...args) => runGitFixture(dir, args);
+    fs.mkdirSync(path.join(dir, "test"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "docs"), { recursive: true });
+    git("init", "-q");
+    const sentence = "The delta review reads the changed lines only.";
+    const spaced = "The spaced path file keeps this sentence pinned.";
+    fs.writeFileSync(path.join(dir, "doc.md"), `${sentence}\n`);
+    fs.writeFileSync(path.join(dir, "docs", "my guide café.md"), `${spaced}\n`);
+    fs.writeFileSync(path.join(dir, "test", "pin.test.mjs"), `const pinned = "${sentence}";\nconst spaced = "${spaced}";\n`);
+    git("add", "-A"); git("commit", "-qm", "c1");
+    const base = git("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(dir, "doc.md"), "Reworded.\n");
+    fs.writeFileSync(path.join(dir, "docs", "my guide café.md"), "Reworded too.\n");
+    git("commit", "-qam", "c2");
+    const head = git("rev-parse", "HEAD");
+    const sites = () => gitStaleSurfaceHits(dir, base, head).hits.map((h) => h.site).sort();
+    const expected = ["test/pin.test.mjs:1", "test/pin.test.mjs:2"];
+    assert.deepEqual(sites(), expected);
+    for (const [key, value] of [["diff.noprefix", "true"], ["color.ui", "always"], ["diff.external", "false"], ["diff.algorithm", "histogram"], ["diff.renames", "copies"], ["diff.orderFile", "/dev/null"], ["core.quotePath", "true"]]) git("config", key, value);
+    assert.deepEqual(sites(), expected);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("gitStaleSurfaceHits runs from the top level and ignores diff.relative and diff.interHunkContext", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "stale-sub-"));
+  try {
+    const git = (...args) => runGitFixture(dir, args);
+    fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "test"), { recursive: true });
+    git("init", "-q");
+    const first = "Alpha rule text describing the gate behavior";
+    const third = "and the second clause ends here.";
+    fs.writeFileSync(path.join(dir, "a.md"), `${first}\nkept middle line\n${third}\n`);
+    fs.writeFileSync(path.join(dir, "test", "pin.test.mjs"), `const a = "${first}";\nconst b = "${third}";\n`);
+    fs.writeFileSync(path.join(dir, "sub", "x.txt"), "x\n");
+    git("add", "-A"); git("commit", "-qm", "c1");
+    const base = git("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(dir, "a.md"), "kept middle line\n");
+    git("commit", "-qam", "c2");
+    const head = git("rev-parse", "HEAD");
+    const sites = () => gitStaleSurfaceHits(path.join(dir, "sub"), base, head).hits.map((h) => `${h.file}:${h.line}`).sort();
+    const expected = ["test/pin.test.mjs:1", "test/pin.test.mjs:2"];
+    assert.deepEqual(sites(), expected);
+    git("config", "diff.relative", "true");
+    git("config", "diff.interHunkContext", "1");
+    assert.deepEqual(sites(), expected);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("AC11: countPrOwnCommits is 0 for a base-only merge range and counts PR-own commits, with baseline and head in that order", async () => {
   const repo = reviewerOnlyRepo();
   const deps = { fetchBase: () => {} };
