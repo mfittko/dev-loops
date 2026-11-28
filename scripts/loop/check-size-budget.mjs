@@ -337,9 +337,9 @@ export function computeSizeBudget({
       // Comment-aware: discount changed lines the comment-discipline detector
       // recognizes as comments, clamped per side (added, removed) so a diff-body vs
       // numstat count skew can never produce negative logic or discount more
-      // than the file changed. A file with no detected comment lines keeps its
-      // full count, so a real-code change is scored exactly as before.
-      // Removed lines weigh deletionDiscount (deleting code is cheap to review).
+      // than the file changed. A file with no detected comment lines discounts
+      // nothing for comments, but its removed lines still weigh deletionDiscount
+      // (deleting code is cheap to review).
       const totalComments = commentChangedLines.get(file.path) ?? 0;
       const removedComments = Math.min(removedCommentLines.get(file.path) ?? 0, file.deleted);
       const addedComments = Math.min(totalComments - (removedCommentLines.get(file.path) ?? 0), file.added);
