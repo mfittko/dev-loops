@@ -25,7 +25,7 @@ import { userInfo } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { clearSequenceMarker, isSafeMarkerName, isValidBranchName, readSequenceMarker, sequenceClosurePath, sequenceMarkerPath, validExecution, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
+import { clearSequenceMarker, fullPhaseEmitCommand, isSafeMarkerName, isValidBranchName, readSequenceMarker, sequenceClosurePath, sequenceMarkerPath, validExecution, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightFieldsSpec, preflightJqFilter } from "../lib/jq-output.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
@@ -164,7 +164,7 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
       // A push record already cleared the sequence. The remedy is the --phase full emission: it emits the full order and writes no marker, and the full-phase fixer's push moves the head past this baseline.
       const remedy = record.nextStep === "push"
         ? `Run \`dev-loops-run scripts/loop/emit-fixer-work-order.mjs --phase full --repo ${repo} --pr ${pr} --head-sha ${head} --act-list-file <act list> --gate <gate> --allowed-path <path> --harness <claude|pi|codex>\` with the act list, gate and allowed paths of this sequence (the full emission takes no delta result). It emits the full order and writes no marker; the full-phase fixer then pushes its candidate, and the push moves the head past this baseline.`
-        : "The delta review is retired, so run emit --phase full instead.";
+        : `The delta review is retired. Run \`${fullPhaseEmitCommand({ repo, pr, head })}\`.`;
       return refuse("sequence_live", `the ${sealed ? "sealed" : "unsealed"} delta record of ${head} ${executionIdentity === undefined ? "" : `names the fixer execution ${executionIdentity} and `}has next step ${record.nextStep}`, remedy);
     }
     return null;
@@ -188,8 +188,8 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   }
   if (condition === null) {
     return executionIdentity
-      ? refuse("sequence_live", `the PR head is still ${head} and the fixer execution ${executionIdentity} is not proven abandoned`, "The delta review is retired, so run emit --phase full instead, or rerun after the dispatch grace if no fixer ever pulled the work order.")
-      : refuse("abandonment_unproven", `the PR head is still ${head} and the marker names no fixer execution`, "The delta review is retired, so run emit --phase full instead, then rerun close-sequence.");
+      ? refuse("sequence_live", `the PR head is still ${head} and the fixer execution ${executionIdentity} is not proven abandoned`, `The delta review is retired. Run \`${fullPhaseEmitCommand({ repo, pr, head })}\`, or rerun after the dispatch grace if no fixer ever pulled the work order.`)
+      : refuse("abandonment_unproven", `the PR head is still ${head} and the marker names no fixer execution`, `The delta review is retired. Run \`${fullPhaseEmitCommand({ repo, pr, head })}\`, then rerun close-sequence.`);
   }
   // The rest runs under the head's sequence lock (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC): a pull admission and a marker re-emit take the same lock, so neither interleaves with the checks below.
   try {

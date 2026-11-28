@@ -22,7 +22,7 @@ afterAll(() => { if (HOST_STALE_MAX_AGE !== undefined) process.env.DEVLOOPS_STAL
 const FORBIDDEN = [/\brm\b/i, /delete the marker/i, /deleting the marker/i, /ask the operator/i];
 const sanctionedNames = Object.values(SANCTIONED_COMMANDS).flatMap((group) => Object.values(group)).filter((file) => typeof file === "string").map((file) => path.basename(file));
 // A remedy names a sanctioned command (by its script name), one of the loop commands below, or a rerun of the refusing command.
-const LOOP_COMMANDS = ["gate close-sequence", "loop pre-push-delta", "emit --phase", "emit-fixer-work-order.mjs"];
+const LOOP_COMMANDS = ["gate close-sequence", "emit-fixer-work-order.mjs"];
 const RERUN = /\b[Rr]erun\b|[Rr]e-run|\bWait for\b|Pass --repo|Pass the --/u;
 const NAMES_AGENT_STEP = { test: (text) => RERUN.test(text) || [...sanctionedNames, ...LOOP_COMMANDS].some((name) => text.includes(name)) };
 const assertAgentStep = (label, text) => {
@@ -126,6 +126,11 @@ test("the --phase full evidence and membership refusals in emit-fixer-work-order
   for (const needle of ["refused (GATE-EXEC-EVIDENCE-SEALED): ${error.message}", "does not belong to this act list at ${headSha}"]) {
     const line = source.split("\n").find((l) => l.includes(needle));
     assert.ok(line, `refusal text for ${needle} exists`);
-    assertAgentStep(`--phase full ${needle}`, line);
+    assert.ok(line.includes("fullPhaseEmitCommand("), `--phase full ${needle} renders the runnable emission: ${line}`);
   }
+});
+
+test("the agent-step guard accepts a runnable emission or close and rejects a deleted or bare command", () => {
+  for (const text of ["dev-loops-run scripts/loop/emit-fixer-work-order.mjs --phase full --repo o/r --pr 1 --head-sha abc", "gate close-sequence --head abc --repo o/r --pr 1"]) assert.ok(NAMES_AGENT_STEP.test(text), text);
+  for (const text of ["the delta review is retired, so run emit --phase full instead", "loop pre-push-delta --reviewer-only"]) assert.ok(!NAMES_AGENT_STEP.test(text), text);
 });

@@ -18,10 +18,9 @@ import { BLOCKED_BY_OPERATOR_STEPS, VALID_SEVERITIES, normalizeSeverity, hasSeve
 import { EvidenceSealError, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
-import { startDeltaSequence, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
+import { isDeltaBodyItem, normalizeThreadsPayload, operatorFocusActItems, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { REVIEW_NODE_ID_PATTERN } from "@dev-loops/core/loop/fixer-disposition";
-import { isDeltaBodyItem, normalizeThreadsPayload, operatorFocusActItems, toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
-import { sequenceClosurePath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { fullPhaseEmitCommand, sequenceClosurePath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { DELIVERY_WAIT_SECONDS, WorkOrderRefusal, buildDispatchPointer, fixerReportPath, materializationHash, registerWorkOrderRole, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
@@ -819,10 +818,10 @@ async function emitPlan({
   const delta = deltaResult ? await readSource("delta-result", abs(deltaResult), capture) : threadRecordPath && existsSync(threadRecordPath) ? await readSource("delta-result", threadRecordPath, capture) : null;
   if (delta && deltaResult) {
     // Verify the seal before any other use of the result, so an edited result gets the typed evidence refusal.
-    try { verifyEvidence(tmpRoot, abs(deltaResult), delta.parsed, delta.read.sha256); } catch (error) { throw new Refusal(`delta result ${deltaResult} refused (GATE-EXEC-EVIDENCE-SEALED): ${error.message}; the delta review is retired, so run emit --phase full instead`); }
+    try { verifyEvidence(tmpRoot, abs(deltaResult), delta.parsed, delta.read.sha256); } catch (error) { throw new Refusal(`delta result ${deltaResult} refused (GATE-EXEC-EVIDENCE-SEALED): ${error.message}; the delta review is retired, so run \`${fullPhaseEmitCommand({ repo, pr, head: headSha })}\``); }
     // The delta result must belong to this act list and this head (its pinned review baseline).
     const errors = validateDeltaResult(delta.parsed, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }), membershipOnly: true });
-    if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}; the delta review is retired, so run emit --phase full instead`);
+    if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}; the delta review is retired, so run \`${fullPhaseEmitCommand({ repo, pr, head: headSha })}\``);
   }
   if (phase === "commit_only") await capture.read(gateDeltaRecordPath(tmpRoot, headSha));
   // ADR 0235: a commit_only thread-route re-dispatch carries the delta record's findings as act items.
@@ -846,23 +845,23 @@ async function emitPlan({
   const openAtHead = sealedAtHead && (hasOpenWork || delta.parsed.outcome !== "locally_clear");
   if (openAtHead) {
     // The result must be the one the decision used: an earlier result of the same sequence shares the act set but not the record's statuses.
-    if (itemPairs(delta.parsed.actionableItems) !== itemPairs(actRecord.items)) throw new Refusal(`--delta-result's item statuses differ from the delta record ${gateDeltaRecordPath(tmpRoot, headSha)}, so it is not the result that decision used; pass that decision's result, or re-run the delta review (dev-loops loop pre-push-delta); nothing was written`);
+    if (itemPairs(delta.parsed.actionableItems) !== itemPairs(actRecord.items)) throw new Refusal(`--delta-result's item statuses differ from the delta record ${gateDeltaRecordPath(tmpRoot, headSha)}, so it is not the result that decision used; the delta review is retired, so run \`${fullPhaseEmitCommand({ repo, pr, head: headSha })}\`; nothing was written`);
     const unresolved = (delta.parsed.actionableItems ?? []).filter((item) => ["not_resolved", "cannot_verify"].includes(item?.status))
       .map((item) => ({ severity: "medium", summary: `act item ${item.ref} is ${item.status} at the reviewed candidate`, evidence: [].concat(item.evidence ?? []).join("; ").slice(0, 2000) || item.status }));
     deltaFindings = [...(Array.isArray(actRecord.findings) ? actRecord.findings : []), ...unresolved];
-    if (deltaFindings.length === 0) throw new Refusal(`delta_record_no_open_task: delta record ${gateDeltaRecordPath(tmpRoot, headSha)} holds fix_and_rereview at the worktree HEAD but no open task: it lists no finding and the --delta-result has no not_resolved or cannot_verify act item; re-run the delta review (dev-loops loop pre-push-delta); nothing was written`);
+    if (deltaFindings.length === 0) throw new Refusal(`delta_record_no_open_task: delta record ${gateDeltaRecordPath(tmpRoot, headSha)} holds fix_and_rereview at the worktree HEAD but no open task: it lists no finding and the --delta-result has no not_resolved or cannot_verify act item; the delta review is retired, so run \`${fullPhaseEmitCommand({ repo, pr, head: headSha })}\`; nothing was written`);
   }
   if (deltaFindings !== undefined) {
     const sealed = threadsFile ? readSealedGateDeltaRecord(tmpRoot, headSha) : actRecord;
     const recordPath = gateDeltaRecordPath(tmpRoot, headSha);
     if (!sealed || (threadsFile && sha256(readFileSync(threadRecordPath)) !== delta.read.sha256)) {
-      throw new Refusal(`delta record ${recordPath} is not sealed for ${headSha} or differs from the pinned read, so its findings are not evidence; the delta checker that wrote it is retired, so run emit --phase full instead`);
+      throw new Refusal(`delta record ${recordPath} is not sealed for ${headSha} or differs from the pinned read, so its findings are not evidence; the delta checker that wrote it is retired, so run \`${fullPhaseEmitCommand({ repo, pr, head: headSha })}\``);
     }
     const text = (value) => typeof value === "string" && value.length <= 2000;
     // The 20-entry cap bounds the record's own findings; the synthetic act-ref tasks are bounded by the act list.
     const recordFindings = openAtHead ? actRecord.findings ?? [] : deltaFindings;
     if (!Array.isArray(deltaFindings) || !Array.isArray(recordFindings) || recordFindings.length > 20 || !deltaFindings.every((f) => text(f?.severity) && VALID_SEVERITIES.has(normalizeSeverity(f.severity)) && text(f.summary) && text(f.evidence) && ["residueOf", "site"].every((key) => f[key] === undefined || text(f[key])))) {
-      throw new Refusal(`delta record findings at ${recordPath} are malformed (an array of at most 20 entries of strings of at most 2000 characters: severity, summary, evidence, optional residueOf and site); the delta review is retired, so run emit --phase full instead`);
+      throw new Refusal(`delta record findings at ${recordPath} are malformed (an array of at most 20 entries of strings of at most 2000 characters: severity, summary, evidence, optional residueOf and site); the delta review is retired, so run \`${fullPhaseEmitCommand({ repo, pr, head: headSha })}\``);
     }
   }
   // Mutation authority comes from the PR itself, never from the caller.

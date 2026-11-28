@@ -16,7 +16,7 @@ A `draft_gate` or `pre_approval_gate` round is a fixed pipeline of deterministic
 
 Type: `flowchart`
 
-The full round as the coordinator drives it, from the context bundle to the re-gate. The insight is that every agent step sits between two deterministic scripts, and every push passes through the delta review first. Derived from `cli/index.mjs` (the `gate` and `loop` subcommand routes), `scripts/github/write-gate-context.mjs`, `scripts/github/emit-fanout-dispatch.mjs`, `scripts/loop/wait-for-gate-units.mjs`, `scripts/loop/consolidate-fanin.mjs`, `scripts/loop/judge-pass.mjs` and `scripts/loop/emit-fixer-work-order.mjs`.
+The full round as the coordinator drives it, from the context bundle to the re-gate. The insight is that every agent step sits between two deterministic scripts. Derived from `cli/index.mjs` (the `gate` and `loop` subcommand routes), `scripts/github/write-gate-context.mjs`, `scripts/github/emit-fanout-dispatch.mjs`, `scripts/loop/wait-for-gate-units.mjs`, `scripts/loop/consolidate-fanin.mjs`, `scripts/loop/judge-pass.mjs` and `scripts/loop/emit-fixer-work-order.mjs`.
 
 ```mermaid
 flowchart TD

@@ -12,8 +12,7 @@ import { afterAll, test } from "bun:test";
 import { setCommentTrustConfig } from "@dev-loops/core/github/comment-trust";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
-import { toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
-import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
+import { startDeltaSequence, toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
 import { renderOperatorFocusSection } from "../../scripts/loop/_operator-focus.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../../scripts/github/_fixer-emission-evidence.mjs";
@@ -3278,7 +3277,7 @@ test("issue 2787 C12: malformed delta findings refuse", async () => {
 test("issue 2787 C12: an unsealed delta record holding findings refuses with the re-run action", async () => {
   await withFixture(async (fx) => {
     await fx.writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", findings: [FINDING] });
-    await assert.rejects(threadsCommitOnly(fx), /not sealed.*run emit --phase full instead/);
+    await assert.rejects(threadsCommitOnly(fx), /not sealed.*run `dev-loops-run scripts\/loop\/emit-fixer-work-order\.mjs --phase full --repo \S+ --pr \d+ --head-sha \w{40} /);
   });
 });
 

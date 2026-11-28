@@ -68,12 +68,11 @@ import { computeSpecDigest, extractSpecFromBody, normalizeCriterionText, stampSp
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
-import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
+import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 import { buildValidationResultsPath, capStopFacts, countCapRounds, isCleanCapRound, ledgerTmpRoot, prBodySha256, readGateContext, readReviewedBodySha256, refusesPastScopedRound, resolveCapRound, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 import { spawnSync } from "node:child_process";
-import { gitEnvNoDirOverrides, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { defaultFetchOrigin } from "../loop/standing-authorization.mjs";

@@ -107,7 +107,8 @@ test("the refusal names the no-commit close command with the baseline head, and 
     writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head, branch: "issue-a" });
     const refused = checkFixPushAuthority(root);
     assert.equal(refused.ok, false);
-    assert.match(refused.reason, new RegExp(`an abandoned sequence closes with the gate close-sequence command named below \\(baseline ${head}\\)`));
+    assert.match(refused.reason, new RegExp(`emit-fixer-work-order\\.mjs --phase full --repo <owner/name> --pr <number> --head-sha ${head} .*gate close-sequence closes the marker with HEAD_MOVED \\(baseline ${head}\\)`));
+    assert.doesNotMatch(refused.reason, /emit --phase full/);
     assert.doesNotMatch(refused.reason, /delete the marker|delet/i);
     assert.match(refused.reason, /dev-loops-run cli\/index\.mjs gate close-sequence --head <baseline sha> --repo <owner\/name> --pr <number>/);
     assert.doesNotMatch(refused.reason, /close-gate-sequence\.mjs/);
