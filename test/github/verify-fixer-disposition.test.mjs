@@ -31,7 +31,7 @@ import { sealDeltaFixture } from "../loop/_seal-fixture.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import * as legacyOwner from "../../scripts/github/_legacy-fixer-revalidation.mjs";
-import { main as buildGateContext, readGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { main as writeGateContextMain, readGateContext } from "../../scripts/github/write-gate-context.mjs";
 
 const REPO = "owner/repo";
 const PR = 1975;
@@ -843,7 +843,7 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
       await writeFile(capture, JSON.stringify(parseReviewThreads(JSON.parse(threadsPayload(nodes)))));
       const deltaPath = path.join(root, "tmp", "gate-delta", `${head}.json`);
       assert.equal(existsSync(deltaPath), false);
-      await buildGateContext(["--repo", REPO, "--pr", String(PR), "--gate", "pre_approval_gate", "--head-sha", head, "--base", candidate,
+      await writeGateContextMain(["--repo", REPO, "--pr", String(PR), "--gate", "pre_approval_gate", "--head-sha", head, "--base", candidate,
         "--angles", '["correctness"]', "--known-findings", capture, "--silent"], { repoRoot: root,
         run: async () => ({ code: 0, stdout: JSON.stringify({ body: "review recovery", closingIssuesReferences: [], baseRefName: "main" }) }),
         checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }),
