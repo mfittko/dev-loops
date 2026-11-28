@@ -5,6 +5,7 @@ import { cp, copyFile, link, lstat, mkdir, mkdtemp, open, readdir, readFile, rea
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { afterAll, describe, test } from "bun:test";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -36,8 +37,29 @@ const REPO = "owner/repo";
 const PR = 1975;
 const HEAD_SHA = "a".repeat(40);
 const FIX_SHA = "b".repeat(40);
-const initialHistories = new Map(), completionHistories = new Map(), legacyHistory = {};
+const initialHistories = new Map(), completionHistories = new Map(), legacyHistory = {}, priorEmitter = {};
+// The verifier's completion path (a later deletion) consumes the delta-bound full order that the emitter no longer
+// produces. The fixtures build that order with the emitter as it was on the commit before that change.
+const PRIOR_EMITTER_COMMIT = "6baeb4ab72917690d635b01c965f52bf3bb6f898";
+const priorEmitFixerWorkOrder = (options) => {
+  priorEmitter.ready ??= (async () => {
+    const checkout = fileURLToPath(new URL("../../", import.meta.url));
+    priorEmitter.root = await mkdtemp(path.join(os.tmpdir(), "prior-emitter-"));
+    const names = ["scripts", "packages", "lib", "cli", "package.json", "skills", "agents"];
+    const archive = execFileSync("git", ["-C", checkout, "archive", PRIOR_EMITTER_COMMIT, ...names], { env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
+    assert.equal(spawnSync("tar", ["-xf", "-", "-C", priorEmitter.root], { input: archive }).status, 0);
+    await mkdir(path.join(priorEmitter.root, "node_modules/@dev-loops"), { recursive: true });
+    await symlink(path.join(priorEmitter.root, "packages/core"), path.join(priorEmitter.root, "node_modules/@dev-loops/core"), "dir");
+    for (const dep of ["yaml", "zod"]) await symlink(path.join(checkout, "node_modules", dep), path.join(priorEmitter.root, "node_modules", dep), "dir");
+    priorEmitter.emit = (await import(pathToFileURL(path.join(priorEmitter.root, "scripts/loop/emit-fixer-work-order.mjs")).href)).emitFixerWorkOrder;
+    priorEmitter.pull = (await import(pathToFileURL(path.join(priorEmitter.root, "scripts/github/_work-order-protocol.mjs")).href)).pullWorkOrder;
+  })();
+  return priorEmitter.ready.then(() => priorEmitter.emit(options));
+};
+const priorPullWorkOrder = (options) => priorEmitter.ready.then(() => priorEmitter.pull(options));
 afterAll(async () => {
+  await priorEmitter.ready?.catch(() => {});
+  if (priorEmitter.root) await rm(priorEmitter.root, { recursive: true, force: true });
   for (const history of [...initialHistories.values(), ...completionHistories.values(), legacyHistory]) {
     await history.ready?.catch(() => {});
     if (history.root) await rm(history.root, { recursive: true, force: true });
@@ -533,8 +555,8 @@ test("emitted and pulled THREAD full binds missing output without an execution d
     await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: plan.planPath, check: true }, deps),
       (error) => error.code === "FIXER_RESULT_MISSING" && assert.deepEqual(error.activeFixer, expected) === undefined);
     const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: head }, deps);
-    assert.equal(result.complete, false);
-    assert.deepEqual(result.activeFixer, expected);
+    // A full-phase threads plan reads no delta or completion input (ADR 0337), so the resolver treats it as head-only: no disposition is verifiable.
+    assert.equal(result, null);
     assert.equal(existsSync(executionDir), false);
     assert.deepEqual(calls, []);
   });
@@ -2131,10 +2153,12 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   const isResidual = (index) => residual && (kind === "residual" || index === (kind === "repeated-mixed" ? 1 : 2));
   const actPath = path.join(tmpRoot, "act.json"), deltaPath = path.join(tmpRoot, "delta.json"), logPath = path.join(tmpRoot, "findings.json");
   await writeFile(actPath, JSON.stringify(actList));
-  const emit = (phase, extra = {}) => emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: baseline, phase, actListFile: actPath, gate: "draft_gate", cwd: repoRoot,
+  const emit = (phase, extra = {}) => priorEmitFixerWorkOrder({ repo: REPO, pr: PR, headSha: baseline, phase, actListFile: actPath, gate: "draft_gate", cwd: repoRoot,
     fetchPr: async () => ({ headRefName: "issue-1", headRefOid: baseline }), fetchVerdictMarkers: async () => ({ draft_gate: { visible: true, contractComplete: true } }), ...extra });
   const prior = await emit("commit_only");
-  const pull = (plan) => pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: repoRoot, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
+  // The prior tree's own protocol locates and pulls its plans: the current emitter would re-render a prior order with its current text.
+  const pullWith = (pullFn) => (plan) => pullFn({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: repoRoot, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
+  const pull = pullWith(priorPullWorkOrder);
   await pull(prior);
   git("commit", "-q", "--allow-empty", "-m", "fixing F");
   const fixing = git("rev-parse", "HEAD");
@@ -2171,6 +2195,7 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
     plan.workOrder.outputRefs = [path.join(path.dirname(plan.planPath), plan.executionIdentity, "fixer-disposition.json")];
     plan.promptPath = path.join(path.dirname(plan.planPath), "work-orders", `${plan.executionIdentity}.md`);
     plan.workOrder.operation = "complete";
+    plan.workOrder.candidateHead = candidate;
     if (settings.descendant) {
       // A descendant re-entry (issue 2787 C14) emits the complete order at the live head L, ahead of the candidate.
       git("commit", "-q", "--allow-empty", "-m", "ci fix");
@@ -2187,7 +2212,8 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
     await writeFile(plan.planPath, JSON.stringify(plan));
     await writeExecutionIndex(tmpRoot, plan);
   }
-  await pull(plan);
+  // A complete order is re-rendered below with the current renderer, so the current protocol pulls it.
+  await (settings.complete ? pullWith(pullWorkOrder) : pull)(plan);
   const fixerPlan = plan.planPath, sourceRead = plan.workOrder.requiredReads.find((read) => read.kind === "completion-input"), sourcePath = sourceRead.path;
   const source = JSON.parse(await readFile(sourcePath));
   // A descendant order is observed at its live head L; the operator-reset case passes the candidate instead.

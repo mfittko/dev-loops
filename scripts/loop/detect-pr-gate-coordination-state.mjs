@@ -13,7 +13,6 @@ import {
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { isBlockedActItem, isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
 import { buildSnapshotFromPrFacts, DISPOSITION, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateEarlySurface } from "./early-surface-checks.mjs";
@@ -32,6 +31,7 @@ import {
   FIXER_COMMIT_CLAIM_KINDS,
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
+import { isBlockedActItem, isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { convergedCarryAccepts } from "../github/_carried-verdict.mjs";
 import { actSetAlreadyHeld, actSetHeld, capRoundActList, countCapRounds, effectiveRounds, operatorClearsCapStop, prBodySha256, readClosedPriorRoundLogs, refusesPastScopedRound, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
@@ -42,7 +42,7 @@ import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { loadDeliveredHandoff, verifyFixerDisposition } from "../github/verify-fixer-disposition.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
-import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "../github/_gate-finding-surface.mjs";
+import { collectFingerprints, countUnresolvedGateAuthoredThreadsFromRawNodes, isStaleJudgeActFingerprint, parseFindingMarker } from "../github/_gate-finding-surface.mjs";
 import { resolveAuthenticatedLogin } from "../github/post-gate-findings.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
@@ -935,8 +935,9 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
       const order = plan.workOrder;
       const foreign = (typeof order.target?.repo === "string" && order.target.repo !== repo)
         || (Number.isInteger(order.target?.pr) && order.target.pr !== pr);
-      // A ci-failure plan (ADR 0235) has no thread to verify: its evidence is the settled green CI and the full gate round.
-      if (!foreign && order.phase !== "commit_only" && order.source !== "ci-failure") {
+      // A ci-failure plan, or an act-list or threads plan with no delta or completion input (ADR 0235, ADR 0337), writes only { headSha }: its evidence is the settled green CI and the next gate round, so no disposition is verifiable.
+      const headOnly = order.source === "ci-failure" || ["act-list", "threads"].includes(order.source) && !order.requiredReads?.some((read) => ["delta-result", "completion-input"].includes(read.kind));
+      if (!foreign && order.phase !== "commit_only" && !headOnly) {
         if (order.role !== "fixer" || order.phase !== "full" || order.target?.repo !== repo || order.target?.pr !== pr || !order.headSha) {
           throw new Error("active fixer plan is not a full-phase fixer work order for this PR");
         }
@@ -1073,6 +1074,39 @@ async function countUnresolvedGateThreads(threadsPayload, runtime) {
     return countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload, await resolveAuthenticatedLogin(runtime));
   } catch {
     return -1;
+  }
+}
+
+// GATE-EXEC-THREAD-DISPOSITION: true when at least one gate-authored thread is open and every one is a judge-act code thread whose
+// recording round ran at a strict ancestor of the current head, read from the ledgers of the gate whose round the route runs (the
+// same ledgers that round's fixed-act close reads). A question, an ambiguous ledger, a failed read or a pre_approval_gate
+// clean or findings-present verdict already posted at the current head (a blocked verdict does not count) fails closed to false, which keeps the fixer route. A round whose ledger exists
+// but whose verdict is not yet posted does not block the route, so the poster can enter the gate.
+export async function onlyStaleGateRoundThreadsOpen({ threadsPayload, repo, pr, currentHeadSha, preApprovalGate, runtime }) {
+  const gate = "pre_approval_gate";
+  try {
+    const login = await resolveAuthenticatedLogin(runtime);
+    const open = threadsPayload.filter((node) => !node?.isResolved && node?.comments?.nodes?.[0]?.author?.login === login);
+    if (open.length === 0) return false;
+    const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
+    const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
+    const head = currentHeadSha.toLowerCase();
+    const posted = String(preApprovalGate?.headSha ?? "").trim().toLowerCase();
+    const closesRound = preApprovalGate?.verdict === "clean" || preApprovalGate?.verdict === "findings_present";
+    if (preApprovalGate?.visible && closesRound && posted && (head.startsWith(posted) || posted.startsWith(head))) return false;
+    for (const node of open) {
+      const body = typeof node.comments.nodes[0].body === "string" ? node.comments.nodes[0].body : "";
+      const marker = parseFindingMarker(body);
+      if (!marker || marker.severity === "question") return false;
+      const fps = new Set([marker.fp]);
+      collectFingerprints(body, fps);
+      for (const fp of fps) {
+        if (!(await isStaleJudgeActFingerprint({ repo, pr, gate, headSha: currentHeadSha, tmpRoot, repoRoot, fp }))) return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -1321,6 +1355,8 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     skippedUntrusted: parsedThreads.skippedUntrusted,
     gateEvidence,
     unresolvedGateThreadCount,
+    staleGateRoundThreadsOnly: unresolvedGateThreadCount > 0 && snapshot.unresolvedThreadCount === unresolvedGateThreadCount
+      && await onlyStaleGateRoundThreadsOpen({ threadsPayload, repo: options.repo, pr: options.pr, currentHeadSha, preApprovalGate: gateEvidence.preApprovalGate, runtime }),
     interpretation,
     disposition,
     copilotBodyConvergence,
@@ -1594,6 +1630,7 @@ export function buildGateCoordinationEvaluatorInput({
     // detector's MARK_READY_FOR_REVIEW decision with detect-checkpoint-
     // evidence.mjs's own unresolved-thread report for the same PR state.
     unresolvedGateThreadCount: context.unresolvedGateThreadCount ?? null,
+    staleGateRoundThreadsOnly: context.staleGateRoundThreadsOnly === true,
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
     copilotConvergenceOk: context.copilotBodyConvergence?.ok === true,
     // Current-head Copilot review evidence, fed alongside sameHeadCleanConverged so

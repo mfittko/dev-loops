@@ -12,7 +12,7 @@ import { initGitFixture, runIdFreeEnv, runNode as runNodeHelper, trustGhEntries,
 
 const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir, trustGhEntries(entries), options);
 
-// GATE-EXEC-LOW-NIT-CONVERGENCE: the server-side gate-evidence check (--skip-fanout-ledger-check) must pass a
+// Body-only converged post: the server-side gate-evidence check (--skip-fanout-ledger-check) must pass a
 // converged PR from GitHub-visible state alone. The temp dir holds no ledger, context, plan or config, so every
 // answer below comes from the stubbed PR comments.
 

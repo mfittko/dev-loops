@@ -93,7 +93,7 @@ export async function carryGateMarker(marker, { gate, currentHeadSha, baseRef, r
 }
 
 /**
- * The converged-record recording seam (GATE-EXEC-LOW-NIT-CONVERGENCE): true only when the fixer commit's clean state stands for `headSha`
+ * The converged-record recording seam (the body-only converged post): true only when the fixer commit's clean state stands for `headSha`
  * under the full classifier, including the gate-tooling rule. Any failure is false.
  */
 export async function convergedCarryAccepts({ originHead, headSha, baseRef, repoRoot }) {

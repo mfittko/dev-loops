@@ -12,8 +12,8 @@ test("COORDINATOR-SINGLE-CHILD-JOIN is registered and carries the no-turn-end an
   assert.match(contract, /The hand-back path must not exist at dispatch: each fixer emission and each delta review invocation gets its own path, and the coordinator never reuses a hand-back path\./);
   assert.match(contract, /, and the child writes no extra marker, when the file parses as JSON and carries the terminal field its schema requires/);
   assert.doesNotMatch(contract, /\.done|staging|never satisfies the join/);
-  assert.match(contract, /a parseable write without it satisfies the join after 10 unchanged seconds\. A full-phase fixer is final on write \(ADR 0223\)/);
-  assert.match(contract, /the stability window does not apply to the full phase/);
+  assert.match(contract, /a parseable write without it satisfies the join after 10 unchanged seconds\. A review-body full-phase fixer is final on write \(ADR 0223\)/);
+  assert.match(contract, /the stability window does not apply\. The act-list, threads and ci-failure full-phase fixer handoffs/);
   assert.match(contract, /an artifact whose mtime is older than the reference is pending and the result reports `stale: true`, and a missing or relative `--after` exits 1/);
   const adr = read("docs/decisions/0218-slice-a-cap-round-chain-and-single-child-join.md");
   assert.match(adr, /satisfies the join after 10 unchanged seconds, for every hand-back type/);
@@ -115,9 +115,3 @@ test("the delta reviewer is told to write its result to the absolute --result pa
   }
 });
 
-test("the Copilot follow-up THREAD-route delta reviewer dispatch sentence names the --artifact join", () => {
-  const text = read("skills/copilot-pr-followup/SKILL.md");
-  const at = text.indexOf("Otherwise run the delta reviewer");
-  assert.ok(at >= 0);
-  assert.ok(text.slice(at, at + 400).includes("gate wait-for-units --artifact <the delta reviewer's --result path> --after <the input run's input.patchPath>"));
-});

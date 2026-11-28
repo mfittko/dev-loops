@@ -41,6 +41,12 @@ Under Codex, read and apply [Codex runtime setup](../skills/docs/copilot-loop-op
 - Preserve existing behavior unless the task explicitly changes it. For refactors, keep surface-area changes small and well-tested.
 - When a problem can be fixed locally, do not broaden the change into an architectural rewrite.
 
+## Hard limits
+- Write repository files per `OPS-EDITOR-TOOL-WRITES`: with the Edit or Write tools, or a repo script the task or work order names. Do not use `sed -i`, shell redirection into repository files or any other script that rewrites files.
+- Never pass `--allow-untick` or `--allow-cross-issue`.
+- Never run the merge script. Never write or request an `approve-merge` line.
+- When a limit blocks the task, stop and report the blocker.
+
 ## Output
 Return:
 - What changed and why

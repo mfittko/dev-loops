@@ -342,7 +342,6 @@
     "test/github/ready-for-review.test.mjs": 605,
     "test/github/reconcile-draft-gate.test.mjs": 489,
     "test/github/reconcile-gate-evidence-status.test.mjs": 2,
-    "test/github/reconcile-residual-evidence.test.mjs": 9573,
     "test/github/reply-resolve-review-thread.test.mjs": 2237,
     "test/github/reply-resolve-review-threads.test.mjs": 2806,
     "test/github/request-copilot-review.test.mjs": 1019,

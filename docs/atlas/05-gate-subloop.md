@@ -8,7 +8,7 @@ source_commit: f6619004d3edc2caccc98edd96914a5706c5d59b
 
 ## Gate sub-loop: fan-out, fan-in, judge, fixer
 
-A `draft_gate` or `pre_approval_gate` round is a fixed pipeline of deterministic scripts around four kinds of agents. The context writer builds one neutral bundle. Independent reviewers run one dispatch unit per angle group, in bounded waves. Fan-in consolidates their per-angle artifacts without disposing any finding. A judge disposes each finding cluster as `act`, `defer` or `reject`. A fixer commits the act list without pushing (`commit_only`). A fresh delta reviewer checks that commit. Only a clear delta grants the `full` phase that pushes and replies. A new head always starts a new full round, so the loop ends on a clean verdict, a low/nit convergence at the cap round, or a typed blocker for the operator. The diagrams below are derived from the pure core modules under `packages/core/src/loop/` and the CLI scripts under `scripts/loop/` and `scripts/github/`.
+A `draft_gate` or `pre_approval_gate` round is a fixed pipeline of deterministic scripts around four kinds of agents. The context writer builds one neutral bundle. Independent reviewers run one dispatch unit per angle group, in bounded waves. Fan-in consolidates their per-angle artifacts without disposing any finding. A judge disposes each finding cluster as `act`, `defer` or `reject`. A fixer pushes the act list in the `full` phase. A new head always starts a new full round that judges the fix, so the loop ends on a clean verdict, the body-only converged post, or a typed blocker for the operator. The diagrams below are derived from the pure core modules under `packages/core/src/loop/` and the CLI scripts under `scripts/loop/` and `scripts/github/`.
 
 <a id="d60"></a>
 
@@ -33,11 +33,7 @@ flowchart TD
   JP --> L["gate write-findings-log"]
   L --> U["gate upsert-verdict"]
   U -->|"empty act list"| OK["Gate passes"]
-  U -->|"act items"| F1["emit-fixer-work-order<br/>--phase commit_only"]
-  F1 --> FX["Fixer commits, no push"]
-  FX --> D["loop pre-push-delta"]
-  D -->|"needs_fix"| F1
-  D -->|"locally_clear or bounded_out"| F2["emit-fixer-work-order<br/>--phase full"]
+  U -->|"act items"| F2["emit-fixer-work-order<br/>--phase full"]
   F2 --> P["Push, replies, CI"]
   P --> A
 ```
@@ -275,7 +271,7 @@ stateDiagram-v2
 
 Type: `flowchart`
 
-How a `draft_gate` round ends under the round cap. Rounds 1 to the cap run and a clean round stops early. Round cap+1 is the scoped final round of `GATE-EXEC-CAP-BRAKES`, and its clean verdict is the only draft exit after the cap round. A later round goes to the operator. Below the cap, act items go to the fixer and the next full round runs. At the cap, only a named human decision blocks (`pastCapBlockers`); a low/nit act list may converge without a new full round. A body-only act list converges through the body-only post at every round up to the cap, and a blocker in it blocks at any round. A cap of 0 disables the cap, because `isRoundRefused` and `isCapRound` both require `cap > 0`. The growth stop (`growth_past_forecast`) is enforced: `resolveCapBrakes` reads the forecast and `decideCapRound` stops the lane. Derived from `packages/core/src/loop/review-round-cap.mjs`, `pastCapBlockers` in `packages/core/src/loop/gate-fanin.mjs`, `composeConvergedDraftGate` and `composeBodyOnlyConvergedDraftGate` in `packages/core/src/loop/pre-push-delta-review.mjs`, and `countCompletedRounds` in `scripts/github/write-gate-context.mjs`.
+How a `draft_gate` round ends under the round cap. Rounds 1 to the cap run and a clean round stops early. Round cap+1 is the scoped final round of `GATE-EXEC-CAP-BRAKES`, and its clean verdict is the only draft exit after the cap round. A later round goes to the operator. Below the cap, act items go to the fixer and the next full round runs. At the cap, only a named human decision blocks (`pastCapBlockers`); every other act list goes to the fixer. A body-only act list converges through the body-only post at every round up to the cap, and a blocker in it blocks at any round. A cap of 0 disables the cap, because `isRoundRefused` and `isCapRound` both require `cap > 0`. The growth stop (`growth_past_forecast`) is enforced: `resolveCapBrakes` reads the forecast and `decideCapRound` stops the lane. Derived from `packages/core/src/loop/review-round-cap.mjs`, `pastCapBlockers` in `packages/core/src/loop/gate-fanin.mjs`, `composeBodyOnlyConvergedDraftGate` in `packages/core/src/loop/pre-push-delta-review.mjs`, and `countCompletedRounds` in `scripts/github/write-gate-context.mjs`.
 
 ```mermaid
 flowchart TD
@@ -291,12 +287,10 @@ flowchart TD
   CAP -->|no| FIX["Fixer, then next full round<br/>(a body-only list takes the body-only post)"]
   CAP -->|yes| BLK{"pastCapBlockers non-empty?"}
   BLK -->|yes| HUM["blocked: round_cap_reached<br/>(operator decision)"]
-  BLK -->|no| LOW{"All act items low or nit?"}
-  LOW -->|yes| CONV["commit_only + clear delta<br/>= converged verdict"]
-  LOW -->|no| BODY{"All PR-body items,<br/>body edited?"}
+  BLK -->|no| BODY{"All PR-body items,<br/>body edited?"}
   BODY -->|yes| BCONV["Body-only converged"]
   BODY -->|no| CFIX["Fixer on cap-round items"]
-  CONV --> RDY["mark_ready_for_review,<br/>then pre_approval_gate"]
+  RDY["mark_ready_for_review,<br/>then pre_approval_gate"]
   BCONV --> RDY
   CFIX --> SCP
   GROW["Growth stop<br/>(growth_past_forecast)"] --> HUM

@@ -6,7 +6,6 @@ import {
   DELTA_CHECKLIST,
   DELTA_MAX_INVOCATIONS,
   buildDeltaInput,
-  composeConvergedDraftGate,
   decideDeltaNextStep,
   deltaFixerFindings,
   deltaResultShapeErrors,
@@ -660,31 +659,6 @@ test("deltaFixerFindings keeps medium-or-higher new findings and open residue, c
   assert.equal(deltaFixerFindings({ newFindings: [f({ severity: "high" + " ".repeat(2001) })] })[0].severity, "high");
 });
 
-describe("composeConvergedDraftGate round gate", () => {
-  const FULL_A = "a".repeat(40);
-  const FULL_B = "b".repeat(40);
-  const acts = [{ severity: "low", summary: "rename" }, { severity: "nit", summary: "typo" }];
-  const converge = (round, cap) => {
-    const actList = acts.map((a) => ({ ...ACT_LIST[0], ...a }));
-    const seq = startDeltaSequence({ reviewBaselineHead: FULL_A, actList });
-    const deltaResult = {
-      reviewBaselineHead: FULL_A, candidateHead: FULL_B, actSetId: seq.actSetId,
-      actionableItems: seq.actItems.map((item) => ({ ref: item.ref, status: "resolved", evidence: ["fixed"] })),
-      newFindings: [], widenedReads: [], outcome: "locally_clear",
-    };
-    return composeConvergedDraftGate({ gate: "draft_gate", headSha: FULL_A, round, cap, roundActItems: actList, converged: { fixerCommit: FULL_B, actList, deltaResult } });
-  };
-
-  test("a round below the cap is refused so the next full round runs", () => {
-    assert.throws(() => converge(1, 4), /applies only at the cap round or later \(round 1, cap 4\)/);
-    assert.throws(() => converge(3, 4), /round 3, cap 4/);
-  });
-
-  test("the cap round and later converge, and a disabled cap does not gate", () => {
-    for (const [round, cap] of [[4, 4], [5, 4], [1, 0]]) assert.equal(converge(round, cap).fixerCommit, FULL_B);
-  });
-});
-
 describe("PR-body act items leave the delta act set", () => {
   const code = (n) => ({ ref: `code-${n}`, severity: "medium", angle: "correctness", summary: `code finding ${n}`, file: `src/f${n}.mjs`, line: n, judgeDisposition: "act" });
   const body = (n) => ({ ref: `body-${n}`, severity: "low", angle: "spec", summary: `PR body finding ${n}`, judgeDisposition: "act" });
@@ -734,15 +708,6 @@ describe("membershipOnly skips the outcome check", () => {
 
   test("membershipOnly still rejects a shape error", () => {
     assert.match(validateDeltaResult(result({ widenedReads: ["scripts/x.mjs"] }), { sequence: sequence(), membershipOnly: true }).join(), /widenedReads\[0\] needs a path and a reason/);
-  });
-
-  test("the converged gate still refuses a locally_clear result with an unresolved item", () => {
-    const FULL = "a".repeat(40), FIX = "b".repeat(40);
-    const actList = [{ severity: "low", angle: "correctness", summary: "s", judgeDisposition: "act", file: "f.mjs", line: 1 }];
-    const seq = startDeltaSequence({ reviewBaselineHead: FULL, actList });
-    const deltaResult = { reviewBaselineHead: FULL, candidateHead: FIX, actSetId: seq.actSetId, widenedReads: [], newFindings: [], outcome: "locally_clear",
-      actionableItems: [{ ref: seq.actItems[0].ref, status: "cannot_verify", evidence: ["e"] }] };
-    assert.throws(() => composeConvergedDraftGate({ gate: "draft_gate", headSha: FULL, round: 1, cap: 0, roundActItems: actList, converged: { fixerCommit: FIX, actList, deltaResult } }), /locally_clear requires every act item resolved/);
   });
 });
 

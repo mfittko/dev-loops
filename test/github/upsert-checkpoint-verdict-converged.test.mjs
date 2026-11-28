@@ -6,16 +6,13 @@ import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { DEFAULT_TEST_PR_BODY, initGitFixture, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 import { parseUpsertCheckpointVerdictCliArgs, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
-import { startDeltaSequence } from "../../packages/core/src/loop/pre-push-delta-review.mjs";
-import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
-import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { prBodySha256 } from "../../scripts/github/write-gate-context.mjs";
 
-// GATE-EXEC-LOW-NIT-CONVERGENCE: an all-low/nit draft_gate round at head A converges after one fixer pass and a
-// clean delta review. The comment at A is updated to clean with the Converged field while the PR head is the
-// fixer commit. Everything else keeps today's refusal.
+// The body-only converged post (GATE-EXEC-NO-DEAD-END): a draft_gate round whose act items are all PR-body items
+// updates the comment at A to clean with the Converged field while the PR head is the fixer commit. Everything
+// else keeps today's refusal.
 
 let A = "a".repeat(40);
 let FIX = "b".repeat(40);
@@ -46,8 +43,8 @@ after(async () => {
   if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
 });
 
+// A PR-body finding names no file; a code finding (finding) names one and is never a PR-body item.
 const bodyFinding = (severity, n = 1) => ({ severity, angle: "correctness", summary: `${severity} finding ${n}`, judgeDisposition: "act", judgeRationale: "test rationale" });
-// A code finding names a file, so it stays in the delta act set; a PR-body finding (bodyFinding) leaves it.
 const finding = (severity, n = 1) => ({ ...bodyFinding(severity, n), file: `f${n}.mjs`, line: n });
 
 const existingBody = () => [
@@ -58,25 +55,6 @@ const existingBody = () => [
   "**Findings summary:** low findings",
   "**Next action:** stay draft and fix",
 ].join("\n");
-
-// The fixer commit and the clean delta review for an act list at head A.
-function convergedInput(actList, overrides = {}) {
-  const sequence = startDeltaSequence({ reviewBaselineHead: A, actList });
-  return {
-    fixerCommit: FIX,
-    actList,
-    deltaResult: {
-      reviewBaselineHead: A,
-      candidateHead: FIX,
-      actSetId: sequence.actSetId,
-      actionableItems: sequence.actItems.map((item) => ({ ref: item.ref, status: "resolved", evidence: ["fixed"] })),
-      newFindings: [],
-      widenedReads: [],
-      outcome: "locally_clear",
-    },
-    ...overrides,
-  };
-}
 
 // Answers every gh call; the PR head is the fixer commit and the draft_gate review lives at A.
 function makeRunChild({ puts, existingReview = true, currentHead = FIX, body = existingBody(), prState = "OPEN", liveBody = DEFAULT_TEST_PR_BODY, ownShas = "" }) {
@@ -144,46 +122,7 @@ async function post(tempDir, { findings, converged, extraArgs = [], runChildOpti
   }
 }
 
-test("an all-low/nit act list with a clean delta updates the comment at A to clean with the Converged field", async () => {
-  await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1), finding("nit", 2)];
-    const { result, body, error } = await post(tempDir, { findings, converged: convergedInput(findings) });
-    assert.equal(error, undefined);
-    assert.equal(result.action, "updated");
-    assert.equal(result.headSha, A);
-    assert.match(body, /\*\*Verdict:\*\* clean/);
-    assert.match(body, new RegExp(`\\*\\*Reviewed head SHA:\\*\\* \`${A}\``));
-    assert.match(body, new RegExp(`\\*\\*Converged:\\*\\* fixer \`${FIX}\` delta \`sha256:[a-f0-9]{64}\``));
-  }, { prefix: "dev-loops-converged-ok-" });
-});
-
-// A converged post is a draft_gate post, so a stale base neither refuses it nor runs a freshness check.
-test("a converged post at a stale base posts and runs no freshness check", async () => {
-  await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1)];
-    const heads = [];
-    const stale = async ({ base, head }) => { heads.push(head); return { ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: "R" }; };
-    const out = await post(tempDir, { findings, converged: convergedInput(findings), checkBaseFreshness: stale });
-    assert.equal(out.error, undefined);
-    assert.equal(out.result.action, "updated");
-    assert.deepEqual(heads, []);
-  }, { prefix: "dev-loops-converged-base-" });
-});
-
-// ADR 0183: a fully judged round depends only on the act list, so an all-act round composes clean when it converges,
-// even when the consolidator's severity verdict (a low blocks under blockCleanOnFindingSeverities [high, low]) is findings_present.
-test("an all-act converged round composes clean from a findings_present ledger verdict", async () => {
-  await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1)];
-    const { result, body, error } = await post(tempDir, { findings, overallVerdict: "findings_present", converged: convergedInput(findings) });
-    assert.equal(error, undefined);
-    assert.equal(result.action, "updated");
-    assert.match(body, /\*\*Verdict:\*\* clean/);
-  }, { prefix: "dev-loops-converged-allact-" });
-});
-
-// GATE-EXEC-ROUND-CAP choke point with the cap on (default 4): the converged post carries only the judged ledger.
-// Closed prior rounds in the cap-on root: the posted round at A is round `prior + 1`.
+// GATE-EXEC-ROUND-CAP choke point with the cap on (default 4): closed prior rounds in the cap-on root; the posted round at A is round `prior + 1`.
 async function withPriorRounds(prior, fn, tmpRoot = path.join(capOnRoot, "tmp")) {
   const dir = path.join(tmpRoot, "gate-findings", "owner-repo", "pr-17");
   await rm(dir, { recursive: true, force: true });
@@ -200,69 +139,6 @@ async function withPriorRounds(prior, fn, tmpRoot = path.join(capOnRoot, "tmp"))
     await rm(dir, { recursive: true, force: true });
   }
 }
-
-test("with the round cap on, a converged post at the cap round with --findings-ledger only posts clean", async () => {
-  await withTempDir(async (tempDir) => {
-    await withPriorRounds(3, async () => {
-      const findings = [finding("low", 1), finding("nit", 2)];
-      const { result, body, error } = await post(tempDir, { findings, converged: convergedInput(findings), root: capOnRoot });
-      assert.equal(error, undefined);
-      assert.equal(result.action, "updated");
-      assert.match(body, /\*\*Verdict:\*\* clean/);
-      assert.match(body, /\*\*Converged:\*\*/);
-    });
-  }, { prefix: "dev-loops-converged-capon-ok-" });
-});
-
-test("below the cap a converged post is refused and nothing is posted", async () => {
-  await withTempDir(async (tempDir) => {
-    for (const prior of [0, 2]) {
-      await withPriorRounds(prior, async () => {
-        const findings = [finding("low", 1), finding("nit", 2)];
-        const out = await post(tempDir, { findings, converged: convergedInput(findings), root: capOnRoot });
-        assert.match(out.error ?? "", new RegExp(`converged verdict applies only at the cap round or later \\(round ${prior + 1}, cap 4\\)`));
-        assert.equal(out.puts.length, 0, "nothing is posted");
-      });
-    }
-  }, { prefix: "dev-loops-converged-capon-below-" });
-});
-
-test("with the round cap on, a converged post with --findings-json is refused by GATE-EXEC-ROUND-CAP", async () => {
-  await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1), finding("nit", 2)];
-    const findingsJson = path.join(tempDir, "findings.json");
-    await writeFile(findingsJson, JSON.stringify(findings), "utf8");
-    const out = await post(tempDir, { findings, converged: convergedInput(findings), extraArgs: ["--findings-json", findingsJson], root: capOnRoot });
-    assert.match(out.error ?? "", /GATE-EXEC-ROUND-CAP.*refusing --findings-json/);
-    assert.equal(out.puts.length, 0, "nothing is posted");
-  }, { prefix: "dev-loops-converged-capon-json-" });
-});
-
-// ADR 0208: the converged post is the one carve-out of the round N+1 refusal; a non-converged post at the same count is refused.
-test("after the scoped final round a converged post is accepted and a non-converged post is refused with round_cap_reached", async () => {
-  await withTempDir(async (tempDir) => {
-    const dir = path.join(capOnRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
-    await rm(dir, { recursive: true, force: true });
-    await mkdir(dir, { recursive: true });
-    for (const c of ["1", "2", "3", "4", "5"]) {
-      const head = c.repeat(40);
-      await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
-        repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${c}T00:00:00.000Z`, findings: c === "5" ? [{ severity: "medium", summary: "open act", judgeDisposition: "act", judgeFix: "fix it", file: "a.mjs", line: 1 }] : [],
-      }), "utf8");
-    }
-    try {
-      const findings = [finding("low", 1), finding("nit", 2)];
-      const accepted = await post(tempDir, { findings, converged: convergedInput(findings), root: capOnRoot });
-      assert.equal(accepted.error, undefined);
-      assert.doesNotMatch(accepted.body, /round_cap_reached/);
-      const refused = await post(tempDir, { findings, verdict: "clean", runChildOptions: { currentHead: A }, root: capOnRoot });
-      assert.match(refused.error ?? "", /round_cap_reached.*round 6 .*cap is 4/);
-      assert.equal(refused.puts.length, 0, "nothing is posted");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  }, { prefix: "dev-loops-converged-capon-n1-" });
-});
 
 // Issue 3604: past the cap the poster publishes the verdict of the body-only rerun: the retained same-head round holds only PR-body act items that read an older body than the context's pr-body read.
 test("past the cap the poster accepts the rerun of a retained body-only round and still refuses the same post when the body did not change", async () => {
@@ -316,7 +192,7 @@ test("3105: a judged log with a medium act item derives findings_present with no
   }, { prefix: "dev-loops-judged-log-verdict-" });
 });
 
-test("without --converged-json the same all-low/nit act list still refuses clean", async () => {
+test("without --converged-json an all-low/nit act list still refuses clean", async () => {
   await withTempDir(async (tempDir) => {
     const findings = [finding("low", 1), finding("nit", 2)];
     const refused = await post(tempDir, { findings, verdict: "clean", runChildOptions: { currentHead: A } });
@@ -324,68 +200,18 @@ test("without --converged-json the same all-low/nit act list still refuses clean
   }, { prefix: "dev-loops-converged-nojson-" });
 });
 
-for (const [name, findings] of [
-  ["a medium-only act list", [finding("medium", 1)]],
-  ["a high-only act list", [finding("high", 1)]],
-  ["a question-only act list", [finding("question", 1)]],
-  ["a mixed list of one medium and two low items", [finding("medium", 1), finding("low", 2), finding("low", 3)]],
-]) {
-  test(`${name} requires a full round`, async () => {
-    await withTempDir(async (tempDir) => {
-      const { error, puts } = await post(tempDir, { findings, converged: convergedInput(findings) });
-      assert.match(error, /needs a full round/);
-      assert.deepEqual(puts, []);
-    }, { prefix: "dev-loops-converged-full-" });
-  });
-}
-
-test("a converged actList that disagrees with the round's act items on which are PR-body items refuses naming both lists", async () => {
+test("a malformed --converged-json, one without bodyOnly: true and a fixer commit that is not the PR head fail closed", async () => {
   await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1)];
-    const input = convergedInput(findings);
-    input.actList = input.actList.map(({ file, line, ...rest }) => rest);
-    const out = await post(tempDir, { findings, converged: input });
-    assert.match(out.error ?? "", /disagree on which items are PR-body items/);
-    assert.deepEqual(out.puts, []);
-    // Reverse direction: the round holds a PR-body item and converged.actList gives it a file, so the body-change checks would be skipped without the agreement refusal.
-    const mixed = [finding("low", 1), bodyFinding("low", 2)];
-    const reverse = convergedInput(mixed);
-    reverse.actList = reverse.actList.map((item) => (item.file ? item : { ...item, file: "x.mjs", line: 2 }));
-    const reversed = await post(tempDir, { findings: mixed, converged: reverse });
-    assert.match(reversed.error ?? "", /disagree on which items are PR-body items/);
-    assert.deepEqual(reversed.puts, []);
-  }, { prefix: "dev-loops-converged-bodyset-" });
-});
-
-test("an empty act list, a stale delta result and a delta result that is not locally_clear fail closed", async () => {
-  await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1)];
-    const empty = await post(tempDir, { findings: [{ ...finding("low", 1), judgeDisposition: "reject" }], converged: convergedInput(findings) });
-    assert.match(empty.error, /needs a full round/);
-    const stale = convergedInput(findings);
-    stale.deltaResult.candidateHead = "c".repeat(40);
-    assert.match((await post(tempDir, { findings, converged: stale })).error, /stale/);
-    const notClear = convergedInput(findings);
-    notClear.deltaResult.outcome = "needs_fix";
-    assert.match((await post(tempDir, { findings, converged: notClear })).error, /deltaResult/);
-  }, { prefix: "dev-loops-converged-delta-" });
-});
-
-test("a malformed --converged-json or a fixer commit that is not the PR head fails closed", async () => {
-  await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1)];
+    const findings = [bodyFinding("low", 1)];
     assert.match((await post(tempDir, { findings, converged: "not json" })).error, /converged-json/);
-    assert.match((await post(tempDir, { findings, converged: "null" })).error, /must be a JSON object/);
-    assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { currentHead: "d".repeat(40) } })).error, /is not the current PR head/);
+    for (const shape of ["null", { fixerCommit: FIX, actList: findings }, { fixerCommit: FIX, actList: findings, bodyOnly: false }, { fixerCommit: FIX, actList: findings, bodyOnly: "true" }]) {
+      const out = await post(tempDir, { findings, converged: shape });
+      assert.match(out.error ?? "", /must be a JSON object \{ fixerCommit, actList, bodyOnly: true \}/, JSON.stringify(shape));
+      assert.deepEqual(out.puts, []);
+    }
+    const stale = await post(tempDir, { findings, converged: { fixerCommit: FIX, actList: findings, bodyOnly: true }, runChildOptions: { currentHead: "d".repeat(40) } });
+    assert.match(stale.error, /is not the current PR head/);
   }, { prefix: "dev-loops-converged-input-" });
-});
-
-test("--converged-json needs the existing draft_gate comment at A", async () => {
-  await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1)];
-    const { error } = await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { existingReview: false } });
-    assert.match(error, /none is the latest draft_gate comment/);
-  }, { prefix: "dev-loops-converged-noexisting-" });
 });
 
 test("--converged-json is refused for any gate other than draft_gate and any verdict other than clean", () => {
@@ -395,96 +221,78 @@ test("--converged-json is refused for any gate other than draft_gate and any ver
   assert.throws(() => parseUpsertCheckpointVerdictCliArgs([...base, "--gate", "draft_gate", "--verdict", "findings_present"]), /--converged-json requires --gate draft_gate/);
 });
 
-test("a comment at A that is already clean or already converged is not converged again", async () => {
+// ADR 0271 (GATE-EXEC-NO-DEAD-END): a round whose act items are all PR-body items clears with no commit.
+const EDITED_BODY = `${DEFAULT_TEST_PR_BODY}\nEdited for the cap round.`;
+// ledgerTmpRoot puts the findings ledger and the prior rounds under another tmp root than the cap-round context (the main checkout versus the reviewed worktree).
+async function bodyOnlyPost(tempDir, { findings, actList = findings, fixer = A, input = {}, overallVerdict = "clean", reviewedBody = DEFAULT_TEST_PR_BODY, runChildOptions = {}, ledgerTmpRoot, priorRounds = 3, checkBaseFreshness }) {
+  const ledgerPath = ledgerTmpRoot ? path.join(ledgerTmpRoot, "gate-findings", "owner-repo", "pr-17", "ledger.json") : undefined;
+  const ctx = path.join(capOnRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
+  await mkdir(path.dirname(ctx), { recursive: true });
+  await writeFile(ctx, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(reviewedBody) }] }), "utf8");
+  let out;
+  await withPriorRounds(priorRounds, async () => {
+    out = await post(tempDir, { findings, overallVerdict, converged: { fixerCommit: fixer, actList, bodyOnly: true, ...input }, root: capOnRoot, ledgerPath, runChildOptions: { currentHead: fixer, liveBody: EDITED_BODY, ...runChildOptions }, checkBaseFreshness });
+  }, ledgerTmpRoot);
+  await rm(ctx, { force: true });
+  return out;
+}
+
+test("body-only: --converged-json needs the existing draft_gate comment at A", async () => {
   await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1)];
+    const { error } = await bodyOnlyPost(tempDir, { findings: [bodyFinding("low", 1)], runChildOptions: { existingReview: false } });
+    assert.match(error, /none is the latest draft_gate comment/);
+  }, { prefix: "dev-loops-converged-noexisting-" });
+});
+
+test("body-only: a ledger whose composed verdict is not clean (blocked) refuses the converged post and posts nothing", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [bodyFinding("low", 1)];
+    const { error, puts } = await bodyOnlyPost(tempDir, { findings, overallVerdict: "blocked" });
+    assert.match(error, /needs a clean composed verdict over a validated body-only act list/);
+    assert.deepEqual(puts, []);
+  }, { prefix: "dev-loops-converged-unjudged-" });
+});
+
+test("body-only: a comment at A that is already clean or already converged is not converged again", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [bodyFinding("low", 1)];
     const clean = existingBody().replace("findings_present", "clean");
-    assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { body: clean } })).error, /already clean or converged/);
+    assert.match((await bodyOnlyPost(tempDir, { findings, runChildOptions: { body: clean } })).error, /already clean or converged/);
     const converged = `${clean}\n**Converged:** fixer \`${FIX}\` delta \`sha256:${"c".repeat(64)}\``;
-    assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { body: converged } })).error, /already clean or converged/);
+    assert.match((await bodyOnlyPost(tempDir, { findings, runChildOptions: { body: converged } })).error, /already clean or converged/);
   }, { prefix: "dev-loops-converged-twice-" });
 });
 
-test("the act items include the ledger at A: a caller cannot list a subset", async () => {
+test("body-only: the act items include the ledger at A: a caller cannot list a subset", async () => {
   await withTempDir(async (tempDir) => {
-    const lows = [finding("low", 1)];
+    const lows = [bodyFinding("low", 1)];
     const findingsJson = path.join(tempDir, "findings.json");
     await writeFile(findingsJson, JSON.stringify(lows), "utf8");
-    const { error, puts } = await post(tempDir, { findings: [finding("medium", 2), ...lows], converged: convergedInput(lows), extraArgs: ["--findings-json", findingsJson] });
-    assert.match(error, /needs a full round/);
-    assert.deepEqual(puts, []);
+    const out = await bodyOnlyPost(tempDir, { findings: [bodyFinding("medium", 2), ...lows], actList: lows });
+    assert.match(out.error, /same items as the posted act items/);
+    assert.deepEqual(out.puts, []);
   }, { prefix: "dev-loops-converged-subset-" });
 });
 
-test("two same-summary low items converge and a low item does not match a nit one", async () => {
+test("body-only: two same-summary low items converge, a low item does not match a nit one and one extra copy refuses", async () => {
   await withTempDir(async (tempDir) => {
-    const twins = [finding("low", 1), finding("low", 1)];
-    const ok = await post(tempDir, { findings: twins, converged: convergedInput(twins) });
-    assert.equal(ok.error, undefined);
-    const low = [finding("low", 1)];
-    const asNit = [{ ...finding("low", 1), severity: "nit" }];
-    assert.match((await post(tempDir, { findings: low, converged: convergedInput(asNit) })).error, /same items as the posted act items/);
+    const twins = [bodyFinding("low", 1), bodyFinding("low", 1)];
+    assert.equal((await bodyOnlyPost(tempDir, { findings: twins })).error, undefined);
+    const asNit = [{ ...bodyFinding("low", 1), severity: "nit" }];
+    assert.match((await bodyOnlyPost(tempDir, { findings: [bodyFinding("low", 1)], actList: asNit })).error, /same items as the posted act items/);
+    assert.match((await bodyOnlyPost(tempDir, { findings: twins, actList: [bodyFinding("low", 1)] })).error, /same items as the posted act items/);
   }, { prefix: "dev-loops-converged-keying-" });
 });
 
-test("same-summary low items at different files must both be in the delta list", async () => {
-  await withTempDir(async (tempDir) => {
-    const a = { ...finding("low", 1), files: ["a.mjs"], line: 10 };
-    const b = { ...finding("low", 1), files: ["b.mjs"], line: 20 };
-    const refused = await post(tempDir, { findings: [a, b], converged: convergedInput([a]) });
-    assert.match(refused.error, /same items as the posted act items/);
-    assert.deepEqual(refused.puts, []);
-    assert.equal((await post(tempDir, { findings: [a, b], converged: convergedInput([a, b]) })).error, undefined);
-  }, { prefix: "dev-loops-converged-sites-" });
-});
-
-test("the ledger and --findings-json carrying the same low item, with and without files and line, converge", async () => {
-  await withTempDir(async (tempDir) => {
-    const withSite = { ...finding("low", 1), files: ["a.mjs"], line: 10 };
-    const findingsJson = path.join(tempDir, "findings.json");
-    await writeFile(findingsJson, JSON.stringify([finding("low", 1)]), "utf8");
-    const { error } = await post(tempDir, { findings: [withSite], converged: convergedInput([withSite]), extraArgs: ["--findings-json", findingsJson] });
-    assert.equal(error, undefined);
-  }, { prefix: "dev-loops-converged-union-" });
-});
-
-test("one extra unresolved copy of a same-summary item refuses convergence", async () => {
-  await withTempDir(async (tempDir) => {
-    const { error, puts } = await post(tempDir, { findings: [finding("low", 1), finding("low", 1)], converged: convergedInput([finding("low", 1)]) });
-    assert.match(error, /same items as the posted act items/);
-    assert.deepEqual(puts, []);
-  }, { prefix: "dev-loops-converged-extra-" });
-});
-
-test("a delta result carrying a new finding fails closed", async () => {
-  await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1)];
-    const input = convergedInput(findings);
-    input.deltaResult.newFindings = [{ severity: "low", summary: "unposted" }];
-    assert.match((await post(tempDir, { findings, converged: input })).error, /deltaResult/);
-  }, { prefix: "dev-loops-converged-newfinding-" });
-});
-
-test("a judge-enriched --findings-json medium act item over an all-low ledger requires a full round", async () => {
-  await withTempDir(async (tempDir) => {
-    const lows = [finding("low", 1)];
-    const findingsJson = path.join(tempDir, "findings.json");
-    await writeFile(findingsJson, JSON.stringify([...lows, finding("medium", 2)]), "utf8");
-    const { error, puts } = await post(tempDir, { findings: lows, converged: convergedInput(lows), extraArgs: ["--findings-json", findingsJson] });
-    assert.match(error, /needs a full round/);
-    assert.deepEqual(puts, []);
-  }, { prefix: "dev-loops-converged-enriched-" });
-});
-
 async function postWithoutLedger(tempDir, { ledgerArgs = [], devloops = "version: 1\n" } = {}) {
-  const lows = [finding("low", 1)];
+  const lows = [bodyFinding("low", 1)];
   const findingsJson = path.join(tempDir, "findings.json");
   await writeFile(findingsJson, JSON.stringify(lows), "utf8");
   const root = path.join(tempDir, "root");
   await mkdir(root, { recursive: true });
   await writeFile(path.join(root, ".devloops"), devloops, "utf8");
   const converged = path.join(tempDir, "converged.json");
-  await writeFile(converged, JSON.stringify(convergedInput(lows)), "utf8");
+  await writeFile(converged, JSON.stringify({ fixerCommit: FIX, actList: lows, bodyOnly: true }), "utf8");
   const puts = [];
   const args = [
     "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", A, "--findings-summary", "converged test",
@@ -522,7 +330,7 @@ test("a converged post whose --findings-ledger does not exist is refused naming 
 // Post-time fan-out enforcement checks the candidate marker at the fixer commit B (convergedFromHeadSha A), not at A.
 test("an inline converged post is refused when A qualifies for inline review but the fixer commit B adds a risk path", async () => {
   const gitRepo = await mkdtemp(path.join(os.tmpdir(), "dev-loops-converged-postscope-"));
-  const saved = { A, FIX, repoRoot, path: process.env.PATH };
+  const saved = { A, FIX, path: process.env.PATH };
   try {
     process.env.PATH = originalPath;
     initGitFixture(gitRepo, { branch: "main" });
@@ -536,84 +344,30 @@ test("an inline converged post is refused when A qualifies for inline review but
     await writeFile(path.join(gitRepo, "scripts", "loop", "check-size-budget.mjs"), "export {};\n", "utf8");
     git("add", "."); git("commit", "-q", "-m", "B");
     const headB = git("rev-parse", "HEAD");
-    await writeFile(path.join(gitRepo, ".devloops"), await readFile(path.resolve(".devloops"), "utf8"), "utf8");
-    A = headA; FIX = headB; repoRoot = gitRepo;
+    // The fan-out evidence stays required (the repo's own config), so the inline review is checked.
+    const liveConfig = await readFile(path.resolve(".devloops"), "utf8");
+    const capOff = liveConfig.replace("\n  draft:\n", "\n  draft:\n    maxReviewRounds: 0\n");
+    // String.replace is a silent no-op on a changed live config and doubles a key the live draft block already has.
+    assert.notEqual(capOff, liveConfig, "the live .devloops has a draft block to patch");
+    assert.equal(capOff.match(/^ {4}maxReviewRounds:/gm)?.length ?? 0, (liveConfig.match(/^ {4}maxReviewRounds:/gm)?.length ?? 0) + 1);
+    assert.equal(liveConfig.split("\n  draft:\n")[1]?.split(/\n {2}\S/)[0].includes("maxReviewRounds"), false, "the live draft block sets no maxReviewRounds of its own");
+    await writeFile(path.join(gitRepo, ".devloops"), capOff, "utf8");
+    A = headA; FIX = headB;
+    const ctx = path.join(gitRepo, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(ctx), { recursive: true });
+    await writeFile(ctx, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(DEFAULT_TEST_PR_BODY) }] }), "utf8");
     await withTempDir(async (tempDir) => {
-      const findings = [finding("low", 1)];
-      const { error, puts } = await post(tempDir, { findings, converged: convergedInput(findings) });
+      const findings = [bodyFinding("low", 1)];
+      const { error, puts } = await post(tempDir, { findings, converged: { fixerCommit: headB, actList: findings, bodyOnly: true }, root: gitRepo, runChildOptions: { liveBody: EDITED_BODY } });
       assert.match(error, /Cannot post a inline_single_agent verdict/);
       assert.deepEqual(puts, []);
     }, { prefix: "dev-loops-converged-postscope-tmp-" });
   } finally {
-    ({ A, FIX, repoRoot } = saved);
+    ({ A, FIX } = saved);
     process.env.PATH = saved.path;
     await rm(gitRepo, { recursive: true, force: true });
   }
 });
-
-test("a converged post is accepted on a cap-fixed PR whose sealed clearing record names the cap-round act set", async () => {
-  await withTempDir(async (tempDir) => {
-    const dir = path.join(capOnRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
-    await rm(dir, { recursive: true, force: true });
-    await mkdir(dir, { recursive: true });
-    const findings = [finding("low", 1), finding("nit", 2)];
-    for (const head of ["1", "2", "3", A]) {
-      const sha = head.length === 1 ? head.repeat(40) : head;
-      await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({
-        repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${head.length === 1 ? head : 4}T00:00:00.000Z`, findings: sha === A ? findings : [],
-      }), "utf8");
-    }
-    writeGateDeltaRecord({ tmpRoot: path.join(capOnRoot, "tmp"), sequence: { reviewBaselineHead: A, actSetId: "0123456789abcdef" }, candidateHead: FIX, invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: findings.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) } });
-    try {
-      const { result, error } = await post(tempDir, { findings, converged: convergedInput(findings), root: capOnRoot });
-      assert.equal(error, undefined);
-      assert.equal(result.action, "updated");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-      await rm(path.join(capOnRoot, "tmp", "gate-delta"), { recursive: true, force: true });
-    }
-  }, { prefix: "dev-loops-converged-capfixed-" });
-});
-
-test("a converged post on a cap-fixed PR is still refused when coordination forbids the draft gate for another reason", async () => {
-  await withTempDir(async (tempDir) => {
-    const dir = path.join(capOnRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
-    await rm(dir, { recursive: true, force: true });
-    await mkdir(dir, { recursive: true });
-    const findings = [finding("low", 1), finding("nit", 2)];
-    for (const head of ["1", "2", "3", A]) {
-      const sha = head.length === 1 ? head.repeat(40) : head;
-      await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({
-        repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${head.length === 1 ? head : 4}T00:00:00.000Z`, findings: sha === A ? findings : [],
-      }), "utf8");
-    }
-    writeGateDeltaRecord({ tmpRoot: path.join(capOnRoot, "tmp"), sequence: { reviewBaselineHead: A, actSetId: "0123456789abcdef" }, candidateHead: FIX, invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: findings.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) } });
-    try {
-      const { result, error } = await post(tempDir, { findings, converged: convergedInput(findings), root: capOnRoot, runChildOptions: { prState: "CLOSED" } });
-      assert.equal(result, undefined);
-      assert.match(error, /^Cannot enter draft_gate on owner\/repo#17: .*(closed|CLOSED)/i, error);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-      await rm(path.join(capOnRoot, "tmp", "gate-delta"), { recursive: true, force: true });
-    }
-  }, { prefix: "dev-loops-converged-capfixed-closed-" });
-});
-
-// ADR 0271 (GATE-EXEC-NO-DEAD-END): a round whose act items are all PR-body items clears with no commit.
-const EDITED_BODY = `${DEFAULT_TEST_PR_BODY}\nEdited for the cap round.`;
-// ledgerTmpRoot puts the findings ledger and the prior rounds under another tmp root than the cap-round context (the main checkout versus the reviewed worktree).
-async function bodyOnlyPost(tempDir, { findings, actList = findings, fixer = A, input = {}, reviewedBody = DEFAULT_TEST_PR_BODY, runChildOptions = {}, ledgerTmpRoot, priorRounds = 3 }) {
-  const ledgerPath = ledgerTmpRoot ? path.join(ledgerTmpRoot, "gate-findings", "owner-repo", "pr-17", "ledger.json") : undefined;
-  const ctx = path.join(capOnRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
-  await mkdir(path.dirname(ctx), { recursive: true });
-  await writeFile(ctx, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(reviewedBody) }] }), "utf8");
-  let out;
-  await withPriorRounds(priorRounds, async () => {
-    out = await post(tempDir, { findings, converged: { fixerCommit: fixer, actList, bodyOnly: true, ...input }, root: capOnRoot, ledgerPath, runChildOptions: { currentHead: fixer, liveBody: EDITED_BODY, ...runChildOptions } });
-  }, ledgerTmpRoot);
-  await rm(ctx, { force: true });
-  return out;
-}
 
 test("body-only: an unchanged head and a head moved by a base-only merge both post the converged record", async () => {
   await withTempDir(async (tempDir) => {
@@ -637,33 +391,6 @@ test("body-only: round 2 of cap 4 with two pr_body act items posts the converged
     assert.equal(result.action, "updated");
     assert.match(body, /\*\*Converged:\*\*/);
   }, { prefix: "dev-loops-converged-bodyonly-below-cap-" });
-});
-
-test("a mixed code and PR-body converged post reads the body digests: unchanged refuses body_unchanged, an unrecorded read refuses body_read_unrecorded, a changed body posts", async () => {
-  await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1), bodyFinding("low", 2)];
-    const ctx = path.join(capOnRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
-    const run = async ({ liveBody, recorded = true }) => {
-      await mkdir(path.dirname(ctx), { recursive: true });
-      if (recorded) await writeFile(ctx, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(DEFAULT_TEST_PR_BODY) }] }), "utf8");
-      else await rm(ctx, { force: true });
-      let out;
-      await withPriorRounds(3, async () => { out = await post(tempDir, { findings, converged: convergedInput(findings), root: capOnRoot, runChildOptions: { liveBody } }); });
-      await rm(ctx, { force: true });
-      return out;
-    };
-    const unchanged = await run({ liveBody: DEFAULT_TEST_PR_BODY });
-    assert.match(unchanged.error ?? "", /^body_unchanged:/);
-    assert.deepEqual(unchanged.puts, []);
-    const unrecorded = await run({ liveBody: EDITED_BODY, recorded: false });
-    assert.match(unrecorded.error ?? "", /^body_read_unrecorded:/);
-    assert.deepEqual(unrecorded.puts, []);
-    const changed = await run({ liveBody: EDITED_BODY });
-    assert.equal(changed.error, undefined);
-    assert.equal(changed.result.action, "updated");
-    assert.match(changed.body, /\*\*Verdict:\*\* clean/);
-    assert.match(changed.body, /\*\*Converged:\*\*/);
-  }, { prefix: "dev-loops-converged-mixed-body-" });
 });
 
 test("body-only: a missing cap-round context refuses body_read_unrecorded, not body_unchanged", async () => {
@@ -704,18 +431,13 @@ test("body-only: each failed narrow check refuses with its typed reason and post
   }, { prefix: "dev-loops-converged-bodyonly-refuse-" });
 });
 
-test("body-only: a non-boolean bodyOnly refuses with an error naming the field, and an omitted or false one takes the delta path", async () => {
+test("body-only: a bodyOnly that is not true refuses with the body-only shape", async () => {
   await withTempDir(async (tempDir) => {
     const findings = [bodyFinding("medium", 1)];
-    for (const bodyOnly of ["true", 1, null]) {
+    for (const bodyOnly of ["true", 1, null, false, undefined]) {
       const out = await bodyOnlyPost(tempDir, { findings, input: { bodyOnly } });
-      assert.match(out.error ?? "", /^--converged-json bodyOnly must be a boolean/, `${JSON.stringify(bodyOnly)}: ${out.error}`);
+      assert.match(out.error ?? "", /must be a JSON object \{ fixerCommit, actList, bodyOnly: true \}/, `${JSON.stringify(bodyOnly)}: ${out.error}`);
       assert.equal(out.puts.length, 0, "nothing is posted");
-    }
-    for (const bodyOnly of [false, undefined]) {
-      const out = await bodyOnlyPost(tempDir, { findings, input: { bodyOnly } });
-      assert.doesNotMatch(out.error ?? "", /bodyOnly must be a boolean/);
-      assert.match(out.error ?? "", /converged\.fixerCommit must be a full sha different/, "the delta path decides");
     }
   }, { prefix: "dev-loops-converged-bodyonly-type-" });
 });
@@ -781,33 +503,7 @@ test("body-only: a malformed context beside a readable one refuses body_read_unr
   }, { prefix: "dev-loops-converged-bodyonly-malformed-" });
 });
 
-// 3105 / ADR 0275: a judged log with low act items persists findings_present, so a round that also holds an unjudged
-// --findings-json finding keeps that ledger verdict and does not converge to clean.
-test("a writer-produced judged log with low act items and an unjudged --findings-json finding does not post clean", async () => {
-  await withTempDir(async (tempDir) => {
-    const judgeVerdict = path.join(tempDir, "judge-verdict.json");
-    await writeFile(judgeVerdict, JSON.stringify({
-      headSha: A,
-      scopeDrift: { verdict: "within_scope", rationale: "in scope", driftedAreas: [] },
-      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes AC-1", criterion: "AC-1" }],
-    }), "utf8");
-    const written = await writeGateFindingsLog({
-      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, verdict: "clean", judgeVerdict, tmpRoot: tempDir,
-      findings: JSON.stringify({ overallVerdict: "clean", findings: [{ severity: "low", angle: "correctness", summary: "edge case" }] }),
-    });
-    const log = JSON.parse(await readFile(written.path, "utf8"));
-    assert.equal(log.overallVerdict, "findings_present");
-    const unjudged = { severity: "low", angle: "scope", summary: "unjudged finding", file: "src/other.mjs", line: 3 };
-    const findingsJson = path.join(tempDir, "findings.json");
-    await writeFile(findingsJson, JSON.stringify([unjudged]), "utf8");
-    const located = log.findings.map((f) => ({ ...f, file: "src/a.mjs" }));
-    const out = await post(tempDir, { findings: located, overallVerdict: log.overallVerdict, converged: convergedInput(located), extraArgs: ["--findings-json", findingsJson] });
-    assert.match(out.error ?? "", /needs a clean composed verdict over a validated low\/nit act list \(got verdict "findings_present"\)/);
-    assert.deepEqual(out.puts, [], "nothing is posted, so no clean body exists");
-  }, { prefix: "dev-loops-converged-unjudged-json-" });
-});
-
-// Slice 5 (converged-record carry): real git, so the stubbed git on PATH is lifted for these cases.
+// Converged-record carry: real git, so the stubbed git on PATH is lifted for these cases.
 const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_DIR: undefined, GIT_WORK_TREE: undefined };
 // Builds main, a PR branch with commit F (the fixer commit) and a merge M of main into it; returns { f, m }.
 // The repo is a dedicated temp dir holding a copy of `template`'s .devloops; it replaces the shared `template` root (repoRoot or capOnRoot) for the call.
@@ -854,74 +550,14 @@ async function withMergeShape(template, { baseFile = "docs/main-only.md", baseCo
 
 const REFUSED = /is not the current PR head/;
 
-test("slice 5: a code-fix converged post at a base merge M after F records convergence and refreshes the base at M before the carry classifier", async () => {
-  await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1)];
-    const savedFix = FIX;
-    await withMergeShape(repoRoot, {}, async ({ f, m }) => {
-      FIX = f;
-      const heads = [];
-      const checkBaseFreshness = async ({ head, base }) => { heads.push(head); return { ok: true, status: "base_current", base }; };
-      const out = await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { currentHead: m }, checkBaseFreshness });
-      assert.equal(out.error, undefined);
-      assert.equal(out.result.action, "updated");
-      assert.match(out.body, new RegExp(`\\*\\*Converged:\\*\\* fixer \`${f}\``));
-      assert.deepEqual(heads, [m], "one refresh before the carry classifier, at M");
-    }).finally(() => { FIX = savedFix; });
-  }, { prefix: "dev-loops-converged-carry-code-" });
-});
-
-test("slice 5: a converged post at M records convergence when the base tracking ref lags until the freshness fetch", async () => {
-  await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1)];
-    const savedFix = FIX;
-    await withMergeShape(repoRoot, { lagRef: true }, async ({ f, m }) => {
-      FIX = f;
-      // The stub stands in for the fetch: it brings the tracking ref up to the base tip.
-      const checkBaseFreshness = async ({ base, cwd }) => {
-        execFileSync("git", ["update-ref", "refs/remotes/origin/main", "main"], { cwd, env: GIT_ENV });
-        return { ok: true, status: "base_current", base };
-      };
-      const out = await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { currentHead: m }, checkBaseFreshness });
-      assert.equal(out.error, undefined);
-      assert.equal(out.result.action, "updated");
-    }).finally(() => { FIX = savedFix; });
-  }, { prefix: "dev-loops-converged-carry-lag-" });
-});
-
-test("slice 5: a code-fix converged post whose delta result names M as candidate head is refused, though the base is fresh at M", async () => {
-  await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1)];
-    const savedFix = FIX;
-    await withMergeShape(repoRoot, {}, async ({ f, m }) => {
-      FIX = f;
-      const input = convergedInput(findings);
-      input.deltaResult.candidateHead = m;
-      const checkBaseFreshness = async ({ base }) => ({ ok: true, status: "base_current", base });
-      const out = await post(tempDir, { findings, converged: input, runChildOptions: { currentHead: m }, checkBaseFreshness });
-      assert.match(out.error ?? "", /deltaResult/);
-      assert.deepEqual(out.puts, []);
-    }).finally(() => { FIX = savedFix; });
-  }, { prefix: "dev-loops-converged-carry-candidate-m-" });
-});
-
-test("slice 5: a converged post with a malformed fixerCommit is refused before the carry check", async () => {
-  await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1)];
-    const savedFix = FIX;
-    try {
-      FIX = "not-a-sha";
-      assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { currentHead: "c".repeat(40) } })).error ?? "", REFUSED);
-    } finally { FIX = savedFix; }
-  }, { prefix: "dev-loops-converged-carry-badsha-" });
-});
-
-test("slice 5: a body-only converged post at a base merge M after F records convergence", async () => {
+test("carry: a body-only converged post at a base merge M after F records convergence and refreshes the base at M before the carry classifier", async () => {
   await withTempDir(async (tempDir) => {
     const findings = [bodyFinding("medium", 1), bodyFinding("low", 2)];
     await withMergeShape(capOnRoot, {}, async ({ f, m }) => {
       const countCalls = [];
-      const out = await bodyOnlyPost(tempDir, { findings, fixer: f, runChildOptions: { currentHead: m, countCalls } });
+      const heads = [];
+      const checkBaseFreshness = async ({ head, base }) => { heads.push(head); return { ok: true, status: "base_current", base }; };
+      const out = await bodyOnlyPost(tempDir, { findings, fixer: f, runChildOptions: { currentHead: m, countCalls }, checkBaseFreshness });
       assert.equal(out.error, undefined);
       assert.equal(out.result.action, "updated");
       assert.equal(countCalls.length, 1);
@@ -931,9 +567,32 @@ test("slice 5: a body-only converged post at a base merge M after F records conv
   }, { prefix: "dev-loops-converged-carry-body-" });
 });
 
-test("slice 5: a changed PR blob, a gate-tooling base delta, a non-ancestor F, a criss-cross base and a detection failure keep the refusal", async () => {
+test("carry: a body-only converged post at M records convergence when the base tracking ref lags until the freshness fetch", async () => {
   await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1)];
+    const findings = [bodyFinding("medium", 1)];
+    await withMergeShape(capOnRoot, { lagRef: true }, async ({ f, m }) => {
+      // The stub stands in for the fetch: it brings the tracking ref up to the base tip.
+      const checkBaseFreshness = async ({ base, cwd }) => {
+        execFileSync("git", ["update-ref", "refs/remotes/origin/main", "main"], { cwd, env: GIT_ENV });
+        return { ok: true, status: "base_current", base };
+      };
+      const out = await bodyOnlyPost(tempDir, { findings, fixer: f, runChildOptions: { currentHead: m }, checkBaseFreshness });
+      assert.equal(out.error, undefined);
+      assert.equal(out.result.action, "updated");
+    });
+  }, { prefix: "dev-loops-converged-carry-lag-" });
+});
+
+test("carry: a converged post with a malformed fixerCommit is refused before the carry check", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await bodyOnlyPost(tempDir, { findings: [bodyFinding("medium", 1)], fixer: "not-a-sha", runChildOptions: { currentHead: "c".repeat(40) } });
+    assert.match(out.error ?? "", REFUSED);
+  }, { prefix: "dev-loops-converged-carry-badsha-" });
+});
+
+test("carry: a changed PR blob, a gate-tooling base delta, a non-ancestor F, a criss-cross base and a detection failure keep the refusal", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [bodyFinding("medium", 1)];
     const cases = {
       "changed PR blob": { changeAfterMerge: true },
       "gate-tooling base delta": { baseFile: "scripts/github/write-gate-context.mjs" },
@@ -944,13 +603,9 @@ test("slice 5: a changed PR blob, a gate-tooling base delta, a non-ancestor F, a
       "detection failure (no base ref)": { noBaseRef: true },
     };
     for (const [name, shape] of Object.entries(cases)) {
-      const savedFix = FIX;
-      try {
-        await withMergeShape(repoRoot, shape, async ({ f, m }) => {
-          FIX = f;
-          assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { currentHead: m } })).error ?? "", REFUSED, name);
-        });
-      } finally { FIX = savedFix; }
+      await withMergeShape(capOnRoot, shape, async ({ f, m }) => {
+        assert.match((await bodyOnlyPost(tempDir, { findings, fixer: f, runChildOptions: { currentHead: m } })).error ?? "", REFUSED, name);
+      });
     }
   }, { prefix: "dev-loops-converged-carry-refuse-" });
 });
