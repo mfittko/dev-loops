@@ -365,7 +365,20 @@ test("a clean ledger past the scoped final round posts when the operator focus f
   }, { prefix: "dev-loops-round-cap-focus-clear-" });
 });
 
-for (const [name, decided] of [["no focus file", null], ["a focus file that misses one act fingerprint", 2]]) {
+test("3652: a clean ledger posts when its only open act item has a defer decision in the operator focus file", async () => {
+  await withTempDir(async (tempDir) => {
+    const act = { ...capActs[0], angle: "correctness" };
+    const ledger = await writeLedger(tempDir, { overallVerdict: "findings_present", findings: [act] });
+    const [fingerprint] = actFingerprintSet({ findings: [act] });
+    const focus = path.join(tempDir, "focus.json");
+    await writeFile(focus, JSON.stringify({ items: [{ fingerprint, decision: "defer to a follow-up issue" }] }), "utf8");
+    const out = await post(["--verdict", "clean", "--findings-ledger", ledger, "--operator-focus-file", focus], { root: capOffRoot });
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "clean");
+  }, { prefix: "dev-loops-defer-clean-" });
+});
+
+for (const [name, decided] of [["no focus file", null],["a focus file that misses one act fingerprint", 2]]) {
   test(`a clean ledger past the scoped final round refuses round_cap_reached with ${name}, and the recovery names the fingerprints`, async () => {
     await withTempDir(async (tempDir) => {
       const { focus, fingerprints, ledger } = await seedCapRound(tempDir, { decided: decided ?? 0 });

@@ -4653,6 +4653,17 @@ async function actListFixture(ledgers, { nextAction = "fix" } = {}) {
 const ACT = { severity: "medium", summary: "fix x", file: "src/x.mjs", line: 3, judgeDisposition: "act" };
 const BODY_ACT = { severity: "medium", summary: "PR body lacks non-goals", judgeDisposition: "act" };
 
+test("3652: resolveDraftOpenActList drops deferred fingerprints and flags an all-deferred list", async () => {
+  const second = { ...ACT, summary: "fix y", line: 9 };
+  const fixture = await actListFixture({ "": { findings: [ACT, second] } });
+  try {
+    const context = { repo: "owner/repo", pr: 10, currentHeadSha: fixture.headSha };
+    const [a, b] = [ACT, second].map(fingerprintFinding);
+    assert.deepEqual(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 0, deferred: new Set([a]) }), { headSha: fixture.headSha, openActCount: 1, blockers: [] });
+    assert.deepEqual(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 0, deferred: new Set([a, b]) }), { headSha: fixture.headSha, openActCount: 0, deferredAll: true, blockers: [] });
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
 // The PR 3234 shape: the open act list at a stale head goes to the fixer before base integration.
 test("3105 AC15: the detector derives the open act list from the current-head ledger and routes the fixer before base integration", async () => {
   const fixture = await actListFixture({ "": { findings: [ACT] } });

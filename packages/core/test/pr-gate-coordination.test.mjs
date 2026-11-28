@@ -5305,6 +5305,16 @@ test("ready PR whose only open threads are judge-act threads from an older ances
   assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK));
 });
 
+test("3652: a draft PR whose every open act item is deferred routes mark_ready_for_review; open items still route the fixer", () => {
+  const head = "ab".repeat(20);
+  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict };
+  const deferred = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 0, deferredAll: true, blockers: [] } });
+  assert.equal(deferred.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, deferred.reason);
+  const open = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 1, blockers: [] } });
+  assert.equal(open.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, open.reason);
+});
+
 test("ready PR with a Copilot, human or same-head thread among the open threads still routes to the fixer", () => {
   const result = evaluatePrGateCoordination(staleRoundInput({ staleGateRoundThreadsOnly: false }));
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);

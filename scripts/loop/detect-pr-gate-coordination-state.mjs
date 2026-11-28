@@ -35,13 +35,13 @@ import { isBlockedActItem, isDeltaBodyItem } from "@dev-loops/core/loop/pre-push
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { convergedCarryAccepts } from "../github/_carried-verdict.mjs";
 import { actSetAlreadyHeld, actSetHeld, capRoundActList, countCapRounds, effectiveRounds, isBodyOnlyRerun, operatorClearsCapStop, prBodySha256, readClosedPriorRoundLogs, refusesPastScopedRound, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
-import { readOperatorFocusFile } from "./_operator-focus.mjs";
+import { deferredFingerprints, readOperatorFocusFile } from "./_operator-focus.mjs";
 import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { loadDeliveredHandoff, verifyFixerDisposition } from "../github/verify-fixer-disposition.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
-import { collectFingerprints, countUnresolvedGateAuthoredThreadsFromRawNodes, isStaleJudgeActFingerprint, parseFindingMarker } from "../github/_gate-finding-surface.mjs";
+import { collectFingerprints, countUnresolvedGateAuthoredThreadsFromRawNodes, fingerprintFinding, isStaleJudgeActFingerprint, parseFindingMarker } from "../github/_gate-finding-surface.mjs";
 import { resolveAuthenticatedLogin } from "../github/post-gate-findings.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
@@ -1464,7 +1464,7 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
  * `blockers` are the GATE-EXEC-SOFT-CAP blockers: those past the round cap, plus the blocked items of a body-only list at any round; below the cap every other act item goes to the fixer.
  * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
  */
-export async function resolveDraftOpenActList(context, { repoRoot, cap, operatorCleared = false, baseOnlyMerge = ({ fromHead, head, mainRef, repoRoot: root }) => convergedCarryAccepts({ originHead: fromHead, headSha: head, baseRef: mainRef, repoRoot: root }) }) {
+export async function resolveDraftOpenActList(context, { repoRoot, cap, operatorCleared = false, deferred = new Set(), baseOnlyMerge =({ fromHead, head, mainRef, repoRoot: root }) => convergedCarryAccepts({ originHead: fromHead, headSha: head, baseRef: mainRef, repoRoot: root }) }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
   const options = { repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: head };
@@ -1472,7 +1472,9 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, operator
   const logs = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead: true });
   let log = logs.find((entry) => String(entry.headSha).trim().toLowerCase() === head);
   // The posted verdict is findings_present (the evaluator checks it); a legacy ledger may persist `clean` beside open act items.
-  let open = log ? listOpenActItems(log.findings) : [];
+  const allOpen = log ? listOpenActItems(log.findings) : [];
+  // GATE-EXEC-OPERATOR-FOCUS: an act item the operator deferred is closed for routing.
+  let open = allOpen.filter((f) => !deferred.has(fingerprintFinding(f)));
   let ledgerHead = head;
   // GATE-EXEC-NO-DEAD-END: a head with no live ledger that is a base-only merge of the reviewed head A keeps A's body-only list, so the post stays reachable after the base merge.
   const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
@@ -1488,7 +1490,7 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, operator
       break;
     }
   }
-  if (open.length === 0) return null;
+  if (open.length === 0) return allOpen.length > 0 && ledgerHead === head ? { headSha: head, openActCount: 0, deferredAll: true, blockers: [] } : null;
   // countCapRounds (countCompletedRounds without the base-merge-forced rounds) counts the round being posted, so the live ledger's round is one less; a base-merge-forced round never counts, as in the poster and the emitter.
   const round = await countCapRounds({ ...options, headSha: ledgerHead }, { repoRoot, prBase: baseRefName, includeLiveCurrentHead: true }) - 1;
   // The emitter refuses an all-PR-body act list (delta_body_only_act_set): its only exit is the ADR 0271 body-only converged post at every round up to the cap (ADR 0332); past the cap the earlier routing holds.
@@ -1758,7 +1760,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const refreshBase = baseRefresher ? (base, head) => baseRefresher({ base, head, cwd: repoRoot, env: runtime.env ?? process.env, trusted: true }).catch(() => ({ ok: false, error: "base_fetch_failed", recovery: "retry the detector; fix the network or git remote access if the fetch keeps failing" })) : null;
   const capBrakes = await resolveCapBrakes(context, { repoRoot, config, operatorFocusFile, evaluateSize: runtime.evaluateSize, refreshBase }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; capBrakesError = error; return null; });
   const draftOpenActList = context.prData?.isDraft === true
-    ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0, operatorCleared: capBrakes?.operatorCleared === true }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
+    ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0, operatorCleared: capBrakes?.operatorCleared === true, deferred: deferredFingerprints(await readOperatorFocusFile(operatorFocusFile).catch(() => null)) }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
     : null;
   const bodyOnlyRetire = await resolveBodyOnlyRetire(context, { repoRoot });
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({

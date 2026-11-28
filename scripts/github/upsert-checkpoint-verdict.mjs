@@ -17,6 +17,7 @@ import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/
 import { minimizeSupersededGateReviews } from "./_minimize-superseded-verdicts.mjs";
 import { deletePrGateCoordinationSnapshot, fetchLiveThreadCounts, loadPrGateCoordinationContext, loadPrGateCoordinationContextReusingSnapshot, loadRefinementArtifact } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
+import { deferredFingerprints, readOperatorFocusFile } from "../loop/_operator-focus.mjs";
 import { CHECKBOX_ROW_RE, checklistLineScopes, checklistSectionLineIndices, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { applyTick } from "./tick-verified-checkboxes.mjs";
 import { editPr } from "./edit-pr.mjs";
@@ -3000,12 +3001,15 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   // --findings-json can carry the same finding.
   let convergedMarker = null;
   const guardedActItems = async (findings) => {
+    // GATE-EXEC-OPERATOR-FOCUS: an act item the operator deferred is closed for routing, so it does not guard a clean verdict.
+    const deferred = deferredFingerprints(await readOperatorFocusFile(options.operatorFocusFile));
+    const notDeferred = (items) => items.filter((f) => !deferred.has(fingerprintFinding(f)));
     // A converged round's act items are the union of A's ledger and the passed (judge-enriched) findings, so a caller cannot list a subset.
     // The ledger is required unconditionally; a missing or unreadable one already refused when it was loaded (naming the path and error).
     if (convergedInput && !preloadedFindingsLedger) {
       throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs --findings-ledger: the ledger at A defines the round's act items.`);
     }
-    const items = listOpenActItems(convergedInput ? [...(preloadedFindingsLedger.findings ?? []), ...findings] : findings);
+    const items = notDeferred(listOpenActItems(convergedInput ? [...(preloadedFindingsLedger.findings ?? []), ...findings] : findings));
     if (!convergedInput) return items;
     // Multiset per key: the larger of the ledger's and the passed findings' counts (callers may re-pass ledger objects, dropped by identity).
     const ledgerFindings = preloadedFindingsLedger.findings ?? [];
