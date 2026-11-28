@@ -963,7 +963,7 @@ round's judge-pass act list at `act-list.json` (the `judge-pass --out` path), wh
 - `index` is the cluster's `clusterId` from the consolidated ledger (the finding's 0-based
   position in `findings` only when the ledger carries no `clusterId`). One disposition per cluster.
   `title`, `detail` and `fix` are required on every disposition and `reason` on `defer` and `reject`.
-  `failOpen` is an optional boolean, set only on a `low` `act` that is a fail-open defect; `GATE-EXEC-LOW-ROUND-FLOOR` owns its promotion.
+  `failOpen` is an optional boolean, set on a `low` `act` that is a fail-open defect (a `defer` with `failOpen` fails closed); `GATE-EXEC-LOW-ROUND-FLOOR` owns its promotion.
 - `act` — a genuine defect or in-scope gap relevant to this PR's acceptance criteria / definition
   of done (a correctness bug, a fail-open/fail-closed gap, a security regression, or an AC-breaking
   defect), plus the non-defect `act` cases named below (an admitted coverage-expansion request;

@@ -1193,8 +1193,8 @@ export function validateJudgeVerdict(verdict) {
     if (entry.failOpen !== undefined && typeof entry.failOpen !== "boolean") {
       throw new Error(`judge verdict.dispositions[${i}].failOpen must be a boolean when present`);
     }
-    if (entry.failOpen === true && entry.disposition !== "act") {
-      throw new Error(`judge verdict.dispositions[${i}].failOpen is set only on an act disposition, not ${entry.disposition}`);
+    if (entry.failOpen === true && entry.disposition === "defer") {
+      throw new Error(`judge verdict.dispositions[${i}].failOpen is not allowed on a defer disposition (a defer would lose its followUpDraft at the floor)`);
     }
     if (entry.lowException !== undefined && !LOW_EXCEPTIONS.includes(entry.lowException)) {
       throw new Error(`judge verdict.dispositions[${i}].lowException must be one of: ${LOW_EXCEPTIONS.join(", ")} when present`);

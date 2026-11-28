@@ -1666,12 +1666,9 @@ describe("applyJudgeDispositions (#1525)", () => {
       assert.deepEqual(findings.map((f) => [f.severity, f.judgeDisposition]), [["medium", "act"], ["low", "act"]]);
     });
 
-    test("failOpen on a defer or reject disposition fails closed", () => {
+    test("failOpen on a defer disposition fails closed", () => {
       const defer = { disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "r", followUpDraft: { title: "t", body: "b" } };
-      const reject = { disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "r" };
-      for (const d of [defer, reject]) {
-        assert.throws(() => applyJudgeDispositions(cluster("low"), judgeVerdict([{ index: 0, ...d, failOpen: true }])), /failOpen is set only on an act disposition/);
-      }
+      assert.throws(() => applyJudgeDispositions(cluster("low"), judgeVerdict([{ index: 0, ...defer, failOpen: true }])), /failOpen is not allowed on a defer disposition/);
     });
 
     test("an unstamped sibling reject's lowException does not exempt the act member from the round-2 floor", () => {
