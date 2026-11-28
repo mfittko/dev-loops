@@ -31,8 +31,6 @@ Required:
                                  exclusive with --pr.
 Optional:
   --timeout <seconds>           Total watch budget (default 1800; 0 = single check, no wait)
-  --timeout-ms <n>              Deprecated alias for --timeout (milliseconds); warns on stderr.
-                                Passing both flags fails closed.
   --poll-interval-ms <n>        Delay between polls (default 60000)
 One call waits at most ${WAIT_CAP_MS / 1000} seconds (GATE-EXEC-BOUNDED-WAIT-CAP); a longer --timeout returns
 "timeout" with outcome "pending" and a "reissue" command (carrying the internal
@@ -100,7 +98,6 @@ export function parseCiWatchCliArgs(argv) {
       pr: { type: "string" },
       commit: { type: "string" },
       timeout: { type: "string" },
-      "timeout-ms": { type: "string" },
       "poll-interval-ms": { type: "string" },
       "baseline-sha": { type: "string" },
       "stall-started-at-ms": { type: "string" },
@@ -146,8 +143,8 @@ export function parseCiWatchCliArgs(argv) {
       options.commit = commit;
       continue;
     }
-    if (token.name === "timeout" || token.name === "timeout-ms") {
-      rawTimeout[token.name === "timeout" ? "timeout" : "timeoutMs"] = requireTokenValue(token, parseError);
+    if (token.name === "timeout") {
+      rawTimeout.timeout = requireTokenValue(token, parseError);
       continue;
     }
     if (token.name === "poll-interval-ms") {
@@ -418,7 +415,7 @@ export async function watchCiStatus(
   onBaseline?.(baselineSha);
   const attemptBudget = buildAttemptBudget(options.timeoutMs, options.pollIntervalMs);
   const watchStartedAtMs = now();
-  // timeout-ms 0 is a single live check with no waiting budget: there is no
+  // timeout 0 is a single live check with no waiting budget: there is no
   // grace window to await a late first check, so a clean no-checks head settles
   // immediately (preserves single-check semantics). A real watch awaits the grace.
   const graceFloor = options.timeoutMs === 0 ? 1 : NO_CHECKS_GRACE_POLLS;

@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { test } from "bun:test";
-import { captureStderr } from "../_helpers.mjs";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import { DEFAULT_POLL_INTERVAL_MS } from "@dev-loops/core/loop/policy-constants";
@@ -115,12 +114,12 @@ test("probe-copilot-review returns idle for a zero-timeout no-change check", asy
   }
 });
 
-test("probe-copilot-review --timeout-ms 0 returns idle via the CLI (restored #1087)", async () => {
+test("probe-copilot-review --timeout 0 returns idle via the CLI (restored #1087)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-cli-idle-"));
   const baseline = createActivityPayload();
   try {
     const env = await writeGhStub(tempDir, [{ stdout: JSON.stringify(baseline) + "\n" }]);
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--timeout-ms", "0"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--timeout", "0"], { env });
     assert.equal(result.code, 0);
     assert.equal(JSON.parse(result.stdout).status, "idle");
   } finally {
@@ -396,9 +395,9 @@ test("probe-copilot-review rejects malformed arguments deterministically", async
   const missingPr = await runNode(["--repo", "owner/repo"]);
   assert.equal(missingPr.code, 1);
   assert.match(JSON.parse(missingPr.stderr).error, /requires both --repo/i);
-  const invalidTimeout = await runNode(["--repo", "owner/repo", "--pr", "17", "--timeout-ms", "-1"]);
+  const invalidTimeout = await runNode(["--repo", "owner/repo", "--pr", "17", "--timeout", "-1"]);
   assert.equal(invalidTimeout.code, 1);
-  assert.match(JSON.parse(invalidTimeout.stderr).error, /--timeout-ms must be a non-negative integer/);
+  assert.match(JSON.parse(invalidTimeout.stderr).error, /--timeout must be a non-negative number of seconds/);
   const invalidInterval = await runNode(["--repo", "owner/repo", "--pr", "17", "--poll-interval-ms", "0"]);
   assert.equal(invalidInterval.code, 1);
   assert.match(JSON.parse(invalidInterval.stderr).error, /--poll-interval-ms has been removed/);
@@ -412,7 +411,7 @@ test("probe-copilot-review --help prints usage and exits 0", async () => {
   assert(helpLong.stdout.includes("--repo"), `expected --repo in help`);
   assert(helpLong.stdout.includes("--pr"), `expected --pr in help`);
   assert(!helpLong.stdout.includes("--poll-interval-ms"), `expected --poll-interval-ms in help`);
-  assert(helpLong.stdout.includes("--timeout-ms"), `expected --timeout-ms in help`);
+  assert(helpLong.stdout.includes("--timeout <seconds>"), `expected --timeout in help`);
 
   const helpShort = await runNode(["-h"]);
   assert.equal(helpShort.code, 0);
@@ -443,9 +442,9 @@ test("probe-copilot-review trims surrounding whitespace from --repo", () => {
   assert.equal(options.repo, "owner/repo");
 });
 
-test("probe-copilot-review parses --timeout-ms (0 = single check, restored #1087)", () => {
-  assert.equal(parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "--timeout-ms", "0"]).timeoutMs, 0);
-  assert.equal(parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "--timeout-ms", "60000"]).timeoutMs, 60_000);
+test("probe-copilot-review parses --timeout (0 = single check, restored #1087)", () => {
+  assert.equal(parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "--timeout", "0"]).timeoutMs, 0);
+  assert.equal(parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "--timeout", "60"]).timeoutMs, 60_000);
   assert.equal(parseWatchCliArgs(["--repo", "o/r", "--pr", "1"]).timeoutMs, 1_800_000);
 });
 
@@ -484,17 +483,11 @@ test("formatProbeConcise reports (none) when no new bodies", () => {
   assert.match(text, /new Copilot comment bodies this round: \(none\)/);
 });
 
-test("probe-copilot-review parses --timeout in seconds; --timeout-ms is a deprecated alias; both fail closed", () => {
+test("probe-copilot-review parses --timeout in seconds", () => {
   const base = ["--repo", "o/r", "--pr", "1"];
   assert.equal(parseWatchCliArgs([...base, "--timeout", "0"]).timeoutMs, 0);
   assert.equal(parseWatchCliArgs([...base, "--timeout", "0.1"]).timeoutMs, 100);
   assert.equal(parseWatchCliArgs([...base, "--timeout", "60"]).timeoutMs, 60_000);
-  assert.throws(() => parseWatchCliArgs([...base, "--timeout", "1", "--timeout-ms", "1000"]), /mutually exclusive/);
-});
-
-test("probe-copilot-review warns on stderr for deprecated --timeout-ms", () => {
-  const err = captureStderr(() => parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "--timeout-ms", "1500"]));
-  assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
 });
 
 

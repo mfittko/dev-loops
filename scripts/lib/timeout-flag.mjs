@@ -1,6 +1,4 @@
 // Shared `--timeout <seconds>` parse for the wait/probe scripts (issue 2755).
-// `--timeout-ms` stays one release as a deprecated alias: it warns on stderr
-// and converts to seconds. Passing both flags fails closed.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
@@ -8,14 +6,10 @@ import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 const NON_NEGATIVE_NUMBER = /^\d+(?:\.\d+)?$/u;
 
 /**
- * @param {{ timeout?: string, timeoutMs?: string }} raw raw flag values (undefined when absent)
- * @param {{ warn?: (message: string) => void }} [deps]
- * @returns {number | undefined} budget in milliseconds, undefined when neither flag is given
+ * @param {{ timeout?: string }} raw raw flag values (undefined when absent)
+ * @returns {number | undefined} budget in milliseconds, undefined when the flag is absent
  */
-export function resolveTimeoutMs({ timeout, timeoutMs }, { warn = (m) => process.stderr.write(`${m}\n`) } = {}) {
-  if (timeout !== undefined && timeoutMs !== undefined) {
-    throw new Error("--timeout and --timeout-ms are mutually exclusive; use --timeout <seconds>");
-  }
+export function resolveTimeoutMs({ timeout }) {
   if (timeout !== undefined) {
     if (!NON_NEGATIVE_NUMBER.test(timeout)) throw new Error("--timeout must be a non-negative number of seconds");
     const seconds = Number(timeout);
@@ -23,12 +17,6 @@ export function resolveTimeoutMs({ timeout, timeoutMs }, { warn = (m) => process
     const ms = seconds > 0 ? Math.max(1, Math.round(seconds * 1000)) : 0;
     if (!Number.isFinite(ms)) throw new Error("--timeout must be a non-negative number of seconds");
     return ms;
-  }
-  if (timeoutMs !== undefined) {
-    if (!/^\d+$/u.test(timeoutMs)) throw new Error("--timeout-ms must be a non-negative integer");
-    if (!Number.isFinite(Number(timeoutMs))) throw new Error("--timeout-ms must be a non-negative integer");
-    warn(`warning: --timeout-ms is deprecated; use --timeout ${Number(timeoutMs) / 1000} (seconds)`);
-    return Number(timeoutMs);
   }
   return undefined;
 }
@@ -65,12 +53,12 @@ export const scriptCommand = (importMetaUrl) => `dev-loops-run --repo-root ${she
  * `true` carries a bare flag.
  */
 export function pendingFields({ remainingMs, command, argv, carry = {} }) {
-  const skipWithValue = new Set(["--timeout", "--timeout-ms", ...Object.keys(carry).filter((flag) => carry[flag] !== true)]);
+  const skipWithValue = new Set(["--timeout", ...Object.keys(carry).filter((flag) => carry[flag] !== true)]);
   const carriedWithValue = (token) => Object.keys(carry).some((flag) => carry[flag] !== true && token.startsWith(`${flag}=`));
   const kept = [];
   for (let i = 0; i < argv.length; i += 1) {
     if (skipWithValue.has(argv[i])) i += 1;
-    else if (carry[argv[i]] !== true && !/^--timeout(?:-ms)?=/u.test(argv[i]) && !carriedWithValue(argv[i])) kept.push(argv[i]);
+    else if (carry[argv[i]] !== true && !/^--timeout=/u.test(argv[i]) && !carriedWithValue(argv[i])) kept.push(argv[i]);
   }
   const carried = Object.entries(carry).filter(([, value]) => value != null).flatMap(([flag, value]) => (value === true ? [flag] : [flag, String(value)]));
   const remainingTimeoutSeconds = Math.ceil(remainingMs / 1000);

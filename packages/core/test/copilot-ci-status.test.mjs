@@ -4,9 +4,7 @@ import { test } from "bun:test";
 import {
   mergeHeadScopedCiStatuses,
   normalizeStatusCheckRollupStatus,
-  normalizeStatusCheckRollupContract,
   summarizeHeadScopedCheckRunsSignal,
-  normalizeHeadScopedCheckRunsStatus,
   normalizeHeadScopedCommitStatus,
   normalizeHeadScopedCiContract,
   deriveLoopCiStatusFromRollup,
@@ -105,8 +103,8 @@ test("normalizeStatusCheckRollupStatus treats cancelled-only rollup entries as n
   assert.equal(status, "none");
 });
 
-test("normalizeStatusCheckRollupContract emits shared wait semantics for missing rollup", () => {
-  const contract = normalizeStatusCheckRollupContract([]);
+test("normalizeHeadScopedCiContract emits shared wait semantics for missing rollup", () => {
+  const contract = normalizeHeadScopedCiContract({ checkRunsStatus: normalizeStatusCheckRollupStatus([]) });
 
   assert.equal(contract.overallStatus, "none");
   assert.equal(contract.rollup.none, true);
@@ -172,8 +170,8 @@ test("summarizeHeadScopedCheckRunsSignal reports allQueued false for an empty se
   assert.equal(empty.allQueued, false);
 });
 
-test("normalizeHeadScopedCheckRunsStatus returns failure over pending for mixed check runs", () => {
-  const status = normalizeHeadScopedCheckRunsStatus({
+test("summarizeHeadScopedCheckRunsSignal returns failure over pending for mixed check runs", () => {
+  const { status } = summarizeHeadScopedCheckRunsSignal({
     check_runs: [
       { status: "IN_PROGRESS", conclusion: null },
       { status: "COMPLETED", conclusion: "FAILURE" },
@@ -183,8 +181,8 @@ test("normalizeHeadScopedCheckRunsStatus returns failure over pending for mixed 
   assert.equal(status, "failure");
 });
 
-test("normalizeHeadScopedCheckRunsStatus treats cancelled completed check runs as none", () => {
-  const status = normalizeHeadScopedCheckRunsStatus({
+test("summarizeHeadScopedCheckRunsSignal treats cancelled completed check runs as none", () => {
+  const { status } = summarizeHeadScopedCheckRunsSignal({
     check_runs: [
       { status: "COMPLETED", conclusion: "CANCELLED" },
     ],
@@ -201,8 +199,8 @@ test("normalizeStatusCheckRollupStatus treats successful status-context rollup e
   assert.equal(status, "success");
 });
 
-test("normalizeHeadScopedCheckRunsStatus treats skipped completed check runs as success", () => {
-  const status = normalizeHeadScopedCheckRunsStatus({
+test("summarizeHeadScopedCheckRunsSignal treats skipped completed check runs as success", () => {
+  const { status } = summarizeHeadScopedCheckRunsSignal({
     check_runs: [
       { status: "COMPLETED", conclusion: "SKIPPED" },
     ],
@@ -211,8 +209,8 @@ test("normalizeHeadScopedCheckRunsStatus treats skipped completed check runs as 
   assert.equal(status, "success");
 });
 
-test("normalizeHeadScopedCheckRunsStatus keeps cancelled completed runs from being masked by success", () => {
-  const status = normalizeHeadScopedCheckRunsStatus({
+test("summarizeHeadScopedCheckRunsSignal keeps cancelled completed runs from being masked by success", () => {
+  const { status } = summarizeHeadScopedCheckRunsSignal({
     check_runs: [
       { status: "COMPLETED", conclusion: "SUCCESS" },
       { status: "COMPLETED", conclusion: "CANCELLED" },

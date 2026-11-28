@@ -8,7 +8,6 @@ import {
   createInspectionViewerAdapter,
   describeRetryAfter,
   isRateLimitError,
-  parseGhJsonOutput,
   readRateLimitResetMs,
 } from "../../scripts/loop/_inspect-run-viewer-adapter.mjs";
 import {
@@ -476,13 +475,6 @@ test("createInspectionViewerAdapter lists assigned open PRs for the current user
     { target: { repo: "other/repo", pr: 77 }, title: "Needs attention PR", updatedAt: null, signal: "attention" },
     { target: { repo: "owner/repo", pr: 55 }, title: "Primary PR", updatedAt: null, signal: "ready" },
   ]);
-});
-
-test("parseGhJsonOutput wraps invalid gh JSON deterministically", () => {
-  assert.throws(
-    () => parseGhJsonOutput("not json\n"),
-    /Invalid JSON from gh: not json/,
-  );
 });
 
 test("createInspectionViewerAdapter listAssignedPullRequests reports invalid gh JSON deterministically", async () => {

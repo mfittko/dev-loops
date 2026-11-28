@@ -51,9 +51,10 @@ test("buildNpxInvocation respects overrides for testing", () => {
 });
 
 test("assertSupportedNodeVersion enforces the repo-wiki runtime floor", () => {
-  assert.doesNotThrow(() => assertSupportedNodeVersion(`${REPO_WIKI_MIN_NODE_MAJOR}.0.0`));
+  const floor = REPO_WIKI_MIN_NODE_MAJOR;
+  assert.doesNotThrow(() => assertSupportedNodeVersion(`${floor}.0.0`, floor, "requires Node.js"));
   assert.throws(
-    () => assertSupportedNodeVersion(`${REPO_WIKI_MIN_NODE_MAJOR - 1}.9.9`),
+    () => assertSupportedNodeVersion(`${floor - 1}.9.9`, floor, "requires Node.js"),
     /requires Node\.js/i,
   );
 });

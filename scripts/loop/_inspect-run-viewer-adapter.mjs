@@ -98,13 +98,6 @@ function malformedTargetError(message) {
   error.code = "MALFORMED_TARGET";
   return error;
 }
-export function parseGhJsonOutput(stdout) {
-  try {
-    return JSON.parse(stdout);
-  } catch {
-    throw new Error(`Invalid JSON from gh: ${stdout.trim() || "<empty>"}`);
-  }
-}
 function parsePositivePr(value) {
   if (typeof value === "number" && Number.isInteger(value) && value > 0) {
     return value;

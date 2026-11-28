@@ -43,8 +43,7 @@ Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), pending (exit 2)
   --artifact <path>    single-unit join (COORDINATOR-SINGLE-CHILD-JOIN): waits until this file parses as JSON and carries its terminal field (outcome), or, with no terminal field, stays unchanged for ${ARTIFACT_STABLE_MS / 1000} seconds; excludes the plan flags and --tmp-root. For a full-phase fixer pass its joinRef (the final-on-write report).
   --after <path>       required with --artifact: an absolute path to a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath). An --artifact older than it is pending and the result reports stale: true.
   --tmp-root <dir>     tmp root with the sentinels and retirement records (default: the nearest tmp directory above the plan path, else the gate tmp root resolved from the current directory; omit it)
-  --timeout <seconds>  0 to ${MAX_TIMEOUT_MS / 1000} (default ${DEFAULT_TIMEOUT_MS / 1000}; 0 = single immediate check)
-  --timeout-ms <n>     Deprecated alias for --timeout (milliseconds); warns on stderr. Passing both fails closed.`;
+  --timeout <seconds>  0 to ${MAX_TIMEOUT_MS / 1000} (default ${DEFAULT_TIMEOUT_MS / 1000}; 0 = single immediate check)`;
 
 export function parseWaitArgs(argv) {
   const { values } = parseArgs({
@@ -58,14 +57,13 @@ export function parseWaitArgs(argv) {
       after: { type: "string" },
       "tmp-root": { type: "string" },
       timeout: { type: "string" },
-      "timeout-ms": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     strict: true,
     allowPositionals: false,
   });
   if (values.help) return { help: true };
-  const timeoutMs = resolveTimeoutMs({ timeout: values.timeout, timeoutMs: values["timeout-ms"] }) ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = resolveTimeoutMs({ timeout: values.timeout }) ?? DEFAULT_TIMEOUT_MS;
   if (timeoutMs > MAX_TIMEOUT_MS) throw new Error(`--timeout must be at most ${MAX_TIMEOUT_MS / 1000} seconds`);
   if (values.after !== undefined && values.artifact === undefined) throw new Error("--after applies only to --artifact; drop --after, or pass --artifact <absolute hand-back path>");
   if (values.artifact !== undefined) {

@@ -4,7 +4,7 @@
  *
  * These replace the now-removed CLI policy flags (--poll-interval-ms,
  * --probe-only, --force, --force-rerequest-review). The wait scripts still
- * take `--timeout <seconds>` (`--timeout-ms` is a deprecated alias).
+ * take `--timeout <seconds>`.
  */
 export const DEFAULT_POLL_INTERVAL_MS = 60_000;
 

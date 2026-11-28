@@ -1,6 +1,25 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { describe, test } from "bun:test";
 import { WAIT_CAP_MS, capWait, pendingFields, resolveTimeoutMs } from "../../scripts/lib/timeout-flag.mjs";
+
+describe("removed --timeout-ms alias", () => {
+  const scripts = {
+    "probe-ci-status.mjs": ["scripts/github/probe-ci-status.mjs", ["--repo", "o/r", "--pr", "1"]],
+    "probe-copilot-review.mjs": ["scripts/github/probe-copilot-review.mjs", ["--repo", "o/r", "--pr", "1"]],
+    "wait-pr-checks.mjs": ["scripts/github/wait-pr-checks.mjs", ["--repo", "o/r", "--pr", "1"]],
+    "wait-for-gate-units.mjs": ["scripts/loop/wait-for-gate-units.mjs", ["--emit-plan", "a", "--tmp-root", "t"]],
+    "watch-initial-copilot-pr.mjs": ["scripts/loop/watch-initial-copilot-pr.mjs", ["--repo", "o/r", "--issue", "1"]],
+  };
+  for (const [name, [script, base]] of Object.entries(scripts)) {
+    test(`${name} rejects --timeout-ms as an unknown argument`, () => {
+      const result = spawnSync(process.execPath, [path.resolve(script), ...base, "--timeout-ms", "1000"], { encoding: "utf8" });
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stdout}${result.stderr}`, /unknown (argument|option).*--timeout-ms/i);
+    });
+  }
+});
 
 describe("capWait / pendingFields (GATE-EXEC-BOUNDED-WAIT-CAP)", () => {
   test("caps one invocation at about 170 s and carries the rest", () => {
@@ -19,7 +38,6 @@ describe("capWait / pendingFields (GATE-EXEC-BOUNDED-WAIT-CAP)", () => {
     assert.equal(out.remainingTimeoutSeconds, 431);
     assert.equal(out.reissue, "dev-loops gate x --repo o/r --jq '.a b' --timeout 431");
     assert.equal(pendingFields({ ...base, argv: ["--timeout=600", "--a"] }).reissue, "dev-loops gate x --a --timeout 431");
-    assert.equal(pendingFields({ ...base, argv: ["--timeout-ms", "600000", "--a"] }).reissue, "dev-loops gate x --a --timeout 431");
     const carried = pendingFields({ ...base, argv: ["--a", "--baseline-sha", "old", "--timeout", "9"], carry: { "--baseline-sha": "abc", "--stall": null } });
     assert.equal(carried.reissue, "dev-loops gate x --a --baseline-sha abc --timeout 431");
     const inline = pendingFields({ ...base, argv: ["--a", "--baseline-sha=old", "--timeout", "9"], carry: { "--baseline-sha": "abc" } });
@@ -30,10 +48,7 @@ describe("capWait / pendingFields (GATE-EXEC-BOUNDED-WAIT-CAP)", () => {
 });
 
 describe("resolveTimeoutMs", () => {
-  const run = (raw) => {
-    const warnings = [];
-    return { ms: resolveTimeoutMs(raw, { warn: (m) => warnings.push(m) }), warnings };
-  };
+  const run = (raw) => ({ ms: resolveTimeoutMs(raw) });
   test("absent flags yield undefined", () => assert.equal(run({}).ms, undefined));
   test("accepts 0, fractions and integers in seconds", () => {
     assert.equal(run({ timeout: "0" }).ms, 0);
@@ -46,23 +61,7 @@ describe("resolveTimeoutMs", () => {
       assert.throws(() => run({ timeout: bad }), /--timeout must be/);
     }
   });
-  test("--timeout-ms warns on stderr and converts", () => {
-    const { ms, warnings } = run({ timeoutMs: "1500" });
-    assert.equal(ms, 1500);
-    assert.equal(warnings.length, 1);
-    assert.match(warnings[0], /deprecated/);
-    assert.match(warnings[0], /--timeout 1\.5/);
-  });
-  test("--timeout-ms rejects non-integers", () => {
-    assert.throws(() => run({ timeoutMs: "1.5" }), /--timeout-ms must be/);
-  });
   test("rejects values that overflow to a non-finite budget", () => {
     assert.throws(() => run({ timeout: "9".repeat(400) }), /--timeout must be/);
-  });
-  test("--timeout-ms rejects values that overflow to a non-finite budget", () => {
-    assert.throws(() => run({ timeoutMs: "9".repeat(400) }), /--timeout-ms must be/);
-  });
-  test("both flags fail closed", () => {
-    assert.throws(() => run({ timeout: "1", timeoutMs: "1000" }), /mutually exclusive/);
   });
 });

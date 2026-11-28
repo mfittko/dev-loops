@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { test } from "bun:test";
-import { captureStderr } from "../_helpers.mjs";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
@@ -174,11 +173,10 @@ test("parseWatchInitialCopilotPrCliArgs accepts --timeout 0 and an hour-or-longe
   assert.throws(() => parseWatchInitialCopilotPrCliArgs([...base, "--timeout", "0.0004"]), /--timeout must be 0 or at least 3600 seconds/);
 });
 
-test("parseWatchInitialCopilotPrCliArgs keeps --timeout-ms as a deprecated alias and fails closed with --timeout", () => {
+test("parseWatchInitialCopilotPrCliArgs rejects a negative --timeout", () => {
   const base = ["--repo", "owner/repo", "--issue", "59"];
-  assert.equal(parseWatchInitialCopilotPrCliArgs([...base, "--timeout-ms", "0"]).timeoutMs, 0);
-  assert.throws(() => parseWatchInitialCopilotPrCliArgs([...base, "--timeout", "0", "--timeout-ms", "0"]), /mutually exclusive/);
-  assert.throws(() => parseWatchInitialCopilotPrCliArgs([...base, "--timeout-ms", "-1"]), /--timeout-ms must be/);
+  assert.equal(parseWatchInitialCopilotPrCliArgs([...base, "--timeout", "0"]).timeoutMs, 0);
+  assert.throws(() => parseWatchInitialCopilotPrCliArgs([...base, "--timeout", "-1"]), /--timeout must be/);
 });
 
 test("parseWatchInitialCopilotPrCliArgs trims whitespace from --repo", () => {
@@ -737,11 +735,6 @@ test("watch-initial-copilot-pr returns prior_linked_pr_closed_unmerged", async (
   assert.equal(result.ok, true);
   assert.equal(result.status, "prior_linked_pr_closed_unmerged");
   assert.equal(result.prNumber, 101);
-});
-
-test("watch-initial-copilot-pr warns on stderr for deprecated --timeout-ms", () => {
-  const err = captureStderr(() => parseWatchInitialCopilotPrCliArgs(["--repo", "owner/repo", "--issue", "59", "--timeout-ms", "3600000"]));
-  assert.match(err, /--timeout-ms is deprecated; use --timeout 3600/);
 });
 
 test("watchCopilotRunUntilComplete retries with the remaining budget and throws RATE_LIMITED when it is spent", async () => {

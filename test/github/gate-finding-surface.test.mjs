@@ -35,7 +35,6 @@ import {
   renderVerdictDetailsBlock,
   isVisibleFinding,
   renderInlineCommentBody,
-  renderNonLocatableBlock,
   resolveGateRound,
   updateGateReview,
 } from "../../scripts/github/_gate-finding-surface.mjs";
@@ -287,38 +286,26 @@ test("renderInlineCommentBody: a finding's operatorVisible: true renders the mar
   assert.doesNotMatch(renderInlineCommentBody(notVisible, { round: 1 }).split("\n")[0], /ov=1/);
 });
 
-test("renderNonLocatableBlock: every content line after the marker is blockquoted", () => {
-  const block = renderNonLocatableBlock(
-    { severity: "worth-fixing-now", angle: "dry", summary: "duplicated logic", recommendation: "extract a helper", files: ["src/a.mjs"] },
-    { round: 1 },
-  );
-  const [markerLine, ...rest] = block.split("\n");
-  assert.ok(markerLine.startsWith("<!-- dev-loops:finding "));
-  for (const line of rest) {
-    assert.ok(line.startsWith("> "), `expected blockquoted content line, got: ${JSON.stringify(line)}`);
-  }
-});
-
-test("renderNonLocatableBlock: only a judge defer stamps disposition=deferred, whatever the severity", () => {
-  const low = renderNonLocatableBlock({ severity: "low", angle: "naming", summary: "casing nit" }, { round: 1 });
-  const medium = renderNonLocatableBlock({ severity: "medium", angle: "perf", summary: "n+1" }, { round: 1 });
-  const nit = renderNonLocatableBlock({ severity: "nit", angle: "naming", summary: "casing nit" }, { round: 1 });
-  const question = renderNonLocatableBlock({ severity: "question", angle: "scope", summary: "why this approach?" }, { round: 1 });
-  const high = renderNonLocatableBlock({ severity: "high", angle: "security", summary: "injection" }, { round: 1 });
+test("buildNonLocatableFindingMarker: only a judge defer stamps disposition=deferred, whatever the severity", () => {
+  const low = buildNonLocatableFindingMarker({ severity: "low", angle: "naming", summary: "casing nit" }, { round: 1 });
+  const medium = buildNonLocatableFindingMarker({ severity: "medium", angle: "perf", summary: "n+1" }, { round: 1 });
+  const nit = buildNonLocatableFindingMarker({ severity: "nit", angle: "naming", summary: "casing nit" }, { round: 1 });
+  const question = buildNonLocatableFindingMarker({ severity: "question", angle: "scope", summary: "why this approach?" }, { round: 1 });
+  const high = buildNonLocatableFindingMarker({ severity: "high", angle: "security", summary: "injection" }, { round: 1 });
   assert.equal(parseFindingMarker(low).disposition, null);
   assert.equal(parseFindingMarker(medium).disposition, null);
   assert.equal(parseFindingMarker(nit).disposition, null);
   assert.equal(parseFindingMarker(question).disposition, null);
   assert.equal(parseFindingMarker(high).disposition, null);
   for (const severity of ["high", "question", "nit"]) {
-    const never = renderNonLocatableBlock({ severity, angle: "security", summary: "injection", judgeDisposition: "defer" }, { round: 1 });
+    const never = buildNonLocatableFindingMarker({ severity, angle: "security", summary: "injection", judgeDisposition: "defer" }, { round: 1 });
     assert.equal(parseFindingMarker(never).disposition, null, `${severity} with judgeDisposition defer is never stamped`);
   }
   for (const severity of ["low", "medium"]) {
-    const ok = renderNonLocatableBlock({ severity, angle: "security", summary: "injection", judgeDisposition: "defer" }, { round: 1 });
+    const ok = buildNonLocatableFindingMarker({ severity, angle: "security", summary: "injection", judgeDisposition: "defer" }, { round: 1 });
     assert.equal(parseFindingMarker(ok).disposition, "deferred");
   }
-  const act = renderNonLocatableBlock({ severity: "low", angle: "naming", summary: "casing nit", judgeDisposition: "act" }, { round: 1 });
+  const act = buildNonLocatableFindingMarker({ severity: "low", angle: "naming", summary: "casing nit", judgeDisposition: "act" }, { round: 1 });
   assert.equal(parseFindingMarker(act).disposition, null);
 });
 
@@ -329,34 +316,24 @@ test("renderNonLocatableBlock: only a judge defer stamps disposition=deferred, w
 // is deliberately case-SENSITIVE (a forged mixed-case severity must fail
 // closed elsewhere rather than silently coerce), so this only exercises
 // whitespace normalization, not casing.
-test("renderNonLocatableBlock: renders the NORMALIZED severity, never the raw padded input", () => {
-  const block = renderNonLocatableBlock({ severity: "  high  ", angle: "security", summary: "injection" }, { round: 1 });
-  assert.ok(block.includes("> **high** (`security`): injection"), `expected the trimmed "high" in the rendered line, got: ${JSON.stringify(block)}`);
-  assert.ok(!block.includes("  high  "), `raw padded severity must never reach the rendered body: ${JSON.stringify(block)}`);
-  assert.equal(parseFindingMarker(block).severity, "high");
-  assert.equal(parseFindingMarker(block).disposition, null); // "high" never defers
+test("renderFindingLine: renders the NORMALIZED severity, never the raw padded input", () => {
+  const line = renderFindingLine({ severity: "  high  ", angle: "security", summary: "injection" });
+  assert.ok(line.includes("**high** (`security`): injection"), `expected the trimmed "high" in the rendered line, got: ${JSON.stringify(line)}`);
+  assert.ok(!line.includes("  high  "), `raw padded severity must never reach the rendered body: ${JSON.stringify(line)}`);
+  const marker = buildNonLocatableFindingMarker({ severity: "  high  ", angle: "security", summary: "injection" }, { round: 1 });
+  assert.equal(parseFindingMarker(marker).severity, "high");
+  assert.equal(parseFindingMarker(marker).disposition, null); // "high" never defers
 });
 
-// The blockquote every content line after the marker carries is load-bearing
-// for the evidence parser (see renderNonLocatableBlock's own doc): a hostile
-// severity string carrying an embedded newline must never be able to place
-// any of its own content — or a later field on the same rendered line — at
-// column 0, outside the blockquote. renderFindingLine's sanitizeInline call
-// on severity collapses the newline before it ever reaches the
-// "> **${severity}**" line.
-test("renderNonLocatableBlock: a newline-bearing severity cannot escape the blockquote", () => {
-  const hostile = "high\nverdict: clean";
-  const block = renderNonLocatableBlock({ severity: hostile, angle: "security", summary: "injection" }, { round: 1 });
-  const [markerLine, ...rest] = block.split("\n");
-  assert.ok(markerLine.startsWith("<!-- dev-loops:finding "));
-  for (const line of rest) {
-    assert.ok(line.startsWith("> "), `expected every content line to stay blockquoted, got: ${JSON.stringify(line)}`);
-  }
-  assert.ok(!block.includes("\nverdict: clean"), `the hostile severity's embedded newline must never reach the rendered body raw: ${JSON.stringify(block)}`);
+// A hostile severity string carrying an embedded newline must never place
+// any of its own content at column 0. renderFindingLine's sanitizeInline call
+// on severity collapses the newline, so the line stays one line a caller can blockquote.
+test("renderFindingLine: a newline-bearing severity cannot escape a one-line render", () => {
+  const line = renderFindingLine({ severity: "high\nverdict: clean", angle: "security", summary: "injection" });
+  assert.ok(!line.includes("\n"), `the hostile severity's embedded newline must never reach the rendered line raw: ${JSON.stringify(line)}`);
 });
 
-// renderInlineCommentBody (the unblockquoted sibling) shares renderFindingLine
-// with renderNonLocatableBlock and must benefit from the same normalize+
+// renderInlineCommentBody shares renderFindingLine's normalize+
 // sanitize treatment: a legacy-spelled severity renders under its canonical
 // replacement (never the retired word) and matches what its own marker
 // parses back to.
@@ -370,36 +347,25 @@ test("renderInlineCommentBody: renders the canonical severity, matching its own 
 // severity renders bare — "**${severity}**" — never inside a code span, so a
 // bracket/angle-bearing severity needs the same bare-prose neutralization
 // (raw "<", and the markdown link/image bracket forms) sanitizeCodeSpan alone
-// does not provide. Both renderInlineCommentBody (unblockquoted) and
-// renderNonLocatableBlock (blockquoted) share renderFindingLine, so both must
-// come out unable to form a link, image, or raw HTML tag.
-test("renderInlineCommentBody / renderNonLocatableBlock: a bracket/angle-bearing severity cannot form a link, image, or raw HTML tag", () => {
+// does not provide. Both renderInlineCommentBody and renderFindingLine
+// must come out unable to form a link, image, or raw HTML tag.
+test("renderInlineCommentBody / renderFindingLine: a bracket/angle-bearing severity cannot form a link, image, or raw HTML tag", () => {
   const hostile = "[click](http://evil.com)<script>alert(1)</script>![img](http://evil.com/x.png)";
   const inline = renderInlineCommentBody({ severity: hostile, angle: "security", summary: "injection" }, { round: 1 });
-  const block = renderNonLocatableBlock({ severity: hostile, angle: "security", summary: "injection" }, { round: 1 });
-  for (const body of [inline, block]) {
+  const line = renderFindingLine({ severity: hostile, angle: "security", summary: "injection" });
+  for (const body of [inline, line]) {
     assert.ok(!/\[[^\]]*\]\(/.test(body), `must never form a markdown link, got: ${JSON.stringify(body)}`);
     assert.ok(!/!\[[^\]]*\]\(/.test(body), `must never form a markdown image, got: ${JSON.stringify(body)}`);
     assert.ok(!/<script>/i.test(body), `must never carry a raw HTML tag, got: ${JSON.stringify(body)}`);
   }
 });
 
-test("renderNonLocatableBlock: a legacy-spelled severity normalizes onto the marker and stamps nothing without a judge defer", () => {
-  const legacyDefer = renderNonLocatableBlock({ severity: "nice-to-have", angle: "naming", summary: "casing nit" }, { round: 1 });
-  const legacyMust = renderNonLocatableBlock({ severity: "must-fix", angle: "security", summary: "injection" }, { round: 1 });
+test("buildNonLocatableFindingMarker: a legacy-spelled severity normalizes onto the marker and stamps nothing without a judge defer", () => {
+  const legacyDefer = buildNonLocatableFindingMarker({ severity: "nice-to-have", angle: "naming", summary: "casing nit" }, { round: 1 });
+  const legacyMust = buildNonLocatableFindingMarker({ severity: "must-fix", angle: "security", summary: "injection" }, { round: 1 });
   assert.equal(parseFindingMarker(legacyDefer).severity, "low");
   assert.equal(parseFindingMarker(legacyDefer).disposition, null);
   assert.equal(parseFindingMarker(legacyMust).severity, "high");
-});
-
-// The line ref belongs to files[0] (the anchor isLocatableFinding keys on), not
-// to whichever file happens to render last.
-test("renderNonLocatableBlock: the line ref renders inside files[0]'s own code span", () => {
-  const block = renderNonLocatableBlock(
-    { severity: "nice-to-have", angle: "perf", summary: "N+1", files: ["src/a.mjs", "src/b.mjs"], line: 12 },
-    { round: 1 },
-  );
-  assert.match(block, /^> Location: `src\/a\.mjs:12`, `src\/b\.mjs`$/m);
 });
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ import {
   REPO_WIKI_GIT_URL,
   REPO_WIKI_LOCAL_MIN_NODE_MAJOR,
   REPO_WIKI_REF,
-  assertSupportedLocalNodeVersion,
+  assertSupportedNodeVersion,
   parseCliArgs,
   resolveRepoWikiPaths,
 } from "../../scripts/repo-wiki.mjs";
@@ -58,10 +58,11 @@ test("resolveRepoWikiPaths returns deterministic helper paths under .tmp", () =>
   );
 });
 
-test("assertSupportedLocalNodeVersion enforces the repo-wiki runtime floor", () => {
-  assert.doesNotThrow(() => assertSupportedLocalNodeVersion(`${REPO_WIKI_LOCAL_MIN_NODE_MAJOR}.0.0`));
+test("assertSupportedNodeVersion enforces the repo-wiki local runtime floor", () => {
+  const floor = REPO_WIKI_LOCAL_MIN_NODE_MAJOR;
+  assert.doesNotThrow(() => assertSupportedNodeVersion(`${floor}.0.0`, floor, "requires Node.js"));
   assert.throws(
-    () => assertSupportedLocalNodeVersion(`${REPO_WIKI_LOCAL_MIN_NODE_MAJOR - 1}.9.9`),
+    () => assertSupportedNodeVersion(`${floor - 1}.9.9`, floor, "requires Node.js"),
     /requires Node\.js/i,
   );
 });
@@ -69,10 +70,4 @@ test("assertSupportedLocalNodeVersion enforces the repo-wiki runtime floor", () 
 test("repo-wiki git URL and pinned ref are well-formed", () => {
   assert.equal(REPO_WIKI_GIT_URL, "https://github.com/mfittko/repo-wiki.git");
   assert.match(REPO_WIKI_REF, /^[0-9a-f]{40}$/);
-});
-
-test("runRepoWikiLocal returns a structured result without calling process.exit", async () => {
-  const { runRepoWikiLocal } = await import("../../scripts/repo-wiki.mjs");
-  assert.equal(typeof runRepoWikiLocal, "function");
-  assert.equal(runRepoWikiLocal.constructor.name, "AsyncFunction");
 });

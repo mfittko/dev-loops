@@ -10,7 +10,7 @@ import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../scripts/loop/_re
 import { pullReceiptPath } from "../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../cli/index.mjs";
 import { ARTIFACT_STALE_PENDING_REMEDY, ARTIFACT_STALE_REMEDY, ARTIFACT_TIMEOUT_REMEDY, main, parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
-import { captureStderr, withTempDir } from "./_helpers.mjs";
+import { withTempDir } from "./_helpers.mjs";
 import { claimRunnerOwnership } from "../scripts/loop/_pr-runner-coordination.mjs";
 import { writeRunContext } from "@dev-loops/core/loop/run-context";
 
@@ -71,11 +71,10 @@ test("invalid input is rejected", async () => {
   assert.throws(() => parseWaitArgs(["--tmp-root", "t"]), /exactly one/);
   assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "571"]), /--timeout must be at most 570/);
   assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout=-1"]), /--timeout must be/);
-  assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "1", "--timeout-ms", "1000"]), /mutually exclusive/);
   assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "0"]).timeoutMs, 0);
   assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "0.1"]).timeoutMs, 100);
   assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "30"]).timeoutMs, 30000);
-  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "570000"]).timeoutMs, 570000);
+  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "570"]).timeoutMs, 570000);
   assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t"]).timeoutMs, 540000);
   await withDir(async (root) => {
     const { planPath } = await seedPlan(root, [["g1", ["a"]]]);
@@ -86,7 +85,7 @@ test("invalid input is rejected", async () => {
     const cli = spawnSync(process.execPath, [SCRIPT, "--emit-plan", bad, "--tmp-root", path.join(root, "tmp")], { encoding: "utf8" });
     assert.equal(cli.status, 1);
     assert.equal(JSON.parse(cli.stdout).ok, false);
-    const badJq = spawnSync(process.execPath, [SCRIPT, "--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout-ms", "1", "--jq", ".bad["], { encoding: "utf8" });
+    const badJq = spawnSync(process.execPath, [SCRIPT, "--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout", "0.001", "--jq", ".bad["], { encoding: "utf8" });
     assert.equal(badJq.status, 1);
     const noExecution = await seedPlan(root, [["g2", ["b"]]]);
     const broken = JSON.parse(await readFile(noExecution.planPath, "utf8"));
@@ -101,7 +100,7 @@ test("CLI exit codes: timeout 2, round_retired 3", async () => {
     assert.equal(spawnSync("git", ["init", "-q", root]).status, 0);
     const { planPath } = await seedPlan(root, [["g", ["a"]]]);
     await setMtime(planPath, 100);
-    const cli = () => spawnSync(process.execPath, [SCRIPT, "--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout-ms", "1"], { encoding: "utf8" });
+    const cli = () => spawnSync(process.execPath, [SCRIPT, "--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout", "0.001"], { encoding: "utf8" });
     const timeout = cli();
     assert.equal(timeout.status, 2);
     assert.equal(JSON.parse(timeout.stdout).outcome, "timeout");
@@ -295,7 +294,7 @@ test("--fields prints the tab-separated scalar fields instead of JSON", async ()
   await withDir(async (root) => {
     assert.equal(spawnSync("git", ["init", "-q", root]).status, 0);
     const { planPath } = await seedPlan(root, [["g", ["a"]]]);
-    const cli = spawnSync(process.execPath, [SCRIPT, "--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout-ms", "1", "--fields", "outcome,unitCount"], { encoding: "utf8" });
+    const cli = spawnSync(process.execPath, [SCRIPT, "--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout", "0.001", "--fields", "outcome,unitCount"], { encoding: "utf8" });
     assert.equal(cli.stdout.trim(), "timeout\t1");
   });
 });
@@ -406,11 +405,6 @@ test("a capped --artifact wait on a stale artifact carries ARTIFACT_STALE_PENDIN
   const fresh = await runMain(argv, async () => ({ ok: true, outcome: "timeout", remedy: ARTIFACT_TIMEOUT_REMEDY }));
   assert.equal(fresh.result.outcome, "pending");
   assert.equal(fresh.result.remedy, undefined);
-});
-
-test("wait-for-gate-units warns on stderr for deprecated --timeout-ms", () => {
-  const err = captureStderr(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "1500"]));
-  assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
 });
 
 // COORDINATOR-SINGLE-CHILD-JOIN: --artifact joins one child by its hand-back file.

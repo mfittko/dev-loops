@@ -5,7 +5,6 @@ import path from "node:path";
 import os from "node:os";
 
 import {
-  findLatestPiSession,
   findLatestSession,
   collectTranscriptFiles,
   parseTranscriptFile,
@@ -777,14 +776,14 @@ describe("audit-pi-session unit & integration", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("findLatestPiSession returns null when the sessions base does not exist", () => {
+  it("findLatestSession returns null when the sessions base does not exist", () => {
     const tmpDir = createTempDir();
     const repoCwd = path.join(tmpDir, "repo");
-    assert.equal(findLatestPiSession(path.join(tmpDir, "absent"), repoCwd), null);
+    assert.equal(findLatestSession(path.join(tmpDir, "absent"), repoCwd, path.join(tmpDir, "no-claude")), null);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("findLatestPiSession scopes discovery to this repository and includes worktrees", () => {
+  it("findLatestSession scopes Pi discovery to this repository and includes worktrees", () => {
     const tmpDir = createTempDir();
     const fakeSessionsBase = path.join(tmpDir, "sessions");
     const repoSessions = path.join(fakeSessionsBase, "--Users-tester-dev-loops--");
@@ -813,13 +812,13 @@ describe("audit-pi-session unit & integration", () => {
     fs.utimesSync(repoTranscript, new Date("2026-01-02T00:00:00Z"), new Date("2026-01-02T00:00:00Z"));
     fs.utimesSync(worktreeTranscript, new Date("2026-01-03T00:00:00Z"), new Date("2026-01-03T00:00:00Z"));
 
-    const latest = findLatestPiSession(fakeSessionsBase, "/Users/tester/dev-loops");
+    const latest = findLatestSession(fakeSessionsBase, "/Users/tester/dev-loops", path.join(tmpDir, "no-claude"));
     assert.equal(latest, worktreeDir);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("findLatestPiSession handles bare transcripts and prefers a matching session directory", () => {
+  it("findLatestSession handles bare transcripts and prefers a matching session directory", () => {
     const tmpDir = createTempDir();
     const fakeSessionsBase = path.join(tmpDir, "sessions");
     const repoSessions = path.join(fakeSessionsBase, "--Users-tester-dev-loops--");
@@ -827,7 +826,8 @@ describe("audit-pi-session unit & integration", () => {
 
     const bareFile = path.join(repoSessions, "bare-session.jsonl");
     fs.writeFileSync(bareFile, "bare");
-    assert.equal(findLatestPiSession(fakeSessionsBase, "/Users/tester/dev-loops"), bareFile);
+    const noClaude = path.join(tmpDir, "no-claude");
+    assert.equal(findLatestSession(fakeSessionsBase, "/Users/tester/dev-loops", noClaude), bareFile);
 
     const pairedFile = path.join(repoSessions, "paired-session.jsonl");
     const pairedDir = path.join(repoSessions, "paired-session");
@@ -835,7 +835,7 @@ describe("audit-pi-session unit & integration", () => {
     fs.mkdirSync(pairedDir);
     const newer = new Date(Date.now() + 20000);
     fs.utimesSync(pairedFile, newer, newer);
-    assert.equal(findLatestPiSession(fakeSessionsBase, "/Users/tester/dev-loops"), pairedDir);
+    assert.equal(findLatestSession(fakeSessionsBase, "/Users/tester/dev-loops", noClaude), pairedDir);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });

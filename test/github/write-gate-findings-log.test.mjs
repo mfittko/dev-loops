@@ -1413,7 +1413,7 @@ test("writeGateFindingsLog defaults a NON-LOCATABLE question finding to unjudged
 // stored UNTRIMMED — a padded path (" src/a.mjs ") still counted as
 // locatable-SHAPED (deriving "needs-answer"), but every downstream consumer
 // that keys on the raw stored value (the diff's commentable-line lookup, the
-// posted review `path`, renderNonLocatableBlock's Location line) compares
+// posted review `path`, the Location line) compares
 // against the TRIMMED form, so it would never actually match a real in-diff
 // position — locatability and disposition must agree with what gets stored.
 test("writeGateFindingsLog trims a padded files[] entry so it matches downstream locatable checks", async () => {

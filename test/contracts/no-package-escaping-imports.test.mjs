@@ -520,7 +520,7 @@ test("STATIC_SPECIFIER_RE catches every static form and no dynamic one", () => {
   // newlines: this exact shape (a thrown template literal containing the word
   // `from`) reported `${spec}` as a specifier while the span was permissive.
   assert.deepEqual(
-    specifiers('export function extractMajorMinor(spec) {\n  throw new Error(`cannot parse a version from "${spec}"`);\n}'),
+    specifiers('export function extractFullVersion(spec) {\n  throw new Error(`cannot parse a version from "${spec}"`);\n}'),
     [],
   );
 });

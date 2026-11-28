@@ -3,7 +3,6 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { captureStderr } from "../_helpers.mjs";
 import { runNode as runNodeHelper } from "../_helpers.mjs";
 
 import { parseCiWatchCliArgs, runCli, watchCiStatus, watchCommitCiStatus } from "../../scripts/github/probe-ci-status.mjs";
@@ -438,7 +437,7 @@ test("watch-ci parses defaults and flags", () => {
   assert.equal(defaults.repo, "owner/repo");
   assert.equal(defaults.pr, 7);
 
-  const custom = parseCiWatchCliArgs(["--repo", " owner/repo ", "--pr", "7", "--timeout-ms", "0", "--poll-interval-ms", "5000"]);
+  const custom = parseCiWatchCliArgs(["--repo", " owner/repo ", "--pr", "7", "--timeout", "0", "--poll-interval-ms", "5000"]);
   assert.equal(custom.repo, "owner/repo");
   assert.equal(custom.timeoutMs, 0);
   assert.equal(custom.pollIntervalMs, 5000);
@@ -449,9 +448,9 @@ test("watch-ci rejects malformed arguments deterministically", async () => {
   assert.equal(missingPr.code, 1);
   assert.match(JSON.parse(missingPr.stderr).error, /requires --repo.*and either --pr.*or --commit/i);
 
-  const badTimeout = await runNode(["--repo", "owner/repo", "--pr", "7", "--timeout-ms", "-1"]);
+  const badTimeout = await runNode(["--repo", "owner/repo", "--pr", "7", "--timeout", "-1"]);
   assert.equal(badTimeout.code, 1);
-  assert.match(JSON.parse(badTimeout.stderr).error, /--timeout-ms must be a non-negative integer/);
+  assert.match(JSON.parse(badTimeout.stderr).error, /--timeout must be a non-negative number of seconds/);
 
   const badInterval = await runNode(["--repo", "owner/repo", "--pr", "7", "--poll-interval-ms", "0"]);
   assert.equal(badInterval.code, 1);
@@ -464,7 +463,7 @@ test("watch-ci --help prints usage and exits 0", async () => {
   assert.equal(helpLong.stderr, "");
   assert(helpLong.stdout.includes("probe-ci-status.mjs"));
   assert(helpLong.stdout.includes("--repo"));
-  assert(helpLong.stdout.includes("--timeout-ms"));
+  assert(helpLong.stdout.includes("--timeout <seconds>"));
 
   const helpShort = await runNode(["-h"]);
   assert.equal(helpShort.code, 0);
@@ -1211,17 +1210,11 @@ test("watch-ci single check (timeout-ms 0) on an all-queued run reports pending,
   );
 });
 
-test("probe-ci-status parses --timeout in seconds; --timeout-ms is a deprecated alias; both fail closed", () => {
+test("probe-ci-status parses --timeout in seconds", () => {
   const base = ["--repo", "o/r", "--pr", "1"];
   assert.equal(parseCiWatchCliArgs([...base, "--timeout", "0"]).timeoutMs, 0);
   assert.equal(parseCiWatchCliArgs([...base, "--timeout", "0.1"]).timeoutMs, 100);
   assert.equal(parseCiWatchCliArgs([...base, "--timeout", "60"]).timeoutMs, 60_000);
-  assert.throws(() => parseCiWatchCliArgs([...base, "--timeout", "1", "--timeout-ms", "1000"]), /mutually exclusive/);
-});
-
-test("probe-ci-status warns on stderr for deprecated --timeout-ms", () => {
-  const err = captureStderr(() => parseCiWatchCliArgs(["--repo", "o/r", "--pr", "1", "--timeout-ms", "1500"]));
-  assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
 });
 
 test("probe-ci-status --baseline-sha accepts a 40-hex SHA and rejects empty, blank, short, 64-hex and uppercase values", () => {

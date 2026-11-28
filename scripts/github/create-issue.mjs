@@ -2,7 +2,7 @@
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
-import { buildCreateArgs as coreBuildCreateArgs, createIssue as coreCreateIssue } from "@dev-loops/core/github/issue-ops";
+import { createIssue as coreCreateIssue } from "@dev-loops/core/github/issue-ops";
 import { enqueueBoardItem } from "./create-pr.mjs";
 import { parseArgs } from "node:util";
 import {
@@ -157,12 +157,6 @@ export function parseCreateIssueCliArgs(argv) {
     throw parseError(error instanceof Error ? error.message : String(error));
   }
   return options;
-}
-
-// Build the `gh issue create` args. A --body-file path is forwarded straight to
-// gh so large bodies avoid command-length limits.
-export function buildCreateArgs(options) {
-  return coreBuildCreateArgs(options);
 }
 
 export async function createIssue(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {

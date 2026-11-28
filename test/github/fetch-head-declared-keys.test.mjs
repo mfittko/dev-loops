@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { stripConfigKeyPaths } from "@dev-loops/core/config";
-import { fetchHeadDeclaredKeys, parseDeclaredKeysStrict, selectHeadKeysArtifact } from "../../scripts/github/fetch-head-declared-keys.mjs";
+import { fetchHeadDeclaredKeys, selectHeadKeysArtifact } from "../../scripts/github/fetch-head-declared-keys.mjs";
 import { parseHeadDeclaredKeys } from "../../scripts/github/head-declared-keys-schema.mjs";
 import { parseDetectCheckpointEvidenceCliArgs } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 
@@ -99,7 +99,6 @@ test("a malformed artifact yields the empty set", async () => {
 });
 
 test("the detector and fetcher share one strict schema", () => {
-  assert.equal(parseDeclaredKeysStrict, parseHeadDeclaredKeys);
   assert.deepEqual(parseHeadDeclaredKeys('{"declaredKeys":["a","b.c"]}'), ["a", "b.c"]);
   assert.deepEqual(parseHeadDeclaredKeys('{"declaredKeys":["a","bad key"]}'), ["a"]);
 });

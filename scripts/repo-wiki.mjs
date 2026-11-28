@@ -25,36 +25,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 
 export const REPO_WIKI_LOCAL_CONFIG_PATH = resolveRepoWikiConfigPath();
-export const REPO_WIKI_SCHEMA_PATH = path.join(PROJECT_ROOT, ".llmwiki", "schema.md");
 
 export function resolveRepoWikiConfigPath(projectRoot = PROJECT_ROOT) {
   return path.join(projectRoot, ".llmwiki", "config.json");
 }
 
-export function assertSupportedNodeVersion(version = process.versions.node) {
+export function assertSupportedNodeVersion(version, floor, requirement) {
   const major = Number.parseInt(String(version).split(".")[0] ?? "", 10);
-  if (!Number.isInteger(major) || major < REPO_WIKI_MIN_NODE_MAJOR) {
-    throw new Error(
-      `repo-wiki npm wrapper requires Node.js ${REPO_WIKI_MIN_NODE_MAJOR}+. Current runtime: ${version}`,
-    );
+  if (!Number.isInteger(major) || major < floor) {
+    throw new Error(`${requirement}. Current runtime: ${version}`);
   }
 }
 
-export function assertSupportedLocalNodeVersion(version = process.versions.node) {
-  const major = Number.parseInt(String(version).split(".")[0] ?? "", 10);
-  if (!Number.isInteger(major) || major < REPO_WIKI_LOCAL_MIN_NODE_MAJOR) {
-    throw new Error(
-      `repo-wiki local helper requires Node.js ${REPO_WIKI_LOCAL_MIN_NODE_MAJOR}+ because repo-wiki itself requires Node.js ${REPO_WIKI_LOCAL_MIN_NODE_MAJOR}+. Current runtime: ${version}`,
-    );
-  }
-}
-
-export function assertConsumerConfigPresent({
-  configPath = REPO_WIKI_LOCAL_CONFIG_PATH,
-  projectRoot = PROJECT_ROOT,
-} = {}) {
-  const resolvedConfigPath =
-    configPath === REPO_WIKI_LOCAL_CONFIG_PATH ? resolveRepoWikiConfigPath(projectRoot) : configPath;
+export function assertConsumerConfigPresent({ projectRoot = PROJECT_ROOT } = {}) {
+  const resolvedConfigPath = resolveRepoWikiConfigPath(projectRoot);
   if (!existsSync(resolvedConfigPath)) {
     throw new Error(
       `Missing required repo-wiki config at ${path.relative(projectRoot, resolvedConfigPath) || resolvedConfigPath}.\n` +
@@ -162,7 +146,11 @@ async function writeBuildStamp(buildStampPath) {
 }
 
 export async function ensureRepoWikiPrepared(projectRoot = PROJECT_ROOT) {
-  assertSupportedLocalNodeVersion();
+  assertSupportedNodeVersion(
+    process.versions.node,
+    REPO_WIKI_LOCAL_MIN_NODE_MAJOR,
+    `repo-wiki local helper requires Node.js ${REPO_WIKI_LOCAL_MIN_NODE_MAJOR}+ because repo-wiki itself requires Node.js ${REPO_WIKI_LOCAL_MIN_NODE_MAJOR}+`,
+  );
   const { baseDir, sourceDir, cliPath, buildStampPath } = resolveRepoWikiPaths(projectRoot);
   await mkdir(baseDir, { recursive: true });
 
@@ -179,26 +167,29 @@ export async function ensureRepoWikiPrepared(projectRoot = PROJECT_ROOT) {
     run("git", ["-C", sourceDir, "checkout", "--force", REPO_WIKI_REF]);
   }
 
-  const stamp = await readBuildStamp(buildStampPath);
-  if (stamp?.ref !== REPO_WIKI_REF) {
-    run("npm", ["install", "--silent"], { cwd: sourceDir });
-    run("npm", ["run", "build", "--silent"], { cwd: sourceDir });
-    await writeBuildStamp(buildStampPath);
-  } else {
+  let built = (await readBuildStamp(buildStampPath))?.ref === REPO_WIKI_REF;
+  if (built) {
     try {
       run(process.execPath, [cliPath, "--help"], { stdio: "ignore" });
     } catch {
-      run("npm", ["install", "--silent"], { cwd: sourceDir });
-      run("npm", ["run", "build", "--silent"], { cwd: sourceDir });
-      await writeBuildStamp(buildStampPath);
+      built = false;
     }
+  }
+  if (!built) {
+    run("npm", ["install", "--silent"], { cwd: sourceDir });
+    run("npm", ["run", "build", "--silent"], { cwd: sourceDir });
+    await writeBuildStamp(buildStampPath);
   }
 
   return resolveRepoWikiPaths(projectRoot);
 }
 
 async function runRepoWikiNpm(passthroughArgs, projectRoot, { runNpx = runNpxInvocation } = {}) {
-  assertSupportedNodeVersion();
+  assertSupportedNodeVersion(
+    process.versions.node,
+    REPO_WIKI_MIN_NODE_MAJOR,
+    `repo-wiki npm wrapper requires Node.js ${REPO_WIKI_MIN_NODE_MAJOR}+`,
+  );
   assertConsumerConfigPresent({ projectRoot });
   const invocation = buildNpxInvocation({ passthroughArgs });
   const result = runNpx({ command: invocation[0], args: invocation.slice(1), cwd: projectRoot });
@@ -228,13 +219,6 @@ async function _runRepoWikiLocal(passthroughArgs, projectRoot) {
 // Composable entry point: returns a structured result instead of calling
 // process.exit so importers can reuse this wrapper without terminating the host
 // process. The direct-run block below owns the process-level exit-code mapping.
-// Convenience export for callers that explicitly want the pinned source path.
-export async function runRepoWikiLocal(argv, projectRoot = PROJECT_ROOT) {
-  const args = argv.some((a) => a === "--source" || a.startsWith("--source="))
-    ? argv
-    : ["--source", "local", ...argv];
-  return runRepoWiki(args, projectRoot);
-}
 
 export async function runRepoWiki(argv, projectRoot = PROJECT_ROOT, { runNpx = runNpxInvocation } = {}) {
   const { source, prepareOnly, passthroughArgs } = parseCliArgs(argv);

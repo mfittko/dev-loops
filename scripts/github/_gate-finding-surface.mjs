@@ -223,10 +223,8 @@ export function collectFingerprints(text, set) {
 // Deferral comment target for deferred findings (GATE-EXEC-DEFERRAL-RECORD)
 // ---------------------------------------------------------------------------
 //
-// A `defer` disposition (judge-pass.mjs's relevance defer, or
-// close-gate-findings.mjs's severity/round auto-defer) is recorded as ONE
-// batched comment per tool run (at most one from judge-pass.mjs and one from
-// close-gate-findings.mjs per round) on the linked spec issue (the configured
+// A judge `defer` disposition (judge-pass.mjs's relevance defer) is recorded as ONE
+// batched comment per tool run on the linked spec issue (the configured
 // tracker is GitHub and the PR has exactly one closing issue reference). A PR
 // target posts no comment: a folded deferral is recorded by its Details marker, a stamped
 // thread by its thread marker (issue=<pr>) plus resolving reply. No tool creates an
@@ -378,8 +376,8 @@ export async function commentDeferredFindings(
 // non-locatable blocks. The inline thread uses renderInlineCommentBody. `severity` is normalized (legacy spelling
 // renders under its canonical name) AND sanitized with sanitizeInline, not
 // sanitizeCodeSpan: it renders bare ("**${severity}**", not in a code span),
-// and sanitizing it also blocks a newline from escaping the blockquote a
-// body-filed block relies on (see renderNonLocatableBlock). angle keeps
+// and sanitizing it also blocks a newline from escaping a blockquote the
+// caller wraps around it. angle keeps
 // sanitizeCodeSpan (it is in a code span); summary already uses
 // sanitizeInline. normalizeSeverity alone does not neutralize hostile
 // characters, so it is applied in addition to, never instead of,
@@ -401,10 +399,6 @@ export function renderFindingLine({ severity, angle, summary, judgeDisposition, 
     ? ` — judge: ${sanitizeInline(judgeDisposition)}${renderJudgeDetail({ judgeReason, followUpIssueNumber })}${renderEvidenceOnlyLabel({ judgeDisposition, remedyKind })}`
     : "";
   return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${escapeProse(summary).replace(/judge:/gi, "judge -")}${judgeSuffix}`;
-}
-
-function renderRecommendationLine(recommendation) {
-  return `Recommendation: ${escapeProse(recommendation)}`;
 }
 
 function hasRecommendation(finding) {
@@ -486,8 +480,7 @@ function fenceCode(text) {
 }
 
 export function renderInlineCommentBody(finding, { round }) {
-  // Normalized ONCE and reused for both the marker and the header (mirrors
-  // renderNonLocatableBlock below): a legacy-spelled severity must never
+  // Normalized ONCE and reused for both the marker and the header: a legacy-spelled severity must never
   // render its retired spelling here while its own marker parses back as the
   // canonical one.
   const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
@@ -610,35 +603,6 @@ export function buildNonLocatableFindingMarker(finding, { round, issue }) {
   return buildFindingMarker({ fp, severity, angle: finding.angle, round, operatorVisible: finding.operatorVisible === true, disposition, issue });
 }
 
-// Human-readable rendering of a body-filed finding, kept for callers that
-// still want the full blockquoted block (e.g. this module's own tests) — no
-// longer spliced into the posted verdict body itself (upsert-checkpoint-verdict.mjs
-// splices buildNonLocatableFindingMarker alone; see its own doc for why).
-export function renderNonLocatableBlock(finding, { round }) {
-  // renderFindingLine below normalizes AND sanitizes severity again on its
-  // own; that sanitizeInline call, not this outer normalize, is what keeps a
-  // hostile (e.g. newline-bearing) severity out of the posted body.
-  const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
-  const lines = [
-    buildNonLocatableFindingMarker(finding, { round }),
-    `> ${renderFindingLine({ ...finding, severity })}`,
-  ];
-  if (hasRecommendation(finding)) {
-    lines.push(`> ${renderRecommendationLine(finding.recommendation)}`);
-  }
-  if (Array.isArray(finding.files) && finding.files.length > 0) {
-    // The line ref belongs to files[0] (the anchor isLocatableFinding keys on),
-    // so it renders INSIDE that entry's own code span rather than trailing the
-    // whole list, where it would read as belonging to the last file instead.
-    const lineRef = Number.isInteger(finding.line) ? `:${finding.line}` : "";
-    const refs = finding.files
-      .map((f, i) => `\`${sanitizeCodeSpan(f)}${i === 0 ? lineRef : ""}\``)
-      .join(", ");
-    lines.push(`> Location: ${refs}`);
-  }
-  return lines.join("\n");
-}
-
 // Verdict-body visibility (GATE-COMMENT-INLINE-SEVERITY-FLOOR): a finding the
 // judge disposed `act`, a `question`, an unrecognized severity, or one at a blocking severity, is always visible. A
 // finding with no judge disposition keeps the severity rule: at or above the
@@ -680,8 +644,7 @@ export function renderVerdictDetailsBlock({ foldedFindings = [], cleanRosterLine
       const target = Number.isInteger(finding.followUpIssueNumber) && finding.followUpIssueNumber > 0 ? finding.followUpIssueNumber : pr;
       const issue = group === "Deferred" && severity !== "nit" && Number.isInteger(target) && target > 0 ? target : undefined;
       lines.push(buildNonLocatableFindingMarker(finding, { round, issue }));
-      // Location prefix mirrors renderNonLocatableBlock's Location logic:
-      // files[0] gets the :line ref, absent files renders no prefix.
+      // Location prefix: files[0] gets the :line ref, absent files renders no prefix.
       const hasFile = Array.isArray(finding.files) && finding.files.length > 0;
       const lineRef = hasFile && Number.isInteger(finding.line) ? `:${finding.line}` : "";
       const locationPrefix = hasFile ? `\`${sanitizeCodeSpan(finding.files[0])}${lineRef}\` ` : "";
@@ -838,8 +801,7 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
   // filters blank entries but does not trim; a hand-authored path can carry an
   // untrimmed value). fingerprintFinding also trims defensively, but
   // normalizing here keeps every downstream consumer (isLocatableFinding's
-  // commentable-set lookup, the posted review `path`, renderNonLocatableBlock's
-  // Location line) on the same trimmed value too.
+  // commentable-set lookup, the posted review `path`, the Location line) on the same trimmed value too.
   const normalizedFindings = findings.map((f) => (
     Array.isArray(f.files) ? { ...f, files: f.files.map((entry) => entry.trim()) } : f
   ));
@@ -1083,7 +1045,7 @@ export function countUnresolvedGateAuthoredThreadsBySeverity(threads, login) {
  */
 export function countUnresolvedGateAuthoredThreadsFromRawNodes(rawNodes, login = null) {
   // A non-array `rawNodes` is a caller contract violation; fail CLOSED — let
-  // the TypeError propagate (detect-checkpoint-evidence sets
+  // the Error propagate (detect-checkpoint-evidence sets
   // unresolvedGateThreadCount = -1/blocked) rather than silently coerce to
   // [] and under-count.
   if (!Array.isArray(rawNodes)) {
@@ -1108,7 +1070,7 @@ export function countUnresolvedGateAuthoredThreadsFromRawNodes(rawNodes, login =
  * trust boundary for the gate-authored provenance decision, identical to
  * `selectDispositionTargets`' author check) and lists review threads once,
  * reusing that same fetch for both countUnresolvedGateAuthoredThreads (the
- * total fetchUnresolvedGateThreadCount below returns) and
+ * total fetchUnresolvedGateThreadState below returns) and
  * countUnresolvedGateAuthoredThreadsBySeverity (the breakdown
  * fetchDraftGateEvidence's `unresolvedGateThreadBreakdown` field returns) — no
  * extra gh round-trip for the breakdown. Throws on gh failure — callers
@@ -1123,15 +1085,6 @@ async function fetchUnresolvedGateThreadState({ repo, pr }, gh) {
     count: countUnresolvedGateAuthoredThreads(threads, login),
     breakdown: countUnresolvedGateAuthoredThreadsBySeverity(threads, login),
   };
-}
-
-/**
- * Fetch the unresolved gate-authored thread count for a PR (fetchDraftGateEvidence's
- * `unresolvedGateThreadCount` field, and this module's own public shorthand
- * for a caller that needs only the count).
- */
-export async function fetchUnresolvedGateThreadCount({ repo, pr }, gh) {
-  return (await fetchUnresolvedGateThreadState({ repo, pr }, gh)).count;
 }
 
 /**

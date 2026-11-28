@@ -69,14 +69,14 @@ test("dev-loop contract pins a bounded FOREGROUND inline probe for the Copilot/C
     assert.match(doc, /probe-copilot-review\.mjs/, `${name} should name the bounded foreground probe script`);
     assert.match(doc, /wait-pr-checks\.mjs/, `${name} should name the CI wait probe script`);
     // Assert the sentence SEMANTICS, not just isolated words (Copilot review, #2065): each doc must
-    // (a) tie a FOREGROUND probe to an explicit --timeout/--timeout-ms bound, and (b) explicitly
+    // (a) tie a FOREGROUND probe to an explicit --timeout bound, and (b) explicitly
     // FORBID/ban the backgrounded wait — a doc that merely mentioned "background" while permitting
     // it must fail. The two assertions below each require a foreground+bounded phrase and a
     // prohibition phrase in proximity to the wait subject.
     assert.match(
       doc,
-      /foreground[\s\S]{0,160}--timeout(?:-ms)?|--timeout(?:-ms)?[\s\S]{0,160}foreground/i,
-      `${name} should tie the FOREGROUND probe to an explicit --timeout/--timeout-ms bound`,
+      /foreground[\s\S]{0,160}--timeout\b(?!-ms)|--timeout\b(?!-ms)[\s\S]{0,160}foreground/i,
+      `${name} should tie the FOREGROUND probe to an explicit --timeout bound`,
     );
     assert.match(
       doc,
