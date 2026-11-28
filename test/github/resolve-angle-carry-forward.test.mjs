@@ -17,7 +17,7 @@ import {
   runGitCommand,
 } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { buildLogPath, parseProvenanceJson } from "../../scripts/github/write-gate-findings-log.mjs";
-import { buildCarryForwardPlanPath, readFullLabel } from "../../scripts/github/write-gate-context.mjs";
+import { buildCarryForwardPlanPath, buildGateContext, main as writeGateContextMain, readFullLabel, readGateContext, unionRationale } from "../../scripts/github/write-gate-context.mjs";
 
 // Scrub inherited global/system git config and any leaked GIT_DIR/GIT_WORK_TREE
 // so host-side commit signing, hooks, templates, or an exported repo pointer
@@ -1810,5 +1810,101 @@ for (const [fileClass, opts, want] of [
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }
+  });
+}
+
+// Issue 3647: the dispatch set is the head-resolved angles plus every mustRerun angle of the keyed plan.
+const planId = { repo: "owner/repo", pr: 12, gate: "draft_gate", headSha: "abc1234567890" };
+const orphanRow = [{ angle: "orphan-angle", reason: "no_perangle_row" }];
+async function withPlanContext(plan, gate, fn, orphanEntry = { name: "orphan-angle", persona: "review", prompt: "p" }) {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-mustrerun-"));
+  const id = { ...planId, gate };
+  // orphan-angle sits in another gate's pool: configured with a prompt, yet not resolved at this head.
+  const input = { config: { version: 1, gates: { draft: { angles: ["correctness"] }, spike: { angles: [orphanEntry] }, review: { angles: ["correctness"] } } }, ...id, hasFullLabel: true };
+  try {
+    await fn({
+      writePlan: async () => {
+        const planPath = path.resolve(repoRoot, buildCarryForwardPlanPath(id));
+        await mkdir(path.dirname(planPath), { recursive: true });
+        await writeFile(planPath, JSON.stringify({ ok: true, ...id, prevHead: "def4567890123", carried: [], ...plan }));
+      },
+      build: async () => (await buildGateContext(input, { repoRoot })).artifact.resolvedAngles,
+      buildArtifact: async () => (await buildGateContext(input, { repoRoot })).artifact,
+    });
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+}
+
+test("buildGateContext adds a mustRerun orphan angle only on the rebuild after the plan exists", async () => {
+  await withPlanContext({ mustRerun: orphanRow }, "draft_gate", async ({ writePlan, build }) => {
+    assert.deepEqual(await build(), ["correctness"]);
+    await writePlan();
+    assert.deepEqual(await build(), ["correctness", "orphan-angle"]);
+  });
+});
+
+test("buildGateContext records an added rationale row for a union-added angle and a skipped row for an unconfigured one", async () => {
+  const plan = { mustRerun: [...orphanRow, { angle: "ghost-angle", reason: "x" }] };
+  await withPlanContext(plan, "draft_gate", async ({ writePlan, buildArtifact }) => {
+    await writePlan();
+    const artifact = await buildArtifact();
+    assert.deepEqual(artifact.resolvedAngles, ["correctness", "orphan-angle"]);
+    assert.deepEqual(artifact.rationale.filter((r) => r.angle !== "correctness"), [
+      { angle: "orphan-angle", action: "added", reason: "carry_forward_must_rerun" },
+      { angle: "ghost-angle", action: "dropped", reason: "skipped: no_resolvable_prompt_or_disabled_entry" },
+    ]);
+    assert.ok(artifact.fanout.preflight.pendingGroups.some((g) => JSON.stringify(g).includes("orphan-angle")));
+  });
+});
+
+test("buildGateContext mustRerun union skips an angle whose only config entry is enabled false", async () => {
+  await withPlanContext({ mustRerun: orphanRow }, "draft_gate", async ({ writePlan, buildArtifact }) => {
+    await writePlan();
+    const artifact = await buildArtifact();
+    assert.deepEqual(artifact.resolvedAngles, ["correctness"]);
+    assert.ok(artifact.rationale.some((r) => r.angle === "orphan-angle" && r.reason.startsWith("skipped:")));
+  }, { name: "orphan-angle", persona: "review", prompt: "p", enabled: false });
+});
+
+test("unionRationale replaces the resolver dropped row of a union-added angle with the added row", () => {
+  const rows = unionRationale([{ angle: "orphan-angle", action: "dropped", reason: "not relevant" }, { angle: "correctness", action: "kept", reason: "k" }], { added: ["orphan-angle"], skipped: [] });
+  assert.deepEqual(rows.filter((r) => r.angle === "orphan-angle"), [{ angle: "orphan-angle", action: "added", reason: "carry_forward_must_rerun" }]);
+});
+
+test("write-gate-context main() adds the mustRerun orphan angle from the keyed plan", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-main-mustrerun-"));
+  const id = { ...planId, gate: "draft_gate" };
+  try {
+    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\ngates:\n  draft:\n    angles:\n      - name: correctness\n  spike:\n    angles:\n      - name: orphan-angle\n        persona: review\n        prompt: p\n", "utf8");
+    const planPath = path.resolve(repoRoot, buildCarryForwardPlanPath(id));
+    await mkdir(path.dirname(planPath), { recursive: true });
+    await writeFile(planPath, JSON.stringify({ ok: true, ...id, prevHead: "def4567890123", carried: [], mustRerun: orphanRow }));
+    const run = async (_command, args) => (args[0] === "pr" && args[1] === "view"
+      ? { code: 0, stdout: JSON.stringify({ body: "b", closingIssuesReferences: [], baseRefName: "main", labels: [{ name: "gate:full" }] }), stderr: "" }
+      : { code: 0, stdout: JSON.stringify({ body: "b" }), stderr: "" });
+    await writeGateContextMain(["--repo", id.repo, "--pr", String(id.pr), "--gate", id.gate, "--head-sha", id.headSha], { repoRoot, run, checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }) });
+    const artifact = await readGateContext(id, { repoRoot });
+    assert.ok(artifact.resolvedAngles.includes("orphan-angle"));
+    assert.ok(artifact.rationale.some((r) => r.angle === "orphan-angle" && r.action === "added"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+for (const [name, plan, gate, want] of [
+  ["a sibling name maps to its base angle", { mustRerun: [{ angle: "orphan-angle-delta-at-abc1234", reason: "x" }] }, "draft_gate", ["correctness", "orphan-angle"]],
+  ["copilot-body adds nothing", { mustRerun: [{ angle: "copilot-body", reason: "x" }] }, "draft_gate", ["correctness"]],
+  ["case-differing duplicates add one angle", { mustRerun: [{ angle: "Correctness", reason: "x" }, { angle: "Orphan-Angle", reason: "x" }, { angle: "orphan-angle", reason: "x" }] }, "draft_gate", ["correctness", "orphan-angle"]],
+  ["an unconfigured angle is skipped", { mustRerun: [{ angle: "ghost-angle", reason: "x" }] }, "draft_gate", ["correctness"]],
+  ["a plan for another head adds nothing", { headSha: "fff9999999999", mustRerun: orphanRow }, "draft_gate", ["correctness"]],
+  ["a plan with ok:false adds nothing", { ok: false, mustRerun: orphanRow }, "draft_gate", ["correctness"]],
+  ["the review gate takes no union", { mustRerun: orphanRow }, "review", ["correctness"]],
+]) {
+  test(`buildGateContext mustRerun union: ${name}`, async () => {
+    await withPlanContext(plan, gate, async ({ writePlan, build }) => {
+      await writePlan();
+      assert.deepEqual(await build(), want);
+    });
   });
 }

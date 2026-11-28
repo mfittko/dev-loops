@@ -225,6 +225,7 @@ gates:
   # (money/auth/shared) and relaxed (scaffold/template) globs in .devloops.
   size:
     testDiscount: 0.25
+    deletionDiscount: 0.25
     absoluteHardLoc: 2000
     tiers:
       default:

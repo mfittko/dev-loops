@@ -633,6 +633,14 @@ test("a body-only retirement without the caller's body-reading units keeps the r
   });
 });
 
+test("a body-only retirement with zero body-reading units keeps the refusal and retires nothing (issue 3667)", async () => {
+  await withPostedRound("pre_approval_gate", [bodyItem], async ({ key, tmpRoot, log }) => {
+    const result = await retireStaleRound({ ...key, tmpRoot, currentPrBodySha256: NEW_BODY, bodyReadingUnits: [] });
+    assert.match(result.refusal.recovery, /^operator: /);
+    assert.equal(existsSync(log), true);
+  });
+});
+
 test("with two verdict roots that each hold a superseded ledger, both ledgers become retained rounds", async () => {
   await withPostedRound("pre_approval_gate", [bodyItem], async ({ key, tmpRoot, log, bodyReadingUnits }) => {
     const otherRoot = await mkdtemp(path.join(os.tmpdir(), "stale-round-other-"));

@@ -12,7 +12,7 @@ const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir,
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 
-import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { detectPrGateCoordinationState, onlyStaleGateRoundThreadsOpen, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveBodyOnlyRetire, resolveCapBrakes, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
@@ -4971,7 +4971,7 @@ test("3611: a below-cap all-PR-body act list with a high item reports blocked on
   assert.doesNotMatch(result.reason, /Round N\+1 never runs/);
 });
 
-// The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so no fixer route follows it.
+// The emitter refuses a nit-only act list outside draft round 1 (low_floor), so no fixer route follows it.
 test("3105 AC15: a nit-only act list in draft round 2 keeps the earlier routing", async () => {
   const result = await detectCapFixture({ cap: 4, priorRounds: 1, finding: { severity: "nit", summary: "rename x" } });
   assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
@@ -5573,6 +5573,49 @@ test("resolveBodyOnlyRetire reads the gate of the PR state, the live and the ret
     await write("draft_gate", "5".repeat(40), [bodyItem]);
     await write("draft_gate", "6".repeat(40), [codeItem]);
     assert.equal(await resolveBodyOnlyRetire(ctx("5".repeat(40), true, "Edited body"), { repoRoot: tempDir }), true);
+    // Issue 3667: with a config, the round's context must hold a body-reading angle; none keeps the earlier routing.
+    const config = { version: 1 };
+    const writeContext = async (angles) => {
+      const file = path.join(tempDir, buildGateContextPath({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, tmpRoot: "tmp" }));
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ resolvedAngles: angles }), "utf8");
+    };
+    assert.equal(await resolveBodyOnlyRetire(ctx(head, true, "Edited body"), { repoRoot: tempDir, config }), false, "no context");
+    await writeContext(["pr-description"]);
+    assert.equal(await resolveBodyOnlyRetire(ctx(head, true, "Edited body"), { repoRoot: tempDir, config }), true);
+    await writeContext([]);
+    assert.equal(await resolveBodyOnlyRetire(ctx(head, true, "Edited body"), { repoRoot: tempDir, config }), false, "zero body-reading angles");
+    // A configured angle without a PR-body prompt does not read the body.
+    const nonBodyConfig = { version: 1, gates: { draft: { angles: [{ name: "link-check", prompt: "Check links." }] } } };
+    await writeContext(["link-check"]);
+    assert.equal(await resolveBodyOnlyRetire(ctx(head, true, "Edited body"), { repoRoot: tempDir, config: nonBodyConfig }), false, "only non-body-reading angles");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// Issue 3667: the writer keeps the context under the tmp of the linked worktree it ran in, while the ledger is main-anchored.
+test("resolveBodyOnlyRetire reads the context from a linked worktree tmp while the ledger lives in the main tmp", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "body-only-retire-wt-"));
+  try {
+    const main = path.join(tempDir, "main");
+    const linked = path.join(tempDir, "linked");
+    await mkdir(main, { recursive: true });
+    const git = (...args) => execFileSync("git", args, { cwd: main, stdio: "ignore", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+    git("init", "-q");
+    git("commit", "-q", "--allow-empty", "-m", "init");
+    git("worktree", "add", "-q", linked, "-b", "linked");
+    const head = "1".repeat(40);
+    const ledger = path.join(main, "tmp", "gate-findings", "owner-repo", "pr-10", `draft_gate-${head}.json`);
+    await mkdir(path.dirname(ledger), { recursive: true });
+    await writeFile(ledger, JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-11-01T00:00:00.000Z", prBodySha256: prBodySha256("Original body"), findings: [{ severity: "medium", angle: "scope", summary: "body", judgeDisposition: "act", remedyKind: "pr_body" }] }), "utf8");
+    const context = path.join(linked, buildGateContextPath({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(context), { recursive: true });
+    await writeFile(context, JSON.stringify({ resolvedAngles: ["pr-description"] }), "utf8");
+    const ctx = { repo: "owner/repo", pr: 10, currentHeadSha: head, prData: { isDraft: true, body: "Edited body" } };
+    for (const repoRoot of [main, linked]) {
+      assert.equal(await resolveBodyOnlyRetire(ctx, { repoRoot, config: { version: 1 } }), true, repoRoot);
+    }
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

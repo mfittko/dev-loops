@@ -30,7 +30,7 @@ import { parseArgs } from "node:util";
 import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 import { readOperatorFocusFile } from "../loop/_operator-focus.mjs";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveCapFixMaxLines, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveFanoutSizeTier, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveGateDispatchMode, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveCapFixMaxLines, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveFanoutSizeTier, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveGateDispatchMode, resolveMaxAnglesPerGroup, resolveReviewerRole, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, pastCapBlockers, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
@@ -55,6 +55,7 @@ import { viewPr } from "./view-pr.mjs";
 import { viewIssue } from "./view-issue.mjs";
 import { buildAdjacentBundle, decodeGitDiffPathToken } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
+import { COPILOT_BODY_ANGLE } from "./_copilot-body-disposition.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
 import { capRoundExit, foldDraftGateSatisfied, isCleanDraftVerdict } from "@dev-loops/core/loop/pr-gate-coordination";
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContextReusingSnapshot } from "../loop/detect-pr-gate-coordination-state.mjs";
@@ -191,7 +192,7 @@ const LIFECYCLE_ONLY_ANGLES = ["gate-evidence"];
  *
  * @param {import("@dev-loops/core/config").DevLoopConfig} config
  * @param {{ hasClosingIssue: boolean|undefined, hasAcChecklist: boolean|undefined, hasFormalIssueSpec?: boolean, hasFormalPrSpec?: boolean }} facts
- * @returns {{ recommendedAngles: string[], skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: false, dynamicAnglesActive: false, addedAngles: string[], addedReasons: Record<string,string> }}
+ * @returns {{ recommendedAngles: string[], skippedAngles: string[], reasons: Record<string,string>, dynamicAnglesActive: false, addedAngles: string[], addedReasons: Record<string,string> }}
  */
 export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklist, hasFormalIssueSpec, hasFormalPrSpec }) {
   const union = resolveOperationAnglePool(config, "review");
@@ -209,7 +210,6 @@ export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklis
       ...Object.fromEntries(specDrops.map((a) => [a, provablyNoSpecOfRecord ? "no spec-of-record" : "no formal spec on the closing issue or PR description"])),
       ...Object.fromEntries(lifecycleDrops.map((a) => [a, "the standalone review has no lifecycle gates"])),
     },
-    fallbackToAll: false,
     dynamicAnglesActive: false,
     addedAngles: [],
     addedReasons: {},
@@ -855,6 +855,54 @@ export { buildGateFaninLedgerPath };
 // the resolver refused), so the artifact is self-describing and key-stamped.
 export function buildCarryForwardPlanPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
   return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".carry-forward-plan.json" });
+}
+
+// Issue 3647: the dispatch set is the head-resolved angles plus every mustRerun angle of this round's
+// keyed carry-forward plan, so a mustRerun angle the head does not resolve is still dispatched. Both
+// context builders call this; the fan-out emitter reads the resulting artifact. A missing, unreadable
+// or foreign-keyed plan adds nothing. An added angle takes the configured angle's canonical casing; one with
+// no resolvable prompt is skipped, because emit-fanout-dispatch refuses the whole round for it.
+// Returns { angles, added, skipped }: the dispatch set and the base names the union added or skipped.
+export async function unionMustRerunAngles(resolvedAngles, { repo, pr, gate, headSha, tmpRoot = "tmp" }, { repoRoot = process.cwd(), config } = {}) {
+  const none = { angles: resolvedAngles, added: [], skipped: [] };
+  if (gate === "review") return none;
+  let plan;
+  try {
+    plan = JSON.parse(await readFile(path.resolve(repoRoot, buildCarryForwardPlanPath({ repo, pr, gate, headSha, tmpRoot })), "utf8"));
+  } catch {
+    return none;
+  }
+  const same = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+  if (plan?.ok !== true || !Array.isArray(plan.mustRerun) || !same(plan.repo, repo) || !same(plan.gate, gate) || !same(plan.headSha, headSha) || String(plan.pr) !== String(pr)) return none;
+  const configured = ["draft", "preApproval", "spike"].flatMap((g) => (Array.isArray(config?.gates?.[g]?.angles) ? config.gates[g].angles : []))
+    .map((a) => (typeof a === "string" ? a : a?.name)).filter((n) => typeof n === "string");
+  // An angle whose every config entry is `enabled: false` stays undispatched.
+  const entries = ["draft", "preApproval", "spike"].flatMap((g) => (Array.isArray(config?.gates?.[g]?.angles) ? config.gates[g].angles : []));
+  const isDisabled = (n) => { const own = entries.filter((a) => same(typeof a === "string" ? a : a?.name, n)); return own.length > 0 && own.every((a) => typeof a !== "string" && a?.enabled === false); };
+  // A sibling name (`<angle>-delta-at-<sha>`) maps to its base angle; the synthetic `copilot-body` is no reviewer.
+  const known = new Set(resolvedAngles.map((a) => a.trim().toLowerCase()));
+  const added = [];
+  const skipped = [];
+  for (const m of plan.mustRerun) {
+    const raw = typeof m?.angle === "string" ? baseAngleName(m.angle.trim()) : "";
+    if (raw === "" || raw === COPILOT_BODY_ANGLE || known.has(raw.toLowerCase())) continue;
+    known.add(raw.toLowerCase());
+    const base = configured.find((n) => same(n, raw)) ?? raw;
+    const prompt = resolveReviewerRole(config, base).prompt;
+    (typeof prompt === "string" && prompt.trim().length > 0 && !isDisabled(base) ? added : skipped).push(base);
+  }
+  return { angles: [...resolvedAngles, ...added], added, skipped };
+}
+
+// Issue 3647: the rationale names every union-added angle (replacing its resolver `dropped` row) and every skipped one.
+export function unionRationale(rationale, { added, skipped }) {
+  const addedSet = new Set(added);
+  const rows = rationale.filter((r) => !addedSet.has(r.angle));
+  for (const angle of added) rows.push({ angle, action: "added", reason: "carry_forward_must_rerun" });
+  for (const angle of skipped) {
+    if (!rows.some((r) => r.angle === angle)) rows.push({ angle, action: "dropped", reason: "skipped: no_resolvable_prompt_or_disabled_entry" });
+  }
+  return rows;
 }
 
 // Deterministic path for the shared validation-results artifact
@@ -2165,7 +2213,7 @@ export async function countCompletedRounds(options, { repoRoot, includeLiveCurre
  * @returns {Promise<{ pastCap: boolean, round: number, cap: number, lowFixCapped: boolean }>}
  */
 export async function resolveDraftRoundCap(options, { repoRoot, includeLiveCurrentHead = false, prBase, contextTmpRoot }) {
-  // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate defers a low in every round; its round count is countCapRounds, not this resolver.
+  // GATE-EXEC-LOW-ROUND-FLOOR: pre_approval_gate defers a low in every round; its round count is countCapRounds, not this resolver.
   if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0, lowFixCapped: options.gate === "pre_approval_gate" };
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
   const cap = resolveGateConfig(config, "draft").maxReviewRounds;
@@ -2189,7 +2237,7 @@ export async function resolveDraftRoundCap(options, { repoRoot, includeLiveCurre
   }
   const round = await countCapRounds(options, { repoRoot, prBase: base, includeLiveCurrentHead });
   const pastCap = isPastRoundCap(round, cap);
-  // The draft gate fixes a low at the cap round; only pre_approval_gate defers it.
+  // The draft gate floors a low at reject from round 2 on (ADR 0339); only pre_approval_gate defers it.
   return { pastCap, round, cap, lowFixCapped: false };
 }
 
@@ -2370,13 +2418,31 @@ export async function refusesPastScopedRound(options, { repoRoot, prBase, cap, r
   return decision.reason === "round_cap_reached" && !(await resolveOperatorClearedRound(options, { repoRoot, cap, prBase, includeLiveCurrentHead }));
 }
 
-/** Whether the head's latest ledger (live, or retained once the automatic retirement moved it) is a round of PR-body act items that read a PR body other than `bodySha256` (default: `options.prBody`'s digest; GATE-EXEC-BODY-ONLY-RERUN). */
-export async function isBodyOnlyRerun(options, { repoRoot, bodySha256 = prBodySha256(options.prBody), includeLiveCurrentHead = true }) {
+/**
+ * Whether the head's latest ledger (live, or retained once the automatic retirement moved it) is a round of PR-body act items that read a PR body other than `bodySha256` (default: `options.prBody`'s digest; GATE-EXEC-BODY-ONLY-RERUN).
+ * With a `config` (issue 3667) it also requires a body-reading angle in the head's gate context `resolvedAngles`, read from the writer's checkout tmp or the ledger tmp root; a missing or unreadable context, or a non-array `resolvedAngles`, gives false.
+ */
+export async function isBodyOnlyRerun(options, { repoRoot, bodySha256 = prBodySha256(options.prBody), includeLiveCurrentHead = true, config = null }) {
   if (typeof bodySha256 !== "string") return false;
   const head = String(options.headSha).trim().toLowerCase();
   const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead });
   const latest = closed.filter((log) => String(log.headSha).trim().toLowerCase().startsWith(head)).at(-1);
-  return Boolean(latest) && bodyOnlySupersededDigest(latest, bodySha256) !== null;
+  if (!latest || bodyOnlySupersededDigest(latest, bodySha256) === null) return false;
+  if (config === null) return true;
+  // The emitter retires only when a unit holds a body-reading angle (issue 3667); a missing or unreadable context keeps the earlier routing.
+  // shortcut: reads the context's resolvedAngles, not the pending units after carry; upgrade if carried-only rounds matter.
+  // The worktree-local live context wins: the writer keeps it under the tmp of the checkout it ran in, while the ledger is main-anchored, so probe every checkout's tmp and then the ledger tmp root.
+  const contextPaths = [
+    ...resolveLedgerCheckouts(repoRoot).map((root) => path.resolve(root, buildGateContextPath({ ...options, tmpRoot: options.tmpRoot || "tmp" }))),
+    path.resolve(repoRoot, buildGateContextPath({ ...options, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) })),
+  ];
+  for (const contextPath of new Set(contextPaths)) {
+    try {
+      const { resolvedAngles } = JSON.parse(await readFile(contextPath, "utf8"));
+      return Array.isArray(resolvedAngles) && resolvedAngles.some((angle) => readsPrBody(angle, config));
+    } catch { /* absent or unreadable at this root: try the next */ }
+  }
+  return false;
 }
 
 /**
@@ -4456,7 +4522,10 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
         sizeOutcome: input.sizeOutcome,
         seamFirstRound: await seamFirstRoundFor(input, repoRoot),
       });
-  const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
+  const { resolvedAngles: headAngles, rationale: resolverRationale } = rationaleFromResolver(resolverResult);
+  const union = await unionMustRerunAngles(headAngles, { repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot: input.tmpRoot || "tmp" }, { repoRoot, config: input.config });
+  const resolvedAngles = union.angles;
+  const rationale = unionRationale(resolverRationale, union);
 
   // AC3: each resolved angle's declared surface scope, straight from
   // config (resolveGateAngleScope fails open to "full" for an angle with no
@@ -4782,7 +4851,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
       // so `acItems` alone would misclassify it as unrefined. This is
       // "provides criteria", NOT the refinement floor the draft gate enforces
       // separately.
-      const artifact = detectIssueRefinementArtifact({ body, issueNumber: number });
+      const artifact = detectIssueRefinementArtifact({ body });
       if (artifact.hasACs || artifact.acItems.length > 0) anyRefined = true;
       bodies.push({ label, body });
     }
@@ -5081,12 +5150,14 @@ export async function main(
           explicitAngles: Array.isArray(options.angles) ? options.angles : undefined, seamInput: options,
         }, repoRoot);
       }
-      const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
+      const { resolvedAngles, rationale: resolverRationale } = rationaleFromResolver(resolverResult);
       // The zero-review-coverage refusal is enforced by writeGateContext (the
       // shared writer every entry point routes through), so it covers this
       // dynamic-resolution path AND the review gate's verbatim `--angles`
       // override AND the programmatic callers — one guard, one message.
-      options.angles = resolvedAngles;
+      const union = await unionMustRerunAngles(resolvedAngles, { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot, config });
+      options.angles = union.angles;
+      const rationale = unionRationale(resolverRationale, union);
       // Resolver-derived rationale is authoritative here: it reflects whatever
       // the resolver actually decided (dynamic selection, a floor override, or
       // an explicit set plus any mandatory-floor addition), which a caller's

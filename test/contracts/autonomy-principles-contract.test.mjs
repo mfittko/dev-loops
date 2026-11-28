@@ -9,7 +9,7 @@ import { collectContractMarkdownFiles, extractRuleDefinitions, findEmbeddedRuleB
 const read = (p) => readFileSync(new URL(`../../${p}`, import.meta.url), "utf8");
 const OWNERS = {
   "GATE-EXEC-JUDGE-PRIME-AUTHORITY": "skills/docs/gate-review-sub-loop-contract.md",
-  "GATE-EXEC-LOW-FIX-UNTIL-CAP": "skills/docs/gate-review-sub-loop-contract.md",
+  "GATE-EXEC-LOW-ROUND-FLOOR": "skills/docs/gate-review-sub-loop-contract.md",
   "GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE": "skills/docs/gate-review-sub-loop-contract.md",
   "GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH": "skills/docs/gate-review-sub-loop-contract.md",
   "ADR-OVER-WAIVER": "skills/docs/decision-record-contract.md",
@@ -17,7 +17,7 @@ const OWNERS = {
 };
 const RULE_OUTCOME = {
   "GATE-EXEC-JUDGE-PRIME-AUTHORITY": /the judge decides it/,
-  "GATE-EXEC-LOW-FIX-UNTIL-CAP": /At `pre_approval_gate` it becomes `defer`/,
+  "GATE-EXEC-LOW-ROUND-FLOOR": /At `pre_approval_gate` it becomes `defer`/,
   "GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE": /`merge-pr.mjs` refuses until a fresh human APPROVED review or the head-pinned `approve merge <sha>` line/,
   "GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH": /no agent pushes a stable tag or publishes/,
   "ADR-OVER-WAIVER": /the orchestrator adds the ADR to the PR/,
@@ -47,7 +47,7 @@ test("each rule has an owner-line with no loose modal wording that names a trigg
     assert.doesNotMatch(text, /\b(should|may|usually|where appropriate)\b/i, id);
     assert.match(text, /\b(When|If)\b/, `${id} trigger`);
     assert.match(text, /\b(judge|orchestrator|operator|refiner|`applyJudgeDispositions`)\b/, `${id} actor`);
-    assert.match(text, /ADR 0188 records this rule|#2756/, id);
+    assert.match(text, /ADR 0339 records the low floor|ADR 0188 records this rule|#2756/, id);
     assert.match(text, RULE_OUTCOME[id], `${id} outcome`);
   }
   // Negative fixture: a rule line without its outcome clause fails the outcome check.
@@ -61,16 +61,16 @@ test("remaining operator lines state why the judge cannot decide them", () => {
 });
 
 test("the low/nit refusal and coercion code is pinned to the rule text", async () => {
-  const text = ruleText("GATE-EXEC-LOW-FIX-UNTIL-CAP");
-  assert.match(text, /`low_fix_until_cap`/);
-  const code = "low_fix_until_cap";
-  assert.match(read("scripts/loop/emit-fixer-work-order.mjs"), new RegExp(`"${code}", \`${code} \\(GATE-EXEC-LOW-FIX-UNTIL-CAP\\)`));
-  assert.match(read("packages/core/src/loop/gate-fanin.mjs"), new RegExp(`${code} \\(GATE-EXEC-LOW-FIX-UNTIL-CAP\\)`));
+  const text = ruleText("GATE-EXEC-LOW-ROUND-FLOOR");
+  assert.match(text, /`low_floor`/);
+  const code = "low_floor";
+  assert.match(read("scripts/loop/emit-fixer-work-order.mjs"), new RegExp(`"${code}", \`${code} \\(GATE-EXEC-LOW-ROUND-FLOOR\\)`));
+  assert.match(read("packages/core/src/loop/gate-fanin.mjs"), new RegExp(`${code} \\(GATE-EXEC-LOW-ROUND-FLOOR\\)`));
 });
 
 // A paraphrased restatement of a rule outcome is a second definition even when no verbatim body is pasted (AC10).
 const OUTCOME_PHRASES = {
-  "GATE-EXEC-LOW-FIX-UNTIL-CAP": [/at `pre_approval_gate`.{0,80}\bdefer\b/i, /\bdefer\b.{0,80}at `pre_approval_gate`/i, /\bfrom round 2\b.{0,80}\bnit\b/i, /\bnit\b.{0,80}\bfrom round 2\b/i, /\bis `act` below the round cap/i, /promoted to `medium`/i],
+  "GATE-EXEC-LOW-ROUND-FLOOR": [/at `pre_approval_gate`.{0,80}\bdefer\b/i, /\bdefer\b.{0,80}at `pre_approval_gate`/i, /\bfrom round 2\b.{0,80}\bnit\b/i, /\bnit\b.{0,80}\bfrom round 2\b/i, /\bis `act` below the round cap/i, /promoted to `medium`/i],
 };
 
 test("S1 rule outcome phrases appear under agents/ and skills/ only in the owning rule line", () => {
@@ -87,5 +87,5 @@ test("S1 rule outcome phrases appear under agents/ and skills/ only in the ownin
     }
   }
   // Negative fixture: the judge-brief wording this guard exists for is detected.
-  assert.match("at `pre_approval_gate` a `low` is `defer`", OUTCOME_PHRASES["GATE-EXEC-LOW-FIX-UNTIL-CAP"][0]);
+  assert.match("at `pre_approval_gate` a `low` is `defer`", OUTCOME_PHRASES["GATE-EXEC-LOW-ROUND-FLOOR"][0]);
 });

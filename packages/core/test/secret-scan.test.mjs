@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ALLOW_MARKER, allowlistReason, parseAddedLines, parseDiffLines, scanDiffText } from "../src/security/secret-scan.mjs";
+import { ALLOW_MARKER, allowlistReason, parseDiffLines, scanDiffText } from "../src/security/secret-scan.mjs";
 
 // Fixture credentials are assembled from fragments at runtime so this file's
 // own committed diff carries no whole credential for the scanner to flag.
@@ -130,10 +130,12 @@ test("AC4: a marker on another line exempts nothing", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// parseAddedLines / scanDiffText — diff-level integration
+// parseDiffLines / scanDiffText — diff-level integration
 // ---------------------------------------------------------------------------
 
-test("parseAddedLines: tracks new-file line numbers, skips removed lines, advances on context lines", () => {
+const addedLines = (diff) => parseDiffLines(diff).filter((e) => e.added).map(({ file, line, text }) => ({ file, line, text }));
+
+test("parseDiffLines: tracks new-file line numbers, skips removed lines, advances on context lines", () => {
   const diff = [
     "diff --git a/f.txt b/f.txt",
     "index 0000000..1111111 100644",
@@ -146,7 +148,7 @@ test("parseAddedLines: tracks new-file line numbers, skips removed lines, advanc
     "+added line two",
     " context two",
   ].join("\n");
-  assert.deepEqual(parseAddedLines(diff), [
+  assert.deepEqual(addedLines(diff), [
     { file: "f.txt", line: 2, text: "added line one" },
     { file: "f.txt", line: 3, text: "added line two" },
   ]);
@@ -172,12 +174,12 @@ test("parseDiffLines: the next file's header lines are not context of the previo
   ]);
 });
 
-test("parseAddedLines: a binary-file diff (no hunk) yields no entries", () => {
+test("parseDiffLines: a binary-file diff (no hunk) yields no entries", () => {
   const diff = ["diff --git a/f.bin b/f.bin", "Binary files a/f.bin and b/f.bin differ"].join("\n");
-  assert.deepEqual(parseAddedLines(diff), []);
+  assert.deepEqual(addedLines(diff), []);
 });
 
-test("parseAddedLines: an added line whose CONTENT starts with '++ ' is content, not a file header", async () => {
+test("parseDiffLines: an added line whose CONTENT starts with '++ ' is content, not a file header", async () => {
   const diff = [
     "diff --git a/config.sh b/config.sh",
     "index 0000000..1111111 100644",
@@ -186,7 +188,7 @@ test("parseAddedLines: an added line whose CONTENT starts with '++ ' is content,
     "@@ -0,0 +1,1 @@",
     `+++ export TOKEN="${MARKER_TOKEN}"`,
   ].join("\n");
-  assert.deepEqual(parseAddedLines(diff), [{ file: "config.sh", line: 1, text: `++ export TOKEN="${MARKER_TOKEN}"` }]);
+  assert.deepEqual(addedLines(diff), [{ file: "config.sh", line: 1, text: `++ export TOKEN="${MARKER_TOKEN}"` }]);
   const result = await scanDiffText(diff);
   assert.deepEqual(result.findings.map((f) => [f.file, f.line]), [["config.sh", 1]]);
 });

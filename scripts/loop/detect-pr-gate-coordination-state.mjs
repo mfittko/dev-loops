@@ -617,7 +617,6 @@ async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand
       issue,
       artifact: detectIssueRefinementArtifact({
         body,
-        issueNumber: issue,
         resolveLinkedDoc: (p) => existsSync(path.isAbsolute(p) ? p : path.resolve(docAnchor, p)),
       }),
     });
@@ -1510,7 +1509,7 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, operator
   if (ledgerHead !== head) return null;
   // Past the cap the act list belongs to the operator (GATE-EXEC-CAP-BRAKES): this route offers the fixer only once an operator decision cleared the stop.
   if (cap > 0 && round > cap) return operatorCleared ? { headSha: head, openActCount: open.length, blockers: [], operatorCleared: true } : null;
-  // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so that list keeps the earlier routing.
+  // The emitter refuses a nit-only act list outside draft round 1 (low_floor), so that list keeps the earlier routing.
   const severities = open.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity]));
   if (round !== 1 && severities.every((s) => normalizeSeverity(s) === "nit")) return null;
   return { headSha: head, openActCount: open.length, blockers: isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [] };
@@ -1521,12 +1520,12 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, operator
  * that read an older PR body than the live one. That round retires automatically and its body-reading units rerun, so the gate round is the next action
  * (GATE-EXEC-ROUND-RETIREMENT, GATE-EXEC-BODY-ONLY-RERUN). Any read failure is false: the earlier routing stays.
  */
-export async function resolveBodyOnlyRetire(context, { repoRoot }) {
+export async function resolveBodyOnlyRetire(context, { repoRoot, config = null }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{40,64}$/.test(head) || typeof context.prData?.body !== "string") return false;
   const gate = context.prData.isDraft === true ? "draft_gate" : "pre_approval_gate";
   // The one probe the context writer uses: the latest round at the head, live or retained (the crash-resume state, AC5).
-  return isBodyOnlyRerun({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, bodySha256: prBodySha256(context.prData.body) }).catch(() => false);
+  return isBodyOnlyRerun({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, bodySha256: prBodySha256(context.prData.body), config }).catch(() => false);
 }
 
 /**
@@ -1774,7 +1773,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const draftOpenActList = context.prData?.isDraft === true
     ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0, operatorCleared: capBrakes?.operatorCleared === true, deferred }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
     : null;
-  const bodyOnlyRetire = await resolveBodyOnlyRetire(context, { repoRoot });
+  const bodyOnlyRetire = await resolveBodyOnlyRetire(context, { repoRoot, config });
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,

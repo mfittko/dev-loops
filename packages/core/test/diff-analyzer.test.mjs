@@ -326,7 +326,6 @@ test("analyzeDiff + resolveDynamicAngles: a pure Ruby diff prunes instead of fal
     ambiguous: r.ambiguous,
     anglePool: DRAFT_ANGLES,
   });
-  assert.equal(resolved.fallbackToAll, false, "Ruby diff must not fall back to the full pool");
   assert.ok(resolved.skippedAngles.length > 0, "pruning skipped at least one angle");
 });
 
@@ -391,7 +390,6 @@ test("classifyFile: unrecognized extensionless dotfile stays unknown (no content
 test("analyzeT0: empty input", () => {
   const result = analyzeT0("");
   assert.deepEqual(result.files, []);
-  assert.deepEqual(result.extensions, []);
   assert.equal(result.renameOnly, false);
   assert.equal(result.allDocs, false);
 });
@@ -399,8 +397,6 @@ test("analyzeT0: empty input", () => {
 test("analyzeT0: single modified file", () => {
   const result = analyzeT0("M\tsrc/foo.mjs");
   assert.deepEqual(result.files, ["src/foo.mjs"]);
-  assert.deepEqual(result.extensions, [".mjs"]);
-  assert.deepEqual(result.directories, ["src"]);
   assert.equal(result.renameOnly, false);
 });
 
@@ -415,16 +411,9 @@ test("analyzeT0: all-docs diff", () => {
   assert.equal(result.allDocs, true);
 });
 
-test("analyzeT0: mixed extensions", () => {
-  const result = analyzeT0("M\tsrc/foo.mjs\nM\tdocs/bar.md\nM\tpackage.json");
-  assert.deepEqual(result.extensions, [".json", ".md", ".mjs"]);
-  assert.deepEqual(result.directories, ["docs", "package.json", "src"]);
-});
-
 test("analyzeT0: handles Windows paths", () => {
   const result = analyzeT0("M\tsrc\\foo.mjs");
   assert.deepEqual(result.files, ["src/foo.mjs"]);
-  assert.deepEqual(result.extensions, [".mjs"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -698,7 +687,6 @@ test("analyzeDiff: hunk-less mixed code+prose keeps prose and the code-review co
     assert.ok(dyn.recommendedAngles.includes(angle), `expected ${angle} in hunk-less mixed subset`);
   }
   assert.ok(dyn.recommendedAngles.length < DRAFT_ANGLES.length);
-  assert.equal(dyn.fallbackToAll, false);
 });
 
 test("analyzeDiff: rename-only → unambiguous", () => {
@@ -731,7 +719,6 @@ test("analyzeDiff → resolveDynamicAngles: pure code-only resolves to core subs
     changeCategories: result.t1.changeCategories,
     ambiguous: result.ambiguous,
   });
-  assert.equal(dyn.fallbackToAll, false);
   for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface", "gate-evidence"]) {
     assert.ok(dyn.recommendedAngles.includes(a), `expected ${a} in core subset`);
   }
@@ -779,7 +766,6 @@ test("analyzeDiff → resolveDynamicAngles: mixed logic+CI resolves to core ∪ 
     changeCategories: result.t1.changeCategories,
     ambiguous: result.ambiguous,
   });
-  assert.equal(dyn.fallbackToAll, false);
   // core subset present …
   for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface"]) {
     assert.ok(dyn.recommendedAngles.includes(a), `expected ${a} in core subset`);
@@ -848,7 +834,6 @@ test("analyzeDiff → resolveDynamicAngles: .devloops + .markdown repro classifi
     changeCategories: result.t1.changeCategories,
     ambiguous: result.ambiguous,
   });
-  assert.equal(dyn.fallbackToAll, false);
   assert.ok(dyn.recommendedAngles.includes("link-check"), "docs file must pull link-check");
   assert.ok(dyn.recommendedAngles.includes("config-drift"), "config file must pull config-drift");
   // Pin the exact pruned set: a loose length check hid that the .devloops

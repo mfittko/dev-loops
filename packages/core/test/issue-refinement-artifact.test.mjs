@@ -11,7 +11,6 @@ import {
   detectAcDodMatrix,
   detectIssueRefinementArtifact,
   detectLinkedRefinementDoc,
-  detectGrillMarker,
   detectGrillEmbedHeading,
   derivePrChecklistsFromIssueMatrix,
   diffPrBodyAgainstIssue,
@@ -20,7 +19,6 @@ import {
   extractUncheckedChecklistItems,
   isGateOutcomeItem,
   parseMarkdownSections,
-  summarizeRefinementGateCheck,
   validatePrBodySpec,
 } from "../src/loop/issue-refinement-artifact.mjs";
 
@@ -235,6 +233,25 @@ test("detectAcDodMatrix still fails closed on an empty (header-only) indexed mat
   assert.equal(m.found, true);
   assert.equal(m.valid, false);
   assert.match(m.reason, /empty/);
+});
+
+test("detectAcDodMatrix keeps an escaped pipe inside a cell and drops the backslash", () => {
+  const body = [
+    "## Acceptance criteria / Definition of Done", "",
+    "| Acceptance criterion | Definition of Done |",
+    "|---|---|",
+    "| AC1 the grep alternation finds both words | D1 a test greps for `foo\\|bar` and passes |",
+    "| AC2 a path like C:\\dir is kept as is | D2 the cell ends with \\| |",
+    "",
+  ].join("\n");
+  const m = detectAcDodMatrix(body);
+  assert.equal(m.valid, true);
+  assert.equal(m.rowCount, 2);
+  assert.equal(m.rows.length, 2);
+  assert.equal(m.rows[1].criterion, "AC2 a path like C:\\dir is kept as is");
+  assert.equal(m.rows[1].evidence, "D2 the cell ends with |");
+  assert.equal(m.rows[0].criterion, "AC1 the grep alternation finds both words");
+  assert.equal(m.rows[0].evidence, "D1 a test greps for `foo|bar` and passes");
 });
 
 // ---------------------------------------------------------------------------
@@ -487,33 +504,6 @@ test("detectLinkedRefinementDoc finds explicit tmp/refinement path", () => {
   const linked = detectLinkedRefinementDoc("See `tmp/refinement/532-plan.md` for ACs.");
   assert.equal(linked.found, true);
   assert.equal(linked.path, "tmp/refinement/532-plan.md");
-});
-
-// ---------------------------------------------------------------------------
-// summarizeRefinementGateCheck (draft-gate wrapper)
-// ---------------------------------------------------------------------------
-
-test("summarizeRefinementGateCheck maps to clean verdict when the matrix + Non-goals are present", () => {
-  const summary = summarizeRefinementGateCheck({ body: "## Problem\n\nX\n" + MATRIX + NGOALS });
-  assert.equal(summary.verdict, "clean");
-  assert.equal(summary.finding, null);
-  assert.equal(summary.blocking, false);
-});
-
-test("summarizeRefinementGateCheck blocks when the mapping matrix is missing", () => {
-  const summary = summarizeRefinementGateCheck({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] done\n" + NGOALS,
-  });
-  assert.equal(summary.verdict, "blocked");
-  assert.equal(summary.finding, MISSING_AC_DOD_MATRIX_FINDING);
-  assert.equal(summary.blocking, true);
-});
-
-test("summarizeRefinementGateCheck maps to blocked verdict when artifact missing", () => {
-  const summary = summarizeRefinementGateCheck({ body: "## Problem\n\nX\n" });
-  assert.equal(summary.verdict, "blocked");
-  assert.equal(summary.finding, "missing_refinement_artifact");
-  assert.equal(summary.blocking, true);
 });
 
 // ---------------------------------------------------------------------------
@@ -808,12 +798,6 @@ test("#1621 detectIssueRefinementArtifact surfaces uncheckedAcItems alongside ac
   assert.deepEqual(artifact.acItems, ["done AC", "open AC one", "open AC two"]);
   // Only unticked AC checkboxes (NOT the DoD item, NOT the ticked AC).
   assert.deepEqual(artifact.uncheckedAcItems, ["open AC one", "open AC two"]);
-});
-
-test("GRILL-SUBLOOP (#1628): detectGrillMarker finds the sanctioned loop-grill marker", () => {
-  assert.equal(detectGrillMarker("<!-- loop-grill: 2026-08-14T00:00:00Z mode:interactive -->\n\n## Acceptance criteria\n\n- [ ] ac"), true);
-  assert.equal(detectGrillMarker("## Acceptance criteria\n\n- [ ] ac"), false);
-  assert.equal(detectGrillMarker(""), false);
 });
 
 test("GRILL-SUBLOOP (#1628): detectGrillEmbedHeading finds grill transcript/synthesis/Q&A embed headings", () => {
