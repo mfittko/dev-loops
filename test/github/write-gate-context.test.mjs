@@ -31,6 +31,7 @@ import {
   buildValidationResultsPath,
   captureDiffFromBase,
   capFixBudgetFacts,
+  closureDeltaFrom,
   actSetAlreadyHeld,
   refusesPastScopedRound,
   resolveScopedFinalRound,
@@ -11914,7 +11915,7 @@ test("a clean scoped round followed by a base-only merge builds a scoped round a
   }
 });
 
-test("a closure round after a base merge and a PR-own change holds the PR-own change and no base-merge file (issue 3668)", async () => {
+test("a closure round after a base merge and a PR-own change holds the PR-own change and no base-merge file", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
     git(repoRoot, ["checkout", "-q", "-b", "mainline", baseSha]);
@@ -11941,7 +11942,7 @@ test("a closure round after a base merge and a PR-own change holds the PR-own ch
   }
 });
 
-for (const [gate, rounds] of [["pre_approval_gate", 2], ["draft_gate", 2]]) {
+for (const gate of ["pre_approval_gate", "draft_gate"]) {
   test(`a ${gate} closure diff holds the PR-own hunk of a file the base merge also changed in another hunk (issue 3668)`, async () => {
     const { repoRoot } = await makeBaseDiffRepo();
     try {
@@ -11961,7 +11962,7 @@ for (const [gate, rounds] of [["pre_approval_gate", 2], ["draft_gate", 2]]) {
       git(repoRoot, ["commit", "-q", "-am", "PR-own change after the merge"]);
       const newHead = git(repoRoot, ["rev-parse", "HEAD"]).trim();
       git(repoRoot, ["update-ref", "refs/remotes/origin/main", mainSha]);
-      await seedClosedRounds(repoRoot, 75, [...Array.from({ length: rounds - 1 }, (_, i) => String(i + 1).repeat(40)), padSha], gate);
+      await seedClosedRounds(repoRoot, 75, ["1".repeat(40), padSha], gate);
       const built = await runPreApprovalContext(repoRoot, 75, newHead, "origin/main", gate);
       assert.notEqual(built.exitCode, 1, built.out);
       const diff = await readFile(path.resolve(repoRoot, buildGateDiffPath({ repo: "owner/repo", pr: 75, gate, headSha: newHead })), "utf8");
@@ -12182,6 +12183,19 @@ test("a body-only rerun past the cap: an emptied PR body runs a full round, and 
     assert.equal(await countCapRounds(options, { repoRoot, prBase: "main", includeLiveCurrentHead: true }), before);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("closureDeltaFrom keeps fromHead and reads a signalled merge-tree as not conflicted", async () => {
+  const args = { fromHead: "a".repeat(40), headSha: "b".repeat(40), prBase: "main", repoRoot: "/unused" };
+  const stub = (tree) => async (a) => (a[0] === "merge-base" ? { code: 0, stdout: "c".repeat(40) } : tree);
+  for (const tree of [{ code: 1, signal: null, stdout: "" }, { code: 1, stdout: "" }]) {
+    assert.equal((await closureDeltaFrom({ ...args, runGit: stub(tree) })).conflicted, true);
+  }
+  for (const tree of [{ code: 1, signal: "SIGTERM", stdout: "" }, { code: 128, stdout: "" }]) {
+    const out = await closureDeltaFrom({ ...args, runGit: stub(tree) });
+    assert.equal(out.conflicted, false);
+    assert.equal(out.from, args.fromHead);
   }
 });
 

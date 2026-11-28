@@ -2304,7 +2304,7 @@ export async function countCapRounds(options, { repoRoot, prBase, includeLiveCur
 export async function closureDeltaFrom({ fromHead, headSha, prBase, repoRoot, runGit = runGitCommand }) {
   const mergedBase = await runGit(["merge-base", headSha, `origin/${prBase}`], { repoRoot, timeout: 30_000 });
   const virtual = mergedBase.code === 0 ? await runGit(["merge-tree", "--write-tree", "--no-messages", fromHead, mergedBase.stdout.trim()], { repoRoot, timeout: 30_000 }) : { code: 128 };
-  return { conflicted: virtual.code === 1, merged: virtual.code === 0, from: virtual.code === 0 ? virtual.stdout.split("\n")[0].trim() || fromHead : fromHead };
+  return { conflicted: virtual.code === 1 && !virtual.signal, merged: virtual.code === 0, from: virtual.code === 0 ? virtual.stdout.split("\n")[0].trim() || fromHead : fromHead };
 }
 
 /** The fix-budget facts of the PR-own diff from `fromHead` to `headSha`: its logic LOC and its added files. An unproven PR-own delta refuses. */
