@@ -8,7 +8,7 @@ Amends [ADR 0074](./0074-deterministic-reconciliation-owns-mechanical-transition
 
 ## Context
 
-ADR 0074 has 1,242 lines. A search of `packages`, `scripts` and `skills` finds no citation of it. Its sections 5 and 19 to 24 require an action envelope, a contract and policy identity, in-flight compatibility rules, typed steering input, a supervisor seam and a fixture-first cutover. None of them exists in code or in a contract. A reader of the ADR cannot tell which parts shipped.
+ADR 0074 has more than 1,200 lines. A search of `packages`, `scripts` and `skills` finds no citation of it. Its sections 5 and 19 to 24 require an action envelope, a contract and policy identity, in-flight compatibility rules, typed steering input, a supervisor seam and a fixture-first cutover. None of them exists in code or in a contract. A reader of the ADR cannot tell which parts shipped.
 
 ## Decision
 
@@ -29,6 +29,8 @@ Sections 5 and 19 to 24 are withdrawn and not scheduled:
 - Section 22, the supervisor seam.
 - Section 23, fixture-first migration and shadowing.
 - Section 24, exclusive cutover and rollback.
+
+The ADR 0074 consequences that depend on these sections are withdrawn with them: "Software upgrades do not require draining active runs", "A future supervisor has a clear seam", "Delivery is intentionally aggressive" and "Verification and cutover criteria are correctness-first".
 
 A new proposal for any of them needs its own record.
 
