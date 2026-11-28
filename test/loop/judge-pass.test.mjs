@@ -465,7 +465,7 @@ for (const [label, maxReviewRounds, expectedActs] of [["at the round cap", 1, 4]
   assert.equal(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")).length, expectedActs);
 });
 
-test("judgePassCli: a completed live same-head ledger counts as an earlier round, so round 2 closes an all-nit act cluster as the writer does (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
+test("judgePassCli: a completed live same-head ledger counts as an earlier round, so round 2 closes an all-nit act cluster as the writer does (GATE-EXEC-LOW-ROUND-FLOOR)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-own-ledger-"));
   await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
   // The durable log is written after judge-pass: a completed ledger at the head is an earlier round of the same head.
@@ -518,7 +518,7 @@ test("runJudgePass never defers an unstamped [low, medium] duplicate cluster thr
   assert.deepEqual(result.enriched.map((f) => f.judgeDisposition), ["act", "act"]);
 });
 
-for (const [label, severities, options] of [["[nit, low] in round 2", ["nit", "low"], { pastCap: false, round: 2 }], ["[low, medium] at the cap", ["low", "medium"], { pastCap: true, round: 4 }]]) test(`the deduped fixer act list keeps the full ${label} cluster severities (ADR 0188)`, () => {
+for (const [label, severities, options] of [["[nit, low] in round 1", ["nit", "low"], { pastCap: false, round: 1 }], ["[low, medium] at the cap", ["low", "medium"], { pastCap: true, round: 4 }]]) test(`the deduped fixer act list keeps the full ${label} cluster severities (ADR 0188)`, () => {
   const findings = ledger(...severities.map((severity, i) => locatedFinding({ severity, angle: i === 0 ? "correctness" : "security", summary: `null deref (${severity} report)` })));
   const act = { disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" };
   const result = runJudgePass(findings, verdict({ dispositions: [{ index: 0, ...act }, { index: 1, ...act }] }), HEAD, options);
@@ -543,14 +543,59 @@ test("judgePassCli accepts a clean low-only ledger whose failOpen act is promote
   assert.equal(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8"))[0].severity, "medium");
 });
 
-test("runJudgePass keeps an unstamped [nit, low] duplicate act on both below the cap in round 2 (GATE-EXEC-LOW-FIX-UNTIL-CAP)", () => {
+test("runJudgePass keeps an unstamped [nit, low] duplicate act on both in round 1 and floors both at reject in round 2 (GATE-EXEC-LOW-ROUND-FLOOR)", () => {
   const findings = ledger(
     locatedFinding({ severity: "nit", angle: "correctness", summary: "null deref (nit report)" }),
     locatedFinding({ severity: "low", angle: "security", summary: "null deref (low report)" }),
   );
   const act = { disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" };
-  const result = runJudgePass(findings, verdict({ dispositions: [{ index: 0, ...act }, { index: 1, ...act }] }), HEAD, { pastCap: false, round: 2 });
-  assert.deepEqual(result.enriched.map((f) => f.judgeDisposition), ["act", "act"]);
+  const run = (round) => runJudgePass(findings, verdict({ dispositions: [{ index: 0, ...act }, { index: 1, ...act }] }), HEAD, { pastCap: false, round }).enriched.map((f) => f.judgeDisposition);
+  assert.deepEqual(run(1), ["act", "act"]);
+  assert.deepEqual(run(2), ["reject", "reject"]);
+});
+
+// ADR 0339: from draft_gate round 2 on, a low cluster floors at reject at every round, unless the judge names an exception.
+const lowFloorDispose = (disposition, options, extra = {}, severities = ["low"]) => {
+  const findings = ledger(...severities.map((severity, i) => locatedFinding({ severity, angle: `angle-${i}`, summary: `null deref (${severity} report ${i})`, clusterId: 0 })));
+  const base = disposition === "act" ? {} : { reason: "out of scope", followUpDraft: { title: "t", body: "b" } };
+  const dispositions = [{ index: 0, disposition, title: "t", detail: "d", fix: "f", rationale: "in scope", ...base, ...extra }];
+  return runJudgePass(findings, verdict({ dispositions }), HEAD, options).enriched.map((f) => [f.judgeDisposition, f.judgeReason?.split(" ")[0]]);
+};
+
+test("a low act stays act in draft round 1 (ADR 0339)", () => {
+  assert.deepEqual(lowFloorDispose("act", { round: 1 }), [["act", undefined]]);
+});
+
+test("a low act floors at reject in draft round 2, below the cap (ADR 0339)", () => {
+  assert.deepEqual(lowFloorDispose("act", { round: 2 }), [["reject", "low_floor"]]);
+});
+
+test("a low act and a low defer floor at reject past the cap round (ADR 0339)", () => {
+  assert.deepEqual(lowFloorDispose("act", { round: 4 }), [["reject", "low_floor"]]);
+  assert.deepEqual(lowFloorDispose("defer", { round: 4 }), [["reject", "low_floor"]]);
+});
+
+test("a judged reject of a low keeps its own reason from round 2 on (ADR 0339)", () => {
+  assert.deepEqual(lowFloorDispose("reject", { round: 3 }), [["reject", "out"]]);
+});
+
+for (const lowException of ["unmet_ac", "regression", "security"]) test(`a low marked ${lowException} keeps its judged disposition in round 2 and past the cap (ADR 0339)`, () => {
+  assert.deepEqual(lowFloorDispose("act", { round: 2 }, { lowException }), [["act", undefined]]);
+  assert.deepEqual(lowFloorDispose("act", { round: 5 }, { lowException }), [["act", undefined]]);
+  assert.deepEqual(lowFloorDispose("defer", { round: 5 }, { lowException }), [["defer", "out"]]);
+});
+
+test("a [nit, low] cluster floors at reject in round 2 and keeps act with an exception (ADR 0339)", () => {
+  assert.deepEqual(lowFloorDispose("act", { round: 2 }, {}, ["nit", "low"]), [["reject", "low_floor"], ["reject", "low_floor"]]);
+  assert.deepEqual(lowFloorDispose("act", { round: 2 }, { lowException: "regression" }, ["nit", "low"]).map((r) => r[0]), ["act", "act"]);
+});
+
+test("a failOpen low keeps its medium act in round 2 (ADR 0188)", () => {
+  assert.deepEqual(lowFloorDispose("act", { round: 2 }, { failOpen: true }), [["act", undefined]]);
+});
+
+test("a lowException other than unmet_ac, regression or security fails the judge verdict closed (ADR 0339)", () => {
+  assert.throws(() => lowFloorDispose("act", { round: 2 }, { lowException: "tempting" }), /lowException/);
 });
 
 // #2246: the fail-closed half of the same rule — a clean verdict with an act on
@@ -2080,7 +2125,7 @@ for (const gate of ["draft_gate", "pre_approval_gate"]) {
   });
 }
 
-test("judgePassCli counts the round from --tmp-root, like the ledger writer and the fixer emitter (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
+test("judgePassCli counts the round from --tmp-root, like the ledger writer and the fixer emitter (GATE-EXEC-LOW-ROUND-FLOOR)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-tmp-root-"));
   await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ severity: "nit", summary: "tidy comment" })] }));
@@ -2107,7 +2152,7 @@ test("judgePassCli counts the round from --tmp-root, like the ledger writer and 
   assert.equal(await run({}), 1);
 });
 
-// GATE-EXEC-LOW-FIX-UNTIL-CAP at pre_approval_gate (#2724 slice 0). Shape of the PR 2945 round 5 ledger at 77a28e84: 0 high, 0 medium, one judge-acted low.
+// GATE-EXEC-LOW-ROUND-FLOOR at pre_approval_gate (#2724 slice 0). Shape of the PR 2945 round 5 ledger at 77a28e84: 0 high, 0 medium, one judge-acted low.
 const PR2945_ROUND5_LOW = { severity: "low", angle: "contradiction-lens", summary: "GATE-EXEC-FIXER-CYCLE-BOUND still names the draft round cap as the fixer stop", clusterId: 0, files: ["skills/docs/gate-review-sub-loop-contract.md"], line: 173 };
 const pre2945Verdict = (extra) => ({ headSha: HEAD, scopeDrift: { verdict: "within_scope", rationale: "r", driftedAreas: [] }, dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", rationale: "r", ...extra }] });
 
@@ -2120,10 +2165,10 @@ test("PR 2945 round 5 replay: a low-only pre_approval_gate round has no act item
   const result = runJudgePass([PR2945_ROUND5_LOW], pre2945Verdict(), HEAD, { pastCap: true, round: 0 });
   assert.deepEqual(result.act, []);
   assert.equal(result.enriched[0].judgeDisposition, "defer");
-  assert.match(result.enriched[0].judgeReason, /^low_fix_until_cap /);
+  assert.match(result.enriched[0].judgeReason, /^low_floor /);
 });
 
-test("judgePassCli at pre_approval_gate defers a low-only act verdict with low_fix_until_cap (#2724 wiring)", async () => {
+test("judgePassCli at pre_approval_gate defers a low-only act verdict with low_floor (#2724 wiring)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-pre-approval-"));
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "clean", findings: [finding({ severity: "low", summary: "low one" })] }));
   await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting to fix" }] })));
@@ -2136,11 +2181,11 @@ test("judgePassCli at pre_approval_gate defers a low-only act verdict with low_f
   const enriched = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings[0];
   assert.equal(enriched.judgeDisposition, "defer");
   assert.equal(enriched.followUpIssueNumber, 99);
-  assert.match(enriched.judgeReason, /^low_fix_until_cap /);
+  assert.match(enriched.judgeReason, /^low_floor /);
   assert.equal(payload.overridden.length, 1);
   assert.equal(payload.overridden[0].index, 0);
   assert.equal(payload.overridden[0].applied, "defer");
-  assert.match(payload.overridden[0].reason, /^low_fix_until_cap /);
+  assert.match(payload.overridden[0].reason, /^low_floor /);
 });
 
 test("judgePassCli names the stamped cluster index of an overridden low among two stamped findings", async () => {

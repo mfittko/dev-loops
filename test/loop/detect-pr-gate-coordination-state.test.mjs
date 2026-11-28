@@ -4927,7 +4927,7 @@ test("3611: a below-cap all-PR-body act list with a high item reports blocked on
   assert.doesNotMatch(result.reason, /Round N\+1 never runs/);
 });
 
-// The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so no fixer route follows it.
+// The emitter refuses a nit-only act list outside draft round 1 (low_floor), so no fixer route follows it.
 test("3105 AC15: a nit-only act list in draft round 2 keeps the earlier routing", async () => {
   const result = await detectCapFixture({ cap: 4, priorRounds: 1, finding: { severity: "nit", summary: "rename x" } });
   assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
