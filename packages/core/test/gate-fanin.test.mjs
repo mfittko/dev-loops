@@ -1666,9 +1666,17 @@ describe("applyJudgeDispositions (#1525)", () => {
       assert.deepEqual(findings.map((f) => [f.severity, f.judgeDisposition]), [["medium", "act"], ["low", "act"]]);
     });
 
-    test("failOpen on a defer disposition fails closed", () => {
+    test("a pre_approval_gate medium defer with failOpen validates and blocks at the cap", () => {
       const defer = { disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "r", followUpDraft: { title: "t", body: "b" } };
-      assert.throws(() => applyJudgeDispositions(cluster("low"), judgeVerdict([{ index: 0, ...defer, failOpen: true }])), /failOpen is not allowed on a defer disposition/);
+      const { findings } = applyJudgeDispositions(cluster("medium"), judgeVerdict([{ index: 0, ...defer, failOpen: true }]), { pastCap: true, round: 0 });
+      assert.deepEqual(findings.map((f) => [f.judgeDisposition, f.failOpen]), [["defer", true]]);
+      assert.equal(fanin.pastCapBlockers(findings, { round: 2, cap: 2 }).length, 1);
+    });
+
+    test("a draft round 2 low defer with failOpen keeps defer", () => {
+      const defer = { disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "r", followUpDraft: { title: "t", body: "b" } };
+      const { findings } = applyJudgeDispositions(cluster("low"), judgeVerdict([{ index: 0, ...defer, failOpen: true }]), { pastCap: false, round: 2 });
+      assert.deepEqual(findings.map((f) => [f.judgeDisposition, f.failOpen]), [["defer", true]]);
     });
 
     test("an unstamped sibling reject's lowException does not exempt the act member from the round-2 floor", () => {

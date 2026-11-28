@@ -1193,9 +1193,6 @@ export function validateJudgeVerdict(verdict) {
     if (entry.failOpen !== undefined && typeof entry.failOpen !== "boolean") {
       throw new Error(`judge verdict.dispositions[${i}].failOpen must be a boolean when present`);
     }
-    if (entry.failOpen === true && entry.disposition === "defer") {
-      throw new Error(`judge verdict.dispositions[${i}].failOpen is not allowed on a defer disposition (a defer would lose its followUpDraft at the floor)`);
-    }
     if (entry.lowException !== undefined && !LOW_EXCEPTIONS.includes(entry.lowException)) {
       throw new Error(`judge verdict.dispositions[${i}].lowException must be one of: ${LOW_EXCEPTIONS.join(", ")} when present`);
     }
@@ -1310,11 +1307,15 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
     const allNit = severities.every((s) => s === "nit");
     // ADR 0339: from draft round 2 on a cluster holding a low floors at reject, act or defer alike, unless the judge names an exception.
     const lowException = d.lowException !== undefined || (!stamped && validated.dispositions.some((o) => o.disposition !== "reject" && o.lowException !== undefined && memberIndices.includes(o.index)));
-    const lowFloored = lowOrNitOnly && !allNit && !pastCap && round >= 2 && !lowException;
+    // A failOpen cluster is never floored: a failOpen defer keeps its disposition and blocks at the cap (GATE-EXEC-SOFT-CAP).
+    const lowFloored = lowOrNitOnly && !allNit && !pastCap && round >= 2 && !lowException && !failOpen;
+    const nitFloored = allNit && disposition === "act" && !(round === 1 && !pastCap);
+    const lowCapDeferred = !allNit && pastCap && disposition === "act";
+    const lowFlooredToReject = lowFloored && (disposition === "act" || disposition === "defer");
     if (disposition === "act" && failOpen && lowOrNitOnly && severities.includes("low")) {
       promote = true;
-    } else if (lowOrNitOnly && (disposition === "act" || (disposition === "defer" && lowFloored)) && (allNit ? disposition === "act" && !(round === 1 && !pastCap) : pastCap || lowFloored)) {
-      disposition = allNit || lowFloored ? "reject" : "defer";
+    } else if (lowOrNitOnly && (nitFloored || lowCapDeferred || lowFlooredToReject)) {
+      disposition = nitFloored || lowFlooredToReject ? "reject" : "defer";
       const code = "low_floor (GATE-EXEC-LOW-ROUND-FLOOR)";
       reason = typeof reason === "string" && reason.trim().length > 0 ? `${code}: ${reason.trim()}` : code;
       if (disposition === "defer" && !followUpDraft) followUpDraft = { title: d.title.trim(), body: d.detail.trim() };
