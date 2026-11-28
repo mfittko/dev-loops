@@ -2300,18 +2300,23 @@ export async function countCapRounds(options, { repoRoot, prBase, includeLiveCur
   return raw - forced;
 }
 
+/** The delta's start tree: `fromHead` merged with the current base, so what a base merge brought is in neither the fix budget nor the closure diff; a failed merge-tree (exit 128 or older git) keeps `fromHead`, an over-count. */
+export async function closureDeltaFrom({ fromHead, headSha, prBase, repoRoot, runGit = runGitCommand }) {
+  const mergedBase = await runGit(["merge-base", headSha, `origin/${prBase}`], { repoRoot, timeout: 30_000 });
+  const virtual = mergedBase.code === 0 ? await runGit(["merge-tree", "--write-tree", "--no-messages", fromHead, mergedBase.stdout.trim()], { repoRoot, timeout: 30_000 }) : { code: 128 };
+  return { conflicted: virtual.code === 1, merged: virtual.code === 0, from: virtual.code === 0 ? virtual.stdout.split("\n")[0].trim() || fromHead : fromHead };
+}
+
 /** The fix-budget facts of the PR-own diff from `fromHead` to `headSha`: its logic LOC and its added files. An unproven PR-own delta refuses. */
 export async function capFixBudgetFacts({ fromHead, headSha, prBase, repoRoot, runGit = runGitCommand }) {
   const own = await captureMainRelativeChangedFilesSince({ base: fromHead, head: headSha, mainRef: `origin/${prBase}`, repoRoot });
   if (!own.reduced) throw new Error(`closure_delta_no_pr_own_change: the PR-own delta since ${fromHead} is unproven (origin/${prBase} does not resolve); the fix budget cannot be measured (GATE-EXEC-CAP-BRAKES).`);
   // An empty PR-own delta is refused later with its own reason (closure_delta_no_pr_own_change).
   if (own.changedFiles.length === 0) return { logicLoc: 0, addedFiles: 0 };
-  // The delta starts at fromHead merged with the current base, so what a base merge brought is not a fix; a failed merge-tree (exit 128 or older git) keeps fromHead, an over-count.
-  const mergedBase = await runGit(["merge-base", headSha, `origin/${prBase}`], { repoRoot, timeout: 30_000 });
-  const virtual = mergedBase.code === 0 ? await runGit(["merge-tree", "--write-tree", "--no-messages", fromHead, mergedBase.stdout.trim()], { repoRoot, timeout: 30_000 }) : { code: 128 };
+  const virtualFrom = await closureDeltaFrom({ fromHead, headSha, prBase, repoRoot, runGit });
   // A conflicted merge of the base has no fix budget: its resolution is not a fix.
-  if (virtual.code === 1) return { logicLoc: 0, addedFiles: 0 };
-  const from = virtual.code === 0 ? virtual.stdout.split("\n")[0].trim() || fromHead : fromHead;
+  if (virtualFrom.conflicted) return { logicLoc: 0, addedFiles: 0 };
+  const from = virtualFrom.from;
   const { wholeLogicLoc } = await evaluatePrSizeBudget({ base: from, head: headSha, repoRoot, paths: own.changedFiles, twoDot: true });
   const added = await runGit(["diff", "--name-status", "--diff-filter=A", `${from}..${headSha}`, "--", ...own.changedFiles], { repoRoot });
   // runGitCommand resolves on a nonzero exit: an unmeasured added-file count refuses like an unproven PR-own delta, never reads as zero.
@@ -3469,9 +3474,9 @@ export const DIFF_ISOLATION_FLAGS = [
   "-c", "core.abbrev=12",
   "-c", "core.autocrlf=false",
 ];
-export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 1024, paths = [] }) {
+export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 1024, paths = [], twoDot = false }) {
   const pathspec = paths.length > 0 ? ["--", ...paths] : []; // closure round (ADR 0197): only the PR-own files
-  const range = `${base}...HEAD`;
+  const range = twoDot ? [base, "HEAD"] : [`${base}...HEAD`]; // a merged-base tree is no commit, so it diffs two-dot
   const isolation = paths.length > 0 ? ["--literal-pathspecs", ...DIFF_ISOLATION_FLAGS] : DIFF_ISOLATION_FLAGS;
   const runGit = (args) => execFileSync("git", [...isolation, ...args], {
     cwd: repoRoot,
@@ -3485,7 +3490,7 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
   // FAIL-CLOSED: --name-status feeds changedFiles + adjacentCode (the bundle's core).
   let nameStatusOutput;
   try {
-    nameStatusOutput = runGit(["diff", "--no-ext-diff", "--name-status", range, ...pathspec]);
+    nameStatusOutput = runGit(["diff", "--no-ext-diff", "--name-status", ...range, ...pathspec]);
   } catch (err) {
     throw new Error(`git diff against --base ${JSON.stringify(base)} failed: ${err?.message ?? err}`);
   }
@@ -3493,7 +3498,7 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
   // failure degrade to an empty diffOutput (diffPath becomes null downstream).
   let diffOutput = "";
   try {
-    diffOutput = runGit(["diff", "--no-ext-diff", range, ...pathspec]);
+    diffOutput = runGit(["diff", "--no-ext-diff", ...range, ...pathspec]);
   } catch (err) {
     process.stderr.write(`[gate-context] full-diff capture against --base ${JSON.stringify(base)} failed (continuing without scope.diffPath): ${err?.message ?? err}\n`);
     diffOutput = "";
@@ -5033,7 +5038,7 @@ export async function main(
       const baseFetched = ["base_current", "base_stale_integrate_first"].includes(options.baseFreshness.status);
       options.base = baseFetched && normalizeBaseBranch(options.base) === options.baseFreshness.base ? `origin/${options.baseFreshness.base}` : anchorBaseRef(options.base, { repoRoot });
       // ADR 0197: the closure bundle holds the PR-own changes since fromHead; the content of a merged-in base is excluded. No PR-own change refuses (never clean).
-      let closurePaths, diffFrom = options.closureRound?.fromHead ?? options.base;
+      let closurePaths, closureTwoDot = false, diffFrom = options.closureRound?.fromHead ?? options.base;
       if (options.closureRound) {
         const own = await captureMainRelativeChangedFilesSince({ base: options.closureRound.fromHead, mainRef: `origin/${prBase}`, repoRoot });
         // A clean closed round followed only by a base merge has no PR-own delta to review: review the whole PR-own diff against the base at the merged head (AC6, AC12).
@@ -5044,10 +5049,13 @@ export async function main(
           throw new Error(`closure_delta_no_pr_own_change: the closure round's PR-own delta since ${options.closureRound.fromHead} is ${own.reduced ? "empty (the commits since then only merged the base)" : `unproven (origin/${prBase} does not resolve)`}; refusing a bundle without the PR's own changes (GATE-EXEC-ROUND-CAP).`);
         } else {
           closurePaths = own.changedFiles;
+          // A base merge since fromHead is no PR-own change: diff from fromHead merged with the base (a conflicted merge keeps fromHead).
+          const virtualFrom = await closureDeltaFrom({ fromHead: diffFrom, headSha: options.headSha, prBase, repoRoot });
+          if (virtualFrom.merged) { diffFrom = virtualFrom.from; closureTwoDot = true; }
         }
       }
       // The scoped round diffs from the previous round head (AC3), restricted to the PR-own paths; other rounds diff from the PR base.
-      diff = captureDiffFromBase(diffFrom, { repoRoot, paths: closurePaths });
+      diff = captureDiffFromBase(diffFrom, { repoRoot, paths: closurePaths, twoDot: closureTwoDot });
       const scope = await resolveDiffScope(
         { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", expansion: options.config?.gates?.contextExpansion },
         { repoRoot },

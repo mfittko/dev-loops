@@ -11914,6 +11914,65 @@ test("a clean scoped round followed by a base-only merge builds a scoped round a
   }
 });
 
+test("a closure round after a base merge and a PR-own change holds the PR-own change and no base-merge file (issue 3668)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["checkout", "-q", "-b", "mainline", baseSha]);
+    await writeFile(path.join(repoRoot, "src/other.mjs"), "export const other = 1;\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "main advances"]);
+    const mainSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    git(repoRoot, ["checkout", "-q", "--detach", headSha]);
+    git(repoRoot, ["merge", "--no-ff", "--no-commit", mainSha]);
+    git(repoRoot, ["commit", "-q", "-m", "merge main"]);
+    await writeFile(path.join(repoRoot, "src/caller.mjs"), 'import { changed } from "./changed.mjs";\nchanged();\nchanged();\n', "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "PR-own change after the merge"]);
+    const newHead = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", mainSha]);
+    await seedClosedRounds(repoRoot, 74, ["1".repeat(40), headSha], "pre_approval_gate");
+    const built = await runPreApprovalContext(repoRoot, 74, newHead, "origin/main");
+    assert.notEqual(built.exitCode, 1, built.out);
+    const diff = await readFile(path.resolve(repoRoot, buildGateDiffPath({ repo: "owner/repo", pr: 74, gate: "pre_approval_gate", headSha: newHead })), "utf8");
+    assert.match(diff, /src\/caller\.mjs/, "the PR-own change is in the scoped diff");
+    assert.doesNotMatch(diff, /src\/other\.mjs/, "no base-merge file");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+for (const [gate, rounds] of [["pre_approval_gate", 2], ["draft_gate", 2]]) {
+  test(`a ${gate} closure diff holds the PR-own hunk of a file the base merge also changed in another hunk (issue 3668)`, async () => {
+    const { repoRoot } = await makeBaseDiffRepo();
+    try {
+      const lines = Array.from({ length: 40 }, (_, i) => `const v${i} = ${i};`);
+      const write = (ls) => writeFile(path.join(repoRoot, "src/caller.mjs"), `${ls.join("\n")}\n`, "utf8");
+      await write(lines);
+      git(repoRoot, ["add", "-A"]);
+      git(repoRoot, ["commit", "-q", "-m", "long caller"]);
+      const padSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+      git(repoRoot, ["checkout", "-q", "-b", "mainline", padSha]);
+      await write(lines.map((l, i) => (i === 1 ? "const baseSide = 1;" : l)));
+      git(repoRoot, ["commit", "-q", "-am", "main advances"]);
+      const mainSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+      git(repoRoot, ["checkout", "-q", "--detach", padSha]);
+      git(repoRoot, ["merge", "--no-ff", "-q", "-m", "merge main", mainSha]);
+      await write(lines.map((l, i) => (i === 1 ? "const baseSide = 1;" : i === 38 ? "const prOwn = 1;" : l)));
+      git(repoRoot, ["commit", "-q", "-am", "PR-own change after the merge"]);
+      const newHead = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+      git(repoRoot, ["update-ref", "refs/remotes/origin/main", mainSha]);
+      await seedClosedRounds(repoRoot, 75, [...Array.from({ length: rounds - 1 }, (_, i) => String(i + 1).repeat(40)), padSha], gate);
+      const built = await runPreApprovalContext(repoRoot, 75, newHead, "origin/main", gate);
+      assert.notEqual(built.exitCode, 1, built.out);
+      const diff = await readFile(path.resolve(repoRoot, buildGateDiffPath({ repo: "owner/repo", pr: 75, gate, headSha: newHead })), "utf8");
+      assert.match(diff, /prOwn/, "the PR-own hunk is in the scoped diff");
+      assert.doesNotMatch(diff, /baseSide/, "the base-side hunk is not");
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+}
+
 test("a round past the scoped round that follows a clean round runs as a scoped round within the fix budget and refuses over it", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
