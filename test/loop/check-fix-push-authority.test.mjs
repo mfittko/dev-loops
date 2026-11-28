@@ -107,7 +107,7 @@ test("the refusal names the no-commit close command with the baseline head, and 
     writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head, branch: "issue-a" });
     const refused = checkFixPushAuthority(root);
     assert.equal(refused.ok, false);
-    assert.match(refused.reason, new RegExp(`close it with the gate close-sequence command named below \\(baseline ${head}\\)`));
+    assert.match(refused.reason, new RegExp(`an abandoned sequence closes with the gate close-sequence command named below \\(baseline ${head}\\)`));
     assert.doesNotMatch(refused.reason, /delete the marker|delet/i);
     assert.match(refused.reason, /dev-loops-run cli\/index\.mjs gate close-sequence --head <baseline sha> --repo <owner\/name> --pr <number>/);
     assert.doesNotMatch(refused.reason, /close-gate-sequence\.mjs/);
@@ -123,7 +123,7 @@ test("the refusal for a marker that names no branch does not name the no-commit 
       mutate();
       const refused = checkFixPushAuthority(root);
       assert.equal(refused.ok, false);
-      assert.doesNotMatch(refused.reason, /close it with|delet/i);
+      assert.doesNotMatch(refused.reason, /closes with the gate close-sequence command|delet/i);
       assert.match(refused.reason, /names no branch.*PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery/);
     }
   });
@@ -179,10 +179,10 @@ test("END-TO-END REGRESSION abandoned sequence lockout: refused, close-sequence,
 });
 
 test("recoveryHint renders the close command only for a 40 or 64 char lowercase hex baseline head", () => {
-  for (const ok of ["a".repeat(40), "0123456789abcdef".repeat(4)]) assert.match(recoveryHint(ok, "/m", "issue-a"), new RegExp(`close it with the gate close-sequence command named below \\(baseline ${ok}\\)`));
+  for (const ok of ["a".repeat(40), "0123456789abcdef".repeat(4)]) assert.match(recoveryHint(ok, "/m", "issue-a"), new RegExp(`an abandoned sequence closes with the gate close-sequence command named below \\(baseline ${ok}\\)`));
   for (const bad of ["A".repeat(40), "a".repeat(39), "a".repeat(41), "a".repeat(40) + "; rm -rf /", "$(id)", "a".repeat(63), ""]) {
     const hint = recoveryHint(bad, "/m", "issue-a");
-    assert.doesNotMatch(hint, /close it with/, bad);
+    assert.doesNotMatch(hint, /closes with the gate close-sequence command/, bad);
     assert.match(hint, /PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery/);
     assert.match(hint, /sequence marker is \/m/);
   }
