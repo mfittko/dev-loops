@@ -1073,6 +1073,13 @@
               "minimum": 0,
               "maximum": 1
             },
+            "deletionDiscount": {
+              "default": 0.25,
+              "description": "Weight applied to removed code lines when computing logicLoc (added lines weigh 1).",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
             "absoluteHardLoc": {
               "default": 2000,
               "description": "Whole-PR logic-LOC ceiling; blocks with no waiver possible above this, for any tier.",

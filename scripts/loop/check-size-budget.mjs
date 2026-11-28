@@ -8,7 +8,8 @@
  * file→tier mapping from `gates.size` config, and emits an outcome
  * (`pass` | `escalate` | `block`) plus the reasons that produced it.
  *
- * `logicLoc = (code - commentOnly) + testDiscount * test`, summed from the
+ * `logicLoc = (addedCode - addedComments) + deletionDiscount * (removedCode - removedComments)
+ * + testDiscount * test`, summed from the
  * existing diff classifier's per-file category
  * (@dev-loops/core/analysis/diff-analyzer): only files that classify as `code`
  * or `test` contribute — a file classifying as `config`/`docs`/`ci`/`asset`/`unknown`
@@ -54,7 +55,8 @@ const USAGE = `Usage: check-size-budget.mjs --base <ref> [--head <ref>] [--waive
 Fail-closed PR size/tier budget: PURE COMPUTATION only (no enforcement —
 this script does not block \`gh pr ready\`; a later phase wires it into
 readyForReview()/pre-pr-ready-gate.mjs). Reads gates.size config, computes
-logicLoc = (code - commentOnly) + testDiscount * test from the existing diff
+logicLoc = (addedCode - addedComments) + deletionDiscount * (removedCode -
+removedComments) + testDiscount * test from the existing diff
 classifier (generated/lockfile content excluded via the classifier's own
 category signal; a code file's comment-only changed lines are not counted as
 logic), resolves each changed file's tier from configured path patterns, and
@@ -80,7 +82,7 @@ Output (stdout, JSON):
     "wholeLogicLoc": 120,
     "t1SliceLoc": 0,
     "tierLogicLoc": { "default": 120, "t1": 0, "t3": 0 },
-    "thresholds": { "testDiscount": 0.25, "absoluteHardLoc": 2000,
+    "thresholds": { "testDiscount": 0.25, "deletionDiscount": 0.25,"absoluteHardLoc": 2000,
                      "default": { "softLoc": 400, "waiverLoc": 1500 },
                      "t1": null },
     "ambiguous": false,
@@ -180,7 +182,7 @@ export function parseNumstatZ(output) {
 // stricter copy that would flag the guard's own comments differently.
 // ---------------------------------------------------------------------------
 
-export function countCommentChangedLinesByFile(diffOutput) {
+export function countCommentChangedLinesByFile(diffOutput, removedCounts = new Map()) {
   const counts = new Map();
   if (typeof diffOutput !== "string" || diffOutput.length === 0) return counts;
   // Track the `--- a/` (removed) and `+++ b/` (added) targets separately so a
@@ -190,8 +192,11 @@ export function countCommentChangedLinesByFile(diffOutput) {
   // are still discounted (a comment-only file deletion is a comment-only diff).
   let removedFile = null;
   let addedFile = null;
-  const bump = (file, text) => {
-    if (file && isCommentLine(text, file)) counts.set(file, (counts.get(file) ?? 0) + 1);
+  // `counts` holds all changed comment lines; `removedCounts` the removed subset.
+  const bump = (file, text, removed) => {
+    if (!file || !isCommentLine(text, file)) return;
+    counts.set(file, (counts.get(file) ?? 0) + 1);
+    if (removed) removedCounts.set(file, (removedCounts.get(file) ?? 0) + 1);
   };
   for (const line of diffOutput.split("\n")) {
     // `+++ ` / `--- ` are file headers only when they resolve to a real diff
@@ -215,7 +220,7 @@ export function countCommentChangedLinesByFile(diffOutput) {
     // A `+`/`-` content line: attribute it to the added/removed file target and
     // count it only when it is a comment line.
     if (line.startsWith("+")) bump(addedFile, line.slice(1));
-    else if (line.startsWith("-")) bump(removedFile, line.slice(1));
+    else if (line.startsWith("-")) bump(removedFile, line.slice(1), true);
   }
   return counts;
 }
@@ -225,6 +230,7 @@ export function countCommentChangedLinesByFile(diffOutput) {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_TEST_DISCOUNT = 0.25;
+const DEFAULT_DELETION_DISCOUNT = 0.25;
 const DEFAULT_ABSOLUTE_HARD_LOC = 2000;
 // Exported so a caller that needs the same fallback numbers (e.g. the refiner
 // phase-doc size estimate — see plan-file-refine-contract.mjs) uses the exact
@@ -265,7 +271,7 @@ const UNCLASSIFIED_BLOCK_RATIO = 0.5;
  *   An absent/empty value while nameStatusOutput names a MIXED change is an
  *   unwaivable block: the budget would be computed from incomplete evidence.
  * @param {string} [input.numstatOutput] — `git diff --numstat -z` output
- * @param {{ testDiscount?: number, absoluteHardLoc?: number, tiers?: { default?: object, t1?: object, t3?: object } }} [input.sizeConfig]
+ * @param {{ testDiscount?: number, deletionDiscount?: number, absoluteHardLoc?: number, tiers?: { default?: object, t1?: object, t3?: object } }} [input.sizeConfig]
  * @param {Array<unknown>} [input.configErrors] — `loadDevLoopConfig` errors; non-empty blocks with no waiver
  * @param {boolean} [input.waived] — a size-budget waiver was granted (grant
  *   surface itself is a later phase; this is the computation-facing input)
@@ -284,6 +290,7 @@ export function computeSizeBudget({
   rules = null,
 } = {}) {
   const testDiscount = typeof sizeConfig?.testDiscount === "number" ? sizeConfig.testDiscount : DEFAULT_TEST_DISCOUNT;
+  const deletionDiscount = typeof sizeConfig?.deletionDiscount === "number" ? sizeConfig.deletionDiscount : DEFAULT_DELETION_DISCOUNT;
   const absoluteHardLoc = typeof sizeConfig?.absoluteHardLoc === "number" ? sizeConfig.absoluteHardLoc : DEFAULT_ABSOLUTE_HARD_LOC;
   const tiers = sizeConfig?.tiers ?? {};
   const defaultTier = { ...DEFAULT_TIER_DEFAULTS, ...(tiers.default ?? {}) };
@@ -291,7 +298,8 @@ export function computeSizeBudget({
 
   const diffAnalysis = analyzeDiff({ nameStatusOutput, diffOutput, rules });
   const files = parseNumstatZ(numstatOutput);
-  const commentChangedLines = countCommentChangedLinesByFile(diffOutput);
+  const removedCommentLines = new Map();
+  const commentChangedLines = countCommentChangedLinesByFile(diffOutput, removedCommentLines);
 
   const tierLoc = { default: 0, t1: 0, t3: 0 };
   // Denominator for the unclassified-ratio fail-closed check: source-like
@@ -331,8 +339,11 @@ export function computeSizeBudget({
       // numstat count skew can never produce negative logic or discount more
       // than the file changed. A file with no detected comment lines keeps its
       // full count, so a real-code change is scored exactly as before.
-      const commentLines = Math.min(commentChangedLines.get(file.path) ?? 0, changedLines);
-      logic = changedLines - commentLines;
+      // Removed lines weigh deletionDiscount (deleting code is cheap to review).
+      const totalComments = commentChangedLines.get(file.path) ?? 0;
+      const removedComments = Math.min(removedCommentLines.get(file.path) ?? 0, file.deleted);
+      const addedComments = Math.min(totalComments - (removedCommentLines.get(file.path) ?? 0), file.added);
+      logic = (file.added - addedComments) + deletionDiscount * (file.deleted - removedComments);
     } else if (!excludedFromLogic && category === "test") logic = testDiscount * changedLines;
     else {
       if (changedLines > 0 && matchesAnyPattern(file.path, tierPatterns)) tierPatternDroppedToZero = true;
@@ -450,6 +461,7 @@ export function computeSizeBudget({
     tierLogicLoc,
     thresholds: {
       testDiscount,
+      deletionDiscount,
       absoluteHardLoc,
       default: { softLoc: defaultTier.softLoc ?? null, waiverLoc: defaultTier.waiverLoc ?? null },
       t1: t1Tier ? { sliceHardLoc: t1Tier.sliceHardLoc ?? null } : null,

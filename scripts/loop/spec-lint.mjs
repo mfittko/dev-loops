@@ -43,7 +43,7 @@ Output (stdout, JSON):
                 "adrs":  { "status": "ran" } | { "status": "skipped", "reason" } } }
 
 Finding kinds: unknown_rule_id, unknown_adr, adr_not_accepted, adr_superseded, adr_amended,
-size_forecast_missing, size_forecast_malformed, size_forecast_split_required (PLAN-SIZE-BAND; one
+size_forecast_missing, size_forecast_malformed, (wloc uses the check-size-budget formula: removed code lines weigh deletionDiscount), size_forecast_split_required (PLAN-SIZE-BAND; one
 "- forecast: slice=<id> wloc=<n> files=<path>,<path>" line per slice under "## Size forecast";
 a line at or above the resolved default-tier waiverLoc must be split, not disposed;
 a list item that starts with the word "forecast" or contains "wloc=" and does not parse is

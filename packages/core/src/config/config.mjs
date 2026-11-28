@@ -563,6 +563,7 @@ const SizePlanningBandConfig = z.strictObject({
 
 const SizeConfig = z.strictObject({
   testDiscount: z.number().min(0).max(1).default(0.25).describe("Weight applied to test LOC when computing logicLoc = code + testDiscount * test."),
+  deletionDiscount: z.number().min(0).max(1).default(0.25).describe("Weight applied to removed code lines when computing logicLoc (added lines weigh 1)."),
   absoluteHardLoc: z.number().int().positive().default(2000).describe("Whole-PR logic-LOC ceiling; blocks with no waiver possible above this, for any tier."),
   tiers: SizeTiersConfig.default({}).describe("Per-tier soft/waiver/slice thresholds and path patterns."),
   planningBand: SizePlanningBandConfig.default({}).describe("Planning-time size band (PLAN-SIZE-BAND): minLoc up to tiers.default.softLoc."),
