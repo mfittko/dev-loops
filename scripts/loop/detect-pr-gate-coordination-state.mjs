@@ -617,7 +617,6 @@ async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand
       issue,
       artifact: detectIssueRefinementArtifact({
         body,
-        issueNumber: issue,
         resolveLinkedDoc: (p) => existsSync(path.isAbsolute(p) ? p : path.resolve(docAnchor, p)),
       }),
     });

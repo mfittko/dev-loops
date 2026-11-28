@@ -44,8 +44,6 @@ import {
 
 export const REFINEMENT_SOURCE = Object.freeze({
   ISSUE_BODY_MATRIX: "issue-body-matrix",
-  ISSUE_BODY_AC: "issue-body-ac",
-  ISSUE_BODY_DOD: "issue-body-dod",
   LINKED_DOC: "linked-doc",
   MISSING: "missing",
 });
@@ -318,7 +316,7 @@ export function parseMarkdownSections(body) {
  * Only called on an already-recognized AC/DoD section, so counting
  * plain bullets never affects prose sections.
  */
-function parseChecklistItems(sectionBody, { anyMarker = false } = {}) {
+function parseChecklistItems(sectionBody) {
   if (typeof sectionBody !== "string" || sectionBody.length === 0) {
     return [];
   }
@@ -357,9 +355,7 @@ function parseChecklistItems(sectionBody, { anyMarker = false } = {}) {
     }
     // Top-level plain bullet: dash at column 0, space required (so `---`
     // horizontal rules and `-x` do not match; indented sub-bullets do not).
-    // `anyMarker` (the PR body versus issue comparison) also accepts indented
-    // `*`/`+`/numbered items, consistent with the checkbox grammar above.
-    const bulletMatch = (anyMarker ? /^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$/u : /^-\s+(.+?)\s*$/u).exec(line);
+    const bulletMatch = /^-\s+(.+?)\s*$/u.exec(line);
     if (bulletMatch) {
       const text = bulletMatch[1].trim();
       if (text.length > 0) {
@@ -731,7 +727,6 @@ export function detectLinkedRefinementDoc(body) {
  *
  * @param {object} input
  * @param {string} [input.body]  Raw issue body Markdown.
- * @param {number} [input.issueNumber]  Issue number, used for linked-doc convention.
  * @param {Function} [input.resolveLinkedDoc]  Optional `(path) => boolean` doc-resolution check.
  * @returns {{
  *   hasACs: boolean,
@@ -747,7 +742,7 @@ export function detectLinkedRefinementDoc(body) {
  *   finding: string|null,
  * }}
  */
-export function detectIssueRefinementArtifact({ body = "", issueNumber = null, resolveLinkedDoc = null } = {}) {
+export function detectIssueRefinementArtifact({ body = "", resolveLinkedDoc = null } = {}) {
   if (typeof body !== "string" || body.length === 0) {
     return {
       hasACs: false,
@@ -1147,15 +1142,6 @@ export const GRILL_EMBED_HEADING_PATTERNS = Object.freeze([
   /^grill\s+q&a$/iu,
   /^grill\s+qa$/iu,
 ]);
-
-/**
- * Detect the sanctioned `<!-- loop-grill: ... -->` marker. Pure predicate.
- * @param {string} [body]
- * @returns {boolean} true when the marker is present.
- */
-export function detectGrillMarker(body = "") {
-  return typeof body === "string" && GRILL_MARKER_PATTERN.test(body);
-}
 
 /**
  * Detect a grill transcript/synthesis/Q&A embed heading in the body. Pure
@@ -1587,7 +1573,6 @@ export async function runPickupRefinementGate({ issueNumber, repo, env, runChild
   const docAnchor = repoRoot ?? process.cwd();
   const artifact = detectIssueRefinementArtifact({
     body,
-    issueNumber,
     resolveLinkedDoc: (p) => existsSync(path.isAbsolute(p) ? p : path.resolve(docAnchor, p)),
   });
   const specChangedSinceGrill = detectSpecChangedSinceGrill({ comments, bodyLastEditedAt: lastEditedAt, commentsTruncated });
@@ -1599,25 +1584,6 @@ export async function runPickupRefinementGate({ issueNumber, repo, env, runChild
     });
   }
   return decision;
-}
-
-/**
- * Map a draft-gate refinement check to the result surface consumed by
- * `evaluatePrGateCoordination`. The mapping keeps the contract
- * deterministic: the draft gate must not produce a `clean` verdict
- * for the current head when the refinement check is `missing`.
- */
-export function summarizeRefinementGateCheck({ body = "", issueNumber = null } = {}) {
-  const artifact = detectIssueRefinementArtifact({ body, issueNumber });
-  const verdict = artifact.hasACs ? "clean" : "blocked";
-  const finding = artifact.finding;
-  return {
-    artifact,
-    verdict,
-    finding,
-    blocking: !artifact.hasACs,
-    reason: artifact.reason,
-  };
 }
 
 /**

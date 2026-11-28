@@ -11,7 +11,6 @@ import {
   detectAcDodMatrix,
   detectIssueRefinementArtifact,
   detectLinkedRefinementDoc,
-  detectGrillMarker,
   detectGrillEmbedHeading,
   derivePrChecklistsFromIssueMatrix,
   diffPrBodyAgainstIssue,
@@ -20,7 +19,6 @@ import {
   extractUncheckedChecklistItems,
   isGateOutcomeItem,
   parseMarkdownSections,
-  summarizeRefinementGateCheck,
   validatePrBodySpec,
 } from "../src/loop/issue-refinement-artifact.mjs";
 
@@ -490,33 +488,6 @@ test("detectLinkedRefinementDoc finds explicit tmp/refinement path", () => {
 });
 
 // ---------------------------------------------------------------------------
-// summarizeRefinementGateCheck (draft-gate wrapper)
-// ---------------------------------------------------------------------------
-
-test("summarizeRefinementGateCheck maps to clean verdict when the matrix + Non-goals are present", () => {
-  const summary = summarizeRefinementGateCheck({ body: "## Problem\n\nX\n" + MATRIX + NGOALS });
-  assert.equal(summary.verdict, "clean");
-  assert.equal(summary.finding, null);
-  assert.equal(summary.blocking, false);
-});
-
-test("summarizeRefinementGateCheck blocks when the mapping matrix is missing", () => {
-  const summary = summarizeRefinementGateCheck({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] done\n" + NGOALS,
-  });
-  assert.equal(summary.verdict, "blocked");
-  assert.equal(summary.finding, MISSING_AC_DOD_MATRIX_FINDING);
-  assert.equal(summary.blocking, true);
-});
-
-test("summarizeRefinementGateCheck maps to blocked verdict when artifact missing", () => {
-  const summary = summarizeRefinementGateCheck({ body: "## Problem\n\nX\n" });
-  assert.equal(summary.verdict, "blocked");
-  assert.equal(summary.finding, "missing_refinement_artifact");
-  assert.equal(summary.blocking, true);
-});
-
-// ---------------------------------------------------------------------------
 // decideEnqueueRefinementGate
 // ---------------------------------------------------------------------------
 
@@ -808,12 +779,6 @@ test("#1621 detectIssueRefinementArtifact surfaces uncheckedAcItems alongside ac
   assert.deepEqual(artifact.acItems, ["done AC", "open AC one", "open AC two"]);
   // Only unticked AC checkboxes (NOT the DoD item, NOT the ticked AC).
   assert.deepEqual(artifact.uncheckedAcItems, ["open AC one", "open AC two"]);
-});
-
-test("GRILL-SUBLOOP (#1628): detectGrillMarker finds the sanctioned loop-grill marker", () => {
-  assert.equal(detectGrillMarker("<!-- loop-grill: 2026-08-14T00:00:00Z mode:interactive -->\n\n## Acceptance criteria\n\n- [ ] ac"), true);
-  assert.equal(detectGrillMarker("## Acceptance criteria\n\n- [ ] ac"), false);
-  assert.equal(detectGrillMarker(""), false);
 });
 
 test("GRILL-SUBLOOP (#1628): detectGrillEmbedHeading finds grill transcript/synthesis/Q&A embed headings", () => {

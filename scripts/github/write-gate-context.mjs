@@ -4767,7 +4767,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
       // so `acItems` alone would misclassify it as unrefined. This is
       // "provides criteria", NOT the refinement floor the draft gate enforces
       // separately.
-      const artifact = detectIssueRefinementArtifact({ body, issueNumber: number });
+      const artifact = detectIssueRefinementArtifact({ body });
       if (artifact.hasACs || artifact.acItems.length > 0) anyRefined = true;
       bodies.push({ label, body });
     }
