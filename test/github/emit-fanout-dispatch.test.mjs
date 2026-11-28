@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { spawnSyncTrusted as spawnSync } from "../_helpers.mjs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, listPriorFindingsLogHeads, main as emitMain, unitBudgetBasis } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
-import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, readCompletedAnglesForHead, renderPrBodyRead, renderRequiredReadLine, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, readCompletedAnglesForHead, renderPrBodyRead, renderRequiredReadLine, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
@@ -3122,5 +3122,121 @@ test("emit-fanout-dispatch.mjs draft_gate without --ci-file refuses with ci_file
       assert.equal(optedOut.status, 1);
       assert.match(JSON.parse(optedOut.stdout).error, /no gate-context artifact/);
     }
+  });
+});
+
+test("a --pending --retry-crashed emit against a stale context drops finished units and keeps their identity (#3661)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const { id, tmpRoot, emitArgs, wave1 } = await setupThreeAngleRound(repoRoot, ["srp", "soc"]);
+    const retry = runEmitCli([...emitArgs, "--pending", "--retry-crashed", "pr-description"], { cwd: repoRoot });
+    assert.equal(retry.status, 0, retry.stderr || retry.stdout);
+    assert.deepEqual(JSON.parse(retry.stdout).units.map((unit) => unit.angles), [["pr-description"]]);
+    const plan = JSON.parse(await readFile(buildGateEmitPlanPath({ ...id, tmpRoot }), "utf8"));
+    assert.deepEqual(plan.units.map((unit) => unit.resumed === true), [true, true, false]);
+    for (const unit of plan.units.filter((u) => u.resumed)) {
+      assert.equal(unit.executionIdentity, wave1.find((w) => w.scope === unit.scope).executionIdentity);
+    }
+  });
+});
+
+// Builds the three-angle round, emits wave 1 and writes a clean artifact for each finished angle.
+async function setupThreeAngleRound(repoRoot, finished = ["srp", "soc", "pr-description"]) {
+  const gate = "draft_gate";
+  const angles = ["srp", "soc", "pr-description"];
+  await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: { groups: angles.map((angle) => ({ name: angle, angles: [angle] })), maxAnglesPerGroup: 6 } } }), "utf8");
+  const { config } = await loadDevLoopConfig({ repoRoot });
+  const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
+  const tmpRoot = path.join(repoRoot, "tmp");
+  const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", "Body"]);
+  await writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { maxAnglesPerGroup: 6 }) }, { repoRoot });
+  const emitArgs = ["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA];
+  const full = runEmitCli(emitArgs, { cwd: repoRoot });
+  assert.equal(full.status, 0, full.stderr || full.stdout);
+  const wave1 = JSON.parse(full.stdout).units;
+  assert.equal(wave1.length, 3);
+  const findingsDir = buildGateReviewsDir({ ...id, tmpRoot });
+  await mkdir(findingsDir, { recursive: true });
+  const writeArtifact = (angle) => writeFile(path.join(findingsDir, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+  for (const angle of finished) await writeArtifact(angle);
+  return { id, tmpRoot, emitArgs, wave1, findingsDir, writeArtifact, contextPath: buildGateContextPath({ ...id, tmpRoot }) };
+}
+
+test("fan-in accepts the resumed units and the retried unit of a --pending --retry-crashed round (#3661)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const { id, tmpRoot, emitArgs, wave1, findingsDir, writeArtifact, contextPath } =await setupThreeAngleRound(repoRoot, ["srp", "soc"]);
+    // The wave-1 reviewers pulled their work orders before the retry round was emitted.
+    const pull = (unit) => {
+      const pulled = runPullCli(unit, { cwd: repoRoot });
+      assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
+    };
+    for (const unit of wave1.filter((w) => w.angles[0] !== "pr-description")) pull(unit);
+    const retry = runEmitCli([...emitArgs, "--pending", "--retry-crashed", "pr-description"], { cwd: repoRoot });
+    assert.equal(retry.status, 0, retry.stderr || retry.stdout);
+    pull(JSON.parse(retry.stdout).units[0]);
+    // Results must be newer than their receipts, so they are written after the pulls.
+    for (const angle of ["srp", "soc", "pr-description"]) await writeArtifact(angle);
+    // The records-floor needs one reviewer sentinel that records the briefing prefix hash.
+    const prefixHash = createHash("sha256").update(await readFile(contextPath.replace(/\.json$/, ".briefing-prefix.txt"))).digest("hex");
+    await writeFile(path.join(tmpRoot, `checkpoint-context-sentinel-draft-gate-srp-${HEAD_SHA}.json`), JSON.stringify({ scope: "draft-gate-srp", prefixHash }), "utf8");
+    const fanin = spawnSync("node", [path.resolve("scripts/loop/consolidate-fanin.mjs"), "--findings-dir", findingsDir, "--emit-plan", buildGateEmitPlanPath({ ...id, tmpRoot }), "--gate", id.gate, "--head-sha", HEAD_SHA, "--out", path.join(repoRoot, "out", "findings.json"), "--ledger-out", path.join(repoRoot, "out", "ledger.json"), "--tmp-root", tmpRoot], { encoding: "utf8", cwd: repoRoot });
+    assert.equal(fanin.status, 0, fanin.stderr || fanin.stdout);
+    const payload = JSON.parse(fanin.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.overallVerdict, "clean");
+  });
+});
+
+test("a --pending emit drops nothing when the context was rebuilt after the artifacts (#3661)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const { id, tmpRoot, emitArgs, contextPath } = await setupThreeAngleRound(repoRoot);
+    const later = new Date(Date.now() + 60_000);
+    await utimes(contextPath, later, later);
+    const pending = runEmitCli([...emitArgs, "--pending"], { cwd: repoRoot });
+    assert.equal(pending.status, 0, pending.stderr || pending.stdout);
+    assert.equal(JSON.parse(pending.stdout).units.length, 3);
+    assert.equal(JSON.parse(await readFile(buildGateEmitPlanPath({ ...id, tmpRoot }), "utf8")).units.length, 3);
+  });
+});
+
+test("a --pending emit with every unit finished refuses with fan-in recovery and keeps the keyed plan (#3661)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const { id, tmpRoot, emitArgs, contextPath } = await setupThreeAngleRound(repoRoot);
+    const past = new Date(Date.now() - 60_000);
+    await utimes(contextPath, past, past);
+    const pending = runEmitCli([...emitArgs, "--pending"], { cwd: repoRoot });
+    assert.notEqual(pending.status, 0);
+    const refusal = JSON.parse(pending.stdout);
+    assert.equal(refusal.ok, false);
+    assert.match(refusal.error, /already finished at this head/);
+    assert.match(refusal.recovery, /consolidate-fanin/);
+    assert.equal(JSON.parse(await readFile(buildGateEmitPlanPath({ ...id, tmpRoot }), "utf8")).units.length, 3);
+  });
+});
+
+test("a --pending emit whose keyed-plan restore fails returns the structured refusal (#3661)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const { tmpRoot, contextPath } = await setupThreeAngleRound(repoRoot);
+    const past = new Date(Date.now() - 60_000);
+    await utimes(contextPath, past, past);
+    const writes = [];
+    const lines = [];
+    const origWrite = process.stdout.write;
+    process.stdout.write = (chunk) => { lines.push(String(chunk)); return true; };
+    let status;
+    try {
+      status = await main(["--repo", REPO, "--pr", PR, "--gate", "draft_gate", "--head-sha", HEAD_SHA, "--pending"], {
+        tmpRootDefault: tmpRoot,
+        ledgerTmpRootDefault: tmpRoot,
+        persistPlan: async (file) => { writes.push(file); throw Object.assign(new Error("simulated EACCES"), { code: "EACCES" }); },
+      });
+    } finally {
+      process.stdout.write = origWrite;
+    }
+    assert.equal(status, 1);
+    assert.equal(writes.length, 1);
+    const refusal = JSON.parse(lines.join(""));
+    assert.equal(refusal.ok, false);
+    assert.match(refusal.error, /restoring the keyed emit plan failed: simulated EACCES/);
+    assert.match(refusal.recovery, /\.prior sidecar/);
   });
 });
