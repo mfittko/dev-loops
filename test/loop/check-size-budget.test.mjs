@@ -941,3 +941,23 @@ test("resolveSizeBounds reads softLoc, waiverLoc, minLoc and absoluteHardLoc fro
   assert.deepEqual(resolveSizeBounds(config), { softLoc: 40, waiverLoc: 75, minLoc: 0, absoluteHardLoc: 900 });
   assert.equal(resolveSizeBounds({ gates: { size: { tiers: { default: { waiverLoc: null } } } } }).waiverLoc, null);
 });
+
+// deletionDiscount (#3574): removed code lines weigh deletionDiscount (default 0.25).
+test("deletion-only code diff counts removed lines at the deletion discount (AC1)", () => {
+  const result = computeSizeBudget({ nameStatusOutput: "D\tsrc/gone.mjs\n", numstatOutput: numstatZ([[0, 1300, "src/gone.mjs"]]) });
+  assert.equal(result.wholeLogicLoc, 325);
+  assert.equal(result.outcome, "pass");
+});
+
+test("mixed diff weighs added lines in full and removed lines at the discount, minus comments (AC2)", () => {
+  const diffOutput = "diff --git a/src/m.mjs b/src/m.mjs\n--- a/src/m.mjs\n+++ b/src/m.mjs\n@@ -1,8 +1,3 @@\n+// new note\n+const a = 1;\n+const b = 2;\n-// old a\n-// old b\n-// old c\n-// old d\n-const c = 3;\n-const d = 4;\n-const e = 5;\n-const f = 6;\n";
+  const result = computeSizeBudget({ nameStatusOutput: "M\tsrc/m.mjs\nM\ttest/m.test.mjs\n", numstatOutput: numstatZ([[3, 8, "src/m.mjs"], [4, 4, "test/m.test.mjs"]]), diffOutput });
+  // code: added 3 - 1 comment = 2; removed 8 - 4 comments = 4 * 0.25 = 1; test: 8 lines * 0.25 = 2
+  assert.equal(result.wholeLogicLoc, 5);
+});
+
+test("deletionDiscount 1 reproduces the undiscounted count (AC4)", () => {
+  const result = computeSizeBudget({ nameStatusOutput: "D\tsrc/gone.mjs\n", numstatOutput: numstatZ([[0, 100, "src/gone.mjs"]]), sizeConfig: { deletionDiscount: 1 } });
+  assert.equal(result.wholeLogicLoc, 100);
+  assert.equal(result.thresholds.deletionDiscount, 1);
+});
