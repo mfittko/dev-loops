@@ -1666,6 +1666,21 @@ describe("applyJudgeDispositions (#1525)", () => {
       assert.deepEqual(findings.map((f) => [f.severity, f.judgeDisposition]), [["medium", "act"], ["low", "act"]]);
     });
 
+    test("failOpen on a defer or reject disposition fails closed", () => {
+      const defer = { disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "r", followUpDraft: { title: "t", body: "b" } };
+      const reject = { disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "r" };
+      for (const d of [defer, reject]) {
+        assert.throws(() => applyJudgeDispositions(cluster("low"), judgeVerdict([{ index: 0, ...d, failOpen: true }])), /failOpen is set only on an act disposition/);
+      }
+    });
+
+    test("an unstamped sibling reject's lowException does not exempt the act member from the round-2 floor", () => {
+      const findings = [0, 1].map((i) => ({ severity: "low", angle: `a${i}`, summary: "dup", file: "src/x.mjs", line: 10, recommendation: "same fix" }));
+      const reject = { disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "r", lowException: "security" };
+      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict([{ index: 0, ...reject }, { index: 1, ...act }]), { pastCap: false, round: 2 });
+      assert.deepEqual(out.map((f) => f.judgeDisposition), ["reject", "reject"]);
+    });
+
     test("a non-boolean failOpen fails closed", () => {
       assert.throws(() => applyJudgeDispositions(cluster("low"), judgeVerdict([{ index: 0, ...act, failOpen: "yes" }])), /failOpen must be a boolean/);
     });

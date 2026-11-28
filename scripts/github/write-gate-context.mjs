@@ -2238,7 +2238,7 @@ export async function resolveDraftRoundCap(options, { repoRoot, includeLiveCurre
   }
   const round = await countCapRounds(options, { repoRoot, prBase: base, includeLiveCurrentHead });
   const pastCap = isPastRoundCap(round, cap);
-  // The draft gate fixes a low at the cap round; only pre_approval_gate defers it.
+  // The draft gate floors a low at reject from round 2 on (ADR 0339); only pre_approval_gate defers it.
   return { pastCap, round, cap, lowFixCapped: false };
 }
 

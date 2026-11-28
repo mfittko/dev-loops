@@ -1193,6 +1193,9 @@ export function validateJudgeVerdict(verdict) {
     if (entry.failOpen !== undefined && typeof entry.failOpen !== "boolean") {
       throw new Error(`judge verdict.dispositions[${i}].failOpen must be a boolean when present`);
     }
+    if (entry.failOpen === true && entry.disposition !== "act") {
+      throw new Error(`judge verdict.dispositions[${i}].failOpen is set only on an act disposition, not ${entry.disposition}`);
+    }
     if (entry.lowException !== undefined && !LOW_EXCEPTIONS.includes(entry.lowException)) {
       throw new Error(`judge verdict.dispositions[${i}].lowException must be one of: ${LOW_EXCEPTIONS.join(", ")} when present`);
     }
@@ -1306,7 +1309,7 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
     const lowOrNitOnly = severities.every((s) => s === "low" || s === "nit");
     const allNit = severities.every((s) => s === "nit");
     // ADR 0339: from draft round 2 on a cluster holding a low floors at reject, act or defer alike, unless the judge names an exception.
-    const lowException = d.lowException !== undefined || (!stamped && validated.dispositions.some((o) => o.lowException !== undefined && memberIndices.includes(o.index)));
+    const lowException = d.lowException !== undefined || (!stamped && validated.dispositions.some((o) => o.disposition !== "reject" && o.lowException !== undefined && memberIndices.includes(o.index)));
     const lowFloored = lowOrNitOnly && !allNit && !pastCap && round >= 2 && !lowException;
     if (disposition === "act" && failOpen && lowOrNitOnly && severities.includes("low")) {
       promote = true;
