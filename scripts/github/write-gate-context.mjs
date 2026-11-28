@@ -857,6 +857,25 @@ export function buildCarryForwardPlanPath({ repo, pr, gate, headSha, tmpRoot = "
   return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".carry-forward-plan.json" });
 }
 
+// Issue 3647: the dispatch set is the head-resolved angles plus every mustRerun angle of this round's
+// keyed carry-forward plan, so a mustRerun angle the head does not resolve is still dispatched. Both
+// context builders call this; the fan-out emitter reads the resulting artifact. A missing, unreadable
+// or foreign-keyed plan adds nothing.
+export async function unionMustRerunAngles(resolvedAngles, { repo, pr, gate, headSha, tmpRoot = "tmp" }, { repoRoot = process.cwd() } = {}) {
+  if (gate === "review") return resolvedAngles;
+  let plan;
+  try {
+    plan = JSON.parse(await readFile(path.resolve(repoRoot, buildCarryForwardPlanPath({ repo, pr, gate, headSha, tmpRoot })), "utf8"));
+  } catch {
+    return resolvedAngles;
+  }
+  const same = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+  if (plan?.ok !== true || !Array.isArray(plan.mustRerun) || !same(plan.repo, repo) || !same(plan.gate, gate) || !same(plan.headSha, headSha) || String(plan.pr) !== String(pr)) return resolvedAngles;
+  const known = new Set(resolvedAngles.map((a) => a.trim().toLowerCase()));
+  const extra = plan.mustRerun.map((m) => m?.angle).filter((a) => typeof a === "string" && a.trim() !== "" && !known.has(a.trim().toLowerCase()));
+  return [...resolvedAngles, ...new Set(extra)];
+}
+
 // Deterministic path for the shared validation-results artifact
 // (GATE-EXEC-VALIDATION-RESOLUTION, `run-gate-validation.mjs`): the record of
 // this round's validation suites, run once and read (not re-run) by every
@@ -4456,7 +4475,8 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
         sizeOutcome: input.sizeOutcome,
         seamFirstRound: await seamFirstRoundFor(input, repoRoot),
       });
-  const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
+  const { resolvedAngles: headAngles, rationale } = rationaleFromResolver(resolverResult);
+  const resolvedAngles = await unionMustRerunAngles(headAngles, { repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot: input.tmpRoot || "tmp" }, { repoRoot });
 
   // AC3: each resolved angle's declared surface scope, straight from
   // config (resolveGateAngleScope fails open to "full" for an angle with no
@@ -5086,7 +5106,7 @@ export async function main(
       // shared writer every entry point routes through), so it covers this
       // dynamic-resolution path AND the review gate's verbatim `--angles`
       // override AND the programmatic callers — one guard, one message.
-      options.angles = resolvedAngles;
+      options.angles = await unionMustRerunAngles(resolvedAngles, { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
       // Resolver-derived rationale is authoritative here: it reflects whatever
       // the resolver actually decided (dynamic selection, a floor override, or
       // an explicit set plus any mandatory-floor addition), which a caller's

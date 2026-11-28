@@ -17,7 +17,7 @@ import {
   runGitCommand,
 } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { buildLogPath, parseProvenanceJson } from "../../scripts/github/write-gate-findings-log.mjs";
-import { buildCarryForwardPlanPath, readFullLabel } from "../../scripts/github/write-gate-context.mjs";
+import { buildCarryForwardPlanPath, buildGateContext, readFullLabel } from "../../scripts/github/write-gate-context.mjs";
 
 // Scrub inherited global/system git config and any leaked GIT_DIR/GIT_WORK_TREE
 // so host-side commit signing, hooks, templates, or an exported repo pointer
@@ -1812,3 +1812,22 @@ for (const [fileClass, opts, want] of [
     }
   });
 }
+
+// Issue 3647: the dispatch set is the head-resolved angles plus every mustRerun angle of the keyed plan.
+test("buildGateContext dispatches a mustRerun angle the head does not resolve", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-mustrerun-"));
+  const id = { repo: "owner/repo", pr: 12, gate: "draft_gate", headSha: "abc1234567890" };
+  try {
+    const planPath = path.resolve(repoRoot, buildCarryForwardPlanPath(id));
+    await mkdir(path.dirname(planPath), { recursive: true });
+    await writeFile(planPath, JSON.stringify({ ok: true, ...id, prevHead: "def4567890123", carried: [], mustRerun: [{ angle: "orphan-angle", reason: "no_perangle_row" }] }));
+    const result = await buildGateContext(
+      { config: { version: 1, gates: { draft: { angles: ["correctness"] } } }, ...id, hasFullLabel: true },
+      { repoRoot },
+    );
+    assert.ok(result.artifact.resolvedAngles.includes("correctness"));
+    assert.ok(result.artifact.resolvedAngles.includes("orphan-angle"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
