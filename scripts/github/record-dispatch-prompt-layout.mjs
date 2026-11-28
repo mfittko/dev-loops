@@ -4,14 +4,14 @@ import { GATE_NAMES } from "./_gate-names.mjs";
 import { DISPATCH_PROMPT_LEADING_CAP_BYTES, sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 
 // Records the LEADING bytes of a dispatched reviewer's ACTUAL composed prompt
-// (GATE-EXEC-BRIEFING-PREFIX layout, issue #1841/completes #1468) as a fan-in
+// (GATE-EXEC-BRIEFING-PREFIX layout) as a fan-in
 // dispatch artifact — the minimal capture point that gives
 // verify-dispatch-prompt-layout.mjs / consolidate-fanin.mjs's fan-in something
 // mechanical to check: whether the prompt actually LEADS with the round's
 // byte-identical invariant prefix (inline mode) or its byte-identical pointer
 // line (pointer-seeding mode), never angle-first.
 //
-// The sanctioned fan-out path (issue #1852/#2166) is emit-fanout-dispatch.mjs,
+// The sanctioned fan-out path is emit-fanout-dispatch.mjs,
 // whose composer core (compose-reviewer-prompt.mjs's exported
 // composeAndRecordReviewerPrompt) composes the prompt AND records this capture
 // atomically via the exported recordDispatchPromptLayout, so a canonical-path
@@ -27,7 +27,7 @@ export const VALID_SCOPE_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
  * Validate that `prefixPath`'s BASENAME is a canonical
  * `<gate>-<headSha>.briefing-prefix.txt` record name for the given head SHA
  * (write-gate-context.mjs's `buildGateBriefingPrefixPath` naming). Pure and
- * path-resolution-free by design (issue #1841): the caller's directory portion
+ * path-resolution-free by design: the caller's directory portion
  * of `prefixPath` is NEVER trusted as ground truth — only the gate name it
  * encodes is extracted, and the ACTUAL bytes are always re-discovered from the
  * real on-disk `<tmp-root>/gate-context/**` record (see
