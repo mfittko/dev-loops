@@ -9,7 +9,6 @@ import {
   assertCoreDependencyInLockstep,
   assertBunLockInLockstep,
   extractFullVersion,
-  extractMajorMinor,
   parseBunLock,
 } from "../../scripts/release/assert-core-dependency-version.mjs";
 
@@ -30,7 +29,6 @@ test("rejects a #1033-shaped manifest (dev-loops@0.6.2 shipping @dev-loops/core@
 test("accepts a manifest whose core range matches the release full version", () => {
   const result = assertCoreDependencyInLockstep({ releaseVersion: "0.6.2", coreRange: "^0.6.2" });
   assert.equal(result.fullVersion, "0.6.2");
-  assert.equal(result.majorMinor, "0.6");
 });
 
 test("rejects patch drift and tilde ranges that do not match the release full version", () => {
@@ -69,14 +67,6 @@ test("fails closed on a missing core dependency", () => {
     () => assertCoreDependencyInLockstep({ releaseVersion: "0.6.2", coreRange: undefined }),
     /must declare a "@dev-loops\/core" dependency/,
   );
-});
-
-test("extractMajorMinor strips range operators and compound ranges", () => {
-  assert.equal(extractMajorMinor("^0.6.0"), "0.6");
-  assert.equal(extractMajorMinor("~1.4.9"), "1.4");
-  assert.equal(extractMajorMinor(">=0.6.0 <0.7.0"), "0.6");
-  assert.equal(extractMajorMinor("0.6.2"), "0.6");
-  assert.throws(() => extractMajorMinor("latest"), /cannot parse/);
 });
 
 test("extractFullVersion keeps the prerelease token and strips range operators", () => {

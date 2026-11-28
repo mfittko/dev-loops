@@ -9,39 +9,6 @@ export function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-export function renderList(items) {
-  if (!Array.isArray(items) || items.length === 0) {
-    return "<p>none</p>";
-  }
-  return `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
-}
-
-export function renderDefinitionList(entries) {
-  return `<dl>${entries.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}</dl>`;
-}
-
-export function renderCompactSection({ title, entries = [], lists = [] }) {
-  if (entries.length === 0 && lists.length === 0) {
-    return `<section><h2>${escapeHtml(title)}</h2><p>not present / unavailable</p></section>`;
-  }
-
-  return `<section>
-    <h2>${escapeHtml(title)}</h2>
-    ${entries.length > 0 ? renderDefinitionList(entries) : "<p>not present / unavailable</p>"}
-    ${lists.map(({ title: listTitle, items }) => `
-      <h3>${escapeHtml(listTitle)}</h3>
-      ${renderList(items)}
-    `).join("")}
-  </section>`;
-}
-
-export function renderCollapsedDetailsPanel(content) {
-  return `<details class="inspection-details">
-    <summary>Details</summary>
-    ${content}
-  </details>`;
-}
-
 export function renderSnapshotStateLabel(snapshot) {
   if (!snapshot) {
     return "unavailable";

@@ -6,7 +6,8 @@ import path from "node:path";
 import { test } from "bun:test";
 import { runNodeWithPrePrRecord, writeGhStub as writeGhStubHelper, initSizeBudgetFixtureRepo as initBareFixtureRepo, repeatedLinesContent, runGitFixture } from "../_helpers.mjs";
 
-import { buildCreatePrArgs, main as createPrMain, detectClosingKeyword, extractClosingIssueNumber, resolveBaseDefault } from "../../scripts/github/create-pr.mjs";
+import { detectClosingKeyword, extractClosingIssueNumber } from "@dev-loops/core/github/closing-ref-guard";
+import { buildCreatePrArgs, main as createPrMain, resolveBaseDefault } from "../../scripts/github/create-pr.mjs";
 import { hasSpikePrMarker } from "../../scripts/github/_spike-pr-marker.mjs";
 import { resolveBaseBranch } from "@dev-loops/core/config";
 import { writePrePrReviewRecord } from "../../scripts/loop/_pre-pr-review-record.mjs";

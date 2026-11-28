@@ -1292,8 +1292,8 @@ test("#2381: a MISSING-loggedAt disagreement across prior ledgers is ambiguous �
 });
 
 // AC row 3 (first half): a body-filed (non-locatable) question never becomes
-// a review thread at all (renderNonLocatableBlock/buildNonLocatableFindingMarker
-// splice it into the verdict body's own text instead) — it produces no
+// a review thread at all (buildNonLocatableFindingMarker
+// splices it into the verdict body's own text instead) — it produces no
 // unresolved-thread count regardless of judge disposition, deferred by
 // construction. countUnresolvedGateAuthoredThreads only ever counts THREADS.
 test("a body-filed (non-locatable) question produces no blocking count regardless of judge disposition", async () => {

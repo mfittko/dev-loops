@@ -44,7 +44,7 @@ const REFUSAL_MESSAGE = "scripts/github/compose-reviewer-prompt.mjs's CLI is not
  *   prefix record, unreadable/empty suffix, or the composer's own shape refusal);
  *   filesystem/record errors reject.
  */
-export async function composeAndRecordReviewerPrompt({ repo, pr, gate, headSha, scope, angleSuffixFile, tmpRoot, out = null }) {
+export async function composeAndRecordReviewerPrompt({ repo, pr, gate, headSha, scope, angleSuffixFile, tmpRoot }) {
   const prefixPath = buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot });
   const volatilePath = buildGateBriefingVolatilePath({ repo, pr, gate, headSha, tmpRoot });
 
@@ -80,7 +80,7 @@ export async function composeAndRecordReviewerPrompt({ repo, pr, gate, headSha, 
     return { composed: false, reason: err.message };
   }
 
-  const outPath = out ?? path.join(path.dirname(prefixPath), `${gate}-${headSha}.dispatch-prompt-${scope}.txt`);
+  const outPath = path.join(path.dirname(prefixPath), `${gate}-${headSha}.dispatch-prompt-${scope}.txt`);
   await mkdir(path.dirname(outPath), { recursive: true });
   await writeFile(outPath, composed, "utf8");
 

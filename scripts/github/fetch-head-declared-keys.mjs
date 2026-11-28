@@ -18,8 +18,6 @@ import { parseHeadDeclaredKeys } from "./head-declared-keys-schema.mjs";
 const execFileAsync = promisify(execFile);
 const MAX_ZIP_BYTES = 1024 * 1024;
 
-export const parseDeclaredKeysStrict = parseHeadDeclaredKeys;
-
 /** Newest non-expired artifact named exactly `head-declared-keys-<sha>` produced by a run at that head, else null. */
 export function selectHeadKeysArtifact(artifacts, headSha) {
   const name = `head-declared-keys-${headSha}`;
@@ -53,7 +51,7 @@ export async function fetchHeadDeclaredKeys({ repo, pr, headSha, exec = defaultE
     const zip = path.join(dir, "artifact.zip");
     await writeFile(zip, await gh(`repos/${slug}/actions/artifacts/${artifact.id}/zip`));
     const text = (await exec("unzip", ["-p", zip, "head-declared-keys.json"])).toString("utf8");
-    return parseDeclaredKeysStrict(text);
+    return parseHeadDeclaredKeys(text);
   } catch {
     return [];
   } finally {

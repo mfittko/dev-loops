@@ -4,12 +4,11 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parseIssueNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
-  LINKED_ISSUE_PR_QUERY,
   selectLinkedIssuePr,
   detectLinkedIssuePr,
 } from "@dev-loops/core/github/issue-ops";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-export { LINKED_ISSUE_PR_QUERY, selectLinkedIssuePr, detectLinkedIssuePr };
+export { selectLinkedIssuePr, detectLinkedIssuePr };
 const USAGE = `Usage: detect-linked-issue-pr.mjs --repo <owner/name> --issue <number>
 Detect whether an issue already has an open linked pull request in the same repository.
 This helper owns linked-event query pagination and deterministic selection.

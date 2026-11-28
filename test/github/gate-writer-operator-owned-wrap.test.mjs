@@ -11,7 +11,7 @@ import { parseCopilotBodyDispositionMarker } from "../../packages/core/src/githu
 import { verifyFreshHumanApproval } from "../../packages/core/src/loop/merge-approval.mjs";
 import { extractWaiverLines } from "../../scripts/loop/adr-waiver-markers.mjs";
 import { resolveApprovalState } from "../../scripts/release/verify-release-approval.mjs";
-import { renderFindingLine, renderInlineCommentBody, renderNonLocatableBlock, buildDeferredFindingsComment } from "../../scripts/github/_gate-finding-surface.mjs";
+import { renderFindingLine, renderInlineCommentBody, buildDeferredFindingsComment } from "../../scripts/github/_gate-finding-surface.mjs";
 import { escapeProse, sanitizeInline, parseFindings, renderBoundedFindingsCommentBody } from "../../scripts/github/post-gate-findings.mjs";
 import { buildMeritRationale } from "../../scripts/github/close-gate-findings.mjs";
 import { parseUpsertCheckpointVerdictCliArgs } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
@@ -77,7 +77,7 @@ test("escapeProse and sanitizeInline wrap a bare phrase, also when it opens the 
 
 test("a backticked approve-release phrase in a recommendation renders through escapeProse and stays inert", () => {
   const finding = { severity: "medium", angle: "holistic", file: "a.js", line: 3, summary: "s", recommendation: "run `approve release v1.2.3` first" };
-  const block = renderNonLocatableBlock(finding, { round: 1 });
+  const block = renderInlineCommentBody(finding, { round: 1 });
   assert.ok(block.includes("`approve release v1.2.3`"), "the reviewer's code span survives (sanitizeInline deleted it)");
   assert.equal(anyAsserts(block), false);
   passesGuard(block);

@@ -214,20 +214,6 @@ function newestSessionIn(matchingDirs) {
 }
 
 /**
- * Find the latest session directory or session file for this repository,
- * including sessions launched from one of its tmp/worktrees entries.
- * @param {string} [sessionsBaseDir]
- * @param {string} [repositoryCwd]
- * @returns {string | null}
- */
-export function findLatestPiSession(
-  sessionsBaseDir = path.join(os.homedir(), ".pi", "agent", "sessions"),
-  repositoryCwd = process.cwd(),
-) {
-  return newestPiSession(sessionsBaseDir, repositoryCwd).path;
-}
-
-/**
  * Find the most recently modified session for this repository across Pi sessions and
  * Claude Code project transcripts (`<claudeProjectsDir>/<repo-slug>`, worktree slugs included).
  * @returns {string | null}

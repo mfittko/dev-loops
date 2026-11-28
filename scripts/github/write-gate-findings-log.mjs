@@ -199,7 +199,7 @@ function validateFindingsArray(parsed, flagLabel) {
     if (Array.isArray(f.files)) {
       // Trimmed, not just filtered: hasLocatableShape only checks non-empty,
       // but every downstream consumer (diff commentable-line lookup, posted
-      // review `path`, renderNonLocatableBlock's Location line) compares
+      // review `path`, the Location line) compares
       // against the TRIMMED form — an untrimmed entry would derive
       // "needs-answer"/locatable here yet never match a real in-diff position
       // later, silently downgrading it at a different layer.

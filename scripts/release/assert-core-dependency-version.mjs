@@ -38,21 +38,6 @@ const CORE_DEP = "@dev-loops/core";
 const CORE_WORKSPACE_KEY = "packages/core";
 
 /**
- * Extract the `major.minor` token from a semver version or npm range.
- * Handles leading range operators (^, ~, >=, >, <=, <, =, v) and compound
- * ranges by taking the first `<digits>.<digits>` occurrence.
- * @param {string} spec
- * @returns {string} e.g. "0.6"
- */
-export function extractMajorMinor(spec) {
-  const match = String(spec).match(/(\d+)\.(\d+)/);
-  if (!match) {
-    throw new Error(`cannot parse a major.minor version from "${spec}"`);
-  }
-  return `${match[1]}.${match[2]}`;
-}
-
-/**
  * Extract the full version token (`major.minor.patch[-prerelease]`) from a
  * semver version or npm range. Anchored at the start of the spec: only leading
  * range operators (^, ~, >=, <, =) and whitespace plus a `v`/`V` shorthand may
@@ -82,7 +67,7 @@ export function extractFullVersion(spec) {
  * version, including the prerelease token) with the release version. Throws on
  * mismatch (fail closed).
  * @param {{releaseVersion: string, coreRange: string}} input
- * @returns {{releaseVersion: string, coreRange: string, fullVersion: string, majorMinor: string}}
+ * @returns {{releaseVersion: string, coreRange: string, fullVersion: string}}
  */
 export function assertCoreDependencyInLockstep({ releaseVersion, coreRange } = {}) {
   if (!releaseVersion) throw new Error("releaseVersion is required");
@@ -103,15 +88,13 @@ export function assertCoreDependencyInLockstep({ releaseVersion, coreRange } = {
     releaseVersion,
     coreRange,
     fullVersion: releaseFull,
-    majorMinor: extractMajorMinor(releaseVersion),
   };
 }
 
 /**
- * Assert every release-sensitive `bun.lock` version field is in full lockstep (same
+ * Assert the checked `bun.lock` version fields are in full lockstep (same
  * full version, including the prerelease token) with the release version.
- * Covers the four fields rc.7 left stale: root version, root package entry
- * version, the `packages/core` workspace entry version, and the
+ * Checks two fields: the `packages/core` workspace entry version and the
  * `@dev-loops/core` dependency spec. Throws on any mismatch (fail closed).
  * @param {{releaseVersion: string, lockfile: object}} input
  * @returns {{releaseVersion: string, expectedVersion: string, checked: string[]}}

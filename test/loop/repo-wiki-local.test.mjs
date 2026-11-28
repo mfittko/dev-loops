@@ -70,9 +70,3 @@ test("repo-wiki git URL and pinned ref are well-formed", () => {
   assert.equal(REPO_WIKI_GIT_URL, "https://github.com/mfittko/repo-wiki.git");
   assert.match(REPO_WIKI_REF, /^[0-9a-f]{40}$/);
 });
-
-test("runRepoWikiLocal returns a structured result without calling process.exit", async () => {
-  const { runRepoWikiLocal } = await import("../../scripts/repo-wiki.mjs");
-  assert.equal(typeof runRepoWikiLocal, "function");
-  assert.equal(runRepoWikiLocal.constructor.name, "AsyncFunction");
-});

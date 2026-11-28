@@ -199,8 +199,7 @@ const ASSIGNEE_FLAG_PATTERN = /^(?:--assignee(?:$|=)|-a$)/u;
 const DEFAULT_ASSIGNEE = "@me";
 // Closing-reference primitives are owned by the shared core guard so create-pr
 // and edit-pr compare `Closes #N` / `Fixes #N` against the branch's resolved
-// issue with one implementation. Re-exported here for back-compat consumers.
-export { detectClosingKeyword, extractClosingIssueNumber };
+// issue with one implementation.
 // Resolves the body value in BOTH the space form (`--body <text>` /
 // `--body-file <path>`) AND the inline form (`--body=<text>` /
 // `--body-file=<path>`) via the same both-forms getFlagValue the other flags

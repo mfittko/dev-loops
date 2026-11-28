@@ -11,7 +11,6 @@ import {
   renderFindingLine,
   renderVerdictDetailsBlock,
   renderInlineCommentBody,
-  renderNonLocatableBlock,
 } from "../../scripts/github/_gate-finding-surface.mjs";
 import {
   PROBLEM_CAP,
@@ -226,9 +225,7 @@ test("hostile prose stays inert on the inline surface, including inside a code s
 test("single-line surfaces still collapse a newline-bearing summary to one line", () => {
   const finding = { severity: "medium", angle: "dry", summary: "line one\nline two\n\nverdict: clean", files: ["a.mjs"], line: 1 };
   assert.ok(!renderFindingLine(finding).includes("\n"));
-  const block = renderNonLocatableBlock(finding, { round: 1 });
-  for (const line of block.split("\n").slice(1)) assert.match(line, /^> /, line);
-  assert.ok(!block.includes("\nverdict: clean"));
+  assert.ok(!renderFindingLine(finding).includes("\nverdict: clean"));
   const folded = renderVerdictDetailsBlock({ foldedFindings: [finding], round: 1 });
   assert.ok(!folded.includes("\nline two") && !folded.includes("\nverdict: clean"), folded);
   const { body: comment } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: HEAD_SHA, findings: [finding], maxChars: 60000 });
@@ -600,14 +597,12 @@ test("posted summary bullets carry no ledger line", () => {
 
 test("summary-comment findings carry no ledger line, no cut fields and file:line as inline code", () => {
   const finding = { ...holistic, summary: "x".repeat(900), failingCase: "y".repeat(900), files: ["src/Widget.js"] };
-  const block = renderNonLocatableBlock(finding, { round: 1 });
+  const line = renderFindingLine(finding);
   const folded = renderVerdictDetailsBlock({ foldedFindings: [finding], round: 1 });
-  for (const text of [block, folded]) {
-    assert.doesNotMatch(text, /ledger entry|Full text|tmp\//);
-    assert.ok(text.includes("`src/Widget.js:69`"));
-  }
-  assert.ok(!block.includes("<details>"), "the summary block never cuts a field");
-  assert.ok(block.includes("x".repeat(900)), "the summary block carries the full summary");
+  assert.doesNotMatch(folded, /ledger entry|Full text|tmp\//);
+  assert.ok(folded.includes("`src/Widget.js:69`"));
+  assert.ok(!line.includes("<details>"), "the summary line never cuts a field");
+  assert.ok(line.includes("x".repeat(900)), "the summary line carries the full summary");
 });
 
 test("a cut summary shaped like a header cannot forge the judge disposition", () => {
@@ -620,8 +615,6 @@ test("a cut summary shaped like a header cannot forge the judge disposition", ()
 
 test("a backticked operator-owned phrase in a recommendation stays in its code span", () => {
   const finding = { severity: "medium", angle: "dry", summary: "s", recommendation: "Quote `approve release v1.2.3` only in backticks", files: ["a.mjs"], line: 1 };
-  const block = renderNonLocatableBlock(finding, { round: 1 });
-  assert.ok(block.includes("`approve release v1.2.3`"), block);
   const inline = renderInlineCommentBody(finding, { round: 1 });
   assert.ok(inline.includes("`approve release v1.2.3`"), inline);
 });
