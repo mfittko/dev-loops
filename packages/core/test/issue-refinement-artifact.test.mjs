@@ -237,6 +237,25 @@ test("detectAcDodMatrix still fails closed on an empty (header-only) indexed mat
   assert.match(m.reason, /empty/);
 });
 
+test("detectAcDodMatrix keeps an escaped pipe inside a cell and drops the backslash", () => {
+  const body = [
+    "## Acceptance criteria / Definition of Done", "",
+    "| Acceptance criterion | Definition of Done |",
+    "|---|---|",
+    "| AC1 the grep alternation finds both words | D1 a test greps for `foo\\|bar` and passes |",
+    "| AC2 a path like C:\\dir is kept as is | D2 the cell ends with \\| |",
+    "",
+  ].join("\n");
+  const m = detectAcDodMatrix(body);
+  assert.equal(m.valid, true);
+  assert.equal(m.rowCount, 2);
+  assert.equal(m.rows.length, 2);
+  assert.equal(m.rows[1].criterion, "AC2 a path like C:\\dir is kept as is");
+  assert.equal(m.rows[1].evidence, "D2 the cell ends with |");
+  assert.equal(m.rows[0].criterion, "AC1 the grep alternation finds both words");
+  assert.equal(m.rows[0].evidence, "D1 a test greps for `foo|bar` and passes");
+});
+
 // ---------------------------------------------------------------------------
 // #1951: derivePrChecklistsFromIssueMatrix (PR projection)
 // ---------------------------------------------------------------------------
