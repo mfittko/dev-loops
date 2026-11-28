@@ -244,35 +244,6 @@ export function resolveAngleCarryForward({ angle, angleSurface, changedFiles, pr
 }
 
 /**
- * Convenience: partition a set of previously-clean angles into those that may be
- * carried forward and those that must re-run, given the delta A..B. Each entry
- * carries the decision reason. Non-clean angles are not carry-forward-eligible and
- * belong in the re-run set — callers should pass only angles whose prior verdict
- * was clean, or set `prevVerdict` per angle via the single-angle function.
- *
- * @param {object} input
- * @param {string[]} input.prevAngles — angles that were clean at head A
- * @param {string[]} input.changedFiles — delta A..B
- * @param {{ alwaysRerun?: Iterable<string> }} [input.options]
- * @returns {{ carried: Array<{ angle: string, reason: string }>, mustRerun: Array<{ angle: string, reason: string }> }}
- */
-export function resolveCarryForwardAngles({ prevAngles, changedFiles, options = {}, rules }) {
-  const carried = [];
-  const mustRerun = [];
-  for (const angle of Array.isArray(prevAngles) ? prevAngles : []) {
-    const decision = resolveAngleCarryForward({
-      angle,
-      angleSurface: angleReviewSurface(angle, options),
-      changedFiles,
-      prevVerdict: "clean",
-      rules,
-    });
-    (decision.carryForward ? carried : mustRerun).push({ angle, reason: decision.reason });
-  }
-  return { carried, mustRerun };
-}
-
-/**
  * The file surface kinds the external Copilot code review actually reviews. Docs
  * and comment-only prose are NOT part of it; everything a Copilot review could
  * legitimately raise a code nit about is (code, tests, config, CI).

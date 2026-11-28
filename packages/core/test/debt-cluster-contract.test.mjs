@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, test } from "bun:test";
 
-import { clusterSignals, clusterSignalsEnriched } from "../src/debt/cluster.mjs";
+import { clusterSignalsEnriched } from "../src/debt/cluster.mjs";
+
+// Findings without the internal shaping fields.
+const cluster = (signals) => clusterSignalsEnriched(signals).map(({ _clusterReason, _signalCount, _categories, ...clean }) => clean);
 
 // Helper: create a synthetic signal
 function sig(id, opts = {}) {
@@ -25,7 +28,7 @@ describe("debt-cluster", () => {
         sig(uuid(1), { location: { filePath: "src/a.mjs" }, signalKind: "file_size" }),
         sig(uuid(2), { location: { filePath: "src/a.mjs" }, signalKind: "spaghetti_branching" }),
       ];
-      const findings = clusterSignals(signals);
+      const findings = cluster(signals);
       assert.equal(findings.length, 1);
       assert.equal(findings[0].signalIds.length, 2);
       assert.ok(findings[0].title.startsWith("file:"));
@@ -36,7 +39,7 @@ describe("debt-cluster", () => {
         sig(uuid(1), { location: { filePath: "src/auth/a.mjs" }, signalKind: "file_size" }),
         sig(uuid(2), { location: { filePath: "scripts/b.mjs" }, signalKind: "thin_wrapper" }),
       ];
-      const findings = clusterSignals(signals);
+      const findings = cluster(signals);
       assert.equal(findings.length, 2);
       for (const f of findings) {
         assert.equal(f.signalIds.length, 1);
@@ -50,7 +53,7 @@ describe("debt-cluster", () => {
         sig(uuid(1), { location: { filePath: "src/auth/login.mjs" }, signalKind: "file_size" }),
         sig(uuid(2), { location: { filePath: "src/auth/logout.mjs" }, signalKind: "spaghetti_branching" }),
       ];
-      const findings = clusterSignals(signals);
+      const findings = cluster(signals);
       // Same module "src/auth", different files, different themes
       // File pass: each file has 1 signal → deferred
       // Module pass: "src/auth" has 2 signals → clustered
@@ -66,7 +69,7 @@ describe("debt-cluster", () => {
         sig(uuid(1), { location: { filePath: "src/a.mjs" }, signalKind: "spaghetti_branching" }),
         sig(uuid(2), { location: { filePath: "scripts/b.mjs" }, signalKind: "spaghetti_branching" }),
       ];
-      const findings = clusterSignals(signals);
+      const findings = cluster(signals);
       // File pass: each has 1 signal → deferred
       // Module pass: "src" 1, "scripts" 1 → deferred
       // Theme pass: "spaghetti_branching" 2 → clustered
@@ -81,7 +84,7 @@ describe("debt-cluster", () => {
       const signals = [
         sig(uuid(1), { signalKind: "unique_category" }),
       ];
-      const findings = clusterSignals(signals);
+      const findings = cluster(signals);
       assert.equal(findings.length, 1);
       assert.equal(findings[0].signalIds.length, 1);
     });
@@ -90,7 +93,7 @@ describe("debt-cluster", () => {
       const signals = [
         { id: uuid(1), sourceType: "manual_review", signalKind: "", location: {}, severityHint: "low", timestamp: "2024-06-03T12:00:00Z" },
       ];
-      const findings = clusterSignals(signals);
+      const findings = cluster(signals);
       assert.equal(findings.length, 1);
       assert.equal(findings[0].signalIds.length, 1);
     });
@@ -103,7 +106,7 @@ describe("debt-cluster", () => {
         sig(uuid(2), { location: { filePath: "src/auth/login.mjs" }, signalKind: "spaghetti_branching" }),
         sig(uuid(3), { location: { filePath: "src/auth/logout.mjs" }, signalKind: "thin_wrapper" }),
       ];
-      const findings = clusterSignals(signals);
+      const findings = cluster(signals);
       // Pass 1 file: login.mjs has 2 → cluster; logout.mjs has 1 → remaining
       // Pass 2 module: "src/auth" has only logout.mjs (1 signal) → deferred → singleton
       assert.equal(findings.length, 2);
@@ -118,7 +121,7 @@ describe("debt-cluster", () => {
         sig(uuid(2), { location: { filePath: "src/x/b.mjs" }, signalKind: "file_size" }),
         sig(uuid(3), { location: { filePath: "scripts/c.mjs" }, signalKind: "spaghetti_branching" }),
       ];
-      const findings = clusterSignals(signals);
+      const findings = cluster(signals);
       // File pass: each file 1 signal → all deferred
       // Module pass: "src/x" has 2 → cluster; "scripts" has 1 → deferred
       // Theme pass: "spaghetti_branching" has only scripts/c.mjs (1) → singleton
@@ -138,7 +141,7 @@ describe("debt-cluster", () => {
         sig(uuid(4), { location: { filePath: "src/c.mjs" }, signalKind: "y" }),
         sig(uuid(5), { location: { filePath: "scripts/d.mjs" }, signalKind: "z" }),
       ];
-      const findings = clusterSignals(signals);
+      const findings = cluster(signals);
       const allSignalIds = findings.flatMap(f => f.signalIds);
       assert.equal(allSignalIds.length, signals.length);
       assert.equal(new Set(allSignalIds).size, signals.length);
@@ -147,12 +150,12 @@ describe("debt-cluster", () => {
 
   describe("empty / edge cases", () => {
     test("empty array returns empty array", () => {
-      assert.deepEqual(clusterSignals([]), []);
+      assert.deepEqual(cluster([]), []);
     });
 
     test("non-array returns empty array", () => {
-      assert.deepEqual(clusterSignals(null), []);
-      assert.deepEqual(clusterSignals(undefined), []);
+      assert.deepEqual(cluster(null), []);
+      assert.deepEqual(cluster(undefined), []);
     });
   });
 
@@ -175,7 +178,7 @@ describe("debt-cluster", () => {
         sig(uuid(1), { signalKind: "test_cat" }),
         sig(uuid(2), { signalKind: "test_cat" }),
       ];
-      const findings = clusterSignals(signals);
+      const findings = cluster(signals);
       for (const f of findings) {
         assert.ok(f.id);
         assert.ok(Array.isArray(f.signalIds));

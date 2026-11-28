@@ -7,7 +7,6 @@ import {
   RENAME_ONLY_ANGLES,
   angleReviewSurface,
   resolveAngleCarryForward,
-  resolveCarryForwardAngles,
   resolveConvergenceCarryForward,
 } from "../src/loop/gate-carry-forward.mjs";
 
@@ -337,43 +336,6 @@ describe("resolveAngleCarryForward — fail-closed decision", () => {
       prevVerdict: "clean",
     });
     assert.equal(decision.carryForward, false);
-  });
-});
-
-describe("resolveCarryForwardAngles — partition", () => {
-  test("splits clean angles into carried vs must-re-run for a doc-only delta", () => {
-    const { carried, mustRerun } = resolveCarryForwardAngles({
-      prevAngles: ["correctness", "coverage", "docs", "pr-description"],
-      changedFiles: ["docs/guide.md"],
-    });
-    const carriedAngles = carried.map((c) => c.angle).sort();
-    const rerunAngles = mustRerun.map((c) => c.angle).sort();
-    assert.deepEqual(carriedAngles, ["correctness", "coverage"]);
-    // docs (surface touched) + pr-description (always) must re-run.
-    assert.deepEqual(rerunAngles, ["docs", "pr-description"]);
-  });
-
-  test("all angles re-run when the delta touches code", () => {
-    const { carried, mustRerun } = resolveCarryForwardAngles({
-      prevAngles: ["correctness", "coverage"],
-      changedFiles: ["src/foo.mjs"],
-    });
-    assert.equal(carried.length, 0);
-    assert.equal(mustRerun.length, 2);
-  });
-
-  // Pin the case-drift lookup widening end to end at the decision seam this
-  // function drives: a case-drifted MAPPED angle name (as might appear in a
-  // prior findings-log entry) still carries forward on a delta provably
-  // outside its surface — it must not fail closed to must-re-run just
-  // because the recorded name's case drifted from the canonical one.
-  test("a case-drifted mapped angle name carries forward on a non-implicating delta", () => {
-    const { carried, mustRerun } = resolveCarryForwardAngles({
-      prevAngles: ["Correctness"],
-      changedFiles: ["docs/guide.md"],
-    });
-    assert.deepEqual(carried.map((c) => c.angle), ["Correctness"]);
-    assert.deepEqual(mustRerun, []);
   });
 });
 

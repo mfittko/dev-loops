@@ -379,18 +379,16 @@ export function composeRunInspectionSnapshot({
   const effectiveOuterAllowedTransitions = effectiveOuterState !== undefined && Array.isArray(outerAllowedTransitions)
     ? [...outerAllowedTransitions]
     : undefined;
-  const effectiveOuterAction = outerAction;
-  const effectiveOuterReason = outerReason;
 
   // -------------------------------------------------------------------------
   // Determine statusClass
   // -------------------------------------------------------------------------
 
   let statusClass;
-  if (sourceMode === SOURCE_MODE.UNAVAILABLE || effectiveOuterAction === undefined) {
+  if (sourceMode === SOURCE_MODE.UNAVAILABLE || outerAction === undefined) {
     statusClass = STATUS_CLASS.UNKNOWN;
   } else {
-    statusClass = mapOuterActionToStatusClass(effectiveOuterAction);
+    statusClass = mapOuterActionToStatusClass(outerAction);
   }
 
   // -------------------------------------------------------------------------
@@ -398,7 +396,7 @@ export function composeRunInspectionSnapshot({
   // -------------------------------------------------------------------------
 
   const needsAttention =
-    effectiveOuterAction === "stop"
+    outerAction === "stop"
     || markers.conflicts.length > 0
     || markers.missing.length > 0
     || sourceMode === SOURCE_MODE.CHECKPOINT_ONLY
@@ -418,7 +416,7 @@ export function composeRunInspectionSnapshot({
     } else if (effectiveOuterState === "needs_reconcile") {
       evidenceSummary = "Live detectors found ambiguous or conflicting state, so the orchestrator must reconcile before continuing.";
     } else if (effectiveOuterState === "stop_needs_human") {
-      evidenceSummary = `Live detectors indicate a blocked outer state that needs human intervention${effectiveOuterReason !== undefined ? ` (reason: ${effectiveOuterReason})` : ""}.`;
+      evidenceSummary = `Live detectors indicate a blocked outer state that needs human intervention${outerReason !== undefined ? ` (reason: ${outerReason})` : ""}.`;
     } else if (effectiveOuterState === "done_terminal") {
       evidenceSummary = "Live detectors agree the PR is complete.";
     } else if (effectiveOuterState === "continue_current_wait") {
@@ -427,8 +425,8 @@ export function composeRunInspectionSnapshot({
       evidenceSummary = "Live detectors indicate the next meaningful work belongs to the Copilot loop.";
     } else if (effectiveOuterState === "handoff_to_reviewer_loop") {
       evidenceSummary = "Live detectors indicate the next meaningful work belongs to the reviewer loop.";
-    } else if (effectiveOuterAction !== undefined) {
-      evidenceSummary = `Live detectors returned results, but only the compatibility outerAction could be determined (outerAction: ${effectiveOuterAction}).`;
+    } else if (outerAction !== undefined) {
+      evidenceSummary = `Live detectors returned results, but only the compatibility outerAction could be determined (outerAction: ${outerAction}).`;
     } else {
       evidenceSummary = "Live detectors returned results but outer state could not be determined.";
     }
@@ -576,14 +574,8 @@ export function composeRunInspectionSnapshot({
     // reconcile between a deferred and a full inspection.
     const hasUnresolvedThreads = typeof loopIter.unresolvedReviewThreads === "number"
       && loopIter.unresolvedReviewThreads > 0;
-    const copilotState = copilotLiveOk && copilotEvidence !== null
-      ? copilotEvidence.interpretation.state
-      : null;
-    const prIsDraft = copilotState === "pr_draft";
-
     const resolved = resolveLifecycleState({
       hasLinkedPr: !explicitTargetMissing,
-      prIsDraft,
       hasUnresolvedThreads,
     });
     lifecyclePhase = resolved.state;
@@ -603,8 +595,8 @@ export function composeRunInspectionSnapshot({
     activeStateFamily: ACTIVE_STATE_FAMILY,
     outerState: effectiveOuterState ?? "unknown",
     ...(effectiveOuterAllowedTransitions !== undefined ? { allowedTransitions: effectiveOuterAllowedTransitions } : {}),
-    outerAction: effectiveOuterAction ?? "unknown",
-    activeFamilyState: effectiveOuterAction ?? "unknown",
+    outerAction: outerAction ?? "unknown",
+    activeFamilyState: outerAction ?? "unknown",
     statusClass,
     needsAttention,
     sourceMode,

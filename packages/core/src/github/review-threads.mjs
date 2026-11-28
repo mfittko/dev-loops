@@ -84,21 +84,6 @@ function compareIds(left, right) {
   return left.localeCompare(right, undefined, { numeric: true });
 }
 
-export function isActionableComment(comment) {
-  const body = normalizeBody(comment?.body ?? comment?.bodyText ?? comment?.bodyHTML ?? "");
-  const author = normalizeAuthor(comment?.author);
-
-  return body.length > 0 && author.login.length > 0 && author.type !== "System" && !author.isBot;
-}
-
-export function isActionableThread(thread) {
-  if (Boolean(thread?.isResolved)) {
-    return false;
-  }
-
-  return extractRawComments(thread).some((comment) => isActionableComment(comment));
-}
-
 function normalizeComment(comment, threadId, index, { isResolved = false } = {}) {
   const author = normalizeAuthor(comment?.author);
   const body = normalizeBody(comment?.body ?? comment?.bodyText ?? comment?.bodyHTML ?? "");

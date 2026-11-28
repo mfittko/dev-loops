@@ -167,7 +167,7 @@ async function main(args, { env = process.env, runChild = _runChild, cwd = proce
       { repo: args.repo, issue: item.issueNumber },
       { env, runChild },
     );
-    const artifact = detectIssueRefinementArtifact({ body, issueNumber: item.issueNumber });
+    const artifact = detectIssueRefinementArtifact({ body });
     // finding !== null is the explicit "fails the refinement floor" signal:
     // no refinement artifact, or an incomplete matrix arm — an
     // AC-only or DoD-only body carries a partial artifact but still fails.

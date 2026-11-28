@@ -108,15 +108,6 @@ this graph, not by this reviewer-loop machine itself.
 - `single_reviewer` means detection was scoped to one reviewer identity and `reviewerLogin` is that normalized login
 - `all_reviewers` means no single requested reviewer was resolved and the detector intentionally aggregated reviewer state across the PR
 
-## Deterministic Review Plan Contract
-
-`selectReviewerPlan` produces bounded parallel review plans:
-
-- supported angles: `correctness`, `tests`, `maintainability`, `security`, `scope`
-- max fan-out is capped to 4
-- default fan-out is 3
-- output is deterministic (`runId` sequence + angle ordering)
-
 <!-- rule: REVIEWER-STATE-GATE-ANGLE-MAPPING -->
 `REVIEWER-STATE-GATE-ANGLE-MAPPING`: For `dev-loops`, the default pre-approval gate before calling a branch/PR
 review-complete, approval-ready, merge-ready, or ready for final handoff uses
@@ -124,25 +115,17 @@ review angles resolved from config (`resolveGateAngles(config, "preApproval")`
 from `@dev-loops/core/config`). Default config ships the `gates.preApproval.angles` set in
 `packages/core/src/config/extension-defaults.yaml`, starting with `dry`, `kiss`, `yagni`.
 These are workflow lenses that reviewer runs must cover for the change; they do
-not replace the state machine's supported review-angle taxonomy (`correctness`,
-`tests`, `maintainability`, `security`, `scope`). The config-resolved lens
-passes MUST map onto that existing taxonomy when planning or merging reviewer
-runs so the workflow gate stays aligned with the deterministic review-plan
-contract. Run those lens passes in fresh context and in parallel when
+not replace the review-angle taxonomy (`correctness`, `tests`,
+`maintainability`, `security`, `scope`). The config-resolved lens
+passes MUST map onto that taxonomy when planning or merging reviewer
+runs so the workflow gate stays aligned with it. Run those lens passes in fresh context and in parallel when
 practical; if true parallelism is impractical, all configured angles MUST
 still be covered and the limitation MUST be explicitly recorded in the merged
 review artifact/verdict.
 
 ## Deterministic Merge/Synthesis Contract
 
-`mergeReviewerResults` merges parallel review run outputs into one bounded machine-readable package:
-
-- deduplicates findings by `path|line|message`
-- classifies findings into `inlineComments` vs `summaryFindings`
-- emits one deterministic verdict: `APPROVE`, `COMMENT`, or `REQUEST_CHANGES`
-- preserves `headSha`, `runsMerged`, and `totalFindings`
-
-`buildDraftReviewPayload` converts a merged review package into a deterministic pending-review payload:
+`buildDraftReviewPayload` converts a merged review package (`headSha`, `verdict`, `inlineComments`, `summaryFindings`, `totalFindings`, `runsMerged`) into a deterministic pending-review payload:
 
 - pins the pending review to `headSha`
 - renders one deterministic summary body including verdict, totals, and summary findings
