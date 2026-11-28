@@ -97,12 +97,10 @@ Options:
                   GATE-EXEC-ROUND-RETIREMENT) and re-fan fresh at the same
                   head. See "Sentinel lifecycle" in
                   skills/docs/gate-review-sub-loop-contract.md.
-  --pr-body-fix-retry  Deprecated alias for --same-head-retry (identical
-                  semantics; kept for existing callers).
 Output (stdout, JSON):
   { "ok": true, "fresh": true, "sentinelCreated": true, "round": "<headSha|null>", "repoRoot": "<abs invocation cwd>" }
   { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "repoRoot": "...", "gateContextPath": "...", "gateContextPresent": true }
-  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "repoRoot": "...", "sameHeadRetry": true, "prBodyFixRetry": true, "prefixHash": "..." }
+  { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "repoRoot": "...", "sameHeadRetry": true, "prefixHash": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "reason": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": false, "reason": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": true, "reason": "required read <kind> ..." }
@@ -116,9 +114,8 @@ Output (stdout, JSON):
   { "ok": false, "error": "...", "usage": "..." }
 ${JQ_OUTPUT_USAGE}
 Exit codes:
-  0  Clean (first run), OR a sanctioned --same-head-retry (or its alias
-     --pr-body-fix-retry) whose prefix hash matches the existing sentinel's
-     recorded hash
+  0  Clean (first run), OR a sanctioned --same-head-retry whose prefix hash
+     matches the existing sentinel's recorded hash
   1  Refuse to review: contaminated (prior session detected), OR (with
      --context-path) the seeded gate-context artifact is missing or resolves
      outside the reviewer's working directory, OR (with --context-path) a
@@ -205,24 +202,12 @@ function sentinelRelative(scope, round) {
   const roundSuffix = round ? `-${round}` : "";
   return path.join("tmp", `${CHECKPOINT_SENTINEL_PREFIX.slice(0, -1)}${scopeSuffix}${roundSuffix}.json`);
 }
-function legacySentinelRelative(scope) {
-  const suffix = scope ? `-${scope}` : "";
-  return path.join("tmp", `gate-review-context-sentinel${suffix}.json`);
-}
 async function checkSentinelExists(scope, round, cwd = process.cwd()) {
   const sentinelPath = path.resolve(cwd, sentinelRelative(scope, round));
-  try { await stat(sentinelPath); return { exists: true, path: sentinelPath, legacy: false }; } catch (err) {
+  try { await stat(sentinelPath); return { exists: true, path: sentinelPath }; } catch (err) {
     if (err.code !== "ENOENT") throw err;
   }
-  // Legacy names predate head-keyed rounds; only consult them for the
-  // scope-only key so a stale pre-round sentinel never blocks a new round.
-  if (!round) {
-    const legacyPath = path.resolve(cwd, legacySentinelRelative(scope));
-    try { await stat(legacyPath); return { exists: true, path: legacyPath, legacy: true }; } catch (err) {
-      if (err.code !== "ENOENT") throw err;
-    }
-  }
-  return { exists: false, path: sentinelPath, legacy: false };
+  return { exists: false, path: sentinelPath };
 }
 // Read the recorded `prefixHash` off an existing sentinel file, for the
 // --same-head-retry comparison. Returns null on any read/parse failure or
@@ -359,7 +344,7 @@ async function main(argv = process.argv.slice(2)) {
     )}\n`);
     return 2;
   }
-  const sameHeadRetry = argv.includes("--same-head-retry") || argv.includes("--pr-body-fix-retry");
+  const sameHeadRetry = argv.includes("--same-head-retry");
   // GATE-EXEC-BRIEFING-PREFIX (#1618): a prefix hash is mandatory on EVERY
   // path, not only --same-head-retry. Before this, a first-run sentinel could
   // be created with NO recorded prefix hash — a hashless sentinel that
@@ -370,7 +355,7 @@ async function main(argv = process.argv.slice(2)) {
   // well-formed population to verify. A hashless sentinel is never grandfathered.
   if (prefixHashArg === null && prefixFileArg === null) {
     const why = sameHeadRetry
-      ? "--same-head-retry (alias --pr-body-fix-retry) requires --prefix-hash or --prefix-file (the sanctioned retry proves byte-identity by comparing prefix hashes, so a hash to compare is mandatory)."
+      ? "--same-head-retry requires --prefix-hash or --prefix-file (the sanctioned retry proves byte-identity by comparing prefix hashes, so a hash to compare is mandatory)."
       : "--prefix-hash or --prefix-file is required on every fresh-context reviewer run (GATE-EXEC-BRIEFING-PREFIX): the invariant-briefing prefix hash is recorded on the reviewer's sentinel so verify-briefing-prefixes.mjs can fail closed at fan-in when reviewers of the same round were seeded with different invariant blocks. A sentinel created without a recorded hash is a hashless sentinel, which the fan-in never grandfathered in.";
     process.stderr.write(`${formatCliError(parseError(why))}\n`);
     return 2;
@@ -521,8 +506,6 @@ async function main(argv = process.argv.slice(2)) {
           fresh: true,
           sentinelCreated: true,
           sameHeadRetry: true,
-          // Deprecated mirror of sameHeadRetry, kept while callers migrate.
-          prBodyFixRetry: true,
           round: round ?? null,
           // See the repoRoot note on the first-run payload below.
           repoRoot: process.cwd(),
@@ -543,7 +526,7 @@ async function main(argv = process.argv.slice(2)) {
       fresh: false,
       sentinelCreated: false,
       round: round ?? null,
-      reason: `Checkpoint context sentinel already exists${existing.legacy ? " (legacy name)" : ""} — inherited session context detected. Restart the subagent with fresh context (subagent({context:\"fresh\"})).`,
+      reason: `Checkpoint context sentinel already exists — inherited session context detected. Restart the subagent with fresh context (subagent({context:\"fresh\"})).`,
     }, false);
   }
   const sentinel = {

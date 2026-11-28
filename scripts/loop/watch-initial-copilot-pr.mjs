@@ -34,8 +34,6 @@ Required:
 Optional:
   --timeout <seconds>           Watch budget; 0 = single immediate check. A positive value
                                 must be at least 3600 (persistent-wait floor).
-  --timeout-ms <n>              Deprecated alias for --timeout (milliseconds); warns on
-                                stderr. Passing both flags fails closed.
 One call waits at most ${WAIT_CAP_MS / 1000} seconds (GATE-EXEC-BOUNDED-WAIT-CAP); a longer --timeout
 returns "timed_out" with outcome "pending" and a "reissue" command (it carries the
 internal --resumed flag and the remaining --timeout); run it.
@@ -147,7 +145,6 @@ export function parseWatchInitialCopilotPrCliArgs(argv) {
       repo: { type: "string" },
       issue: { type: "string" },
       timeout: { type: "string" },
-      "timeout-ms": { type: "string" },
       resumed: { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -178,8 +175,8 @@ export function parseWatchInitialCopilotPrCliArgs(argv) {
       options.issue = parseIssueNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token.name === "timeout" || token.name === "timeout-ms") {
-      rawTimeout[token.name === "timeout" ? "timeout" : "timeoutMs"] = requireTokenValue(token, parseError);
+    if (token.name === "timeout") {
+      rawTimeout.timeout = requireTokenValue(token, parseError);
       continue;
     }
     if (token.name === "resumed") {

@@ -25,8 +25,6 @@ Required:
   --repo <owner/name>           Repository slug (e.g. owner/repo)
   --pr <number>                 Pull request number
 Options:
-  --timeout-ms <n>              Deprecated alias for --timeout (milliseconds); warns on stderr.
-                                Passing both flags fails closed.
   --timeout <seconds>           Total watch budget in seconds (default ${COPILOT_REVIEW_WAIT_TIMEOUT_MS / 1000}, i.e. ${COPILOT_REVIEW_WAIT_TIMEOUT_MS / 60_000} min;
                                 0 = single immediate check, no wait — returns "idle" if
                                 no fresh activity). For a quick non-watch thread/state
@@ -126,7 +124,6 @@ export function parseWatchCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       timeout: { type: "string" },
-      "timeout-ms": { type: "string" },
       concise: { type: "boolean" },
       summary: { type: "boolean" },
       "baseline-ids": { type: "string" },
@@ -169,8 +166,8 @@ export function parseWatchCliArgs(argv) {
       options.pr = parsePositiveInteger(requireTokenValue(token, parseError), "--pr", parseError);
       continue;
     }
-    if (token.name === "timeout" || token.name === "timeout-ms") {
-      rawTimeout[token.name === "timeout" ? "timeout" : "timeoutMs"] = requireTokenValue(token, parseError);
+    if (token.name === "timeout") {
+      rawTimeout.timeout = requireTokenValue(token, parseError);
       continue;
     }
     if (token.name === "concise" || token.name === "summary") {

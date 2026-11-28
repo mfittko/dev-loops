@@ -338,7 +338,6 @@ Required:
 
 Optional:
 - `--timeout <seconds>` (non-negative number, fractions allowed; default `1800`, i.e. 30 minutes)
-- `--timeout-ms <n>` is a deprecated alias: it warns on stderr and converts to seconds. Passing both flags fails closed.
 
 Contract:
 - captures a baseline snapshot, then performs a bounded number of follow-up polls

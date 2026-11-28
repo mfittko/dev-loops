@@ -36,8 +36,6 @@ Required:
 Optional:
   --timeout <seconds>     Total wait budget (default ${DEFAULT_TIMEOUT_SECONDS}; 0 = single
                           immediate check, no wait; fractions allowed)
-  --timeout-ms <n>        Deprecated alias for --timeout (milliseconds); warns on
-                          stderr. Passing both flags fails closed.
   --poll <seconds>        Delay between polls (default ${DEFAULT_POLL_SECONDS})
 One call waits at most ${WAIT_CAP_MS / 1000} seconds (GATE-EXEC-BOUNDED-WAIT-CAP). A longer --timeout
 returns status "timeout" with outcome "pending" (exit 2) and a "reissue" command
@@ -112,7 +110,6 @@ export function parseWaitPrChecksCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       timeout: { type: "string" },
-      "timeout-ms": { type: "string" },
       poll: { type: "string" },
       "baseline-sha": { type: "string" },
       "stall-started-at-ms": { type: "string" },
@@ -149,8 +146,8 @@ export function parseWaitPrChecksCliArgs(argv) {
       options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token.name === "timeout" || token.name === "timeout-ms") {
-      rawTimeout[token.name === "timeout" ? "timeout" : "timeoutMs"] = requireTokenValue(token, parseError);
+    if (token.name === "timeout") {
+      rawTimeout.timeout = requireTokenValue(token, parseError);
       continue;
     }
     if (token.name === "poll") {

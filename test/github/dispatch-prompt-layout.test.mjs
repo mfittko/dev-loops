@@ -7,16 +7,16 @@ import { test } from "bun:test";
 
 import { renderBriefingPointerLine, sha256Hex, DISPATCH_PROMPT_LEADING_CAP_BYTES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { evaluateDispatchPromptLayout, verifyDispatchPromptLayoutForHead } from "../../scripts/github/verify-dispatch-prompt-layout.mjs";
-import { validateBriefingPrefixPath, dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
+import { validateBriefingPrefixPath, dispatchPromptLayoutRecordPath, recordDispatchPromptLayout } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
+import { canonicalizeScope } from "../../scripts/github/_gate-names.mjs";
 import { bindCompactReference } from "../_helpers.mjs";
 
 const COMPACT_REFERENCE = { workOrderRef: `review:o/r#1:draft_gate:abc:draft-gate-coverage`, workOrderDigest: "sha256:d", executionIdentity: "r1-ab-u0" };
 
-const recordCliPath = path.resolve("scripts/github/record-dispatch-prompt-layout.mjs");
 const verifyCliPath = path.resolve("scripts/github/verify-dispatch-prompt-layout.mjs");
 
-function runRecordCli(args = [], opts = {}) {
-  return spawnSync("node", [recordCliPath, ...args], { encoding: "utf8", ...opts });
+function recordPrompt(tmpDir, scope, prefixPath, promptText) {
+  return recordDispatchPromptLayout({ scope, headSha: HEAD_SHA, prefixPath, promptText, tmpRoot: path.join(tmpDir, "tmp") });
 }
 
 function runVerifyCli(args = [], opts = {}) {
@@ -267,29 +267,16 @@ test("verifyDispatchPromptLayoutForHead: fails closed when no emitted unit exist
 });
 
 // ---------------------------------------------------------------------------
-// CLI: record-dispatch-prompt-layout.mjs
+// recordDispatchPromptLayout
 // ---------------------------------------------------------------------------
 
-test("record-dispatch-prompt-layout.mjs --help exits 0", () => {
-  const result = runRecordCli(["--help"]);
-  assert.equal(result.status, 0);
-  assert.match(result.stdout, /record-dispatch-prompt-layout/);
-});
-
-test("record-dispatch-prompt-layout.mjs records a full-content hash; the round passes only with a matching emitted unit", async () => {
+test("recordDispatchPromptLayout records a full-content hash; the round passes only with a matching emitted unit", async () => {
   await withTmpDir(async (tmpDir) => {
     const relPath = await writeGateContextPrefix(tmpDir);
     const promptBody = `${PREFIX_BYTES}## Angle: coverage\nDo the thing.`;
-    const promptFile = path.join(tmpDir, "prompt.txt");
-    await writeFile(promptFile, promptBody, "utf8");
     // Sanctioned emitter would also write the canonical emitted file:
     await writeEmittedPrompt(tmpDir, "draft-gate-coverage", promptBody);
-    const result = runRecordCli(
-      ["--scope", "draft-gate-coverage", "--head-sha", HEAD_SHA, "--prefix-path", relPath, "--prompt-file", promptFile],
-      { cwd: tmpDir },
-    );
-    assert.equal(result.status, 0, result.stderr);
-    const payload = JSON.parse(result.stdout);
+    const payload = await recordPrompt(tmpDir, "draft-gate-coverage", relPath, promptBody);
     assert.equal(payload.recorded, true);
 
     const recordRaw = await readFile(dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA), "utf8");
@@ -310,22 +297,16 @@ test("record-dispatch-prompt-layout.mjs records a full-content hash; the round p
 // prompt, never of the truncated `leading` capture. A regression that hashed
 // `leading` instead of `promptText` would still match a same-truncated emitted
 // file and pass every other test; this pins the full-content invariant.
-test("record-dispatch-prompt-layout.mjs binds a >cap prompt by FULL content (not the truncated leading capture)", async () => {
+test("recordDispatchPromptLayout binds a >cap prompt by FULL content (not the truncated leading capture)", async () => {
   await withTmpDir(async (tmpDir) => {
     const relPath = await writeGateContextPrefix(tmpDir);
     // A prompt comfortably past DISPATCH_PROMPT_LEADING_CAP_BYTES whose bytes
     // AFTER the cap still matter: the emitted file carries the full bytes.
     const bigPrompt = `${PREFIX_BYTES}## Angle: coverage\n${"x".repeat(DISPATCH_PROMPT_LEADING_CAP_BYTES)}TAIL-AFTER-CAP\n`;
     assert.ok(bigPrompt.length > DISPATCH_PROMPT_LEADING_CAP_BYTES);
-    const promptFile = path.join(tmpDir, "big-prompt.txt");
-    await writeFile(promptFile, bigPrompt, "utf8");
     await writeEmittedPrompt(tmpDir, "draft-gate-coverage", bigPrompt);
-    const result = runRecordCli(
-      ["--scope", "draft-gate-coverage", "--head-sha", HEAD_SHA, "--prefix-path", relPath, "--prompt-file", promptFile],
-      { cwd: tmpDir },
-    );
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(result.stdout).truncated, true);
+    const result = await recordPrompt(tmpDir, "draft-gate-coverage", relPath, bigPrompt);
+    assert.equal(result.truncated, true);
 
     const record = JSON.parse(await readFile(dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA), "utf8"));
     // Hash is over the FULL prompt, never the truncated leading capture.
@@ -349,17 +330,11 @@ test("record-dispatch-prompt-layout.mjs binds a >cap prompt by FULL content (not
 // Issue #1957: an underscore gate-id-derived scope must record on the first
 // attempt (no hyphen self-correction) and key the record by the canonical
 // hyphenated form.
-test("record-dispatch-prompt-layout.mjs canonicalizes an underscore gate-id-derived --scope", async () => {
+test("recordDispatchPromptLayout keys a canonicalized underscore gate-id-derived scope by its hyphenated form", async () => {
   await withTmpDir(async (tmpDir) => {
     const relPath = await writeGateContextPrefix(tmpDir);
-    const promptFile = path.join(tmpDir, "prompt.txt");
-    await writeFile(promptFile, `${PREFIX_BYTES}## Angle: coverage\nDo the thing.`, "utf8");
-    const result = runRecordCli(
-      ["--scope", "draft_gate-group-docs-surface", "--head-sha", HEAD_SHA, "--prefix-path", relPath, "--prompt-file", promptFile],
-      { cwd: tmpDir },
-    );
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(result.stdout).recorded, true);
+    const result = await recordPrompt(tmpDir, canonicalizeScope("draft_gate-group-docs-surface"), relPath, `${PREFIX_BYTES}## Angle: coverage\nDo the thing.`);
+    assert.equal(result.recorded, true);
     // Record keyed and stored under the canonical hyphenated scope.
     const recordRaw = await readFile(
       dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-group-docs-surface", HEAD_SHA),
@@ -369,38 +344,20 @@ test("record-dispatch-prompt-layout.mjs canonicalizes an underscore gate-id-deri
   });
 });
 
-test("record-dispatch-prompt-layout.mjs refuses (exit 1) a non-canonical --prefix-path basename", async () => {
+test("recordDispatchPromptLayout refuses a non-canonical prefix-path basename", async () => {
   await withTmpDir(async (tmpDir) => {
-    const promptFile = path.join(tmpDir, "prompt.txt");
-    await writeFile(promptFile, "anything", "utf8");
-    const result = runRecordCli(
-      ["--scope", "draft-gate-coverage", "--head-sha", HEAD_SHA, "--prefix-path", "not-a-real-record.txt", "--prompt-file", promptFile],
-      { cwd: tmpDir },
-    );
-    assert.equal(result.status, 1);
-    assert.equal(JSON.parse(result.stdout).recorded, false);
+    const result = await recordPrompt(tmpDir, "draft-gate-coverage", "not-a-real-record.txt", "anything");
+    assert.equal(result.recorded, false);
   });
 });
 
-test("record-dispatch-prompt-layout.mjs validates --prefix-path BEFORE reading --prompt-file (fail-fast: an unreadable --prompt-file never masks a bad --prefix-path)", () => {
-  const result = runRecordCli([
-    "--scope", "draft-gate-coverage", "--head-sha", HEAD_SHA,
-    "--prefix-path", "not-a-real-record.txt",
-    // A nonexistent --prompt-file: if the CLI read it BEFORE validating
-    // --prefix-path, the reason would report an unreadable prompt-file
-    // instead of the (earlier, real) prefix-path defect.
-    "--prompt-file", "/nonexistent/path/does-not-exist.txt",
-  ]);
-  assert.equal(result.status, 1);
-  const payload = JSON.parse(result.stdout);
-  assert.equal(payload.recorded, false);
-  assert.match(payload.reason, /canonical/);
-  assert.doesNotMatch(payload.reason, /unreadable/);
-});
-
-test("record-dispatch-prompt-layout.mjs requires --scope/--head-sha/--prefix-path/--prompt-file", () => {
-  assert.equal(runRecordCli([]).status, 2);
-  assert.equal(runRecordCli(["--scope", "a"]).status, 2);
+test("recordDispatchPromptLayout validates the prefix-path BEFORE the prompt text (an empty prompt never masks a bad prefix-path)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const result = await recordPrompt(tmpDir, "draft-gate-coverage", "not-a-real-record.txt", "");
+    assert.equal(result.recorded, false);
+    assert.match(result.reason, /canonical/);
+    assert.doesNotMatch(result.reason, /empty/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -430,14 +387,9 @@ test("verify-dispatch-prompt-layout.mjs exits 1 (fails closed) on a hand-compose
     // the inlined invariant prefix. The coordinator writes it as the emitted
     // file AND records its hash — but it is NOT inline-aligned, so it fails.
     const promptBody = `${pointerLine}\n## Angle: coverage\nDo the thing.`;
-    const promptFile = path.join(tmpDir, "prompt.txt");
-    await writeFile(promptFile, promptBody, "utf8");
     await writeEmittedPrompt(tmpDir, "draft-gate-coverage", promptBody);
-    const recordResult = runRecordCli(
-      ["--scope", "draft-gate-coverage", "--head-sha", HEAD_SHA, "--prefix-path", relPath, "--prompt-file", promptFile],
-      { cwd: tmpDir },
-    );
-    assert.equal(recordResult.status, 0, recordResult.stderr);
+    const recordResult = await recordPrompt(tmpDir, "draft-gate-coverage", relPath, promptBody);
+    assert.equal(recordResult.recorded, true);
 
     const result = runVerifyCli(["--head-sha", HEAD_SHA], { cwd: tmpDir });
     assert.equal(result.status, 1);
@@ -451,13 +403,8 @@ test("verify-dispatch-prompt-layout.mjs recovery: a compliant replacement round 
   await withTmpDir(async (tmpDir) => {
     const relPath = await writeGateContextPrefix(tmpDir);
     const compliant = `${PREFIX_BYTES}## Angle: coverage\nDo the thing.`;
-    const promptFile = path.join(tmpDir, "prompt.txt");
-    await writeFile(promptFile, compliant, "utf8");
     await writeEmittedPrompt(tmpDir, "draft-gate-coverage", compliant);
-    runRecordCli(
-      ["--scope", "draft-gate-coverage", "--head-sha", HEAD_SHA, "--prefix-path", relPath, "--prompt-file", promptFile],
-      { cwd: tmpDir },
-    );
+    await recordPrompt(tmpDir, "draft-gate-coverage", relPath, compliant);
     await bindCompactReference(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA);
     const result = runVerifyCli(["--head-sha", HEAD_SHA], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stderr);

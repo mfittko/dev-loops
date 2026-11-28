@@ -3,7 +3,6 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { captureStderr } from "../_helpers.mjs";
 import { runNode as runNodeHelper } from "../_helpers.mjs";
 
 import { exitCodeForWaitResult, parseWaitPrChecksCliArgs, runCli } from "../../scripts/github/wait-pr-checks.mjs";
@@ -661,18 +660,12 @@ test("wait-pr-checks --help names the RATE_LIMITED result and its resetAt field"
   assert(stdout.text().includes("resetAt"));
 });
 
-test("wait-pr-checks accepts --timeout 0, fractions and deprecated --timeout-ms; both flags fail closed", () => {
+test("wait-pr-checks accepts --timeout 0 and fractions", () => {
   const base = ["--repo", "owner/repo", "--pr", "7"];
   assert.equal(parseWaitPrChecksCliArgs([...base, "--timeout", "0"]).timeoutMs, 0);
   assert.equal(parseWaitPrChecksCliArgs([...base, "--timeout", "0.1"]).timeoutMs, 100);
   assert.equal(parseWaitPrChecksCliArgs([...base, "--timeout", "90"]).timeoutMs, 90_000);
-  assert.equal(parseWaitPrChecksCliArgs([...base, "--timeout-ms", "1500"]).timeoutMs, 1500);
-  assert.throws(() => parseWaitPrChecksCliArgs([...base, "--timeout", "1", "--timeout-ms", "1000"]), /mutually exclusive/);
-});
-
-test("wait-pr-checks warns on stderr for deprecated --timeout-ms", () => {
-  const err = captureStderr(() => parseWaitPrChecksCliArgs(["--repo", "owner/repo", "--pr", "7", "--timeout-ms", "1500"]));
-  assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
+  assert.equal(parseWaitPrChecksCliArgs([...base, "--timeout", "1.5"]).timeoutMs, 1500);
 });
 
 test("wait-pr-checks clamps a poll interval above the cap so a check-less head still settles success", async () => {
