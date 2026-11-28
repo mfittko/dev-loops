@@ -53,7 +53,7 @@ export function buildRetireCommand({ gate, headSha, tmpRoot, findingsDir = null,
 /**
  * Retire the undispatched or finished round of one gate at one head, through retire-gate-round's logic, so a rebuilt
  * context or a re-emission mints a fresh round (GATE-EXEC-ROUND-RETIREMENT). A round with a posted verdict (a findings
- * log at that head) is never retired, except a round whose open act items are all `remedyKind: pr_body` and whose PR body digest changed (issue 3604): it retires through the scoped body-reading retirement when the caller passes `bodyReadingUnits` and `currentPrBodySha256`. Any other posted round gets a refusal with a `recovery` field. So does a round
+ * log at that head) is never retired, except a round whose open act items are all `remedyKind: pr_body` and whose PR body digest changed (issue 3604): it retires through the scoped body-reading retirement when the caller passes a non-empty `bodyReadingUnits` list and `currentPrBodySha256`. Any other posted round gets a refusal with a `recovery` field. So does a round
  * with a live sentinel (no valid artifact for its unit newer than it): its reviewer may still be running. An error other
  * than ENOENT while probing the round throws, so the guards fail closed.
  *

@@ -12,7 +12,7 @@ const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir,
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 
-import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { detectPrGateCoordinationState, onlyStaleGateRoundThreadsOpen, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveBodyOnlyRetire, resolveCapBrakes, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, deletePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot,PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
@@ -5529,6 +5529,18 @@ test("resolveBodyOnlyRetire reads the gate of the PR state, the live and the ret
     await write("draft_gate", "5".repeat(40), [bodyItem]);
     await write("draft_gate", "6".repeat(40), [codeItem]);
     assert.equal(await resolveBodyOnlyRetire(ctx("5".repeat(40), true, "Edited body"), { repoRoot: tempDir }), true);
+    // Issue 3667: with a config, the round's context must hold a body-reading angle; none keeps the earlier routing.
+    const config = { version: 1 };
+    const writeContext = async (angles) => {
+      const file = path.join(tempDir, buildGateContextPath({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, tmpRoot: "tmp" }));
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ resolvedAngles: angles }), "utf8");
+    };
+    assert.equal(await resolveBodyOnlyRetire(ctx(head, true, "Edited body"), { repoRoot: tempDir, config }), false, "no context");
+    await writeContext(["pr-description"]);
+    assert.equal(await resolveBodyOnlyRetire(ctx(head, true, "Edited body"), { repoRoot: tempDir, config }), true);
+    await writeContext([]);
+    assert.equal(await resolveBodyOnlyRetire(ctx(head, true, "Edited body"), { repoRoot: tempDir, config }), false, "zero body-reading angles");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

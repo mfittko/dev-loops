@@ -2371,12 +2371,22 @@ export async function refusesPastScopedRound(options, { repoRoot, prBase, cap, r
 }
 
 /** Whether the head's latest ledger (live, or retained once the automatic retirement moved it) is a round of PR-body act items that read a PR body other than `bodySha256` (default: `options.prBody`'s digest; GATE-EXEC-BODY-ONLY-RERUN). */
-export async function isBodyOnlyRerun(options, { repoRoot, bodySha256 = prBodySha256(options.prBody), includeLiveCurrentHead = true }) {
+export async function isBodyOnlyRerun(options, { repoRoot, bodySha256 = prBodySha256(options.prBody), includeLiveCurrentHead = true, config = null }) {
   if (typeof bodySha256 !== "string") return false;
   const head = String(options.headSha).trim().toLowerCase();
   const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead });
   const latest = closed.filter((log) => String(log.headSha).trim().toLowerCase().startsWith(head)).at(-1);
-  return Boolean(latest) && bodyOnlySupersededDigest(latest, bodySha256) !== null;
+  if (!latest || bodyOnlySupersededDigest(latest, bodySha256) === null) return false;
+  if (config === null) return true;
+  // The emitter retires only when a unit holds a body-reading angle (issue 3667); a missing or unreadable context keeps the earlier routing.
+  // shortcut: reads the context's resolvedAngles, not the pending units after carry; upgrade if carried-only rounds matter.
+  try {
+    const contextPath = buildGateContextPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) });
+    const { resolvedAngles } = JSON.parse(await readFile(path.resolve(repoRoot, contextPath), "utf8"));
+    return Array.isArray(resolvedAngles) && resolvedAngles.some((angle) => readsPrBody(angle, config));
+  } catch {
+    return false;
+  }
 }
 
 /**
