@@ -170,7 +170,7 @@ test("AC1 the soft-cap bullet points at the run-ending cases and the fix-pass en
   const content = await readRepo(MAIN);
   assert.match(content, /Fresh dispatch stays for reviewer and judge isolation and for the run-ending cases in Unit coordinator boundaries\./);
   assert.doesNotMatch(content, /Fresh dispatch stays for reviewer and judge isolation, genuine recovery/);
-  assert.match(content, /eligible under `GATE-EXEC-LOW-NIT-CONVERGENCE`, the fix pass ends only after the `--converged-json` post/);
+  assert.match(content, /all PR-body items, the fix pass ends only after the body-only `--converged-json` post/);
 });
 
 test("issue 3414 ac:3 a verdict post refused for red CI is recorded with the CI route as nextAction", async () => {

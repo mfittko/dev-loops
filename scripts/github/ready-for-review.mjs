@@ -113,28 +113,28 @@ export function describeUnresolvedGateThreadReasons(breakdown, fallbackCount) {
   const reasons = [];
   if (question > 0) {
     reasons.push(
-      `${question} question thread(s): if unanswered, post a resolving answer reply, then rerun close-gate-findings — it reject-closes an answered question the judge rejected (citing the judge's rejection rationale); an answered question the judge disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied, is closed by a close-gate-findings rerun, and any other judge-disposed act question is resolved by the fixer's own answer-and-resolve path; an answered question whose judge disposition is ambiguous or unrecorded needs an operator decision`,
+      `${question} question thread(s): if unanswered, post a resolving answer reply, then rerun close-gate-findings — it reject-closes an answered question the judge rejected (citing the judge's rejection rationale); an answered question the judge disposed act with an evidence-only remedy, or with a pr_body remedy once the PR-body edit is applied, is closed by a close-gate-findings rerun, and any other judge-disposed act question stays open until a judge rerun at the current head changes its disposition; an answered question whose judge disposition is ambiguous or unrecorded needs an operator decision`,
     );
   }
   if (nit > 0) {
-    // A nit is never a fixer target (unlike high/medium/low below) and is
-    // never closed from severity or round alone: close-gate-findings closes
-    // it only on a judge reject, a judge defer, or an evidence-only judge
-    // act (gate-review-sub-loop-contract.md; NON_DEFECT_SEVERITIES,
-    // gate-fanin.mjs) — naming fixer fix-close here would send operators to
-    // a remedy that cannot clear this count.
+    // A nit is never closed from severity or round alone: close-gate-findings
+    // closes it on a judge reject, a judge defer, an evidence-only judge act,
+    // or the fixed-act close (a judge act nit whose fix was pushed and which
+    // the next gate round does not raise again; gate-review-sub-loop-contract.md,
+    // NON_DEFECT_SEVERITIES in gate-fanin.mjs). An unjudged nit needs a judge rerun.
     reasons.push(
-      `${nit} open nit thread(s): rerun close-gate-findings once the judge has rejected or deferred it (or disposed it act with an evidence-only remedy); an unjudged or act nit needs the fixer or a judge rerun, except a pr_body act thread, which close-gate-findings closes after the PR-body edit once the live body digest differs`,
+      `${nit} open nit thread(s): rerun close-gate-findings once the judge has rejected or deferred it (or disposed it act with an evidence-only remedy); a fixed act nit closes through the fixed-act close at the next gate round; an unjudged nit needs a judge rerun, except a pr_body act thread, which close-gate-findings closes after the PR-body edit once the live body digest differs`,
     );
   }
   if (other > 0) {
     // A judge-rejected or judge-deferred medium or low, and an evidence-only
     // judge act, is closed by a close-gate-findings rerun (ADR 0144). An
-    // unjudged or act thread needs the fixer or a judge rerun. Only a
+    // act thread closes through the fixed-act close at the next gate round once
+    // its fix is pushed; an unjudged thread needs a judge rerun. Only a
     // judge-rejected high is cleared by neither remedy and stays on the
     // operator path.
     reasons.push(
-      `${other} open defect thread(s) (high/medium/low): resolve via fixer fix-close, or rerun close-gate-findings once the judge has deferred or rejected a medium or low (ADR 0144) or disposed it act with an evidence-only remedy; an unjudged or act thread needs the fixer or a judge rerun, except a pr_body act thread, which close-gate-findings closes after the PR-body edit once the live body digest differs; a judge-rejected high is cleared by neither and needs an operator decision`,
+      `${other} open defect thread(s) (high/medium/low): rerun close-gate-findings at the next gate round once the judge has deferred or rejected a medium or low (ADR 0144), disposed it act with an evidence-only remedy, or the fix is pushed (the fixed-act close resolves a fixed act thread; a gate fix pass resolves no thread); an unjudged thread needs a judge rerun, except a pr_body act thread, which close-gate-findings closes after the PR-body edit once the live body digest differs; a judge-rejected high is cleared by neither and needs an operator decision`,
     );
   }
   if (reasons.length === 0) {
@@ -143,7 +143,7 @@ export function describeUnresolvedGateThreadReasons(breakdown, fallbackCount) {
     // own distinct message — this is a defensive fallback for a breakdown
     // that somehow undercounts the reported total, never expected in normal
     // operation.
-    reasons.push(`${fallbackCount} unresolved gate-authored review thread(s): run the disposition pass (close-gate-findings) + fixer triage to resolve (fix-close or defer-close) every gate-authored thread`);
+    reasons.push(`${fallbackCount} unresolved gate-authored review thread(s): run the disposition pass (close-gate-findings) at the next gate round, which resolves every gate-authored thread through its defer, reject, fixed-act, evidence-only or PR-body act close`);
   }
   return reasons.join("; ");
 }

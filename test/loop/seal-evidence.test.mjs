@@ -141,7 +141,7 @@ test("emit-fixer-work-order refuses a --delta-result with no run record with evi
   const deltaResult = path.join(dir, "result.json");
   fs.writeFileSync(actList, JSON.stringify(ACT_LIST));
   fs.writeFileSync(deltaResult, JSON.stringify(result({ candidateHead: A })));
-  await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_run_missing/);
+  await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "commit_only", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_run_missing/);
 });
 
 test("a sealed record is final: re-seal of identical bytes and re-seal after an edit are refused, and re-creating the run keeps the seal", () => {
@@ -294,7 +294,7 @@ test("emit-fixer-work-order refuses a null --delta-result with evidence_malforme
   const deltaResult = path.join(dir, "result.json");
   fs.writeFileSync(actList, JSON.stringify(ACT_LIST));
   fs.writeFileSync(deltaResult, "null");
-  await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_malformed/);
+  await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "commit_only", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_malformed/);
 });
 
 test("seal-evidence --help prints usage and exits cleanly", () => {
@@ -348,14 +348,13 @@ test("emit-fixer-work-order refuses an edited (evidence_digest_mismatch) and a f
     createEvidenceRun(dir, { ...EXPECTED, candidateHead: A }, sealedPath);
     sealEvidence(dir, sealedPath, sealed);
     fs.writeFileSync(deltaResult, JSON.stringify(foreign ? sealed : { ...sealed, newFindings: [{ severity: "low", summary: "x", evidence: ["e"] }] }));
-    await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), expected);
+    await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "commit_only", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), expected);
   }
 });
 
 test("the delta reviewer brief names input.sealCommand and the result path binding, and the --handback list names sealCommand", () => {
   const contract = fs.readFileSync("skills/docs/pre-pr-review-contract.md", "utf8");
-  const skill = fs.readFileSync("skills/dev-loop/SKILL.md", "utf8");
-  for (const text of [contract, skill]) assert.match(text, /`input\.patchPath`, `input\.evidenceRule` and `input\.sealCommand`/);
+  assert.match(contract, /`input\.patchPath`, `input\.evidenceRule` and `input\.sealCommand`/);
   assert.match(contract, /`--result-path`/);
   assert.match(contract, /prints none of `patchPath`, `evidenceRule` or `sealCommand`/);
 });
@@ -391,7 +390,7 @@ test("emit-fixer-work-order refuses a --delta-result whose run was never sealed 
   fs.writeFileSync(actList, JSON.stringify(ACT_LIST));
   fs.writeFileSync(deltaResult, JSON.stringify(result({ candidateHead: A })));
   createEvidenceRun(dir, { ...EXPECTED, candidateHead: A }, deltaResult);
-  await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_unsealed/);
+  await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "commit_only", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_unsealed/);
 });
 
 test("emit-fixer-work-order gives the typed evidence refusal for an edited sealed --delta-result before the membership check", async () => {
@@ -404,7 +403,7 @@ test("emit-fixer-work-order gives the typed evidence refusal for an edited seale
     createEvidenceRun(dir, { ...EXPECTED, candidateHead: A }, deltaResult);
     sealEvidence(dir, deltaResult, result({ candidateHead: A }));
     edit(deltaResult, over);
-    return emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir });
+    return emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "commit_only", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir });
   };
   await assert.rejects(run({ actionableItems: [{ ref: "act-x", status: "resolved", evidence: ["e"] }] }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_digest_mismatch/);
   await assert.rejects(run({ actSetId: "0".repeat(16) }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_foreign_run/);

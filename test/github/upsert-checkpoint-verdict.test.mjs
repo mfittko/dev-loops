@@ -8427,100 +8427,6 @@ test("upsert-checkpoint-verdict --findings-ledger accepts a pr_body act finding,
   }
 });
 
-// #3309: the ledger-label merge copies pr_body onto a locatable ledger finding only when every same-fingerprint act match is pr_body.
-// Observable seam: --converged-json compares the ledger's PR-body items (isDeltaBodyItem) with its actList, so a wrong label shows as a PR-body disagreement.
-test("upsert-checkpoint-verdict --findings-ledger labels a ledger finding pr_body only when every act match is pr_body (#3309)", async () => {
-  const locatable = { ...BODY_FILED_FINDING, files: ["src/a.mjs"] };
-  const cases = [
-    // All pr_body: the ledger finding gains pr_body, so it is a PR-body item and matches the pr_body actList item.
-    { name: "all", ledger: [locatable], remedies: ["pr_body"], actRemedyKind: "pr_body", reached: /no unclaimed gh fixture matched: pr view 17 --repo owner\/repo --json body/ },
-    // Mixed: no label, so both locatable ledger findings stay code items and match an actList with no remedyKind.
-    { name: "mixed", ledger: [locatable, { ...locatable }], remedies: ["pr_body", "evidence_only"], actRemedyKind: undefined, reached: /converged\.fixerCommit must be a full sha different from the reviewed head/ },
-  ];
-  for (const { name, ledger, remedies, actRemedyKind, reached } of cases) {
-    await withTempDir(async (tempDir) => {
-      const ledgerPath = await writeSingleSurfaceLedger(tempDir, ledger);
-      const findingsPath = path.join(tempDir, "findings.json");
-      const base = { severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary, files: ["src/a.mjs"], judgeDisposition: "act" };
-      await writeFile(findingsPath, JSON.stringify([
-        { angle: "coverage", verdict: "findings_present", findings: remedies.map((remedyKind) => ({ ...base, remedyKind })) },
-      ]), "utf8");
-      const convergedPath = path.join(tempDir, "converged.json");
-      const item = { severity: base.severity, summary: base.summary, files: base.files, ...(actRemedyKind ? { remedyKind: actRemedyKind } : {}) };
-      await writeFile(convergedPath, JSON.stringify({ fixerCommit: SINGLE_SURFACE_HEAD, actList: ledger.map(() => item) }), "utf8");
-      const { runChild } = makeGhMock(singleSurfaceLeadingEntries());
-      const err = await upsertCheckpointVerdict({
-        repo: "owner/repo",
-        pr: 17,
-        gate: "draft_gate",
-        headSha: SINGLE_SURFACE_HEAD,
-        verdict: "clean",
-        findingsJson: findingsPath,
-        findingsLedger: ledgerPath,
-        convergedJson: convergedPath,
-        nextAction: "stay draft and fix",
-        executionMode: "fanout_fanin",
-      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }).then(() => null, (e) => e);
-      assert.doesNotMatch(String(err?.message ?? ""), /disagree on which items are PR-body items/, name);
-      // The refusal that follows the PR-body comparison proves the label merge ran first.
-      assert.match(String(err?.message ?? ""), reached, name);
-    }, { prefix: `dev-loops-upsert-pr-body-label-${name}-` });
-  }
-});
-
-// GATE-EXEC-ROUND-CAP, AC2: the converged post counts the draft round with countCapRounds and the PR base, so a base-merge-forced round never counts toward the cap.
-test("upsert-checkpoint-verdict --converged-json refuses below the cap when the second round is forced by a base merge", async () => {
-  await withTempDir(async (tempDir) => {
-    const git = (...args) => runGitFixture(tempDir, args);
-    initGitFixture(tempDir, { branch: "main", commit: null });
-    await writeFile(path.join(tempDir, "a.txt"), "a", "utf8");
-    git("add", "a.txt"); git("commit", "-q", "-m", "m0");
-    git("checkout", "-q", "-b", "feature");
-    await writeFile(path.join(tempDir, "own.txt"), "own", "utf8");
-    git("add", "own.txt"); git("commit", "-q", "-m", "own");
-    const ownHead = git("rev-parse", "HEAD");
-    git("checkout", "-q", "main");
-    await writeFile(path.join(tempDir, "b.txt"), "b", "utf8");
-    git("add", "b.txt"); git("commit", "-q", "-m", "m1");
-    git("update-ref", "refs/remotes/origin/main", "main");
-    git("checkout", "-q", "feature");
-    git("merge", "-q", "--no-ff", "-m", "merge main", "main");
-    const mergeHead = git("rev-parse", "HEAD");
-    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n  draft:\n    maxReviewRounds: 2\n", "utf8");
-    const low = { severity: "low", angle: "docs", summary: "a low finding", files: ["src/a.mjs"], judgeDisposition: "act" };
-    const ledgerDir = path.join(tempDir, "gate-findings", "owner-repo", "pr-17");
-    await mkdir(ledgerDir, { recursive: true });
-    const ledgerBase = { repo: "owner/repo", pr: 17, gate: "draft_gate", verdict: "findings_present", overallVerdict: "findings_present", findings: [low] };
-    await writeFile(path.join(ledgerDir, `draft_gate-${ownHead}.json`), JSON.stringify({ ...ledgerBase, headSha: ownHead, loggedAt: "2026-11-01T00:00:00.000Z" }), "utf8");
-    const ledgerPath = path.join(ledgerDir, `draft_gate-${mergeHead}.json`);
-    await writeFile(ledgerPath, JSON.stringify({ ...ledgerBase, headSha: mergeHead, loggedAt: "2026-11-02T00:00:00.000Z" }), "utf8");
-    const convergedPath = path.join(tempDir, "converged.json");
-    await writeFile(convergedPath, JSON.stringify({ fixerCommit: mergeHead, actList: [{ severity: "low", summary: low.summary, files: low.files }] }), "utf8");
-    const entries = singleSurfaceLeadingEntries().map((e) => ({
-      ...e,
-      ...(e.stdout ? { stdout: e.stdout.replaceAll(SINGLE_SURFACE_HEAD, mergeHead).replace('"state":"OPEN"', '"state":"OPEN","baseRefName":"main"') } : {}),
-    }));
-    const { runChild } = makeGhMock(entries);
-    // The file-level git stub on PATH answers every git call empty; the round count needs the real git.
-    const stubbedPath = process.env.PATH;
-    process.env.PATH = originalPath;
-    const err = await upsertCheckpointVerdict({
-      repo: "owner/repo",
-      pr: 17,
-      gate: "draft_gate",
-      headSha: mergeHead,
-      verdict: "clean",
-      findingsLedger: ledgerPath,
-      convergedJson: convergedPath,
-      nextAction: "stay draft and fix",
-      executionMode: "inline_single_agent",
-      inlineReason: "single-agent inline review (test)",
-    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }).then(() => null, (e) => e).finally(() => { process.env.PATH = stubbedPath; });
-    // The raw count is 2 (the cap); the forced round does not count, so the effective round is 1 and the converged post is below the cap.
-    assert.match(String(err?.message ?? ""), /converged verdict applies only at the cap round or later \(round 1, cap 2\)/);
-  }, { prefix: "dev-loops-upsert-converged-base-merge-" });
-});
-
 // ---------------------------------------------------------------------------
 // #2263: inlineSeverityFloor — locatable low/nit findings fold into the
 // verdict body's collapsed <details> block instead of posting inline, at the
@@ -13235,6 +13141,34 @@ test("buildCoordinationEvaluatorInput threads draftCapRoundFixed so pre_approval
   assert.ok(evaluate(true).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "cap-round-fixed proof: entry allowed");
   assert.ok(!evaluate(false).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "no proof: entry refused");
   assert.ok(!evaluate(undefined).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "an unresolved proof (resolver threw) fails closed");
+});
+
+// GATE-EXEC-THREAD-DISPOSITION: the poster's gate-entry check reads the detector's stale-gate-thread flag, so the round the coordinator routes is not refused as unresolved feedback.
+test("buildCoordinationEvaluatorInput threads staleGateRoundThreadsOnly so a ready PR with only stale judge-act gate threads may post a pre_approval_gate verdict", () => {
+  const coordinationContext = {
+    repo: "owner/repo",
+    pr: 2937,
+    currentHeadSha: "29aa40b7deadbeef",
+    prData: { isDraft: false, state: "OPEN" },
+    interpretation: { state: "unresolved_feedback_present", sameHeadCleanConverged: true },
+    disposition: { loopDisposition: "action_required" },
+    snapshot: { ciStatus: "success", copilotReviewRoundCount: 1, unresolvedThreadCount: 1, copilotReviewOnCurrentHead: true, copilotReviewRequestStatus: "none" },
+    gateEvidence: { draftGate: { visible: false }, draftGateMarker: { visible: false }, preApprovalGate: { visible: false }, preApprovalGateMarker: { visible: false } },
+    refinementArtifact: null,
+    copilotBodyConvergence: { ok: true },
+    unresolvedGateThreadCount: 1,
+  };
+  const evaluate = (staleGateRoundThreadsOnly) => evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
+    coordinationContext: { ...coordinationContext, ...(staleGateRoundThreadsOnly === undefined ? {} : { staleGateRoundThreadsOnly }) },
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: "internal_only",
+    draftCapRoundFixed: true,
+  }));
+  assert.ok(evaluate(true).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "only stale judge-act gate threads open: the round is allowed");
+  assert.ok(!evaluate(false).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "other open threads: refused");
+  assert.ok(!evaluate(undefined).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "an absent flag fails closed");
 });
 
 test("tick (#2898): the dry-run artifact keeps a label a reload-only issue carries unticked even when another issue's row is flipped", async () => {

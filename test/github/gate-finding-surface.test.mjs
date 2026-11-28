@@ -863,7 +863,7 @@ test("#1585: a thread without a parseable finding marker never counts", () => {
 
 test("#1585 (c) defer-from-round-1 is permitted for nice-to-haves: a round-1 nice-to-have thread is counted (defer allowed from round 1, no fix window)", () => {
   // The counter is severity-agnostic and round-agnostic: a nice-to-have at
-  // round 1 is a gate-authored thread that must be resolved (fix-close or
+  // round 1 is a gate-authored thread that must be resolved (the fixed-act close or
   // defer-close) before gate close — defer is permitted from round 1 on.
   const nthRound1 = thread({ body: `${buildFindingMarker({ fp: "b".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): z` });
   assert.equal(countUnresolvedGateAuthoredThreads([nthRound1], GATE_LOGIN), 1);
@@ -909,7 +909,7 @@ test("#2381: countUnresolvedGateAuthoredThreadsBySeverity splits question from e
 // Copilot review (PR 2402): a nit must split out of "other" into its OWN
 // bucket — a nit is never a fixer target (NON_DEFECT_SEVERITIES,
 // gate-fanin.mjs), unlike high/medium/low, so lumping it into "other" told
-// operators to use a remedy (fixer fix-close) that cannot clear it.
+// operators to use a remedy (a close-gate-findings rerun) that cannot clear it.
 test("#2381: countUnresolvedGateAuthoredThreadsBySeverity splits nit into its own bucket, separate from question and other defect severities", () => {
   const nit = thread({ body: `${buildFindingMarker({ fp: "9".repeat(16), severity: "nit", angle: "style", round: 1 })}\n**nit** (\`style\`): x` });
   const low = thread({ body: `${buildFindingMarker({ fp: "8".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): y` });

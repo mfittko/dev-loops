@@ -366,11 +366,11 @@ machine, reads absent size evidence as "human approval required", never as a sil
 
 ## Optional converged field
 
-A `draft_gate` comment updated by `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) renders one more line
+A `draft_gate` comment updated by the body-only converged post of `GATE-EXEC-NO-DEAD-END` renders one more line
 beyond `GATE-COMMENT-REQUIRED-FIELDS`: `**Converged:** fixer <sha> delta sha256:<digest>`. The
-`<sha>` is the full fixer commit and the digest is the sha256 of the clean pre-push delta result.
-The line appears only on a `clean` `draft_gate` comment, and it marks the two cases where `clean`
-stands over open judge act items (the first case is all low or nit, at the cap round or later; below the cap the poster refuses a converged post and the next full round runs; the second case is the `GATE-EXEC-NO-DEAD-END` body-only post below, ADR 0271, valid at any `draft_gate` round up to the cap and at cap 0, ADR 0332). A body without the line reads back as absent
+`<sha>` is the full fixer commit and the digest is the sha256 of the body-only post record.
+The line appears only on a `clean` `draft_gate` comment, and it marks the one case where `clean`
+stands over open judge act items: the `GATE-EXEC-NO-DEAD-END` body-only post below, ADR 0271, valid at any `draft_gate` round up to the cap and at cap 0, ADR 0332. A body without the line reads back as absent
 (unchanged). A present line that does not match the format reads back as malformed, and
 `buildPreMergeGateCheck` fails closed on it. Gate coordination treats a valid line as the
 `draft_gate` marker of the fixer commit's head. The marker also carries from the fixer commit to a later base merge that the full base-merge carry classifier accepts (ADR 0294, `GATE-EXEC-BASE-MERGE-VERDICT-CARRY`). The line is not merge evidence: merge still needs a
@@ -389,7 +389,7 @@ with the fixed meaning below:
 
 | Verdict | Meaning |
 |---|---|
-| `clean` | A fully judged round (every finding carries a judge disposition) has an empty judge act list, whatever the severities; a round with an unjudged finding keeps the fan-in verdict, so no finding at a `blockCleanOnFindingSeverities` severity may remain. `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) and the `GATE-EXEC-NO-DEAD-END` body-only post (ADR 0271, medium, low or nit PR-body act items that are not fail-open and not from a security angle) are the two exceptions |
+| `clean` | A fully judged round (every finding carries a judge disposition) has an empty judge act list, whatever the severities; a round with an unjudged finding keeps the fan-in verdict, so no finding at a `blockCleanOnFindingSeverities` severity may remain. The `GATE-EXEC-NO-DEAD-END` body-only post (ADR 0271, medium, low or nit PR-body act items that are not fail-open and not from a security angle) is the one exception |
 | `findings_present` | A fully judged round has a non-empty judge act list; a round with an unjudged finding has an issue at a blocking severity or a non-empty act list; fixes are required before the gate boundary can be crossed |
 | `blocked` | The gate could not complete or a hard blocker prevented a verdict |
 
@@ -411,15 +411,15 @@ Enforcement at write time and post time:
   ([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525)).
   After a judge pass the log's `overallVerdict` and `verdict` are `findings_present` whenever the
   judge act list is non-empty (`blocked` stays `blocked`), so a verdict derived from the log is
-  `findings_present`. `GATE-EXEC-LOW-NIT-CONVERGENCE` still posts `clean` for a fully judged round; a round with an unjudged finding keeps the ledger `overallVerdict`, which is `findings_present` after a judge pass with open act items. A non-review write without `--judge-verdict` refuses `judge_verdict_required`
+  `findings_present`. The body-only post of `GATE-EXEC-NO-DEAD-END` still posts `clean` for a fully judged round; a round with an unjudged finding keeps the ledger `overallVerdict`, which is `findings_present` after a judge pass with open act items. A non-review write without `--judge-verdict` refuses `judge_verdict_required`
   while a `j<id>/judge-verdict.json` exists for the round (a judge emitted before the round's
   fan-out emit plan, or one emitted at or before a judge execution that a live or retained same-head ledger
   already stamps as a completed `roundIdentity.judgeExecution`, belongs to an earlier same-head round and is ignored, ADR 0275).
 - `upsert-checkpoint-verdict.mjs` composes the ledger's `overallVerdict` with its open judge act
   items (ADR 0089) for the same head and gate (#1616), so a non-empty act list yields
-  `findings_present` (except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168), for a fully judged round only). A fully judged round takes its verdict from the act list alone, and a round with an unjudged finding keeps the ledger `overallVerdict`. It derives the verdict by default (passing no `--verdict` is valid),
+  `findings_present` (except the `GATE-EXEC-NO-DEAD-END` body-only post, for a fully judged round only). A fully judged round takes its verdict from the act list alone, and a round with an unjudged finding keeps the ledger `overallVerdict`. It derives the verdict by default (passing no `--verdict` is valid),
   accepts a matching explicit value, and refuses a contradiction citing this rule. A ledger
-  without `overallVerdict` still refuses an explicit `clean` while its act list is not empty, except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168).
+  without `overallVerdict` still refuses an explicit `clean` while its act list is not empty, except the `GATE-EXEC-NO-DEAD-END` body-only post.
 - The act list for a verdict post comes from judge-enriched data: the ledger written with
   `--judge-verdict`, or a judge-enriched `--findings-json` (its open act items also yield
   `findings_present` over a ledger). A durable log written before the judge pass carries no
@@ -469,7 +469,7 @@ satisfies the gate.
 
 <!-- rule: GATE-COMMENT-DRAFT-REQUIREMENTS -->
 `GATE-COMMENT-DRAFT-REQUIREMENTS`: The PR MUST NOT leave draft unless a visible, current-head
-`clean` `draft_gate` checkpoint verdict comment exists, per the rules below. Exception: `GATE-EXEC-LOW-NIT-CONVERGENCE` lets the converged `draft_gate` comment at head A that names the fixer commit stand as the comment for the fixer head, and for a later base merge that the full base-merge carry classifier accepts from it (ADR 0294, `GATE-EXEC-BASE-MERGE-VERDICT-CARRY`).
+`clean` `draft_gate` checkpoint verdict comment exists, per the rules below. Exception: the `GATE-EXEC-NO-DEAD-END` body-only post lets the converged `draft_gate` comment at head A that names the fixer commit stand as the comment for the fixer head, and for a later base merge that the full base-merge carry classifier accepts from it (ADR 0294, `GATE-EXEC-BASE-MERGE-VERDICT-CARRY`).
 
 **One-time transition boundary.** `draft_gate` records exactly one decision point: the
 draft → ready-for-review transition. Once a clean `draft_gate` comment exists on the PR and the
@@ -479,7 +479,7 @@ follow-up relies on normal review/fix loops and the recurring per-head `pre_appr
 - **Skip rule:** skip the draft gate entirely only when a clean `draft_gate` comment exists on
   the PR (any head) AND the PR has already left draft. Do not re-post it on later heads.
 - While the PR is still draft, a checkpoint verdict comment for an older head SHA does not
-  satisfy the current head. A new head requires a new current-head `draft_gate` comment, except that the converged comment of `GATE-EXEC-LOW-NIT-CONVERGENCE` at head A satisfies the fixer commit head it names and a later base-merge head carried from it (`GATE-EXEC-BASE-MERGE-VERDICT-CARRY`).
+  satisfy the current head. A new head requires a new current-head `draft_gate` comment, except that the converged comment of the `GATE-EXEC-NO-DEAD-END` body-only post at head A satisfies the fixer commit head it names and a later base-merge head carried from it (`GATE-EXEC-BASE-MERGE-VERDICT-CARRY`).
 - When the `draft_gate` runs (while the PR is still draft and no clean evidence exists
   for the current head), the PR MUST receive a visible checkpoint verdict comment.
 - If the `draft_gate` verdict is `findings_present` or `blocked`, the comment MUST
