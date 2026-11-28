@@ -5557,7 +5557,7 @@ test("resolveBodyOnlyRetire reads the context from a linked worktree tmp while t
     const main = path.join(tempDir, "main");
     const linked = path.join(tempDir, "linked");
     await mkdir(main, { recursive: true });
-    const git = (...args) => execFileSync("git", args, { cwd: main, stdio: "ignore", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+    const git = (...args) => execFileSync("git", args, { cwd: main, stdio: "ignore", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
     git("init", "-q");
     git("commit", "-q", "--allow-empty", "-m", "init");
     git("worktree", "add", "-q", linked, "-b", "linked");
