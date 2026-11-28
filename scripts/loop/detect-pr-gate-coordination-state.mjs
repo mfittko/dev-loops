@@ -1154,6 +1154,11 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // detector with detect-checkpoint-evidence.mjs: neither can report
   // mark_ready_for_review/clean while the other reports unresolved threads.
   const unresolvedGateThreadCount = await countUnresolvedGateThreads(threadsPayload, runtime);
+  // GATE-EXEC-OPERATOR-FOCUS: the count without the threads of operator-deferred findings; the deferred-clean route reads it. A -1 or malformed count still blocks.
+  const deferred = runtime.deferred ?? new Set();
+  const unresolvedUndeferredGateThreadCount = deferred.size === 0 || unresolvedGateThreadCount <= 0
+    ? unresolvedGateThreadCount
+    : await countUnresolvedGateThreads(threadsPayload.filter((node) => !deferred.has(parseFindingMarker(node?.comments?.nodes?.[0]?.body)?.fp)), runtime);
   // Injects the login-narrowed count computed just above so
   // detectCheckpointEvidence's own draftGateSatisfied fold (ADR 0088) agrees
   // with this detector without a second thread-payload fetch or a second
@@ -1354,6 +1359,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     skippedUntrusted: parsedThreads.skippedUntrusted,
     gateEvidence,
     unresolvedGateThreadCount,
+    unresolvedUndeferredGateThreadCount,
     staleGateRoundThreadsOnly: unresolvedGateThreadCount > 0 && snapshot.unresolvedThreadCount === unresolvedGateThreadCount
       && await onlyStaleGateRoundThreadsOpen({ threadsPayload, repo: options.repo, pr: options.pr, currentHeadSha, preApprovalGate: gateEvidence.preApprovalGate, runtime }),
     interpretation,
@@ -1464,7 +1470,7 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
  * `blockers` are the GATE-EXEC-SOFT-CAP blockers: those past the round cap, plus the blocked items of a body-only list at any round; below the cap every other act item goes to the fixer.
  * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
  */
-export async function resolveDraftOpenActList(context, { repoRoot, cap, operatorCleared = false, deferred = new Set(), baseOnlyMerge =({ fromHead, head, mainRef, repoRoot: root }) => convergedCarryAccepts({ originHead: fromHead, headSha: head, baseRef: mainRef, repoRoot: root }) }) {
+export async function resolveDraftOpenActList(context, { repoRoot, cap, operatorCleared = false, deferred = new Set(), baseOnlyMerge = ({ fromHead, head, mainRef, repoRoot: root }) => convergedCarryAccepts({ originHead: fromHead, headSha: head, baseRef: mainRef, repoRoot: root }) }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
   const options = { repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: head };
@@ -1631,6 +1637,7 @@ export function buildGateCoordinationEvaluatorInput({
     // detector's MARK_READY_FOR_REVIEW decision with detect-checkpoint-
     // evidence.mjs's own unresolved-thread report for the same PR state.
     unresolvedGateThreadCount: context.unresolvedGateThreadCount ?? null,
+    unresolvedUndeferredGateThreadCount: context.unresolvedUndeferredGateThreadCount ?? null,
     staleGateRoundThreadsOnly: context.staleGateRoundThreadsOnly === true,
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
     copilotConvergenceOk: context.copilotBodyConvergence?.ok === true,
@@ -1675,10 +1682,10 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // A malformed operator focus file refuses here (GATE-EXEC-OPERATOR-FOCUS), before any gh read.
   // Resolved against cwd once, as emit-fixer-work-order.mjs does, so both readers name the same file.
   const operatorFocusFile = options.operatorFocusFile ? path.resolve(process.cwd(), options.operatorFocusFile) : undefined;
-  await readOperatorFocusFile(operatorFocusFile);
+  const deferred = deferredFingerprints(await readOperatorFocusFile(operatorFocusFile));
   // ADR 0117 (issue 3139): an open self-hosting PR is answered by its own head's toolchain; another checkout refuses inside the loader, before any shared gate state is written.
   const fetchedAtMs = Date.now();
-  const context = await loadPrGateCoordinationContext(options, { ...runtime, guardToolchain: true });
+  const context = await loadPrGateCoordinationContext(options, { ...runtime, guardToolchain: true, deferred });
   await writePrGateCoordinationSnapshot(options, runtime, context, fetchedAtMs);
   const { toolchain } = context;
   const draftGateConfig = resolveGateConfig(config, "draft");
@@ -1762,7 +1769,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const refreshBase = baseRefresher ? (base, head) => baseRefresher({ base, head, cwd: repoRoot, env: runtime.env ?? process.env, trusted: true }).catch(() => ({ ok: false, error: "base_fetch_failed", recovery: "retry the detector; fix the network or git remote access if the fetch keeps failing" })) : null;
   const capBrakes = await resolveCapBrakes(context, { repoRoot, config, operatorFocusFile, evaluateSize: runtime.evaluateSize, refreshBase }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; capBrakesError = error; return null; });
   const draftOpenActList = context.prData?.isDraft === true
-    ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0, operatorCleared: capBrakes?.operatorCleared === true, deferred: deferredFingerprints(await readOperatorFocusFile(operatorFocusFile).catch(() => null)) }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
+    ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0, operatorCleared: capBrakes?.operatorCleared === true, deferred }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
     : null;
   const bodyOnlyRetire = await resolveBodyOnlyRetire(context, { repoRoot });
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({

@@ -7,16 +7,20 @@ import path from "node:path";
 import { workOrderDigest } from "@dev-loops/core/loop/work-order-digest";
 import { OperatorFocusRefusal, bindOperatorFocusItems, deferredFingerprints, normalizeOperatorFocus, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "../../scripts/loop/_operator-focus.mjs";
 
-test("3652: deferredFingerprints matches defer, Defer, deferred and replyDisposition deferred on fingerprint items only", () => {
+test("3652: deferredFingerprints closes only an exact defer decision or a deferred replyDisposition on fingerprint items", () => {
   const items = [
     { fingerprint: "a", decision: "fix it with remedy 1" },
-    { fingerprint: "b", decision: "Defer to a follow-up" },
-    { fingerprint: "c", decision: "deferred by the operator" },
+    { fingerprint: "b", decision: "defer" },
+    { fingerprint: "c", decision: "Defer" },
+    { fingerprint: "g", decision: " DEFER " },
     { threadId: "T1", replyDisposition: "deferred", replyNote: "later" },
     { fingerprint: "d", replyDisposition: "deferred", replyNote: "later" },
-    { fingerprint: "e", decision: "undefer nothing" },
+    { fingerprint: "e", decision: "Deferring is wrong here; apply remedy 2" },
+    { fingerprint: "f", decision: "deferred until later" },
+    { fingerprint: "h", decision: "deferring" },
+    { fingerprint: "i", decision: "defer-ish" },
   ];
-  assert.deepEqual([...deferredFingerprints({ items })].sort(), ["b", "c", "d"]);
+  assert.deepEqual([...deferredFingerprints({ items })].sort(), ["b", "c", "d", "g"]);
 });
 
 test("absent focus yields null and renders nothing", () => {

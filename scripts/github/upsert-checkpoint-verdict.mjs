@@ -272,7 +272,7 @@ Required:
                                             without --findings-ledger still requires the flag, ignores its
                                             value and derives "mark ready for review".)
 Optional:
-  --operator-focus-file <path>              GATE-EXEC-OPERATOR-FOCUS JSON naming each act fingerprint of the cap round with a decision; it clears the round_cap_reached refusal of a draft_gate post (GATE-EXEC-CAP-BRAKES).
+  --operator-focus-file <path>              GATE-EXEC-OPERATOR-FOCUS JSON naming each act fingerprint of the cap round with a decision; it clears the round_cap_reached refusal of a draft_gate post (GATE-EXEC-CAP-BRAKES). An item with decision defer, or replyDisposition deferred, is closed for routing at any draft_gate round and does not block a clean verdict.
   --converged-json <path>                   draft_gate body-only post
                                             { fixerCommit, actList, bodyOnly: true }.
                                             A round whose open act items are
@@ -3000,9 +3000,9 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   // The only path that lets a clean verdict stand over open act items is the GATE-EXEC-NO-DEAD-END body-only post, checked in composeBodyOnlyConvergedDraftGate. Items compare by severity and trimmed summary as a multiset: the ledger and
   // --findings-json can carry the same finding.
   let convergedMarker = null;
+  // GATE-EXEC-OPERATOR-FOCUS: an act item the operator deferred is closed for routing, so it does not guard a clean verdict. The focus file is read once.
+  const deferred = deferredFingerprints(await readOperatorFocusFile(options.operatorFocusFile));
   const guardedActItems = async (findings) => {
-    // GATE-EXEC-OPERATOR-FOCUS: an act item the operator deferred is closed for routing, so it does not guard a clean verdict.
-    const deferred = deferredFingerprints(await readOperatorFocusFile(options.operatorFocusFile));
     const notDeferred = (items) => items.filter((f) => !deferred.has(fingerprintFinding(f)));
     // A converged round's act items are the union of A's ledger and the passed (judge-enriched) findings, so a caller cannot list a subset.
     // The ledger is required unconditionally; a missing or unreadable one already refused when it was loaded (naming the path and error).

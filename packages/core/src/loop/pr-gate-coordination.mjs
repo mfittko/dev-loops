@@ -1286,6 +1286,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // A base-merge carried verdict (ADR 0186) proves the review, not the new head's CI.
   const draftGateCarried = draftGate.currentHeadClean && trimmedOrNull(input.draftGateMarker?.carriedFrom) !== null;
   const draftGateAlreadySatisfied = !prDraft && (draftGate?.cleanEvidenceExists ?? false);
+  // A draft PR goes ready only on clean current-head draft_gate evidence; the cap-round-fixed proof serves ready PRs only (issue 3464).
+  const draftReady = draftGate.currentHeadClean;
 
   const allowedNextActions = [];
   const forbiddenActions = [];
@@ -1334,13 +1336,13 @@ function evaluatePrGateCoordinationCore(input = {}) {
     && carriedMarker.verdict === "findings_present" && carriedMarker.headSha !== null && String(actList.headSha ?? "").toLowerCase().startsWith(carriedMarker.headSha.toLowerCase());
   // The one head binding of the open act list: a full current head SHA that the list names as its head or its carried head.
   const actListHeadBound = /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase());
-  // A draft PR goes ready only on clean current-head draft_gate evidence; the cap-round-fixed proof serves ready PRs only (issue 3464).
   // GATE-EXEC-OPERATOR-FOCUS: a posted round whose every open act item the operator deferred routes to the clean-verdict post, then the ready flip.
+  // The gate threads of deferred findings stay open until the clean marker exists, so the count excludes them when the detector supplies it.
+  const nonDeferredGateThreads = input.unresolvedUndeferredGateThreadCount ?? input.unresolvedGateThreadCount;
   const deferredClean = actList?.deferredAll === true && actListHeadBound && draftGate.currentHead && draftGate.contractComplete
     // The thread condition currentHeadClean applies (toGateStatus): no signal or a count of 0; a positive, -1 or malformed count blocks.
-    && (input.unresolvedGateThreadCount === null || input.unresolvedGateThreadCount === undefined || input.unresolvedGateThreadCount === 0)
+    && (nonDeferredGateThreads === null || nonDeferredGateThreads === undefined || nonDeferredGateThreads === 0)
     && (draftGate.verdict === "findings_present" || draftGate.verdict === "blocked");
-  const draftReady = draftGate.currentHeadClean;
   const headActList = !draftReady && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete
     // The poster writes blocked for a scoped round with act items, so an operator-cleared list accepts that verdict too.
     && (draftGate.verdict === "findings_present" || (draftGate.verdict === "blocked" && actList?.operatorCleared === true))))
@@ -1768,8 +1770,6 @@ function evaluatePrGateCoordinationCore(input = {}) {
       });
     }
 
-    // GATE-EXEC-CAP-BRAKES: the next draft_gate round is past the scoped final round; the context writer refuses it, so never route to it.
-    // ADR 0332: an all-PR-body act list takes this route at every round up to the cap, so run_draft_gate (refused at the same head) is never offered.
     if (deferredClean && !draftReady) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
       pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, ...draftReviewForbidden]);
@@ -1797,6 +1797,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
       });
     }
 
+    // GATE-EXEC-CAP-BRAKES: the next draft_gate round is past the scoped final round; the context writer refuses it, so never route to it.
+    // ADR 0332: an all-PR-body act list takes this route at every round up to the cap, so run_draft_gate (refused at the same head) is never offered.
     if (((input.draftRoundRefused === true && !bodyOnlyRetire) || actBlockers.length > 0 || bodyOnlyList) && !draftReady) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
       pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, ...draftReviewForbidden]);
@@ -1849,8 +1851,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
       allowedNextActions,
       forbiddenActions,
       nextAction: draftReady ? PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW : PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
-      reason: draftReady
-        ? `The PR is still draft, and current-head clean \`draft_gate\` evidence exists, so \`dev-loops pr ready-for-review\` is now legal.`
+      reason: draftGate.currentHeadClean
+        ? "The PR is still draft, and current-head clean `draft_gate` evidence exists, so `dev-loops pr ready-for-review` is now legal."
         : (draftGateRequireCi
           ? "The PR is still draft, current-head CI is green, and `draft_gate` is now the legal gate boundary before `dev-loops pr ready-for-review`."
           : "The PR is still draft, and this repo does not require CI before `draft_gate`, so the draft gate is the next legal boundary before `dev-loops pr ready-for-review`."),

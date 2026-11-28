@@ -5315,8 +5315,22 @@ test("3652: a draft PR whose every open act item is deferred names the clean-ver
   assert(!deferred.allowedNextActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
   assert(deferred.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
   assert.match(deferred.agentRemedy.command, /upsert-checkpoint-verdict\.mjs .*--verdict clean .*--operator-focus-file/);
-  const dangling = evaluatePrGateCoordination({ ...base, unresolvedGateThreadCount: 1, draftOpenActList: deferredList });
-  assert(!dangling.agentRemedy?.command?.includes("--operator-focus-file"));
+  // The deferred item's own open gate thread (count 1, none left once it is excluded) still names the post.
+  const ownThread = evaluatePrGateCoordination({ ...base, unresolvedGateThreadCount: 1, unresolvedUndeferredGateThreadCount: 0, draftOpenActList: deferredList });
+  assert.equal(ownThread.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, ownThread.reason);
+  assert.match(ownThread.agentRemedy.command, /upsert-checkpoint-verdict\.mjs .*--verdict clean .*--operator-focus-file/);
+  // A gate thread of a non-deferred finding withholds the post.
+  const otherThread = evaluatePrGateCoordination({ ...base, unresolvedGateThreadCount: 2, unresolvedUndeferredGateThreadCount: 1, draftOpenActList: deferredList });
+  assert(!otherThread.agentRemedy?.command?.includes("--operator-focus-file"), otherThread.reason);
+  assert.notEqual(otherThread.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+  // An unreadable thread count (-1) withholds the post.
+  const unreadable = evaluatePrGateCoordination({ ...base, unresolvedGateThreadCount: -1, unresolvedUndeferredGateThreadCount: -1, draftOpenActList: deferredList });
+  assert(!unreadable.agentRemedy?.command?.includes("--operator-focus-file"), unreadable.reason);
+  // The scoped-round post writes a blocked verdict, which names the post too.
+  const blockedVerdict = { ...verdict, verdict: "blocked" };
+  const blocked = evaluatePrGateCoordination({ ...base, draftGate: blockedVerdict, draftGateMarker: blockedVerdict, draftOpenActList: deferredList });
+  assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, blocked.reason);
+  assert.match(blocked.agentRemedy.command, /upsert-checkpoint-verdict\.mjs .*--verdict clean .*--operator-focus-file/);
   const cleanVerdict = { ...verdict, verdict: "clean" };
   const clean = evaluatePrGateCoordination({ ...base, draftGate: cleanVerdict, draftGateMarker: cleanVerdict, draftOpenActList: deferredList });
   assert.equal(clean.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, clean.reason);
