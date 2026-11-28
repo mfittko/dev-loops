@@ -584,7 +584,7 @@ async function applyDeferralComment(enriched, { repo, pr, gate, trackerProvider 
   }));
   const { issueNumber } = await commentDeferredFindings({ repo, pr, entries, trackerProvider }, deps);
   for (const f of deferred) f.followUpIssueNumber = issueNumber;
-  // #2724 slice 0: a pre_approval_gate low_floor defer needs a target other than the PR itself; with none the whole cluster (nit members included) is a reject.
+  // GATE-EXEC-LOW-ROUND-FLOOR: a pre_approval_gate low_floor defer needs a target other than the PR itself; with none the whole cluster (nit members included) is a reject.
   if (gate === "pre_approval_gate" && issueNumber === pr) {
     for (const f of enriched) {
       if (f.judgeDisposition !== "defer" || !f.judgeReason?.startsWith("low_floor ")) continue;
