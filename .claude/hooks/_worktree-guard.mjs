@@ -360,9 +360,7 @@ export function classifyRepoMutation(abs) {
  * @returns {boolean} true when the target should be guarded (not-ignored, or unresolvable → fail-safe); false only when it is confirmed gitignored (exit 0).
  */
 export function resolveTrackedFromCheckIgnore(checkIgnoreStatus) {
-  if (checkIgnoreStatus === 0) return false; // confirmed gitignored — not guarded
-  if (checkIgnoreStatus === 1) return true; // confirmed not-ignored — guarded
-  return true; // unresolvable — fail safe (AC4)
+  return checkIgnoreStatus !== 0; // only a confirmed gitignored (0) is unguarded; exit 1 and unresolvable fail safe (AC4)
 }
 
 
@@ -379,9 +377,6 @@ export function resolveTrackedFromCheckIgnore(checkIgnoreStatus) {
  */
 export const DEVLOOPS_SUBAGENT_AVAILABLE_VAR = "DEVLOOPS_SUBAGENT_AVAILABLE";
 
-/** Availability env var names. */
-export const SUBAGENT_AVAILABLE_VARS = Object.freeze([DEVLOOPS_SUBAGENT_AVAILABLE_VAR]);
-
 /**
  * Detect whether subagent dispatch is available in the current runtime.
  *
@@ -395,11 +390,5 @@ export const SUBAGENT_AVAILABLE_VARS = Object.freeze([DEVLOOPS_SUBAGENT_AVAILABL
  * @returns {boolean}
  */
 export function detectSubagentAvailability({ env = process.env } = {}) {
-  for (const name of SUBAGENT_AVAILABLE_VARS) {
-    const raw = (env[name] ?? "").trim();
-    if (raw.length > 0) {
-      return raw === "1";
-    }
-  }
-  return false;
+  return (env[DEVLOOPS_SUBAGENT_AVAILABLE_VAR] ?? "").trim() === "1";
 }
