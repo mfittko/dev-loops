@@ -53,7 +53,7 @@ export function buildRetireCommand({ gate, headSha, tmpRoot, findingsDir = null,
 /**
  * Retire the undispatched or finished round of one gate at one head, through retire-gate-round's logic, so a rebuilt
  * context or a re-emission mints a fresh round (GATE-EXEC-ROUND-RETIREMENT). A round with a posted verdict (a findings
- * log at that head) is never retired, except a round whose open act items are all `remedyKind: pr_body` and whose PR body digest changed (issue 3604): it retires through the scoped body-reading retirement when the caller passes `bodyReadingUnits` and `currentPrBodySha256`. Any other posted round gets a refusal with a `recovery` field. So does a round
+ * log at that head) is never retired, except a round whose open act items are all `remedyKind: pr_body` and whose PR body digest changed (issue 3604): it retires through the scoped body-reading retirement when the caller passes a non-empty `bodyReadingUnits` list and `currentPrBodySha256`. Any other posted round gets a refusal with a `recovery` field. So does a round
  * with a live sentinel (no valid artifact for its unit newer than it): its reviewer may still be running. An error other
  * than ENOENT while probing the round throws, so the guards fail closed.
  *
@@ -142,8 +142,8 @@ async function retireStaleRoundProbed({ repo, pr, gate, headSha, tmpRoot, verdic
     seenMarkers.add(path.resolve(marker));
     if (await exists(marker)) {
       // GATE-EXEC-ROUND-RETIREMENT: a round whose open act items are all PR-body items and whose body digest is stale retires; the ledger stays as a retained round.
-      // The scoped rerun needs the caller's body-reading units; a caller that names none keeps the refusal.
-      const priorBody = Array.isArray(bodyReadingUnits) ? await readBodyOnlySupersededDigest(marker, currentPrBodySha256) : null;
+      // The scoped rerun needs at least one body-reading unit; a caller that names none (or an empty list) keeps the refusal, since retiring would rerun nothing (issue 3667).
+      const priorBody = Array.isArray(bodyReadingUnits) && bodyReadingUnits.length > 0 ? await readBodyOnlySupersededDigest(marker, currentPrBodySha256) : null;
       if (priorBody !== null) {
         supersededBodies.push({ marker, priorBody });
         continue;

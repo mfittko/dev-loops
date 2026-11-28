@@ -255,7 +255,7 @@ Optional:
   `detect-reviewer-loop-state.mjs --local-state` use
 
 Contract:
-- reads a merged reviewer result JSON file (for example output derived from `mergeReviewerResults`)
+- reads a merged reviewer result JSON file
 - builds a deterministic pending-review payload pinned to the review package `headSha`
 - posts the pending review to `repos/<owner>/<name>/pulls/<pr>/reviews` without an `event` field so GitHub keeps it pending
 - returns the draft review id/url/commit sha

@@ -117,16 +117,6 @@ const VALID_LOCAL_MERGE_STATUSES = new Set(["none", "ready", "failed"]);
 const VALID_DRAFT_NOTIFICATION_STATUSES = new Set(["none", "notified"]);
 const VALID_SUBMISSION_STATUSES = new Set(["none", "submitted", "failed"]);
 
-const SUPPORTED_REVIEW_ANGLES = Object.freeze([
-  "correctness",
-  "tests",
-  "maintainability",
-  "security",
-  "scope",
-]);
-const DEFAULT_REVIEW_MAX_PARALLEL = 3;
-const HARD_REVIEW_MAX_PARALLEL = 4;
-
 function normalizePositiveInt(value) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
@@ -267,48 +257,6 @@ export function interpretReviewerLoopState(snapshot) {
 }
 
 /**
- * Build a bounded deterministic review-angle plan for parallel local runs.
- *
- * @param {{ requestedAngles?: string[], maxParallel?: number }} [options]
- * @returns {{ maxParallel: number, angles: string[], runs: {runId:string, angle:string}[] }}
- */
-export function selectReviewerPlan(options = {}) {
-  const requestedAngles = Array.isArray(options.requestedAngles)
-    ? options.requestedAngles
-      .filter((entry) => typeof entry === "string")
-      .map((entry) => entry.trim().toLowerCase())
-      .filter((entry) => SUPPORTED_REVIEW_ANGLES.includes(entry))
-    : [];
-
-  const maxParallel = typeof options.maxParallel === "number"
-    && Number.isFinite(options.maxParallel)
-    && options.maxParallel > 0
-    ? Math.min(HARD_REVIEW_MAX_PARALLEL, Math.floor(options.maxParallel))
-    : DEFAULT_REVIEW_MAX_PARALLEL;
-
-  const chosenAngles = [];
-  const source = requestedAngles.length > 0 ? requestedAngles : SUPPORTED_REVIEW_ANGLES;
-
-  for (const angle of source) {
-    if (!chosenAngles.includes(angle)) {
-      chosenAngles.push(angle);
-    }
-    if (chosenAngles.length >= maxParallel) {
-      break;
-    }
-  }
-
-  return {
-    maxParallel,
-    angles: chosenAngles,
-    runs: chosenAngles.map((angle, index) => ({
-      runId: `review-angle-${String(index + 1).padStart(2, "0")}`,
-      angle,
-    })),
-  };
-}
-
-/**
  * Normalize free-form severity text to the bounded set:
  * critical | high | medium | low | note.
  * Unknown values are conservatively treated as medium.
@@ -325,70 +273,6 @@ function normalizeFindingSeverity(value) {
     return severity;
   }
   return "medium";
-}
-
-/**
- * Build a deterministic dedup key from finding location and message.
- *
- * @param {object} finding
- * @returns {string}
- */
-function findingDedupKey(finding) {
-  const pathPart = typeof finding.path === "string" ? finding.path.trim() : "";
-  const linePart = typeof finding.line === "number" && finding.line > 0 ? String(Math.floor(finding.line)) : "";
-  const messagePart = typeof finding.message === "string" ? finding.message.trim().toLowerCase() : "";
-  return `${pathPart}|${linePart}|${messagePart}`;
-}
-
-/**
- * Deterministically merge bounded parallel review-run outputs into one review package.
- *
- * @param {{headSha?: string|null, runResults?: Array<{runId?:string, angle?:string, findings?:Array<object>, verdictHint?:string}>}} input
- * @returns {{headSha:string|null, verdict:string, inlineComments:object[], summaryFindings:object[], totalFindings:number, runsMerged:number}}
- */
-export function mergeReviewerResults(input = {}) {
-  const headSha = trimmedOrNull(input.headSha);
-  const runResults = Array.isArray(input.runResults) ? input.runResults : [];
-
-  const deduped = [];
-  const seen = new Set();
-  let hintRequestsChanges = false;
-
-  for (const run of runResults) {
-    if (run?.verdictHint === "REQUEST_CHANGES") {
-      hintRequestsChanges = true;
-    }
-    const findings = Array.isArray(run?.findings) ? run.findings : [];
-
-    for (const finding of findings) {
-      const key = findingDedupKey(finding);
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      deduped.push({
-        path: typeof finding.path === "string" ? finding.path.trim() : null,
-        line: typeof finding.line === "number" && finding.line > 0 ? Math.floor(finding.line) : null,
-        message: typeof finding.message === "string" ? finding.message.trim() : "",
-        severity: normalizeFindingSeverity(finding.severity),
-        angle: typeof run?.angle === "string" ? run.angle : null,
-      });
-    }
-  }
-
-  const inlineComments = deduped.filter((finding) => finding.path && finding.line && finding.message.length > 0);
-  const summaryFindings = deduped.filter((finding) => !finding.path || !finding.line);
-
-  const verdict = determineReviewVerdict(deduped, hintRequestsChanges);
-
-  return {
-    headSha,
-    verdict,
-    inlineComments,
-    summaryFindings,
-    totalFindings: deduped.length,
-    runsMerged: runResults.length,
-  };
 }
 
 export function buildDraftReviewPayload(mergedResult = {}) {
@@ -421,33 +305,6 @@ export function buildDraftReviewPayload(mergedResult = {}) {
     }),
     comments,
   };
-}
-
-export const REVIEWER_SUPPORTED_ANGLES = Object.freeze([...SUPPORTED_REVIEW_ANGLES]);
-
-/**
- * Determine one merged review verdict from deduplicated findings.
- * - APPROVE when there are no findings
- * - REQUEST_CHANGES when a run explicitly hints it, or high/critical severity exists
- * - COMMENT otherwise
- *
- * @param {Array<{severity:string}>} dedupedFindings
- * @param {boolean} hintRequestsChanges
- * @returns {"APPROVE"|"REQUEST_CHANGES"|"COMMENT"}
- */
-function determineReviewVerdict(dedupedFindings, hintRequestsChanges) {
-  if (dedupedFindings.length === 0) {
-    return "APPROVE";
-  }
-
-  const hasBlockingSeverity = dedupedFindings
-    .some((finding) => finding.severity === "critical" || finding.severity === "high");
-
-  if (hintRequestsChanges || hasBlockingSeverity) {
-    return "REQUEST_CHANGES";
-  }
-
-  return "COMMENT";
 }
 
 function normalizeDraftVerdict(value) {

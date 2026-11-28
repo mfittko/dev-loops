@@ -55,7 +55,6 @@ import {
   resolveFanoutEffectiveConcurrency,
   DEFAULT_MAX_ANGLES_PER_GROUP,
   DEFAULT_FANOUT_MAX_CONCURRENT,
-  DEFAULT_FANOUT_SEQUENTIAL,
   CLAUDE_MAX_EFFECTIVE_CONCURRENT,
   resolveGateAngleScope,
   resolveEffectiveCopilotRoundCap,
@@ -5418,7 +5417,6 @@ test("resolveMaxAnglesPerGroup / resolveFanoutMaxConcurrent: defaults + config o
 test("resolveFanoutSequential / resolveFanoutEffectiveConcurrency: serial bound (#1726) with a cross-harness-safe default", () => {
   // Shipped default is false → other harnesses/repos keep maxConcurrent behavior (no regression).
   assert.equal(resolveFanoutSequential({ version: 1 }), false);
-  assert.equal(DEFAULT_FANOUT_SEQUENTIAL, false);
   // Pin env to {} so these assertions stay deterministic regardless of the ambient harness
   // (resolveFanoutEffectiveConcurrency defaults env to process.env; the Claude-harness clamp is
   // exercised explicitly, with { CLAUDECODE: "1" }, in the #1971 block below).
@@ -5982,7 +5980,6 @@ describe("resolveGateAnglesDynamic", () => {
     assert.deepEqual(result.recommendedAngles, ["scope", "coverage", "docs"]);
     assert.deepEqual(result.skippedAngles, []);
     assert.equal(result.dynamicAnglesActive, false);
-    assert.equal(result.fallbackToAll, false);
   });
 
   test("returns null recommendedAngles when no angles configured", async () => {
@@ -6459,7 +6456,6 @@ describe("resolveGateAnglesDynamic", () => {
     assert.deepEqual(result.recommendedAngles, ["pr-description", "docs", "link-check"]);
     assert.deepEqual(result.skippedAngles, ["correctness"]);
     assert.deepEqual(result.reasons, { correctness: "tier:docs-only" });
-    assert.equal(result.fallbackToAll, false);
     assert.deepEqual(result.addedAngles, []);
     assert.deepEqual(result.addedReasons, {});
   });
@@ -6471,7 +6467,6 @@ describe("resolveGateAnglesDynamic", () => {
       recommendedAngles: ["pr-description", "docs", "link-check", "correctness"],
       skippedAngles: [],
       reasons: {},
-      fallbackToAll: false,
       dynamicAnglesActive: false,
       addedAngles: [],
       addedReasons: {},
@@ -6502,7 +6497,6 @@ describe("resolveGateAnglesDynamic", () => {
     assert.ok(result.recommendedAngles.includes("docs"), "docs lens kept for a docs-only diff");
     assert.ok(result.recommendedAngles.length < 5, "pool narrowed from the full 5");
     assert.ok(result.skippedAngles.includes("coverage"), "non-docs angle pruned by default");
-    assert.equal(result.fallbackToAll, false);
   });
 
   test("#1579 mandatory angle survives dynamic pruning under the default config (no dynamic key)", async () => {
@@ -6554,7 +6548,6 @@ describe("resolveGateAnglesDynamic", () => {
     assert.equal(result.dynamicAnglesActive, false);
     assert.deepEqual(result.recommendedAngles, ["scope", "coverage", "docs", "deep", "kiss"]);
     assert.deepEqual(result.skippedAngles, []);
-    assert.equal(result.fallbackToAll, false);
   });
 
   test("#1579 gate:full label alone does NOT restore the full pool (only per-angle dispatch of the pruned set)", async () => {
@@ -6573,7 +6566,6 @@ describe("resolveGateAnglesDynamic", () => {
     assert.ok(result.recommendedAngles.includes("docs"), "docs lens kept for a docs-only diff");
     assert.ok(result.recommendedAngles.length < 5, "pool still pruned — gate:full does not restore the full pool");
     assert.ok(result.skippedAngles.length > 0, "non-docs angles still pruned under gate:full");
-    assert.equal(result.fallbackToAll, false);
   });
 
   test("#1579 default config + ambiguous diff → best-effort strict subset", async () => {
@@ -6585,7 +6577,6 @@ describe("resolveGateAnglesDynamic", () => {
       diff: { nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/specs/bar.md" },
     });
     assert.equal(result.dynamicAnglesActive, true);
-    assert.equal(result.fallbackToAll, false);
     assert.ok(result.recommendedAngles.length < 5);
     assert.ok(result.skippedAngles.length > 0);
     for (const angle of result.skippedAngles) assert.ok(result.reasons[angle]);
@@ -6728,7 +6719,6 @@ describe("resolveGateAnglesDynamic", () => {
       assert.equal(result.dynamicAnglesActive, true, scenario.name);
       assert.ok(result.recommendedAngles.includes("pr-description"), `${scenario.name}: mandatory floor missing`);
       assert.notDeepEqual(result.recommendedAngles, ["docs"], `${scenario.name}: explicit override was not refused`);
-      assert.equal(result.fallbackToAll, false, `${scenario.name}: must never fall back to all angles`);
       assert.ok(
         result.recommendedAngles.length < staticPool.length,
         `${scenario.name}: a fired floor must not return the full untiered pool`,
@@ -6770,7 +6760,6 @@ describe("resolveGateAnglesDynamic", () => {
       sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(result.dynamicAnglesActive, true);
-    assert.equal(result.fallbackToAll, false);
     assert.ok(result.recommendedAngles.length < staticPool.length);
     for (const angle of mandatoryAngles) assert.ok(result.recommendedAngles.includes(angle));
   });
@@ -6785,7 +6774,6 @@ describe("resolveGateAnglesDynamic", () => {
     assert.ok(result.recommendedAngles.length < staticPool.length);
     assert.ok(result.recommendedAngles.includes("pr-description"));
     assert.equal(result.dynamicAnglesActive, true);
-    assert.equal(result.fallbackToAll, false);
     for (const angle of result.skippedAngles) assert.ok(result.reasons[angle]);
   });
 
@@ -6875,7 +6863,6 @@ describe("resolveGateAnglesDynamic", () => {
       }
       const result = await resolveGateAnglesDynamic(config, "draft", scenario.options);
       assert.equal(result.dynamicAnglesActive, true, scenario.name);
-      assert.equal(result.fallbackToAll, false, scenario.name);
       assert.ok(result.recommendedAngles.length < staticPool.length, scenario.name);
       for (const angle of ["pr-description", "holistic"]) {
         assert.ok(result.recommendedAngles.includes(angle), `${scenario.name}: missing ${angle}`);
@@ -6969,7 +6956,6 @@ describe("resolveGateAnglesDynamic", () => {
     const result = await resolveGateAnglesDynamic(config, "draft", {
       diff: { nameStatusOutput: "M\tsrc/main.mjs\nM\tconfig/app.yml" },
     });
-    assert.equal(result.fallbackToAll, false);
     assert.ok(!result.recommendedAngles.includes("blast-radius"));
     assert.ok(result.skippedAngles.includes("blast-radius"));
   });
