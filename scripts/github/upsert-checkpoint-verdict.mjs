@@ -3014,8 +3014,8 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
     // Multiset per key: the larger of the ledger's and the passed findings' counts (callers may re-pass ledger objects, dropped by identity).
     const ledgerFindings = preloadedFindingsLedger.findings ?? [];
     const group = (list) => list.reduce((m, f) => m.set(convergedActItemKey(f), [...(m.get(convergedActItemKey(f)) ?? []), f]), new Map());
-    const fromLedger = group(listOpenActItems(ledgerFindings));
-    const fromPassed = group(listOpenActItems(findings.filter((f) => !ledgerFindings.includes(f))));
+    const fromLedger = group(notDeferred(listOpenActItems(ledgerFindings)));
+    const fromPassed = group(notDeferred(listOpenActItems(findings.filter((f) => !ledgerFindings.includes(f)))));
     const roundActItems = [...new Set([...fromLedger.keys(), ...fromPassed.keys()])]
       .flatMap((k) => ((fromLedger.get(k)?.length ?? 0) >= (fromPassed.get(k)?.length ?? 0) ? fromLedger.get(k) : fromPassed.get(k)));
     // GATE-EXEC-ROUND-CAP: the same cap-round count as every other draft consumer, so a base-merge-forced round never counts toward the cap.

@@ -1335,10 +1335,12 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // The one head binding of the open act list: a full current head SHA that the list names as its head or its carried head.
   const actListHeadBound = /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase());
   // A draft PR goes ready only on clean current-head draft_gate evidence; the cap-round-fixed proof serves ready PRs only (issue 3464).
-  // GATE-EXEC-OPERATOR-FOCUS: a posted round whose every open act item the operator deferred routes as a clean round.
+  // GATE-EXEC-OPERATOR-FOCUS: a posted round whose every open act item the operator deferred routes to the clean-verdict post, then the ready flip.
   const deferredClean = actList?.deferredAll === true && actListHeadBound && draftGate.currentHead && draftGate.contractComplete
+    // The thread condition currentHeadClean applies (toGateStatus): no signal or a count of 0; a positive, -1 or malformed count blocks.
+    && (input.unresolvedGateThreadCount === null || input.unresolvedGateThreadCount === undefined || input.unresolvedGateThreadCount === 0)
     && (draftGate.verdict === "findings_present" || draftGate.verdict === "blocked");
-  const draftReady = draftGate.currentHeadClean || deferredClean;
+  const draftReady = draftGate.currentHeadClean;
   const headActList = !draftReady && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete
     // The poster writes blocked for a scoped round with act items, so an operator-cleared list accepts that verdict too.
     && (draftGate.verdict === "findings_present" || (draftGate.verdict === "blocked" && actList?.operatorCleared === true))))
@@ -1768,6 +1770,33 @@ function evaluatePrGateCoordinationCore(input = {}) {
 
     // GATE-EXEC-CAP-BRAKES: the next draft_gate round is past the scoped final round; the context writer refuses it, so never route to it.
     // ADR 0332: an all-PR-body act list takes this route at every round up to the cap, so run_draft_gate (refused at the same head) is never offered.
+    if (deferredClean && !draftReady) {
+      pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
+      pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, ...draftReviewForbidden]);
+      return buildResult({
+        repo: input.repo ?? null,
+        pr: Number.isInteger(input.pr) ? input.pr : null,
+        currentHeadSha,
+        lifecycleState: STATE.BLOCKED_NEEDS_USER_DECISION,
+        loopDisposition: DISPOSITION.BLOCKED,
+        gateBoundary: PR_CHECKPOINT.BLOCKED,
+        draftGateAlreadySatisfied,
+        draftGate,
+        preApprovalGate,
+        allowedNextActions,
+        forbiddenActions,
+        nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        ...remedyOrOperator(input, (r, n) => ({
+          command: `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo ${r} --pr ${n} --gate draft_gate --verdict clean --head-sha ${actList.headSha} --findings-ledger '<draft_gate ledger of this round>' --findings-summary '<text>' --next-action "mark ready for review" --operator-focus-file '<operator focus file>' --execution-mode fanout_fanin`,
+          summary: "Post the clean draft_gate verdict for the round whose every open act item the operator deferred (GATE-EXEC-OPERATOR-FOCUS); once it exists, the ready flip is legal.",
+        })),
+        reason: "The PR is still draft and every open `draft_gate` act item of the current head is operator-deferred (GATE-EXEC-OPERATOR-FOCUS). Post the clean draft_gate verdict through upsert-checkpoint-verdict.mjs --operator-focus-file; no further draft_gate round or fixer runs for it.",
+        mergeStateStatus,
+        conflictFiles,
+        refinementArtifact,
+      });
+    }
+
     if (((input.draftRoundRefused === true && !bodyOnlyRetire) || actBlockers.length > 0 || bodyOnlyList) && !draftReady) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
       pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, ...draftReviewForbidden]);
@@ -1821,7 +1850,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       forbiddenActions,
       nextAction: draftReady ? PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW : PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
       reason: draftReady
-        ? `The PR is still draft, and ${deferredClean ? "every open `draft_gate` act item is operator-deferred" : "current-head clean `draft_gate` evidence exists"}, so \`dev-loops pr ready-for-review\` is now legal.`
+        ? `The PR is still draft, and current-head clean \`draft_gate\` evidence exists, so \`dev-loops pr ready-for-review\` is now legal.`
         : (draftGateRequireCi
           ? "The PR is still draft, current-head CI is green, and `draft_gate` is now the legal gate boundary before `dev-loops pr ready-for-review`."
           : "The PR is still draft, and this repo does not require CI before `draft_gate`, so the draft gate is the next legal boundary before `dev-loops pr ready-for-review`."),

@@ -77,8 +77,8 @@ export async function readOperatorFocusFile(file) {
   return normalizeOperatorFocus(raw);
 }
 
-/** Fingerprints of act items the operator deferred: a decision whose text starts with the word defer. */
-export const deferredFingerprints = (focus) => new Set((focus?.items ?? []).filter((item) => item.fingerprint !== undefined && /^defer\b/i.test(item.decision ?? "")).map((item) => item.fingerprint));
+/** Fingerprints of act items the operator deferred: a fingerprint item whose decision starts with defer, deferred or deferring, or whose replyDisposition is deferred. */
+export const deferredFingerprints = (focus) => new Set((focus?.items ?? []).filter((item) => item.fingerprint !== undefined && (/^defer(?:red|ring)?\b/i.test(item.decision ?? "") || item.replyDisposition === "deferred")).map((item) => item.fingerprint));
 
 /**
  * Bind each item to its source. A fingerprint item binds to an act item and records its summary; a threadId item

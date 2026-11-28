@@ -4647,7 +4647,7 @@ async function actListFixture(ledgers, { nextAction = "fix" } = {}) {
     await writeSealed(path.join(findingsDir, `draft_gate-${headSha}${suffix}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha, verdict, loggedAt, findings }));
   }
   const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 medium", nextAction });
-  const detect = async () => detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body }), { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, checkBaseFreshness: async () => STALE }));
+  const detect = async (extra = {}) => detectPrGateCoordinationState({ repo: "owner/repo", pr: 10, ...extra }, buildMockRuntime(await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body }), { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, checkBaseFreshness: async () => STALE }));
   return { tempDir, headSha, findingsDir, detect };
 }
 const ACT = { severity: "medium", summary: "fix x", file: "src/x.mjs", line: 3, judgeDisposition: "act" };
@@ -4661,6 +4661,17 @@ test("3652: resolveDraftOpenActList drops deferred fingerprints and flags an all
     const [a, b] = [ACT, second].map(fingerprintFinding);
     assert.deepEqual(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 0, deferred: new Set([a]) }), { headSha: fixture.headSha, openActCount: 1, blockers: [] });
     assert.deepEqual(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 0, deferred: new Set([a, b]) }), { headSha: fixture.headSha, openActCount: 0, deferredAll: true, blockers: [] });
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
+test("3652: the detector with a real focus file that defers the only act item names the clean-verdict poster, not the fixer", async () => {
+  const fixture = await actListFixture({ "": { findings: [ACT] } });
+  try {
+    const focusFile = path.join(fixture.tempDir, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: fingerprintFinding(ACT), decision: "Defer to a follow-up" }] }), "utf8");
+    const result = await fixture.detect({ operatorFocusFile: focusFile });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+    assert.match(result.agentRemedy.command, /upsert-checkpoint-verdict\.mjs .*--verdict clean .*--operator-focus-file/);
   } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
 });
 

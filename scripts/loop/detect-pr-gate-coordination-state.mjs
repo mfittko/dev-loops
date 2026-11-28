@@ -1474,16 +1474,18 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, operator
   // The posted verdict is findings_present (the evaluator checks it); a legacy ledger may persist `clean` beside open act items.
   const allOpen = log ? listOpenActItems(log.findings) : [];
   // GATE-EXEC-OPERATOR-FOCUS: an act item the operator deferred is closed for routing.
-  let open = allOpen.filter((f) => !deferred.has(fingerprintFinding(f)));
+  // Fingerprinting runs only with a deferral, so a malformed finding never throws on the no-focus path.
+  const notDeferred = (items) => (deferred.size === 0 ? items : items.filter((f) => !deferred.has(fingerprintFinding(f))));
+  let open = notDeferred(allOpen);
   let ledgerHead = head;
   // GATE-EXEC-NO-DEAD-END: a head with no live ledger that is a base-only merge of the reviewed head A keeps A's body-only list, so the post stays reachable after the base merge.
   const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
-  if (open.length === 0 && baseRefName) {
+  if (allOpen.length === 0 && baseRefName) {
     // Only a head's live ledger (its latest round) counts: it sorts after its retained `.round-N` siblings, so the last entry per head wins.
     const latestPerHead = new Map(logs.map((entry) => [String(entry.headSha).trim().toLowerCase(), entry]));
     // Newest head first (logs sort oldest first): a later ledger supersedes an older one, so only the newest accepted head decides and a mixed list there carries nothing.
     for (const [from, prior] of [...latestPerHead].reverse()) {
-      const priorOpen = listOpenActItems(prior.findings);
+      const priorOpen = notDeferred(listOpenActItems(prior.findings));
       if (from === head || priorOpen.length === 0) continue;
       if (!(await baseOnlyMerge({ fromHead: from, head, mainRef: `origin/${baseRefName}`, repoRoot }))) continue;
       if (priorOpen.every(isDeltaBodyItem)) { log = prior; open = priorOpen; ledgerHead = from; }
