@@ -29,7 +29,7 @@ import {
   siteCoverageGaps,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { deltaCoverageBinding, isDeltaResultFresh, startDeltaSequence, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
-import { isDeltaBodyItem, toDeltaActItems } from "@dev-loops/core/loop/fixer-disposition";
+import { isDeltaBodyItem, toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { LOOP_DERIVED_CI_CHECK_NAMES } from "@dev-loops/core/loop/copilot-ci-status";

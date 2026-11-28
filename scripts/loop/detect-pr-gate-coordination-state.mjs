@@ -31,7 +31,7 @@ import {
   FIXER_COMMIT_CLAIM_KINDS,
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
-import { isBlockedActItem, isDeltaBodyItem } from "@dev-loops/core/loop/fixer-disposition";
+import { isBlockedActItem, isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { convergedCarryAccepts } from "../github/_carried-verdict.mjs";
 import { actSetAlreadyHeld, actSetHeld, capRoundActList, countCapRounds, effectiveRounds, isBodyOnlyRerun, operatorClearsCapStop, prBodySha256, readClosedPriorRoundLogs, refusesPastScopedRound, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";

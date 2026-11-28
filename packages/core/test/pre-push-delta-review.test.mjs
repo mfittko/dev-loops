@@ -14,9 +14,9 @@ import {
   resolveDeltaTrigger,
   startDeltaSequence,
   threadsToActList,
+  toDeltaActItems,
   validateDeltaResult,
 } from "../src/loop/pre-push-delta-review.mjs";
-import { toDeltaActItems } from "../src/loop/fixer-disposition.mjs";
 import { consolidateFanin } from "../src/loop/gate-fanin.mjs";
 import { sha256Hex } from "../src/loop/review-dispatch-plan.mjs";
 
@@ -447,11 +447,12 @@ describe("pre-push results never become gate evidence", () => {
   test("the delta module performs no I/O: no gate artifact, comment or thread can be written", () => {
     const source = fs.readFileSync(new URL("../src/loop/pre-push-delta-review.mjs", import.meta.url), "utf8");
     const imports = [...source.matchAll(/^import .* from "([^"]+)";$/gm)].map((m) => m[1]);
-    assert.deepEqual(imports.sort(), ["../github/repo-slug.mjs", "./fixer-disposition.mjs", "./gate-fanin.mjs", "./review-dispatch-plan.mjs", "./stale-surface-hits.mjs", "node:crypto"]);
+    assert.deepEqual(imports.sort(), ["../github/repo-slug.mjs", "./fixer-disposition.mjs", "./gate-fanin.mjs", "./review-dispatch-plan.mjs", "node:crypto"]);
   });
 });
 
-import { collectStaleSurfaceHits, unaddressedStaleSurfaceHits, staleSurfaceTruncatedHit, STALE_SURFACE_TRUNCATED_SITE } from "../src/loop/stale-surface-hits.mjs";
+import { unaddressedStaleSurfaceHits, staleSurfaceTruncatedHit, STALE_SURFACE_TRUNCATED_SITE } from "../src/loop/pre-push-delta-review.mjs";
+import { collectStaleSurfaceHits } from "../src/loop/stale-surface-hits.mjs";
 
 test("surfaceHints is the union of the act item angles and the reviewed round angles", () => {
   const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], angle: "contract-surface" }] });
