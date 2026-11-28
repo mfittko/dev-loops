@@ -28,9 +28,7 @@ test("resolveDynamicAngles: ambiguity selects a justified strict subset", () => 
     configuredAngles: DRAFT_ANGLES,
     changeCategories: [ChangeCategory.LOGIC_CHANGE],
     ambiguous: true,
-  });
-  assert.equal(result.fallbackToAll, false);
-  assert.ok(result.recommendedAngles.length < DRAFT_ANGLES.length);
+  });  assert.ok(result.recommendedAngles.length < DRAFT_ANGLES.length);
   for (const angle of ALWAYS_INCLUDE) {
     if (DRAFT_ANGLES.includes(angle)) assert.ok(result.recommendedAngles.includes(angle));
   }
@@ -44,9 +42,7 @@ test("resolveDynamicAngles: no categories selects always-include lenses only", (
   const result = resolveDynamicAngles({
     configuredAngles: DRAFT_ANGLES,
     changeCategories: [],
-  });
-  assert.equal(result.fallbackToAll, false);
-  assert.ok(result.recommendedAngles.length < DRAFT_ANGLES.length);
+  });  assert.ok(result.recommendedAngles.length < DRAFT_ANGLES.length);
   for (const angle of ALWAYS_INCLUDE) {
     if (DRAFT_ANGLES.includes(angle)) assert.ok(result.recommendedAngles.includes(angle));
   }
@@ -67,9 +63,7 @@ test("resolveDynamicAngles: rename-only skips structural angles", () => {
   assert.ok(result.recommendedAngles.includes("scope"));
   assert.ok(result.recommendedAngles.includes("contract-surface"));
   assert.ok(result.skippedAngles.includes("config-drift"));
-  assert.ok(result.skippedAngles.includes("packaging-runtime"));
-  assert.equal(result.fallbackToAll, false);
-});
+  assert.ok(result.skippedAngles.includes("packaging-runtime"));});
 
 test("resolveDynamicAngles: docs-only skips most angles", () => {
   const result = resolveDynamicAngles({
@@ -103,9 +97,7 @@ test("resolveDynamicAngles: LOGIC_CHANGE resolves to core subset, not all angles
   const result = resolveDynamicAngles({
     configuredAngles: DRAFT_ANGLES,
     changeCategories: [ChangeCategory.LOGIC_CHANGE],
-  });
-  assert.equal(result.fallbackToAll, false);
-  // Core review subset (∩ DRAFT_ANGLES) + always-include gate-evidence.
+  });  // Core review subset (∩ DRAFT_ANGLES) + always-include gate-evidence.
   // input-validation is part of the core subset (#1336): entrypoint/input drift
   // is reviewed for every logic change, not only when hand-picked.
   for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface", "gate-evidence", "input-validation", "state-concurrency"]) {
@@ -128,9 +120,7 @@ test("resolveDynamicAngles: SECURITY_SENSITIVE_SEAM selects threat-model (config
   const result = resolveDynamicAngles({
     configuredAngles: SEAM_DRAFT_ANGLES,
     changeCategories: [ChangeCategory.LOGIC_CHANGE, ChangeCategory.SECURITY_SENSITIVE_SEAM],
-  });
-  assert.equal(result.fallbackToAll, false);
-  assert.ok(result.recommendedAngles.includes("threat-model"), "seam diff must select threat-model");
+  });  assert.ok(result.recommendedAngles.includes("threat-model"), "seam diff must select threat-model");
   assert.ok(!result.skippedAngles.includes("threat-model"), "threat-model must never be skipped for a seam diff");
   assert.ok(result.recommendedAngles.includes("input-validation"));
 });
@@ -160,9 +150,7 @@ test("resolveDynamicAngles: mixed logic + CI unions ci-guard into the core subse
   const result = resolveDynamicAngles({
     configuredAngles: DRAFT_ANGLES,
     changeCategories: [ChangeCategory.LOGIC_CHANGE, ChangeCategory.CI_ONLY],
-  });
-  assert.equal(result.fallbackToAll, false);
-  assert.ok(result.recommendedAngles.includes("ci-guard"));   // from CI_ONLY
+  });  assert.ok(result.recommendedAngles.includes("ci-guard"));   // from CI_ONLY
   assert.ok(result.recommendedAngles.includes("correctness")); // from LOGIC_CHANGE core
   assert.ok(result.recommendedAngles.includes("config-drift")); // CI_ONLY unions this in
 });
@@ -177,9 +165,7 @@ test("resolveDynamicAngles: PROSE_PRESENT selects deslop (configured)", () => {
   const result = resolveDynamicAngles({
     configuredAngles: PROSE_DRAFT_ANGLES,
     changeCategories: [ChangeCategory.DOCS_ONLY, ChangeCategory.PROSE_PRESENT],
-  });
-  assert.equal(result.fallbackToAll, false);
-  assert.ok(result.recommendedAngles.includes("deslop"), "prose diff must run deslop");
+  });  assert.ok(result.recommendedAngles.includes("deslop"), "prose diff must run deslop");
   assert.ok(!result.skippedAngles.includes("deslop"));
 });
 
@@ -375,9 +361,7 @@ test("resolveDynamicAngles: consumer angle selected by matching category", () =>
     angleDeclarations: { "blast-radius": { categories: ["LOGIC_CHANGE"] } },
   });
   assert.ok(result.recommendedAngles.includes("blast-radius"));
-  assert.ok(!result.skippedAngles.includes("blast-radius"));
-  assert.equal(result.fallbackToAll, false);
-});
+  assert.ok(!result.skippedAngles.includes("blast-radius"));});
 
 test("resolveDynamicAngles: consumer angle skipped by non-matching category", () => {
   const result = resolveDynamicAngles({
@@ -415,17 +399,13 @@ test("resolveDynamicAngles: declared consumer angle is still selected under unce
     angleDeclarations: { "blast-radius": { categories: ["LOGIC_CHANGE"] } },
   });
   assert.ok(ambiguous.recommendedAngles.includes("blast-radius"));
-  assert.equal(ambiguous.fallbackToAll, false);
-
   const noCategories = resolveDynamicAngles({
     configuredAngles: CONSUMER_ANGLES,
     changeCategories: [],
     fileKinds: ["config"],
     angleDeclarations: { "blast-radius": { kinds: ["config"] } },
   });
-  assert.ok(noCategories.recommendedAngles.includes("blast-radius"));
-  assert.equal(noCategories.fallbackToAll, false);
-});
+  assert.ok(noCategories.recommendedAngles.includes("blast-radius"));});
 
 test("resolveDynamicAngles: catalog angles + ALWAYS_INCLUDE unchanged when consumer binding present", () => {
   const withDecl = resolveDynamicAngles({

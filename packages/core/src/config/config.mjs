@@ -30,7 +30,7 @@ const InputSourceConfig = z.enum(["tracker", "phase-docs"]).describe("Where loca
 // per-harness model id; `null` means "inherit" (no model override, a genuine
 // no-op on that harness). Pi ships null on every built-in tier, so zero-config
 // resolution is a no-op on Pi until an operator sets concrete Pi ids.
-export const BUILTIN_TIER_ALIASES = Object.freeze(["low", "high"]);
+const BUILTIN_TIER_ALIASES = Object.freeze(["low", "high"]);
 
 // Both Claude tiers resolve to opus: Opus 5.5 is currently the most
 // cost-efficient Claude model per task (fewer turns than sonnet on fixer runs).
@@ -332,8 +332,7 @@ const GateTier = z.strictObject({
 
 const GateDynamicConfig = z.strictObject({
   // Diff-driven dynamic angle PRUNING, ON by default. mandatory:true angles
-  // stay a hard always-run floor. fallbackToAll is retained in resolver output
-  // for compatibility but is always false; uncertainty never widens the set.
+  // stay a hard always-run floor. Uncertainty never widens the set.
   subtractive: z.boolean().default(true).describe("Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static angle pool). Was gates.<gate>.dynamicAngles."),
   // Additive counterpart to the subtractive path: when true, the
   // context-builder may also ADD catalog angles (from resolveAnglePool) that
@@ -963,12 +962,12 @@ const UiReviewConfig = z.strictObject({
 // forever when the author leaves timeoutMs unset; the ceiling caps how far a
 // config CAN push it — a config can only tighten these, never loosen past the
 // ceiling.
-export const POST_MERGE_ACTION_DEFAULT_TIMEOUT_MS = 120000;
-export const POST_MERGE_ACTION_TIMEOUT_CEILING_MS = 600000;
-export const POST_MERGE_VERIFY_DEFAULT_TIMEOUT_MS = 60000;
-export const POST_MERGE_VERIFY_TIMEOUT_CEILING_MS = 600000;
-export const POST_MERGE_VERIFY_DEFAULT_INTERVAL_MS = 2000;
-export const POST_MERGE_VERIFY_INTERVAL_CEILING_MS = 60000;
+const POST_MERGE_ACTION_DEFAULT_TIMEOUT_MS = 120000;
+const POST_MERGE_ACTION_TIMEOUT_CEILING_MS = 600000;
+const POST_MERGE_VERIFY_DEFAULT_TIMEOUT_MS = 60000;
+const POST_MERGE_VERIFY_TIMEOUT_CEILING_MS = 600000;
+const POST_MERGE_VERIFY_DEFAULT_INTERVAL_MS = 2000;
+const POST_MERGE_VERIFY_INTERVAL_CEILING_MS = 60000;
 
 /**
  * One post-merge action (Stage: local consumer hook). `run` and `verify` are
@@ -1472,7 +1471,7 @@ function readPackageVersion(url) {
 }
 
 /** Version of the running dev-loops (this package ships in lockstep with it). */
-export const RUNNING_VERSION = readPackageVersion(OWN_PACKAGE_JSON);
+const RUNNING_VERSION = readPackageVersion(OWN_PACKAGE_JSON);
 
 /** Version of the dev-loops source checkout at `repoRoot`, or null when it is not one. */
 function readCheckoutVersion(repoRoot) {
@@ -2825,7 +2824,6 @@ export const DEFAULT_MAX_ANGLES_PER_GROUP = 5;
  * `scheduleFanoutWaves` (@dev-loops/core/loop/gate-fanin).
  */
 export const DEFAULT_FANOUT_MAX_CONCURRENT = 5;
-export const DEFAULT_FANOUT_SEQUENTIAL = false;
 
 /**
  * Resolve `gates.fanout.sequential` (default false). Serial one-at-a-time
@@ -3382,7 +3380,7 @@ export function resolveReviewProportionality(config, gate, {
  * @param {{ outcome?: "pass"|"escalate"|"block", wholeLogicLoc?: number, tierLogicLoc?: { t1?: number } }|null} [options.sizeOutcome] — only consulted when `checkFloors` is true
  * @param {boolean} [options.seamFirstRound] — true in a draft_gate round, or in a pre_approval_gate round at a head where no draft_gate round ran threat-model (caller-derived; defaults to true only for `draft`); only then does a SECURITY_SENSITIVE_SEAM diff force threat-model past `enabled: false`, so a pre_approval_gate round after a draft round at the same head does not re-run it
  * @param {string[]} [options.explicitAngles] — caller-supplied verbatim override (e.g. CLI `--angles`); wins over tier/dynamic resolution but NEVER over a fired floor above (a fired floor refuses the override and continues to tier/dynamic best-effort selection); a SECURITY_SENSITIVE_SEAM diff still adds threat-model to the explicit set (when seamFirstRound)
- * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: boolean, dynamicAnglesActive: boolean, addedAngles: string[], addedReasons: Record<string,string> }}
+ * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, dynamicAnglesActive: boolean, addedAngles: string[], addedReasons: Record<string,string> }}
  */
 export async function resolveGateAnglesDynamic(config, gate, options = {}) {
   const result = await selectGateAnglesDynamic(config, gate, options);
@@ -3471,7 +3469,6 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
       recommendedAngles: [],
       skippedAngles: [],
       reasons: {},
-      fallbackToAll: false,
       dynamicAnglesActive: false,
       addedAngles: [],
       addedReasons: {},
@@ -3482,7 +3479,6 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
       recommendedAngles: [...explicitAngles],
       skippedAngles: [],
       reasons: {},
-      fallbackToAll: false,
       dynamicAnglesActive: false,
       addedAngles: [],
       addedReasons: {},
@@ -3504,7 +3500,6 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
       recommendedAngles,
       skippedAngles,
       reasons,
-      fallbackToAll: false,
       dynamicAnglesActive: true,
       addedAngles: [],
       addedReasons: {},
@@ -3514,7 +3509,7 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
   const gateConfig = resolveGateConfig(config, gate);
   const staticAngles = resolveGateAngles(config, gate);
   if (staticAngles === null) {
-    return { recommendedAngles: null, skippedAngles: [], reasons: {}, fallbackToAll: false, dynamicAnglesActive: false, addedAngles: [], addedReasons: {} };
+    return { recommendedAngles: null, skippedAngles: [], reasons: {}, dynamicAnglesActive: false, addedAngles: [], addedReasons: {} };
   }
 
   if (!gateConfig.dynamicAngles || !diff) {
@@ -3534,7 +3529,6 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
       reasons: Object.fromEntries(
         skippedAngles.map((a) => [a, "Skipped: no diff is available to select on; the mandatory floor plus justified lenses were selected instead"]),
       ),
-      fallbackToAll: false,
       dynamicAnglesActive: bestEffortWithoutDiff,
       addedAngles: [],
       addedReasons: {},
@@ -3622,7 +3616,6 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
     recommendedAngles,
     skippedAngles,
     reasons,
-    fallbackToAll: dynamicResult.fallbackToAll,
     dynamicAnglesActive: true,
     addedAngles,
     addedReasons,

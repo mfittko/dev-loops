@@ -191,7 +191,7 @@ const LIFECYCLE_ONLY_ANGLES = ["gate-evidence"];
  *
  * @param {import("@dev-loops/core/config").DevLoopConfig} config
  * @param {{ hasClosingIssue: boolean|undefined, hasAcChecklist: boolean|undefined, hasFormalIssueSpec?: boolean, hasFormalPrSpec?: boolean }} facts
- * @returns {{ recommendedAngles: string[], skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: false, dynamicAnglesActive: false, addedAngles: string[], addedReasons: Record<string,string> }}
+ * @returns {{ recommendedAngles: string[], skippedAngles: string[], reasons: Record<string,string>, dynamicAnglesActive: false, addedAngles: string[], addedReasons: Record<string,string> }}
  */
 export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklist, hasFormalIssueSpec, hasFormalPrSpec }) {
   const union = resolveOperationAnglePool(config, "review");
@@ -209,7 +209,6 @@ export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklis
       ...Object.fromEntries(specDrops.map((a) => [a, provablyNoSpecOfRecord ? "no spec-of-record" : "no formal spec on the closing issue or PR description"])),
       ...Object.fromEntries(lifecycleDrops.map((a) => [a, "the standalone review has no lifecycle gates"])),
     },
-    fallbackToAll: false,
     dynamicAnglesActive: false,
     addedAngles: [],
     addedReasons: {},
