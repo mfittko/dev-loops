@@ -1157,8 +1157,16 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // mark_ready_for_review/clean while the other reports unresolved threads.
   // GATE-EXEC-OPERATOR-FOCUS: the count without the threads of operator-deferred findings; the deferred-clean route reads it. A -1 or malformed count still blocks.
   const deferred = runtime.deferred ?? new Set();
+  // The same predicate as resolveDeferredGateThreads: a thread is deferred only when every marker fingerprint on it is deferred.
+  const isDeferredGateThread = (body, deferredFps) => {
+    const marker = parseFindingMarker(body);
+    if (!marker) return false;
+    const fps = new Set([marker.fp]);
+    collectFingerprints(body, fps);
+    return [...fps].every((fp) => deferredFps.has(fp));
+  };
   const [unresolvedGateThreadCount, unresolvedUndeferredGateThreadCount = unresolvedGateThreadCount] = await countUnresolvedGateThreadsOf(
-    deferred.size === 0 ? [threadsPayload] : [threadsPayload, threadsPayload.filter((node) => !deferred.has(parseFindingMarker(node?.comments?.nodes?.[0]?.body)?.fp))],
+    deferred.size === 0 ? [threadsPayload] : [threadsPayload, threadsPayload.filter((node) => !isDeferredGateThread(node?.comments?.nodes?.[0]?.body, deferred))],
     runtime,
   );
   // Injects the login-narrowed count computed just above so

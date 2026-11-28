@@ -59,6 +59,20 @@ test("3652: the clean post replies to and resolves only the gate thread of a def
   }, { prefix: "dev-loops-deferred-threads-" });
 });
 
+test("3652: a merged gate thread with a deferred and an undeferred fingerprint stays open", async () => {
+  await withTempDir(async (tempDir) => {
+    const focus = path.join(tempDir, "focus.json");
+    await writeFile(focus, JSON.stringify({ items: [{ fingerprint: DEFERRED_FP, decision: "defer" }] }), "utf8");
+    const calls = [];
+    const merged = node("T-merged", 504, DEFERRED_FP);
+    merged.comments.nodes[0].body += `\n${buildFindingMarker({ fp: OTHER_FP, severity: "medium", angle: "correctness", round: 1 })}`;
+    const options = { repo: REPO, pr: PR, gate: "draft_gate", verdict: "clean", operatorFocusFile: focus };
+    const out = await resolveDeferredGateThreads(posted, options, { env: runIdFreeEnv(), ghCommand: "gh", runChild: makeRunChild([merged], calls) });
+    assert.equal(out.deferredThreadsResolved, undefined);
+    assert.equal(calls.filter((c) => c.a.includes("resolveReviewThread") || c.a.includes("/replies")).length, 0);
+  }, { prefix: "dev-loops-deferred-merged-" });
+});
+
 test("3652: no thread closes for a non-clean verdict, a focus file without a defer decision or a gate other than draft_gate", async () => {
   await withTempDir(async (tempDir) => {
     const deferFocus = path.join(tempDir, "defer.json");

@@ -4527,8 +4527,8 @@ async function seedCapFixedRepo(repoRoot, { headSha, seal = true, record: record
 }
 
 // threads: -1 seeds one gate thread whose login lookup fails, so the gate thread count is unreadable (-1).
-async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, files, threads = 0, threadFp, reviews = [], linkedIssueBody, failedLaterIssue = false }) {
-  const threadNodes = Array.from({ length: Math.abs(threads) }, (_, i) => ({ id: `PRRT_${i}`, isResolved: false, isOutdated: false, path: "src/scope.mjs", line: 4, comments: { nodes: [{ id: `PRRC_${i}`, databaseId: 9000 + i, body: `${buildFindingMarker({ fp: threadFp ?? String(i).repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why?`, author: { login: "dev-loops-gate[bot]", __typename: "Bot" } }] } }));
+async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, files, threads = 0, threadFp, threadExtraFp, reviews = [], linkedIssueBody, failedLaterIssue = false }) {
+  const threadNodes = Array.from({ length: Math.abs(threads) }, (_, i) => ({ id: `PRRT_${i}`, isResolved: false, isOutdated: false, path: "src/scope.mjs", line: 4, comments: { nodes: [{ id: `PRRC_${i}`, databaseId: 9000 + i, body: `${buildFindingMarker({ fp: threadFp ?? String(i).repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why?${threadExtraFp ? `\n${buildFindingMarker({ fp: threadExtraFp, severity: "question", angle: "scope", round: 1 })}` : ""}`, author: { login: "dev-loops-gate[bot]", __typename: "Bot" } }] } }));
   return writeGhStub(tempDir, [
     {
       stdout: JSON.stringify({
@@ -4684,6 +4684,16 @@ test("3652: a deferred locatable act item with its own open gate thread still na
     const result = await fixture.detect({ operatorFocusFile: focusFile }, { threads: 1, threadFp: fingerprint });
     assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
     assert.match(result.agentRemedy.command, /upsert-checkpoint-verdict\.mjs .*--verdict clean .*--operator-focus-file/);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
+test("3652: a merged gate thread with a deferred and an undeferred fingerprint withholds the clean-verdict poster", async () => {
+  const fixture = await actListFixture({ "": { findings: [ACT] } });
+  try {
+    const focusFile = path.join(fixture.tempDir, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: fingerprintFinding(ACT), decision: "defer" }] }), "utf8");
+    const result = await fixture.detect({ operatorFocusFile: focusFile }, { threads: 1, threadFp: fingerprintFinding(ACT), threadExtraFp: "20f6d24370c05022" });
+    assert.doesNotMatch(result.agentRemedy?.command ?? "", /--verdict clean/);
   } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
 });
 
