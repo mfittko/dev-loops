@@ -1081,6 +1081,9 @@ export const UNJUDGED_DISPOSITION = "unjudged";
  */
 export const JUDGE_DISPOSITIONS = Object.freeze(["act", "defer", "reject"]);
 
+/** The three reasons a low cluster keeps its judged disposition from draft round 2 on (ADR 0339). */
+export const LOW_EXCEPTIONS = Object.freeze(["unmet_ac", "regression", "security"]);
+
 /**
  * The `scopeDrift.verdict` vocabulary — the single shared source. The validator
  * below consumes it directly, and a divergence-guard test asserts the judge
@@ -1124,7 +1127,7 @@ export function normalizeScopeDriftVerdict(verdict) {
  * {
  *   headSha: "<sha>",
  *   scopeDrift: { verdict: "within_scope"|"drift_detected", rationale: "...", driftedAreas?: ["..."] (optional for within_scope, defaults to []) },
- *   dispositions: [{ index, disposition: "act"|"defer"|"reject", title, detail, fix, reason (required unless act), rationale, criterion?, followUpDraft? }]
+ *   dispositions: [{ index, disposition: "act"|"defer"|"reject", title, detail, fix, reason (required unless act), rationale, criterion?, followUpDraft?, failOpen?, lowException? }]
  * }
  * ```
  *
@@ -1189,6 +1192,9 @@ export function validateJudgeVerdict(verdict) {
     }
     if (entry.failOpen !== undefined && typeof entry.failOpen !== "boolean") {
       throw new Error(`judge verdict.dispositions[${i}].failOpen must be a boolean when present`);
+    }
+    if (entry.lowException !== undefined && !LOW_EXCEPTIONS.includes(entry.lowException)) {
+      throw new Error(`judge verdict.dispositions[${i}].lowException must be one of: ${LOW_EXCEPTIONS.join(", ")} when present`);
     }
     if (entry.disposition !== "act" && (typeof entry.reason !== "string" || entry.reason.trim().length === 0)) {
       throw new Error(`judge verdict.dispositions[${i}].reason must be a non-empty one-sentence string on a ${entry.disposition} disposition`);
@@ -1288,7 +1294,7 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
     // (read before any promotion, so the result never depends on disposition order). failOpen promotes a cluster holding a low
     // to medium and keeps act in every round; else (failOpen is ignored on an all-nit cluster) an all-nit cluster stays act only in
     // draft round 1 (the fixer fixes it) and rejects after; a low/nit cluster with a low (its nit members ride along,
-    // one disposition per cluster) stays act at the draft gate and defers at pre_approval_gate.
+    // one disposition per cluster) stays act in draft round 1, floors at reject from round 2 (ADR 0339), and defers at pre_approval_gate.
     let disposition = d.disposition;
     let reason = d.reason;
     let followUpDraft = d.followUpDraft;
@@ -1299,15 +1305,20 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
     const severities = memberIndices.map((i) => originalSeverities[i]);
     const lowOrNitOnly = severities.every((s) => s === "low" || s === "nit");
     const allNit = severities.every((s) => s === "nit");
-    if (disposition === "act") {
-      if (failOpen && lowOrNitOnly && severities.includes("low")) {
-        promote = true;
-      } else if (lowOrNitOnly && (allNit ? !(round === 1 && !pastCap) : pastCap)) {
-        disposition = allNit ? "reject" : "defer";
-        const code = "low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP)";
-        reason = typeof reason === "string" && reason.trim().length > 0 ? `${code}: ${reason.trim()}` : code;
-        if (disposition === "defer" && !followUpDraft) followUpDraft = { title: d.title.trim(), body: d.detail.trim() };
-      }
+    // ADR 0339: from draft round 2 on a cluster holding a low floors at reject, act or defer alike, unless the judge names an exception.
+    const lowException = d.lowException !== undefined || (!stamped && validated.dispositions.some((o) => o.disposition !== "reject" && o.lowException !== undefined && memberIndices.includes(o.index)));
+    // A failOpen cluster is never floored: a failOpen defer keeps its disposition and blocks at the cap (GATE-EXEC-SOFT-CAP).
+    const lowFloored = lowOrNitOnly && !allNit && !pastCap && round >= 2 && !lowException && !failOpen;
+    const nitFloored = allNit && disposition === "act" && !(round === 1 && !pastCap);
+    const lowCapDeferred = !allNit && pastCap && disposition === "act";
+    const lowFlooredToReject = lowFloored && (disposition === "act" || disposition === "defer");
+    if (disposition === "act" && failOpen && lowOrNitOnly && severities.includes("low")) {
+      promote = true;
+    } else if (lowOrNitOnly && (nitFloored || lowCapDeferred || lowFlooredToReject)) {
+      disposition = nitFloored || lowFlooredToReject ? "reject" : "defer";
+      const code = "low_floor (GATE-EXEC-LOW-ROUND-FLOOR)";
+      reason = typeof reason === "string" && reason.trim().length > 0 ? `${code}: ${reason.trim()}` : code;
+      if (disposition === "defer" && !followUpDraft) followUpDraft = { title: d.title.trim(), body: d.detail.trim() };
     }
     for (const [i, target] of enriched.entries()) {
       if (clusterOf(i) !== d.index) continue;

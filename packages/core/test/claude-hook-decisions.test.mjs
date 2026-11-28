@@ -1601,7 +1601,7 @@ test("decideBashGate lets the judge run only the sanctioned work-order pull, fai
 });
 
 test("decideBashGate lets the judge run read-only search commands and refuses writers (issue 3092)", () => {
-  for (const command of ["grep -n GATE-EXEC-LOW-FIX-UNTIL-CAP skills/docs/gate-review-sub-loop-contract.md", "rg -n 'foo|bar' scripts/loop", "rg -n 'foo$' f", "grep -n 'a|b$' f", `grep -n "a\\|b" -A6 skills/docs/x.md`, "git show abc123:packages/core/src/a.mjs", "git diff abc123..def456 -- scripts/loop/x.mjs", "git diff origin/main...HEAD", "git diff origin/main HEAD", "git diff HEAD~1 HEAD -- x", "rg -n 'a*b' packages", "grep -n 'x?' file.mjs", "git show HEAD:agents/judge.agent.md"]) {
+  for (const command of ["grep -n GATE-EXEC-LOW-ROUND-FLOOR skills/docs/gate-review-sub-loop-contract.md", "rg -n 'foo|bar' scripts/loop", "rg -n 'foo$' f", "grep -n 'a|b$' f", `grep -n "a\\|b" -A6 skills/docs/x.md`, "git show abc123:packages/core/src/a.mjs", "git diff abc123..def456 -- scripts/loop/x.mjs", "git diff origin/main...HEAD", "git diff origin/main HEAD", "git diff HEAD~1 HEAD -- x", "rg -n 'a*b' packages", "grep -n 'x?' file.mjs", "git show HEAD:agents/judge.agent.md"]) {
     for (const agentType of ["judge", "dev-loops:judge"]) assert.equal(decideBashGate({ command, agentType }).decision, "allow", command);
   }
   for (const command of ["grep -n x f > out.txt", "grep -n x f >> out.txt", "rg -n x | tee out.txt", "grep -n x f; rm f", "grep -n x f && ls", "grep -n $(id) f", "grep -n `id` f", "grep -n \"$HOME\" f", "grep -n x$ f", "grep -n \"a`b\" f", "grep -n x f\nls",
