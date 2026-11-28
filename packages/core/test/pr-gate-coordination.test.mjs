@@ -5305,6 +5305,45 @@ test("ready PR whose only open threads are judge-act threads from an older ances
   assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK));
 });
 
+test("3652: a draft PR whose every open act item is deferred names the clean-verdict poster; a clean marker offers mark_ready; open items still route the fixer", () => {
+  const head = "ab".repeat(20);
+  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict };
+  const deferredList = { headSha: head, openActCount: 0, deferredAll: true, blockers: [] };
+  const deferred = evaluatePrGateCoordination({ ...base, draftOpenActList: deferredList });
+  assert.equal(deferred.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, deferred.reason);
+  assert(!deferred.allowedNextActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert(deferred.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  assert.match(deferred.agentRemedy.command, /upsert-checkpoint-verdict\.mjs .*--verdict clean .*--operator-focus-file/);
+  // The deferred item's own open gate thread (count 1, none left once it is excluded) still names the post.
+  const ownThread = evaluatePrGateCoordination({ ...base, unresolvedGateThreadCount: 1, unresolvedUndeferredGateThreadCount: 0, draftOpenActList: deferredList });
+  assert.equal(ownThread.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, ownThread.reason);
+  assert.match(ownThread.agentRemedy.command, /upsert-checkpoint-verdict\.mjs .*--verdict clean .*--operator-focus-file/);
+  // A gate thread of a non-deferred finding withholds the post.
+  const otherThread = evaluatePrGateCoordination({ ...base, unresolvedGateThreadCount: 2, unresolvedUndeferredGateThreadCount: 1, draftOpenActList: deferredList });
+  assert(!otherThread.agentRemedy?.command?.includes("--operator-focus-file"), otherThread.reason);
+  assert.notEqual(otherThread.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+  // An unreadable thread count (-1) withholds the post.
+  const unreadable = evaluatePrGateCoordination({ ...base, unresolvedGateThreadCount: -1, unresolvedUndeferredGateThreadCount: -1, draftOpenActList: deferredList });
+  assert(!unreadable.agentRemedy?.command?.includes("--operator-focus-file"), unreadable.reason);
+  // The scoped-round post writes a blocked verdict, which names the post too.
+  const blockedVerdict = { ...verdict, verdict: "blocked" };
+  const blocked = evaluatePrGateCoordination({ ...base, draftGate: blockedVerdict, draftGateMarker: blockedVerdict, draftOpenActList: deferredList });
+  assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, blocked.reason);
+  assert.match(blocked.agentRemedy.command, /upsert-checkpoint-verdict\.mjs .*--verdict clean .*--operator-focus-file/);
+  const cleanVerdict = { ...verdict, verdict: "clean" };
+  const clean = evaluatePrGateCoordination({ ...base, draftGate: cleanVerdict, draftGateMarker: cleanVerdict, draftOpenActList: deferredList });
+  assert.equal(clean.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, clean.reason);
+  // Second AC1 hop: the clean post resolved the deferred item's gate thread, so the next run counts 0 and flips the PR ready.
+  const afterPost = evaluatePrGateCoordination({ ...base, draftGate: cleanVerdict, draftGateMarker: cleanVerdict, unresolvedGateThreadCount: 0, unresolvedUndeferredGateThreadCount: 0, draftOpenActList: deferredList });
+  assert.equal(afterPost.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, afterPost.reason);
+  // Until that thread is resolved, the open gate thread withholds the flip.
+  const threadOpen = evaluatePrGateCoordination({ ...base, draftGate: cleanVerdict, draftGateMarker: cleanVerdict, unresolvedGateThreadCount: 1, unresolvedUndeferredGateThreadCount: 0, draftOpenActList: deferredList });
+  assert.notEqual(threadOpen.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, threadOpen.reason);
+  const open = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 1, blockers: [] } });
+  assert.equal(open.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, open.reason);
+});
+
 test("ready PR with a Copilot, human or same-head thread among the open threads still routes to the fixer", () => {
   const result = evaluatePrGateCoordination(staleRoundInput({ staleGateRoundThreadsOnly: false }));
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);

@@ -5,7 +5,23 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { workOrderDigest } from "@dev-loops/core/loop/work-order-digest";
-import { OperatorFocusRefusal, bindOperatorFocusItems, normalizeOperatorFocus, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "../../scripts/loop/_operator-focus.mjs";
+import { OperatorFocusRefusal, bindOperatorFocusItems, deferredFingerprints, normalizeOperatorFocus, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "../../scripts/loop/_operator-focus.mjs";
+
+test("3652: deferredFingerprints closes only an exact defer decision on fingerprint items", () => {
+  const items = [
+    { fingerprint: "a", decision: "fix it with remedy 1" },
+    { fingerprint: "b", decision: "defer" },
+    { fingerprint: "c", decision: "Defer" },
+    { fingerprint: "g", decision: " DEFER " },
+    { threadId: "T1", replyDisposition: "deferred", replyNote: "later" },
+    { fingerprint: "d", replyDisposition: "deferred", replyNote: "later" },
+    { fingerprint: "e", decision: "Deferring is wrong here; apply remedy 2" },
+    { fingerprint: "f", decision: "deferred until later" },
+    { fingerprint: "h", decision: "deferring" },
+    { fingerprint: "i", decision: "defer-ish" },
+  ];
+  assert.deepEqual([...deferredFingerprints({ items })].sort(), ["b", "c", "g"]);
+});
 
 test("absent focus yields null and renders nothing", () => {
   assert.equal(normalizeOperatorFocus(undefined), null);

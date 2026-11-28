@@ -77,6 +77,9 @@ export async function readOperatorFocusFile(file) {
   return normalizeOperatorFocus(raw);
 }
 
+/** Fingerprints of act items the operator deferred: a fingerprint item whose trimmed decision is exactly `defer` (case-insensitive). */
+export const deferredFingerprints = (focus) => new Set((focus?.items ?? []).filter((item) => item.fingerprint !== undefined && item.decision?.trim().toLowerCase() === "defer").map((item) => item.fingerprint));
+
 /**
  * Bind each item to its source. A fingerprint item binds to an act item and records its summary; a threadId item
  * binds to a thread of the threads source. An item of the other kind, or one the source lacks, refuses.

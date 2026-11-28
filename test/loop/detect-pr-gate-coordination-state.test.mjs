@@ -4527,8 +4527,8 @@ async function seedCapFixedRepo(repoRoot, { headSha, seal = true, record: record
 }
 
 // threads: -1 seeds one gate thread whose login lookup fails, so the gate thread count is unreadable (-1).
-async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, files, threads = 0, reviews = [], linkedIssueBody, failedLaterIssue = false }) {
-  const threadNodes = Array.from({ length: Math.abs(threads) }, (_, i) => ({ id: `PRRT_${i}`, isResolved: false, isOutdated: false, path: "src/scope.mjs", line: 4, comments: { nodes: [{ id: `PRRC_${i}`, databaseId: 9000 + i, body: `${buildFindingMarker({ fp: String(i).repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why?`, author: { login: "dev-loops-gate[bot]", __typename: "Bot" } }] } }));
+async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, files, threads = 0, threadFp, threadExtraFp, reviews = [], linkedIssueBody, failedLaterIssue = false }) {
+  const threadNodes = Array.from({ length: Math.abs(threads) }, (_, i) => ({ id: `PRRT_${i}`, isResolved: false, isOutdated: false, path: "src/scope.mjs", line: 4, comments: { nodes: [{ id: `PRRC_${i}`, databaseId: 9000 + i, body: `${buildFindingMarker({ fp: threadFp ?? String(i).repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why?${threadExtraFp ? `\n${buildFindingMarker({ fp: threadExtraFp, severity: "question", angle: "scope", round: 1 })}` : ""}`, author: { login: "dev-loops-gate[bot]", __typename: "Bot" } }] } }));
   return writeGhStub(tempDir, [
     {
       stdout: JSON.stringify({
@@ -4647,11 +4647,65 @@ async function actListFixture(ledgers, { nextAction = "fix" } = {}) {
     await writeSealed(path.join(findingsDir, `draft_gate-${headSha}${suffix}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha, verdict, loggedAt, findings }));
   }
   const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 medium", nextAction });
-  const detect = async () => detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body }), { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, checkBaseFreshness: async () => STALE }));
+  const detect = async (extra = {}, envExtra = {}) => detectPrGateCoordinationState({ repo: "owner/repo", pr: 10, ...extra }, buildMockRuntime(await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body, ...envExtra }), { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, checkBaseFreshness: async () => STALE }));
   return { tempDir, headSha, findingsDir, detect };
 }
 const ACT = { severity: "medium", summary: "fix x", file: "src/x.mjs", line: 3, judgeDisposition: "act" };
 const BODY_ACT = { severity: "medium", summary: "PR body lacks non-goals", judgeDisposition: "act" };
+
+test("3652: resolveDraftOpenActList drops deferred fingerprints and flags an all-deferred list", async () => {
+  const second = { ...ACT, summary: "fix y", line: 9 };
+  const fixture = await actListFixture({ "": { findings: [ACT, second] } });
+  try {
+    const context = { repo: "owner/repo", pr: 10, currentHeadSha: fixture.headSha };
+    const [a, b] = [ACT, second].map(fingerprintFinding);
+    assert.deepEqual(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 0, deferred: new Set([a]) }), { headSha: fixture.headSha, openActCount: 1, blockers: [] });
+    assert.deepEqual(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 0, deferred: new Set([a, b]) }), { headSha: fixture.headSha, openActCount: 0, deferredAll: true, blockers: [] });
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
+test("3652: the detector with a real focus file that defers the only act item names the clean-verdict poster, not the fixer", async () => {
+  const fixture = await actListFixture({ "": { findings: [ACT] } });
+  try {
+    const focusFile = path.join(fixture.tempDir, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: fingerprintFinding(ACT), decision: "Defer" }] }), "utf8");
+    const result = await fixture.detect({ operatorFocusFile: focusFile });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+    assert.match(result.agentRemedy.command, /upsert-checkpoint-verdict\.mjs .*--verdict clean .*--operator-focus-file/);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
+test("3652: a deferred locatable act item with its own open gate thread still names the clean-verdict poster", async () => {
+  const fixture = await actListFixture({ "": { findings: [ACT] } });
+  try {
+    const focusFile = path.join(fixture.tempDir, "focus.json");
+    const fingerprint = fingerprintFinding(ACT);
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint, decision: "defer" }] }), "utf8");
+    const result = await fixture.detect({ operatorFocusFile: focusFile }, { threads: 1, threadFp: fingerprint });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+    assert.match(result.agentRemedy.command, /upsert-checkpoint-verdict\.mjs .*--verdict clean .*--operator-focus-file/);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
+test("3652: a merged gate thread with a deferred and an undeferred fingerprint withholds the clean-verdict poster", async () => {
+  const fixture = await actListFixture({ "": { findings: [ACT] } });
+  try {
+    const focusFile = path.join(fixture.tempDir, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: fingerprintFinding(ACT), decision: "defer" }] }), "utf8");
+    const result = await fixture.detect({ operatorFocusFile: focusFile }, { threads: 1, threadFp: fingerprintFinding(ACT), threadExtraFp: "20f6d24370c05022" });
+    assert.doesNotMatch(result.agentRemedy?.command ?? "", /--verdict clean/);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
+test("3652 AC2: a focus item decided fix keeps the act item open and routes the fixer", async () => {
+  const fixture = await actListFixture({ "": { findings: [ACT] } });
+  try {
+    const focusFile = path.join(fixture.tempDir, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: fingerprintFinding(ACT), decision: "fix with remedy 1" }] }), "utf8");
+    const result = await fixture.detect({ operatorFocusFile: focusFile });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
 
 // The PR 3234 shape: the open act list at a stale head goes to the fixer before base integration.
 test("3105 AC15: the detector derives the open act list from the current-head ledger and routes the fixer before base integration", async () => {

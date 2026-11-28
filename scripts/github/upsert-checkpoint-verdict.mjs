@@ -17,6 +17,7 @@ import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/
 import { minimizeSupersededGateReviews } from "./_minimize-superseded-verdicts.mjs";
 import { deletePrGateCoordinationSnapshot, fetchLiveThreadCounts, loadPrGateCoordinationContext, loadPrGateCoordinationContextReusingSnapshot, loadRefinementArtifact } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
+import { deferredFingerprints, readOperatorFocusFile } from "../loop/_operator-focus.mjs";
 import { CHECKBOX_ROW_RE, checklistLineScopes, checklistSectionLineIndices, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { applyTick } from "./tick-verified-checkboxes.mjs";
 import { editPr } from "./edit-pr.mjs";
@@ -40,10 +41,12 @@ import {
   buildCommentableLineSet,
   buildNonLocatableFindingMarker,
   buildReviewHeaderMarker,
+  collectFingerprints,
   collectSuppressedFingerprints,
   createGateReview,
   discardPendingReview,
   fetchPrFiles,
+  fetchThreadsWithFullBodies,
   findOwnPendingDraft,
   findOwnPendingReview,
   findOwnSubmittedReview,
@@ -53,6 +56,7 @@ import {
   isVisibleFinding,
   isLocatableFinding,
   listPrReviews,
+  parseFindingMarker,
   readGateFindingsLedger,
   renderJudgeDetail,
   renderVerdictDetailsBlock,
@@ -62,6 +66,7 @@ import {
   updateGateReview,
 } from "./_gate-finding-surface.mjs";
 import { fetchAllReviewThreadsWithSkips } from "./list-review-threads.mjs";
+import { replyAndMaybeResolve } from "./_review-thread-mutations.mjs";
 import { postUntrustedSkipNote } from "./_untrusted-skip-note.mjs";
 import { mergeSameDefectFindings, normalizeFindingSummary } from "./_gate-finding-text.mjs";
 import { computeSpecDigest, extractSpecFromBody, normalizeCriterionText, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
@@ -271,7 +276,7 @@ Required:
                                             without --findings-ledger still requires the flag, ignores its
                                             value and derives "mark ready for review".)
 Optional:
-  --operator-focus-file <path>              GATE-EXEC-OPERATOR-FOCUS JSON naming each act fingerprint of the cap round with a decision; it clears the round_cap_reached refusal of a draft_gate post (GATE-EXEC-CAP-BRAKES).
+  --operator-focus-file <path>              GATE-EXEC-OPERATOR-FOCUS JSON naming each act fingerprint of the cap round with a decision; it clears the round_cap_reached refusal of a draft_gate post (GATE-EXEC-CAP-BRAKES). An item with decision defer is closed for routing at any draft_gate round and does not block a clean verdict; the clean post replies to and resolves the gate thread of each deferred item.
   --converged-json <path>                   draft_gate body-only post
                                             { fixerCommit, actList, bodyOnly: true }.
                                             A round whose open act items are
@@ -2831,9 +2836,35 @@ export async function assertGateValidationArtifact({ repo, pr, gate, headSha, re
   );
 }
 
+// GATE-EXEC-OPERATOR-FOCUS: once a clean draft_gate verdict stands, the gate thread of each operator-deferred fingerprint closes with a reply naming the deferral, so it does not block the ready flip.
+// A thread closes only when every fingerprint on it is deferred; every other gate thread stays open.
+export async function resolveDeferredGateThreads(result, options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  if (!result?.ok || options.gate !== "draft_gate" || options.operatorFocusFile === undefined) return result;
+  if ((result.reviewVerdict ?? options.verdict) !== "clean" || result.gateBlockers?.length > 0) return result;
+  const deferred = deferredFingerprints(await readOperatorFocusFile(options.operatorFocusFile));
+  if (deferred.size === 0) return result;
+  const gh = { env, ghCommand, runChild };
+  const login = await resolveAuthenticatedLogin(gh);
+  const { threads, snapshot } = await fetchThreadsWithFullBodies({ repo: options.repo, pr: options.pr }, gh);
+  const body = `Operator deferral (GATE-EXEC-OPERATOR-FOCUS): the operator decided to defer this finding, so the clean draft_gate verdict at head ${result.headSha} stands and this thread closes without a fix.`;
+  let resolved = 0;
+  for (const thread of threads) {
+    const marker = thread.isResolved || thread.author !== login ? null : parseFindingMarker(thread.body);
+    if (!marker) continue;
+    const fps = new Set([marker.fp]);
+    collectFingerprints(thread.body, fps);
+    if (![...fps].every((fp) => deferred.has(fp))) continue;
+    await replyAndMaybeResolve({ repo: options.repo, pr: options.pr, commentId: thread.commentId, threadId: thread.threadId, body, resolve: true, validatedSnapshot: snapshot, allowedRefs: options.allowedRefs }, gh);
+    resolved += 1;
+  }
+  return resolved > 0 ? { ...result, deferredThreadsResolved: resolved } : result;
+}
+
 export async function upsertCheckpointVerdict(options, runtime = {}) {
+  // One absolute path for every reader of the focus file (the deferral read, the cap clear and the thread close), as the detector resolves it.
+  if (options.operatorFocusFile !== undefined) options.operatorFocusFile = path.resolve(options.operatorFocusFile);
   try {
-    return await postCheckpointVerdict(options, runtime);
+    return await resolveDeferredGateThreads(await postCheckpointVerdict(options, runtime), options, runtime);
   } finally {
     // A refused or failed post leaves no snapshot either, so a retry loads fresh instead of re-reading frozen values.
     await deletePrGateCoordinationSnapshot({ repo: options.repo, pr: options.pr }, { repoRoot: runtime.repoRoot ?? process.cwd(), runChild: runtime.runChild, coordinationSnapshotRoot: runtime.coordinationSnapshotRoot });
@@ -2999,19 +3030,22 @@ async function postCheckpointVerdict(options, { env = process.env, ghCommand = "
   // The only path that lets a clean verdict stand over open act items is the GATE-EXEC-NO-DEAD-END body-only post, checked in composeBodyOnlyConvergedDraftGate. Items compare by severity and trimmed summary as a multiset: the ledger and
   // --findings-json can carry the same finding.
   let convergedMarker = null;
+  // GATE-EXEC-OPERATOR-FOCUS: an act item the operator deferred is closed for routing, so it does not guard a clean verdict. The focus file is read once.
+  const deferred = deferredFingerprints(await readOperatorFocusFile(options.operatorFocusFile));
   const guardedActItems = async (findings) => {
+    const notDeferred = (items) => items.filter((f) => !deferred.has(fingerprintFinding(f)));
     // A converged round's act items are the union of A's ledger and the passed (judge-enriched) findings, so a caller cannot list a subset.
     // The ledger is required unconditionally; a missing or unreadable one already refused when it was loaded (naming the path and error).
     if (convergedInput && !preloadedFindingsLedger) {
       throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs --findings-ledger: the ledger at A defines the round's act items.`);
     }
-    const items = listOpenActItems(convergedInput ? [...(preloadedFindingsLedger.findings ?? []), ...findings] : findings);
+    const items = notDeferred(listOpenActItems(convergedInput ? [...(preloadedFindingsLedger.findings ?? []), ...findings] : findings));
     if (!convergedInput) return items;
     // Multiset per key: the larger of the ledger's and the passed findings' counts (callers may re-pass ledger objects, dropped by identity).
     const ledgerFindings = preloadedFindingsLedger.findings ?? [];
     const group = (list) => list.reduce((m, f) => m.set(convergedActItemKey(f), [...(m.get(convergedActItemKey(f)) ?? []), f]), new Map());
-    const fromLedger = group(listOpenActItems(ledgerFindings));
-    const fromPassed = group(listOpenActItems(findings.filter((f) => !ledgerFindings.includes(f))));
+    const fromLedger = group(notDeferred(listOpenActItems(ledgerFindings)));
+    const fromPassed = group(notDeferred(listOpenActItems(findings.filter((f) => !ledgerFindings.includes(f)))));
     const roundActItems = [...new Set([...fromLedger.keys(), ...fromPassed.keys()])]
       .flatMap((k) => ((fromLedger.get(k)?.length ?? 0) >= (fromPassed.get(k)?.length ?? 0) ? fromLedger.get(k) : fromPassed.get(k)));
     // GATE-EXEC-ROUND-CAP: the same cap-round count as every other draft consumer, so a base-merge-forced round never counts toward the cap.
