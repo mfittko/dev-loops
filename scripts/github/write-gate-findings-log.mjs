@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-import { access, copyFile, mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
-import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "./_gate-artifact-seal.mjs";
+import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { OUT_OF_BAND_WRITE, claimRetainedRound, nextRetainedPath, readSealed, writeSealed } from "./_gate-artifact-seal.mjs";
 import path from "node:path";
 import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
 import { expandDispatchUnits } from "./_dispatch-units.mjs";
@@ -1366,27 +1365,9 @@ async function retainSameHeadLedger(fullPath, logPath, roundIdentity) {
   if (live?.roundIdentity?.completed === true && roundIdentity.completed !== true && (same(live.roundIdentity.roundId, roundIdentity.roundId) || same(live.roundIdentity.judgeExecution, roundIdentity.judgeExecution))) {
     throw parseError(`the live ledger ${logPath} is already a completed write of this round; an unjudged write of the same round is refused (completed-round-unjudged-rewrite)`);
   }
-  const dir = path.dirname(fullPath);
-  const stem = path.basename(fullPath, ".json");
-  const roundOf = (n) => (n.startsWith(`${stem}.round-`) ? /\.round-(\d+)\.json$/.exec(n)?.[1] : undefined);
-  const taken = (await readdir(dir)).map((n) => Number(roundOf(n) ?? 0));
-  const next = Math.max(0, ...taken.filter(Number.isSafeInteger)) + 1;
-  await claimRetainedRound(fullPath, path.join(dir, `${stem}.round-${next}.json`));
-  return logPath.replace(/\.json$/, `.round-${next}.json`);
-}
-// Moves the live ledger and its seal to `retained` without ever replacing an existing file: COPYFILE_EXCL fails with EEXIST on a taken name.
-// The copies are separate inodes, so a later rewrite of the live path never writes through to the retained round.
-// The seal is copied first (a crash leaves a waiting seal that matches the bytes a retry copies there; EEXIST on the seal is that waiting seal).
-export async function claimRetainedRound(fullPath, retained) {
-  let copiedSeal = true;
-  await copyFile(`${fullPath}.seal`, `${retained}.seal`, fsConstants.COPYFILE_EXCL).catch((err) => { copiedSeal = false; if (err?.code !== "ENOENT" && err?.code !== "EEXIST") throw err; });
-  // A refused claim drops only the seal this call copied; a pre-existing seal of the taken round stays.
-  try { await copyFile(fullPath, retained, fsConstants.COPYFILE_EXCL); } catch (err) {
-    if (copiedSeal) await unlink(`${retained}.seal`).catch(() => {});
-    throw err;
-  }
-  await unlink(fullPath);
-  await unlink(`${fullPath}.seal`).catch((err) => { if (err?.code !== "ENOENT") throw err; });
+  const retained = await nextRetainedPath(fullPath);
+  await claimRetainedRound(fullPath, retained);
+  return logPath.replace(/\.json$/, `.${/round-\d+\.json$/.exec(retained)[0]}`);
 }
 async function main() {
   let options;

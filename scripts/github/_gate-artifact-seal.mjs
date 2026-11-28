@@ -8,7 +8,9 @@
  * once all writers have shipped.
  */
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { copyFile, mkdir, readdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 export const OUT_OF_BAND_WRITE = "gate_artifact_out_of_band_write";
 const sealPath = (file) => `${file}.seal`;
@@ -58,4 +60,27 @@ export async function readSealed(file) {
     throw Object.assign(new Error(`${OUT_OF_BAND_WRITE}: ${file} was modified outside its sanctioned writer (seal mismatch)`), { code: OUT_OF_BAND_WRITE, file });
   }
   return text;
+}
+
+// Moves the live ledger and its seal to `retained` without ever replacing an existing file: COPYFILE_EXCL fails with EEXIST on a taken name.
+// The copies are separate inodes, so a later rewrite of the live path never writes through to the retained round.
+// The seal is copied first (a crash leaves a waiting seal that matches the bytes a retry copies there; EEXIST on the seal is that waiting seal).
+export async function claimRetainedRound(fullPath, retained) {
+  let copiedSeal = true;
+  await copyFile(`${fullPath}.seal`, `${retained}.seal`, fsConstants.COPYFILE_EXCL).catch((err) => { copiedSeal = false; if (err?.code !== "ENOENT" && err?.code !== "EEXIST") throw err; });
+  // A refused claim drops only the seal this call copied; a pre-existing seal of the taken round stays.
+  try { await copyFile(fullPath, retained, fsConstants.COPYFILE_EXCL); } catch (err) {
+    if (copiedSeal) await unlink(`${retained}.seal`).catch(() => {});
+    throw err;
+  }
+  await unlink(fullPath);
+  await unlink(`${fullPath}.seal`).catch((err) => { if (err?.code !== "ENOENT") throw err; });
+}
+
+/** The next free `<stem>.round-<n>.json` beside a live ledger: the one naming rule of every retained-round writer. */
+export async function nextRetainedPath(fullPath) {
+  const dir = path.dirname(fullPath);
+  const stem = path.basename(fullPath, ".json");
+  const taken = (await readdir(dir)).map((n) => Number((n.startsWith(`${stem}.round-`) ? /\.round-(\d+)\.json$/.exec(n)?.[1] : undefined) ?? 0));
+  return path.join(dir, `${stem}.round-${Math.max(0, ...taken.filter(Number.isSafeInteger)) + 1}.json`);
 }

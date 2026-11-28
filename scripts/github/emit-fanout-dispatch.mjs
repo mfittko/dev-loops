@@ -11,7 +11,7 @@ import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output
 import { gateScopePrefix, LIFECYCLE_GATES, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE, dispatchPromptLayoutRecordPath } from "./record-dispatch-prompt-layout.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, workOrderDigest, writeExecutionIndex } from "./_work-order-protocol.mjs";
-import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseDiffFileBlocks, readCompletedAnglesForHead, renderRequiredReadLine } from "./write-gate-context.mjs";
+import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseDiffFileBlocks, readCompletedAnglesForHead, readsPrBody, renderRequiredReadLine } from "./write-gate-context.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
@@ -791,7 +791,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // its angle as the name — so both the scope and the provenance group are
   // well-formed by construction.
   const unitBound = resolveReviewerUnitBound(fanout.unitBound);
-  const dispatchUnits = expandDispatchUnits(units, configuredGroupNames, unitBound);
+  let dispatchUnits = expandDispatchUnits(units, configuredGroupNames, unitBound);
   // --retry-crashed matches only an emitted dispatch unit name (pendingGroups already holds the cap-split units).
   const emittedNames = dispatchUnits.map((unit) => unit.name);
   const retryEmitted = new Set(dispatchUnits.filter((unit) => retryCrashed.has(unit.name)));
@@ -877,14 +877,18 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       return 2;
     }
   }
+  let bodyOnlyRetired = null;
   // Issue 3416: a full emission mints a new round, so the undispatched or partial round at this head is retired first
-  // (GATE-EXEC-ROUND-RETIREMENT). A --pending emission resumes the round and keeps it. A posted verdict is never retired.
+  // (GATE-EXEC-ROUND-RETIREMENT). A --pending emission resumes the round and keeps it. A posted verdict is never retired, except a round of PR-body act items whose body changed (issue 3604, GATE-EXEC-BODY-ONLY-RERUN).
   if (!pendingOnly) {
     let stale;
     try {
       // Sentinels always live under <cwd>/tmp (verify-fresh-review-context); the round's findings and dispatch records follow --tmp-root;
       // a verdict marker may sit under --tmp-root, the ledger root or the main worktree's tmp.
-      stale = await retireStaleRound({ repo, pr, gate, headSha, tmpRoot: tmpRootDefault, findingsTmpRoot: tmpRoot, recordsTmpRoot: tmpRoot, verdictRoots: [...new Set([tmpRoot, ledgerTmpRoot, ledgerTmpRootDefault])] });
+      // The context's pr-body digest is the body this emission reviews: a posted round of PR-body act items that read an older body retires (issue 3604).
+      const currentPrBodySha256 = artifact.requiredReads?.find((read) => read?.kind === "pr-body")?.sha256 ?? null;
+      const bodyReadingUnits = dispatchUnits.filter((unit) => unit.angles.some((angle) => readsPrBody(angle, config))).map((unit) => ({ scope: dispatchUnitScope(gate, unit), angles: unit.angles }));
+      stale = await retireStaleRound({ repo, pr, gate, headSha, tmpRoot: tmpRootDefault, findingsTmpRoot: tmpRoot, recordsTmpRoot: tmpRoot, verdictRoots: [...new Set([tmpRoot, ledgerTmpRoot, ledgerTmpRootDefault])], currentPrBodySha256, bodyReadingUnits });
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;
@@ -894,6 +898,17 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       return finish({ ok: false, error: stale.refusal.error, recovery: stale.refusal.recovery }, false);
     }
     retiredRound = stale.retiredRound;
+    // A body-only retirement leaves the other units' sentinels and artifacts in place, so only the retired units dispatch again.
+    if (stale.bodyOnlyScopes) {
+      dispatchUnits = dispatchUnits.filter((unit) => stale.bodyOnlyScopes.includes(dispatchUnitScope(gate, unit)));
+      // The kept units' entries of the removed plan stay in the persisted plan as resumed, so fan-in keeps their provenance.
+      try {
+        priorPlan = removedPlanText === null ? null : JSON.parse(removedPlanText);
+      } catch {
+        priorPlan = null;
+      }
+      bodyOnlyRetired = stale.bodyOnlyScopes;
+    }
   }
   // This emission's round identity, minted after the retirement above. Its ms timestamp lets the pull tool tell a
   // round retired after it (GATE-EXEC-ROUND-RETIREMENT record) from a typo, so the new round must not predate the retirement.
@@ -1032,7 +1047,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const emittedAngles = new Set(emitted.flatMap((unit) => unit.angles));
   const priorUnits = priorPlan?.gate === gate && priorPlan.headSha === headSha && Array.isArray(priorPlan.units) ? priorPlan.units.filter((unit) => unit !== null && typeof unit === "object") : [];
   const isResumed = (unit) => Array.isArray(unit.angles) && unit.angles.length > 0
-    && unit.angles.every((angle) => completedAngles.has(angle) && !emittedAngles.has(angle));
+    && unit.angles.every((angle) => (completedAngles.has(angle) || (bodyOnlyRetired !== null && !bodyOnlyRetired.includes(unit.scope))) && !emittedAngles.has(angle));
   // The prior unit order stays: the findings-log sibling check needs split-group parts adjacent and in order.
   const emittedByScope = new Map(emitted.map((unit) => [unit.scope, unit]));
   const mergedUnits = priorUnits.flatMap((unit) => (isResumed(unit) ? [{ ...unit, resumed: true }] : emittedByScope.has(unit.scope) ? [emittedByScope.get(unit.scope)] : []));

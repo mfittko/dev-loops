@@ -39,7 +39,7 @@ import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-wri
 import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { retireGateRound } from "./retire-gate-round.mjs";
-import { buildLiveRoundRecovery, buildRetireCommand, findUnfinishedSentinels, isFinishedArtifact, retireStaleRound } from "./_stale-round-retirement.mjs";
+import { bodyOnlySupersededDigest, buildLiveRoundRecovery, buildRetireCommand, findUnfinishedSentinels, isFinishedArtifact, retireStaleRound } from "./_stale-round-retirement.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities, splitDiffIntoParts, DIFF_PART_MAX_BYTES, DIFF_PART_MAX_LINES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
@@ -2152,7 +2152,9 @@ export async function countCompletedRounds(options, { repoRoot, includeLiveCurre
   // Only a strict toISOString-form UTC timestamp earlier than the cutoff is skipped; any other value counts (fails toward the cap).
   // The calendar round trip rejects values Date.parse normalizes (2026-02-30, T24:00:00); at most 3 fraction digits.
   const preCap = (loggedAt) => typeof loggedAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(loggedAt) && Number.isFinite(Date.parse(loggedAt)) && new Date(loggedAt).toISOString().slice(0, 19) === loggedAt.slice(0, 19) && Date.parse(loggedAt) < cutoff;
-  return closed.filter((log) => !preCap(log.loggedAt)).length + unreadable + 1;
+  // GATE-EXEC-BODY-ONLY-RERUN: a ledger written at the same head right after a body-only superseded round is that round's rerun, no cap round; the superseded round itself counts.
+  const isBodyOnlyRerunLog = (log, i) => i > 0 && String(closed[i - 1].headSha).trim().toLowerCase() === String(log.headSha).trim().toLowerCase() && bodyOnlySupersededDigest(closed[i - 1], log.prBodySha256) !== null;
+  return closed.filter((log, i) => !preCap(log.loggedAt) && !isBodyOnlyRerunLog(log, i)).length + unreadable + 1;
 }
 
 /**
@@ -2361,9 +2363,19 @@ async function resolveOperatorClearedRound(options, { repoRoot, cap, prBase, inc
  * Whether `round` of a gate with cap `cap` is past the scoped final round and not cleared by the operator (GATE-EXEC-CAP-BRAKES): the shared refusal
  * of the draft_gate poster and detector, so the round cap+1 is never refused. `round` is a {@link countCapRounds} count.
  */
-export async function refusesPastScopedRound(options, { repoRoot, prBase, cap, round, includeLiveCurrentHead = false }) {
-  const decision = decideCapRound({ round, cap, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 } });
+export async function refusesPastScopedRound(options, { repoRoot, prBase, cap, round, includeLiveCurrentHead = false, bodySha256 = null }) {
+  // A poster passes the digest the rerun read: the retained round it superseded makes the post a body-only rerun, which is no cap round (GATE-EXEC-BODY-ONLY-RERUN).
+  const bodyOnlyRerun = await isBodyOnlyRerun(options, { repoRoot, bodySha256, includeLiveCurrentHead });  const decision = decideCapRound({ round, cap, fixBudget: { logicLoc: 0, addedFiles: 0, maxLines: 0 }, bodyOnlyRerun });
   return decision.reason === "round_cap_reached" && !(await resolveOperatorClearedRound(options, { repoRoot, cap, prBase, includeLiveCurrentHead }));
+}
+
+/** Whether the head's latest ledger (live, or retained once the automatic retirement moved it) is a round of PR-body act items that read a PR body other than `bodySha256` (default: `options.prBody`'s digest; GATE-EXEC-BODY-ONLY-RERUN). */
+export async function isBodyOnlyRerun(options, { repoRoot, bodySha256 = prBodySha256(options.prBody), includeLiveCurrentHead = true }) {
+  if (typeof bodySha256 !== "string") return false;
+  const head = String(options.headSha).trim().toLowerCase();
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead });
+  const latest = closed.filter((log) => String(log.headSha).trim().toLowerCase().startsWith(head)).at(-1);
+  return Boolean(latest) && bodyOnlySupersededDigest(latest, bodySha256) !== null;
 }
 
 /**
@@ -2374,6 +2386,8 @@ export async function resolveScopedFinalRound(options, { repoRoot, prBase, confi
   const cap = resolveGateConfig(config, mapGateToConfigKey(options.gate)).maxReviewRounds;
   if (!(cap > 0)) return null;
   const round = await countCapRounds(options, { repoRoot, prBase, includeLiveCurrentHead: true });
+  // Issue 3604: the same-head rerun after a PR-body edit of a round of PR-body act items is no cap round and has no fix to budget.
+  if (await isBodyOnlyRerun(options, { repoRoot })) return null;
   const closure = round === cap + 1 ? await resolveClosureRound(options, { repoRoot, cap, round }) : null;
   const facts = closure ? await capFixBudgetFacts({ fromHead: closure.fromHead, headSha: options.headSha, prBase, repoRoot }) : { logicLoc: 0, addedFiles: 0 };
   const fixBudget = { ...facts, maxLines: resolveCapFixMaxLines(config) };
@@ -3859,7 +3873,7 @@ async function writeGateContextBody(options, { repoRoot = process.cwd() } = {}, 
       throw new Error(`Refusing to rebuild the briefing prefix with DIFFERENT bytes at head ${options.headSha} (${options.gate}): the live-sentinel scan failed (${scanError.code ?? scanError.message}) — cannot rule out an in-flight fan-out for this head, and a rebuild that splits a live round must not be allowed through a broken scan. The existing (recorded) prefix hash is ${priorPrefixHash}; the attempted rebuild would write hash ${newPrefixHash}. Fix the scan first (make tmp/ listable again — restore read permission on the tmp/ directory or remove a file/blocker masquerading as it), then either retire the round explicitly before rebuilding (retire-gate-round moves sentinels out of the live namespace, so a rebuild then sees no live sentinels) or confirm no fan-out is in flight: ${retireCommand}`);
     } else {
       // Issue 3416: retire the undispatched or partial round at this head automatically, so the fresh round starts clean.
-      // A live round has sentinels or dispatch records; a round with a posted verdict is never retired: the refusal stands, with its recovery.
+      // A live round has sentinels or dispatch records; a round with a posted verdict is never retired here (this writer passes no bodyReadingUnits; only emit-fanout-dispatch retires a body-only round, issue 3604): the refusal stands, with its recovery.
       const stale = await retireStaleRound({ ...staleRoundArgs, ...loadedSpecDigests(options) });
       if (stale.refusal) throw Object.assign(new Error(`${stale.refusal.error} recovery: ${stale.refusal.recovery}`), { recovery: stale.refusal.recovery });
       retiredRound = stale.retiredRound;
