@@ -1067,14 +1067,17 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
 const readHandoffReviewMarkers = (handoff, ctx, runtime) => readReviewMarkerCommits(handoff.dispositions.filter((entry) => entry.reviewId).map((entry) => entry.reviewId), ctx, runtime);
 
 // Gate-authored unresolved thread count (ADR 0088) from a raw thread payload; an unreadable payload or login fails closed (-1).
-async function countUnresolvedGateThreads(threadsPayload, runtime) {
+// The login resolves once for every payload given; one count per payload comes back.
+async function countUnresolvedGateThreadsOf(payloads, runtime) {
   try {
-    if (countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload) === 0) return 0;
-    return countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload, await resolveAuthenticatedLogin(runtime));
+    if (payloads.every((payload) => countUnresolvedGateAuthoredThreadsFromRawNodes(payload) === 0)) return payloads.map(() => 0);
+    const login = await resolveAuthenticatedLogin(runtime);
+    return payloads.map((payload) => countUnresolvedGateAuthoredThreadsFromRawNodes(payload, login));
   } catch {
-    return -1;
+    return payloads.map(() => -1);
   }
 }
+const countUnresolvedGateThreads = async (threadsPayload, runtime) => (await countUnresolvedGateThreadsOf([threadsPayload], runtime))[0];
 
 // GATE-EXEC-THREAD-DISPOSITION: true when at least one gate-authored thread is open and every one is a judge-act code thread whose
 // recording round ran at a strict ancestor of the current head, read from the ledgers of the gate whose round the route runs (the
@@ -1153,12 +1156,12 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // (buildGateCoordinationEvaluatorInput below) is what reconciles this
   // detector with detect-checkpoint-evidence.mjs: neither can report
   // mark_ready_for_review/clean while the other reports unresolved threads.
-  const unresolvedGateThreadCount = await countUnresolvedGateThreads(threadsPayload, runtime);
   // GATE-EXEC-OPERATOR-FOCUS: the count without the threads of operator-deferred findings; the deferred-clean route reads it. A -1 or malformed count still blocks.
   const deferred = runtime.deferred ?? new Set();
-  const unresolvedUndeferredGateThreadCount = deferred.size === 0 || unresolvedGateThreadCount <= 0
-    ? unresolvedGateThreadCount
-    : await countUnresolvedGateThreads(threadsPayload.filter((node) => !deferred.has(parseFindingMarker(node?.comments?.nodes?.[0]?.body)?.fp)), runtime);
+  const [unresolvedGateThreadCount, unresolvedUndeferredGateThreadCount = unresolvedGateThreadCount] = await countUnresolvedGateThreadsOf(
+    deferred.size === 0 ? [threadsPayload] : [threadsPayload, threadsPayload.filter((node) => !deferred.has(parseFindingMarker(node?.comments?.nodes?.[0]?.body)?.fp))],
+    runtime,
+  );
   // Injects the login-narrowed count computed just above so
   // detectCheckpointEvidence's own draftGateSatisfied fold (ADR 0088) agrees
   // with this detector without a second thread-payload fetch or a second

@@ -5334,6 +5334,12 @@ test("3652: a draft PR whose every open act item is deferred names the clean-ver
   const cleanVerdict = { ...verdict, verdict: "clean" };
   const clean = evaluatePrGateCoordination({ ...base, draftGate: cleanVerdict, draftGateMarker: cleanVerdict, draftOpenActList: deferredList });
   assert.equal(clean.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, clean.reason);
+  // Second AC1 hop: the clean post resolved the deferred item's gate thread, so the next run counts 0 and flips the PR ready.
+  const afterPost = evaluatePrGateCoordination({ ...base, draftGate: cleanVerdict, draftGateMarker: cleanVerdict, unresolvedGateThreadCount: 0, unresolvedUndeferredGateThreadCount: 0, draftOpenActList: deferredList });
+  assert.equal(afterPost.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, afterPost.reason);
+  // Until that thread is resolved, the open gate thread withholds the flip.
+  const threadOpen = evaluatePrGateCoordination({ ...base, draftGate: cleanVerdict, draftGateMarker: cleanVerdict, unresolvedGateThreadCount: 1, unresolvedUndeferredGateThreadCount: 0, draftOpenActList: deferredList });
+  assert.notEqual(threadOpen.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, threadOpen.reason);
   const open = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 1, blockers: [] } });
   assert.equal(open.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, open.reason);
 });

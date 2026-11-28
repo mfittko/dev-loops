@@ -1337,7 +1337,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // The one head binding of the open act list: a full current head SHA that the list names as its head or its carried head.
   const actListHeadBound = /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase());
   // GATE-EXEC-OPERATOR-FOCUS: a posted round whose every open act item the operator deferred routes to the clean-verdict post, then the ready flip.
-  // The gate threads of deferred findings stay open until the clean marker exists, so the count excludes them when the detector supplies it.
+  // The gate threads of deferred findings stay open until the clean post, which replies to and resolves them (upsert-checkpoint-verdict.mjs), so the count excludes them when the detector supplies it.
   const nonDeferredGateThreads = input.unresolvedUndeferredGateThreadCount ?? input.unresolvedGateThreadCount;
   const deferredClean = actList?.deferredAll === true && actListHeadBound && draftGate.currentHead && draftGate.contractComplete
     // The thread condition currentHeadClean applies (toGateStatus): no signal or a count of 0; a positive, -1 or malformed count blocks.
