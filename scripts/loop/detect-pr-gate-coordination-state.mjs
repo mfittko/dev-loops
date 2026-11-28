@@ -34,8 +34,7 @@ import {
 import { isBlockedActItem, isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { convergedCarryAccepts } from "../github/_carried-verdict.mjs";
-import { actSetAlreadyHeld, actSetHeld, capRoundActList, countCapRounds, effectiveRounds, operatorClearsCapStop, prBodySha256, readClosedPriorRoundLogs, refusesPastScopedRound, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
-import { bodyOnlySupersededDigest } from "../github/_stale-round-retirement.mjs";
+import { actSetAlreadyHeld, actSetHeld, capRoundActList, countCapRounds, effectiveRounds, isBodyOnlyRerun, operatorClearsCapStop, prBodySha256, readClosedPriorRoundLogs, refusesPastScopedRound, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
 import { readOperatorFocusFile } from "./_operator-focus.mjs";
 import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
@@ -1513,10 +1512,8 @@ export async function resolveBodyOnlyRetire(context, { repoRoot }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{40,64}$/.test(head) || typeof context.prData?.body !== "string") return false;
   const gate = context.prData.isDraft === true ? "draft_gate" : "pre_approval_gate";
-  const logs = await readClosedPriorRoundLogs({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, includeLiveCurrentHead: true, includeRetainedCurrentHead: true }).catch(() => []);
-  // The latest round at the head: the live ledger, or the retained round once the automatic retirement moved it (the crash-resume state, AC5).
-  const last = logs.at(-1);
-  return Boolean(last) && String(last.headSha).trim().toLowerCase() === head && bodyOnlySupersededDigest(last, prBodySha256(context.prData.body)) !== null;
+  // The one probe the context writer uses: the latest round at the head, live or retained (the crash-resume state, AC5).
+  return isBodyOnlyRerun({ repo: context.repo, pr: context.pr, gate, headSha: head }, { repoRoot, bodySha256: prBodySha256(context.prData.body) }).catch(() => false);
 }
 
 /**

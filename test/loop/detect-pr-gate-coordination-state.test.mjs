@@ -5525,6 +5525,10 @@ test("resolveBodyOnlyRetire reads the gate of the PR state, the live and the ret
     // Crash-resume (AC5): only the retained ledger remains once the emitter moved the live one.
     await write("draft_gate", "4".repeat(40), [bodyItem], `draft_gate-${"4".repeat(40)}.round-1.json`);
     assert.equal(await resolveBodyOnlyRetire(ctx("4".repeat(40), true, "Edited body"), { repoRoot: tempDir }), true);
+    // A later ledger at another head does not hide the current head's body-only round.
+    await write("draft_gate", "5".repeat(40), [bodyItem]);
+    await write("draft_gate", "6".repeat(40), [codeItem]);
+    assert.equal(await resolveBodyOnlyRetire(ctx("5".repeat(40), true, "Edited body"), { repoRoot: tempDir }), true);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -2371,7 +2371,7 @@ export async function refusesPastScopedRound(options, { repoRoot, prBase, cap, r
 }
 
 /** Whether the head's latest ledger (live, or retained once the automatic retirement moved it) is a round of PR-body act items that read a PR body other than `bodySha256` (default: `options.prBody`'s digest; GATE-EXEC-BODY-ONLY-RERUN). */
-async function isBodyOnlyRerun(options, { repoRoot, bodySha256 = prBodySha256(options.prBody), includeLiveCurrentHead = true }) {
+export async function isBodyOnlyRerun(options, { repoRoot, bodySha256 = prBodySha256(options.prBody), includeLiveCurrentHead = true }) {
   if (typeof bodySha256 !== "string") return false;
   const head = String(options.headSha).trim().toLowerCase();
   const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead });
