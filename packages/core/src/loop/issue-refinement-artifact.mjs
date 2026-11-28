@@ -426,13 +426,24 @@ const TABLE_DELIMITER_RE = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/u;
 
 /** Split one GFM table row into trimmed cell strings (drops leading/trailing pipes). */
 function splitTableRow(line) {
-  let s = line.trim();
-  if (s.startsWith("|")) s = s.slice(1);
-  if (s.endsWith("|")) s = s.slice(0, -1);
-  // ponytail: no escaped-pipe (`\|`) handling — refined-issue matrix cells are
-  // short prose, not pipe-bearing code. Add a split-on-unescaped-pipe pass only
-  // if a real matrix cell ever needs a literal `|`.
-  return s.split("|").map((c) => c.trim());
+  const s = line.trim();
+  const cells = [];
+  let cur = "";
+  for (let i = 0; i < s.length; i += 1) {
+    if (s[i] === "\\" && s[i + 1] === "|") {
+      cur += "|";
+      i += 1;
+    } else if (s[i] === "|") {
+      cells.push(cur);
+      cur = "";
+    } else {
+      cur += s[i];
+    }
+  }
+  // A trailing unescaped pipe leaves `cur` empty; an escaped one leaves it non-empty.
+  if (cur !== "" || !s.endsWith("|")) cells.push(cur);
+  if (s.startsWith("|")) cells.shift();
+  return cells.map((c) => c.trim());
 }
 
 /**

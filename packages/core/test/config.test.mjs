@@ -991,6 +991,7 @@ describe("loader — graceful degradation", () => {
       assert.deepEqual(result.errors, []);
       assert.deepEqual(result.config.gates.size, {
         testDiscount: 0.25,
+        deletionDiscount: 0.25,
         absoluteHardLoc: 2000,
         tiers: { default: { softLoc: 400, waiverLoc: 1500 } },
         planningBand: { minLoc: 150 },

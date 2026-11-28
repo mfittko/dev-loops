@@ -561,7 +561,8 @@ const SizePlanningBandConfig = z.strictObject({
 });
 
 const SizeConfig = z.strictObject({
-  testDiscount: z.number().min(0).max(1).default(0.25).describe("Weight applied to test LOC when computing logicLoc = code + testDiscount * test."),
+  testDiscount: z.number().min(0).max(1).default(0.25).describe("Weight applied to test LOC when computing logicLoc = addedCode + deletionDiscount * removedCode + testDiscount * test."),
+  deletionDiscount: z.number().min(0).max(1).default(0.25).describe("Weight applied to removed code lines when computing logicLoc (added lines weigh 1)."),
   absoluteHardLoc: z.number().int().positive().default(2000).describe("Whole-PR logic-LOC ceiling; blocks with no waiver possible above this, for any tier."),
   tiers: SizeTiersConfig.default({}).describe("Per-tier soft/waiver/slice thresholds and path patterns."),
   planningBand: SizePlanningBandConfig.default({}).describe("Planning-time size band (PLAN-SIZE-BAND): minLoc up to tiers.default.softLoc."),
@@ -1032,7 +1033,7 @@ const FileGatesConfig = z.strictObject({
   draft: DraftGateConfig.partial().describe("Draft gate config (runs before a PR leaves draft).").optional(),
   preApproval: DraftGateConfig.partial().describe("Pre-approval gate config (final re-review before the merge handoff).").optional(),
   spike: GateConfig.partial().describe("Relaxed spike gate profile; applies only to spike-mode work.").optional(),
-  size: SizeConfig.partial().describe("Fail-closed PR size/tier budget: testDiscount, absoluteHardLoc, and per-tier soft/waiver/slice thresholds + patterns.").optional(),
+  size: SizeConfig.partial().describe("Fail-closed PR size/tier budget: testDiscount, deletionDiscount, absoluteHardLoc, and per-tier soft/waiver/slice thresholds + patterns.").optional(),
   requireFanoutEvidence: z.boolean().describe("Require fan-out/fan-in review evidence on gate verdicts; inline single-agent verdicts are rejected except under the strict light-mode exception (under-threshold scope, no gate:full label, recorded inline reason).").optional(),
   requireFanoutProvenance: z.boolean().describe("Additionally require recorded, internally-consistent fan-out provenance (distinct reviewer count + per-angle dispatch).").optional(),
   maxFanoutReviewers: z.number().int().min(1).max(64).describe("SUPERSEDED by gates.fanout.maxConcurrent (#1601, ADR 0048): no longer governs fan-out dispatch — the conductor dispatches wave-by-wave at most gates.fanout.maxConcurrent (M) dispatch units per wave via scheduleFanoutWaves (the wave plan emitted by write-gate-context.mjs). Kept for back-compat; setting it has no dispatch effect.").optional(),
