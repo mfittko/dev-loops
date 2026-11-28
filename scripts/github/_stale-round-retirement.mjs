@@ -98,7 +98,7 @@ export function bodyOnlySupersededDigest(log, currentPrBodySha256) {
   if (!/^[0-9a-f]{64}$/.test(String(currentPrBodySha256)) || !/^[0-9a-f]{64}$/.test(String(log?.prBodySha256)) || log.prBodySha256 === currentPrBodySha256) return null;
   const open = listOpenActItems(log.findings);
   // `remedyKind: "pr_body"` is required: isDeltaBodyItem also accepts a fileless code finding, which a body edit cannot fix.
-  return open.length > 0 && open.every((item) => isDeltaBodyItem(item) && item.remedyKind === "pr_body") ?log.prBodySha256 : null;
+  return open.length > 0 && open.every((item) => isDeltaBodyItem(item) && item.remedyKind === "pr_body") ? log.prBodySha256 : null;
 }
 
 // `otherSpecDigests` are further digests the spec source could have; the stop needs the pinned digest to differ from all of them and from `currentSpecDigest`.
