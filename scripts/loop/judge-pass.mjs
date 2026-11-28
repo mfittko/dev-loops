@@ -470,7 +470,7 @@ export function validateCliArgs(options) {
  * @param {Array<object>} findings — the flat consolidated findings array (already unwrapped)
  * @param {object} judgeVerdict — the judge agent's verdict artifact (JSON object)
  * @param {string} headSha — the round's current head (the verdict must be current-head)
- * @param {{ pastCap?: boolean, round?: number }} [options] — `pastCap` receives the `lowFixCapped` state from `resolveDraftRoundCap`, true at pre_approval_gate only (the draft gate fixes a low at the cap round)
+ * @param {{ pastCap?: boolean, round?: number }} [options] — `pastCap` receives the `lowFixCapped` state from `resolveDraftRoundCap`, true at pre_approval_gate only (the draft gate floors a low at reject from round 2, ADR 0339)
  * @returns {{ enriched: Array<object>, act: Array<object>, scopeDrift: object,
  *             counts: { act: number, defer: number, reject: number } (act excludes evidence-only remedies), headSha: string }}
  */
@@ -584,10 +584,10 @@ async function applyDeferralComment(enriched, { repo, pr, gate, trackerProvider 
   }));
   const { issueNumber } = await commentDeferredFindings({ repo, pr, entries, trackerProvider }, deps);
   for (const f of deferred) f.followUpIssueNumber = issueNumber;
-  // #2724 slice 0: a pre_approval_gate low_fix_until_cap defer needs a target other than the PR itself; with none the whole cluster (nit members included) is a reject.
+  // #2724 slice 0: a pre_approval_gate low_floor defer needs a target other than the PR itself; with none the whole cluster (nit members included) is a reject.
   if (gate === "pre_approval_gate" && issueNumber === pr) {
     for (const f of enriched) {
-      if (f.judgeDisposition !== "defer" || !f.judgeReason?.startsWith("low_fix_until_cap ")) continue;
+      if (f.judgeDisposition !== "defer" || !f.judgeReason?.startsWith("low_floor ")) continue;
       f.judgeDisposition = "reject";
       delete f.followUpDraft;
       delete f.followUpIssueNumber;
@@ -1158,11 +1158,11 @@ export async function judgePassCli(
     }
   }
 
-  // GATE-EXEC-LOW-FIX-UNTIL-CAP: name each judge `act` cluster a later step changed (derived, no state).
+  // GATE-EXEC-LOW-ROUND-FLOOR: name each judge `act` or `defer` cluster a later step changed (derived, no state).
   const overridden = [];
   for (const d of judgeVerdict.dispositions) {
-    if (d.disposition !== "act") continue;
-    const changed = result.enriched.find((f, i) => (Number.isInteger(f.clusterId) ? f.clusterId : i) === d.index && f.judgeDisposition !== "act");
+    if (d.disposition === "reject") continue;
+    const changed = result.enriched.find((f, i) => (Number.isInteger(f.clusterId) ? f.clusterId : i) === d.index && f.judgeDisposition !== d.disposition);
     if (changed) overridden.push({ index: d.index, applied: changed.judgeDisposition, reason: changed.judgeReason === (typeof d.reason === "string" ? d.reason.trim() : undefined) ? null : changed.judgeReason ?? null });
   }
 

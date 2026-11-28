@@ -46,14 +46,14 @@ function assertClaims(block, claims, label) {
 test("agents/judge.agent.md states severity is an INPUT and a real defect (incl. a low) is act regardless of its label", async () => {
   const text = await read("agents/judge.agent.md");
   assert.match(text, /Severity is an INPUT[\s\S]{0,60}never an auto-gate/, "judge contract must state severity is an INPUT, never an auto-gate");
-  assert.match(text, /`GATE-EXEC-LOW-FIX-UNTIL-CAP`[\s\S]{0,200}`failOpen: true`/, "judge contract must cite the low/nit rule and failOpen");
+  assert.match(text, /`GATE-EXEC-LOW-ROUND-FLOOR`[\s\S]{0,200}`failOpen: true`/, "judge contract must cite the low/nit rule and failOpen");
   assert.doesNotMatch(text, OLD_AUTODEFER_RE, "judge contract must NOT re-introduce the severity-based auto-defer sentence for lows");
 });
 
-test("agents/judge.agent.md leaves the low and nit cap outcomes to GATE-EXEC-LOW-FIX-UNTIL-CAP", async () => {
+test("agents/judge.agent.md leaves the low and nit cap outcomes to GATE-EXEC-LOW-ROUND-FLOOR", async () => {
   const text = await read("agents/judge.agent.md");
   // ADR 0188 / AC10: the defer bullet cites the owner rule and restates no cap outcome.
-  assert.match(text, /`GATE-EXEC-LOW-FIX-UNTIL-CAP` decides a `low` or `nit` cluster/, "the defer bullet cites the owner rule");
+  assert.match(text, /`GATE-EXEC-LOW-ROUND-FLOOR` decides a `low` or `nit` cluster/, "the defer bullet cites the owner rule");
 });
 
 test("the Phase 3.5 judge contract states no severity auto-defer and adjudicates every finding on merits", async () => {
@@ -65,7 +65,7 @@ test("the Phase 3.5 judge contract states no severity auto-defer and adjudicates
   assertClaims(body, [
     ["Severity is an INPUT", "never an auto-gate"],
     ["EVERY finding", "`low`", "merits"],
-    ["`GATE-EXEC-LOW-FIX-UNTIL-CAP`"],
+    ["`GATE-EXEC-LOW-ROUND-FLOOR`"],
   ], "Phase 3.5 merit disposition");
   assert.doesNotMatch(body, OLD_AUTODEFER_RE, "Phase 3.5 must NOT re-introduce the severity-based auto-defer sentence for lows");
 });

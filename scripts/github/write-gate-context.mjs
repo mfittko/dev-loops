@@ -2214,7 +2214,7 @@ export async function countCompletedRounds(options, { repoRoot, includeLiveCurre
  * @returns {Promise<{ pastCap: boolean, round: number, cap: number, lowFixCapped: boolean }>}
  */
 export async function resolveDraftRoundCap(options, { repoRoot, includeLiveCurrentHead = false, prBase, contextTmpRoot }) {
-  // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate defers a low in every round; its round count is countCapRounds, not this resolver.
+  // GATE-EXEC-LOW-ROUND-FLOOR: pre_approval_gate defers a low in every round; its round count is countCapRounds, not this resolver.
   if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0, lowFixCapped: options.gate === "pre_approval_gate" };
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
   const cap = resolveGateConfig(config, "draft").maxReviewRounds;
