@@ -877,6 +877,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       return 2;
     }
   }
+  let bodyOnlyRetired = null;
   // Issue 3416: a full emission mints a new round, so the undispatched or partial round at this head is retired first
   // (GATE-EXEC-ROUND-RETIREMENT). A --pending emission resumes the round and keeps it. A posted verdict is never retired, except a round of PR-body act items whose body changed (issue 3604, GATE-EXEC-BODY-ONLY-RERUN).
   if (!pendingOnly) {
@@ -898,7 +899,16 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     }
     retiredRound = stale.retiredRound;
     // A body-only retirement leaves the other units' sentinels and artifacts in place, so only the retired units dispatch again.
-    if (stale.bodyOnlyScopes) dispatchUnits = dispatchUnits.filter((unit) => stale.bodyOnlyScopes.includes(dispatchUnitScope(gate, unit)));
+    if (stale.bodyOnlyScopes) {
+      dispatchUnits = dispatchUnits.filter((unit) => stale.bodyOnlyScopes.includes(dispatchUnitScope(gate, unit)));
+      // The kept units' entries of the removed plan stay in the persisted plan as resumed, so fan-in keeps their provenance.
+      try {
+        priorPlan = removedPlanText === null ? null : JSON.parse(removedPlanText);
+      } catch {
+        priorPlan = null;
+      }
+      bodyOnlyRetired = stale.bodyOnlyScopes;
+    }
   }
   // This emission's round identity, minted after the retirement above. Its ms timestamp lets the pull tool tell a
   // round retired after it (GATE-EXEC-ROUND-RETIREMENT record) from a typo, so the new round must not predate the retirement.
@@ -1037,7 +1047,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const emittedAngles = new Set(emitted.flatMap((unit) => unit.angles));
   const priorUnits = priorPlan?.gate === gate && priorPlan.headSha === headSha && Array.isArray(priorPlan.units) ? priorPlan.units.filter((unit) => unit !== null && typeof unit === "object") : [];
   const isResumed = (unit) => Array.isArray(unit.angles) && unit.angles.length > 0
-    && unit.angles.every((angle) => completedAngles.has(angle) && !emittedAngles.has(angle));
+    && unit.angles.every((angle) => (completedAngles.has(angle) || (bodyOnlyRetired !== null && !bodyOnlyRetired.includes(unit.scope))) && !emittedAngles.has(angle));
   // The prior unit order stays: the findings-log sibling check needs split-group parts adjacent and in order.
   const emittedByScope = new Map(emitted.map((unit) => [unit.scope, unit]));
   const mergedUnits = priorUnits.flatMap((unit) => (isResumed(unit) ? [{ ...unit, resumed: true }] : emittedByScope.has(unit.scope) ? [emittedByScope.get(unit.scope)] : []));

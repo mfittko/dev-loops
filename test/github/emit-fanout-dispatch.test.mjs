@@ -2971,6 +2971,9 @@ test("issue 3604: a posted round of PR-body act items retires only its body-read
     assert.equal(second.status, 0, second.stderr || second.stdout);
     const payload = JSON.parse(second.stdout);
     assert.deepEqual(payload.units.map((unit) => unit.name), ["contradiction-lens"]);
+    // The saved plan keeps the kept unit as a resumed entry so fan-in derives its provenance.
+    const savedPlan = JSON.parse(await readFile(path.join(tmpDir, buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: "tmp" })), "utf8"));
+    assert.deepEqual(savedPlan.units.map((unit) => [unit.name, unit.resumed === true]), [["contradiction-lens", false], ["dry", true]]);
     assert.equal(existsSync(sentinels[0]), false);
     assert.equal(existsSync(path.join(reviews, "contradiction-lens.json")), false);
     assert.equal(existsSync(sentinels[1]), true);
