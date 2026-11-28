@@ -1814,20 +1814,46 @@ for (const [fileClass, opts, want] of [
 }
 
 // Issue 3647: the dispatch set is the head-resolved angles plus every mustRerun angle of the keyed plan.
-test("buildGateContext dispatches a mustRerun angle the head does not resolve", async () => {
+const planId = { repo: "owner/repo", pr: 12, gate: "draft_gate", headSha: "abc1234567890" };
+const orphanRow = [{ angle: "orphan-angle", reason: "no_perangle_row" }];
+async function withPlanContext(plan, gate, fn) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-mustrerun-"));
-  const id = { repo: "owner/repo", pr: 12, gate: "draft_gate", headSha: "abc1234567890" };
+  const id = { ...planId, gate };
+  const input = { config: { version: 1, gates: { draft: { angles: ["correctness"] }, review: { angles: ["correctness"] } } }, ...id, hasFullLabel: true };
   try {
-    const planPath = path.resolve(repoRoot, buildCarryForwardPlanPath(id));
-    await mkdir(path.dirname(planPath), { recursive: true });
-    await writeFile(planPath, JSON.stringify({ ok: true, ...id, prevHead: "def4567890123", carried: [], mustRerun: [{ angle: "orphan-angle", reason: "no_perangle_row" }] }));
-    const result = await buildGateContext(
-      { config: { version: 1, gates: { draft: { angles: ["correctness"] } } }, ...id, hasFullLabel: true },
-      { repoRoot },
-    );
-    assert.ok(result.artifact.resolvedAngles.includes("correctness"));
-    assert.ok(result.artifact.resolvedAngles.includes("orphan-angle"));
+    await fn({
+      writePlan: async () => {
+        const planPath = path.resolve(repoRoot, buildCarryForwardPlanPath(id));
+        await mkdir(path.dirname(planPath), { recursive: true });
+        await writeFile(planPath, JSON.stringify({ ok: true, ...id, prevHead: "def4567890123", carried: [], ...plan }));
+      },
+      build: async () => (await buildGateContext(input, { repoRoot })).artifact.resolvedAngles,
+    });
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
+}
+
+test("buildGateContext adds a mustRerun orphan angle only on the rebuild after the plan exists", async () => {
+  await withPlanContext({ mustRerun: orphanRow }, "draft_gate", async ({ writePlan, build }) => {
+    assert.deepEqual(await build(), ["correctness"]);
+    await writePlan();
+    assert.deepEqual(await build(), ["correctness", "orphan-angle"]);
+  });
 });
+
+for (const [name, plan, gate, want] of [
+  ["a sibling name maps to its base angle", { mustRerun: [{ angle: "orphan-angle-delta-at-abc1234", reason: "x" }] }, "draft_gate", ["correctness", "orphan-angle"]],
+  ["copilot-body adds nothing", { mustRerun: [{ angle: "copilot-body", reason: "x" }] }, "draft_gate", ["correctness"]],
+  ["case-differing duplicates add one angle", { mustRerun: [{ angle: "Correctness", reason: "x" }, { angle: "Orphan-Angle", reason: "x" }, { angle: "orphan-angle", reason: "x" }] }, "draft_gate", ["correctness", "Orphan-Angle"]],
+  ["a plan for another head adds nothing", { headSha: "fff9999999999", mustRerun: orphanRow }, "draft_gate", ["correctness"]],
+  ["a plan with ok:false adds nothing", { ok: false, mustRerun: orphanRow }, "draft_gate", ["correctness"]],
+  ["the review gate takes no union", { mustRerun: orphanRow }, "review", ["correctness"]],
+]) {
+  test(`buildGateContext mustRerun union: ${name}`, async () => {
+    await withPlanContext(plan, gate, async ({ writePlan, build }) => {
+      await writePlan();
+      assert.deepEqual(await build(), want);
+    });
+  });
+}

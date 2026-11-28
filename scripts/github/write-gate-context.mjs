@@ -55,6 +55,7 @@ import { viewPr } from "./view-pr.mjs";
 import { viewIssue } from "./view-issue.mjs";
 import { buildAdjacentBundle, decodeGitDiffPathToken } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
+import { COPILOT_BODY_ANGLE } from "./_copilot-body-disposition.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
 import { capRoundExit, foldDraftGateSatisfied, isCleanDraftVerdict } from "@dev-loops/core/loop/pr-gate-coordination";
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContextReusingSnapshot } from "../loop/detect-pr-gate-coordination-state.mjs";
@@ -871,9 +872,16 @@ export async function unionMustRerunAngles(resolvedAngles, { repo, pr, gate, hea
   }
   const same = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
   if (plan?.ok !== true || !Array.isArray(plan.mustRerun) || !same(plan.repo, repo) || !same(plan.gate, gate) || !same(plan.headSha, headSha) || String(plan.pr) !== String(pr)) return resolvedAngles;
+  // A sibling name (`<angle>-delta-at-<sha>`) maps to its base angle; the synthetic `copilot-body` is no reviewer.
   const known = new Set(resolvedAngles.map((a) => a.trim().toLowerCase()));
-  const extra = plan.mustRerun.map((m) => m?.angle).filter((a) => typeof a === "string" && a.trim() !== "" && !known.has(a.trim().toLowerCase()));
-  return [...resolvedAngles, ...new Set(extra)];
+  const extra = [];
+  for (const m of plan.mustRerun) {
+    const base = typeof m?.angle === "string" ? baseAngleName(m.angle.trim()) : "";
+    if (base === "" || base === COPILOT_BODY_ANGLE || known.has(base.toLowerCase())) continue;
+    known.add(base.toLowerCase());
+    extra.push(base);
+  }
+  return [...resolvedAngles, ...extra];
 }
 
 // Deterministic path for the shared validation-results artifact
