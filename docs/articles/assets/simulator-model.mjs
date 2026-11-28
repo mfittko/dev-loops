@@ -222,7 +222,7 @@ export function createModel() {
     nodes:[
       ["c1","1 head","head resolvable",0,0,{a:"code"}],["c2","2 isDraft","PR is a draft",1,0,{a:"code"}],["c3","3 title markers","none on the title",2,0,{a:"code"}],["c4","4 CI","gates.draft.requireCi",3,0,{a:"code"}],
       ["c5","5 draft evidence","clean, current head",3,1,{a:"code"}],["c6","6 gate threads","unresolved 0, -1 fails",2,1,{a:"code"}],
-      ["c7","7 size budget","check-size-budget",1,1,{k:"gate",a:"code",src:"scripts/loop/check-size-budget.mjs computeSizeBudget",L:["budget","Size is measured, not guessed: logicLoc = added code + 0.25 * removed code + 0.25 * test, comments not counted, for JS and TS files."]}],
+      ["c7","7 size budget","check-size-budget",1,1,{k:"gate",a:"code",src:"scripts/loop/check-size-budget.mjs computeSizeBudget",L:["budget","Size is measured, not guessed: logicLoc = (code - commentOnly) + 0.25 * test, for JS and TS files."]}],
       ["size_block","block","over 1500 or 2000",0,1,{k:"exit"}],["ret_refuse_size","refused","PR stays draft",0,2,{k:"ret exit"}],
       ["size_pass","pass","at most 400 logic LOC",1,2,{a:"code"}],["size_escalate","escalate","over softLoc 400",2,2,{a:"code"}],
       ["c8","8 ADR tripwire","check-adr-tripwire",1.5,3,{k:"gate",a:"code",src:"scripts/loop/check-adr-tripwire.mjs computeAdrTripwire; decision-record-contract.md",L:["people","Changing a contract doc needs a decision record or an operator's reasoned marker."]}],
